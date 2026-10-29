@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Any
-from triton._utils import validate_block_shape, canonicalize_dtype
+import triton.language as tl
+from triton._utils import canonicalize_dtype, fp6_logical_shape, validate_block_shape, validate_fp6_box
 
 
 @dataclass
@@ -11,6 +12,7 @@ class TensorDescriptor:
     block_shape: List[int]
     padding: str = "zero"
     round_f32_to_tf32: bool = False
+    dtype: Any = None
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -18,8 +20,18 @@ class TensorDescriptor:
         assert len(self.block_shape) == rank, f"rank mismatch: {self}"
         assert rank > 0, "rank must not be zero"
         assert rank <= 5, "rank cannot be more than 5"
-        ty = type(self.base)
-        if ty.__name__ not in ("FakeTensor", "FunctionalTensor"):
+        check_address = type(self.base).__name__ not in ("FakeTensor", "FunctionalTensor")
+        if self.dtype is not None:
+            from triton.runtime.jit import reinterpret
+            if not self.dtype.is_fp6() or canonicalize_dtype(self.base.dtype) != "u8":
+                raise ValueError("a descriptor dtype override requires FP6 on a uint8 base")
+            self.base = reinterpret(self.base, self.dtype)
+        if self.base.dtype in (tl.float6e2m3, tl.float6e3m2):
+            width = self.block_shape[-1]
+            validate_fp6_box(width, self.shape[-1], self.strides[:-1], self.padding, host=True)
+            if self.round_f32_to_tf32 or (check_address and self.base.data_ptr() % (width // 4)):
+                raise ValueError(f"FP6 tensor maps require a {width // 4}-byte aligned base and no TF32 rounding")
+        if check_address:
             assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)
         elem_bytes = self.base.dtype.itemsize
@@ -36,5 +48,9 @@ class TensorDescriptor:
             assert dtype_name == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False):
-        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding, round_f32_to_tf32)
+    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False, dtype=None):
+        """Infer logical extents from storage. An FP6 dtype interprets uint8 rows as packed codes."""
+        shape = tensor.shape
+        if (dtype or tensor.dtype) in (tl.float6e2m3, tl.float6e3m2):
+            shape = fp6_logical_shape(shape)
+        return TensorDescriptor(tensor, shape, tensor.stride(), block_shape, padding, round_f32_to_tf32, dtype)

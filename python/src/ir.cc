@@ -1091,6 +1091,14 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getIntegerType(128);
            })
+      .def("get_fp6e2m3_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float6E2M3FNType>();
+           })
+      .def("get_fp6e3m2_ty",
+           [](TritonOpBuilder &self) -> Type {
+             return self.getBuilder().getType<Float6E3M2FNType>();
+           })
       .def("get_fp4e2m1x2_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<PackedFloat4E2M1Type>();

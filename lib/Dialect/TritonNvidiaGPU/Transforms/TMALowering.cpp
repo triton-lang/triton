@@ -50,7 +50,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
-                    getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) / 8;
+                    getTMATransferBitWidth(tensorType.getElementType()) / 8;
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
                                               sizeInBytes, pred);
@@ -227,8 +227,30 @@ public:
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
                  TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
         context);
-    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
+      return;
+    }
+    // Descriptor-fed MMA operands reuse the TMA tile. For operands that
+    // originate in registers, put a full packing atom in each thread.
+    m.walk([](gpu::LocalAllocOp alloc) {
+      auto mem = alloc.getType();
+      if (!alloc.getSrc() ||
+          !gpu::NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding()))
+        return;
+      OpBuilder b(alloc);
+      auto ty = alloc.getSrc().getType();
+      auto order = gpu::getOrder(mem);
+      SmallVector<unsigned> spt(ty.getRank(), 1);
+      spt[order.front()] = 16;
+      auto layout = gpu::BlockedEncodingAttr::get(
+          ty.getContext(), ty.getShape(), spt, order,
+          gpu::lookupNumWarps(alloc), gpu::lookupThreadsPerWarp(b),
+          gpu::getCGALayout(mem.getEncoding()));
+      auto cvt = gpu::ConvertLayoutOp::create(
+          b, alloc.getLoc(), ty.cloneWithEncoding(layout), alloc.getSrc());
+      alloc.getSrcMutable().assign(cvt.getResult());
+    });
   }
 };
 

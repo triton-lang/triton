@@ -698,7 +698,9 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   if (fp6) {
     if (nvmma.getSwizzlingByteWidth() == 32)
       return op->emitOpError("FP6 TMA does not support 32-byte swizzling");
-    if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
+    if ((!memDesc.getElementType().isInteger(8) &&
+         memDesc.getElementType() != fp6) ||
+        !isa<TensorDescType>(desc) ||
         (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
       return op->emitOpError(
           "FP6 only supports tiled TMA loads and stores with byte storage");
@@ -1375,8 +1377,9 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (scaleType != ScaleDotElemType::E2M3 &&
-      scaleType != ScaleDotElemType::E3M2 && isa<FloatType>(elementType))
+  if (isa<FloatType>(elementType) && !isFP6(elementType) &&
+      scaleType != ScaleDotElemType::E2M3 &&
+      scaleType != ScaleDotElemType::E3M2)
     return elementType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:
@@ -1490,7 +1493,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   for (auto [mem, type] : {std::pair{getA().getType(), atype},
                            std::pair{getB().getType(), btype}}) {
     auto fp6 = NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding());
-    if ((isa<Float6E2M3FNType, Float6E3M2FNType>(type) || fp6) && fp6 != type)
+    if ((isFP6(type) || fp6) && fp6 != type)
       return emitOpError("FP6 MMA format must match the shared tile");
   }
   Type dtype = getD().getType().getElementType();

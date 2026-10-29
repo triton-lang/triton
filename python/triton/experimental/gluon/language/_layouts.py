@@ -426,7 +426,10 @@ class NVMMASharedLayout(SharedLayout):
         if transposed:
             shape_per_cta = shape_per_cta[1:] + shape_per_cta[:1]
         contig_dim_size = shape_per_cta[-1] * packing_factor
-        contig_dim_bytes = contig_dim_size * dtype.primitive_bitwidth // 8
+        element_bitwidth = 8 if dtype.is_fp6() else dtype.primitive_bitwidth
+        if dtype.is_fp6() and fp6_format is None:
+            fp6_format = dtype.name[3:]
+        contig_dim_bytes = contig_dim_size * element_bitwidth // 8
         if contig_dim_bytes >= 128 and contig_dim_bytes % 128 == 0:
             swizzle_byte_width = 128
         elif contig_dim_bytes >= 64 and contig_dim_bytes % 64 == 0:
@@ -444,7 +447,7 @@ class NVMMASharedLayout(SharedLayout):
 
         return NVMMASharedLayout(
             swizzle_byte_width=swizzle_byte_width,
-            element_bitwidth=dtype.primitive_bitwidth,
+            element_bitwidth=element_bitwidth,
             rank=rank,
             transposed=transposed,
             fp4_padded=fp4_padded,

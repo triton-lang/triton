@@ -64,6 +64,26 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+  if (NVMMASharedEncodingAttr::getFp6Type(memDescTy.getEncoding())) {
+    auto dims = standardOutDimNames(ctx, memDescTy.getRank());
+    auto order = applyPermutation(dims, getOrder(memDescTy));
+    if (regLayout.transposeOuts(order).getNumConsecutiveInOut() < 16)
+      return emitError(loc,
+                       "FP6 packing requires 16 contiguous register values");
+    // Bitcast four six-bit codes into three bytes. Pad each 16-code MMA atom.
+    SmallVector<Value> packed;
+    for (unsigned i = 0; i < inVals.size(); i += 4) {
+      SmallVector<Value> codes;
+      for (Value v : ArrayRef(inVals).slice(i, 4))
+        codes.push_back(b.trunc(int_ty(6), v));
+      auto bytes =
+          b.bitcast(packLLVector(loc, codes, rewriter), vec_ty(i8_ty, 3));
+      llvm::append_range(packed, unpackLLVector(loc, bytes, rewriter));
+      if (i % 16 == 12)
+        packed.append(4, b.i8_val(0));
+    }
+    inVals = std::move(packed);
+  }
   auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
   auto cvt = invertAndComposeStore(sharedLayout, regLayout);
   // Extra high register bits select CTA replicas, so repeat the source values.

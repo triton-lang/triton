@@ -392,8 +392,9 @@ void createTMABarrierAndWait(
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
-      sizeInBytes +=
-          loadSize * getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) / 8;
+      sizeInBytes += loadSize *
+                     ttng::getTMATransferBitWidth(tensorTy.getElementType()) /
+                     8;
     }
 
     bool mmaOnly = llvm::all_of(group, [](Operation *load) {

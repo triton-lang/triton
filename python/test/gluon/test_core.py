@@ -4886,6 +4886,40 @@ def test_fp6_tma_store_contiguous(width, source, with_allocator):
 
 
 @gluon.jit
+def _fp6_cast_tile(src, desc, out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [4, 1], [1, 0])
+    i = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
+    x = ttgl.load(src + i).to(desc.dtype)
+    ttgl.store(out + i, x.to(out.dtype.element_ty))
+    stage = ttgl.allocate_shared_memory(desc.dtype, [1, 128], ttgl.NVMMASharedLayout(0, 8), x[None, :])
+    ttgl.static_assert(stage.nbytes_per_cta == 128 and desc.nbytes_per_cta == 96)
+    fence_async_shared()
+    tma.async_store(desc, [0, 0], stage)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="Requires SM100 or SM103")
+@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
+@pytest.mark.parametrize("float_dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_fp6_tma_cast(fmt, float_dtype):
+    dtype = ttgl.float6e2m3 if fmt == "e2m3" else ttgl.float6e3m2
+    codes = torch.arange(128, device="cuda", dtype=torch.int32) % 64
+    values = fp6_values(fmt, codes).to(float_dtype)
+    buf = torch.empty((1, 96), device="cuda", dtype=torch.uint8)
+    desc = TensorDescriptor.from_tensor(triton.reinterpret(buf, dtype), [1, 128],
+                                        ttgl.NVMMASharedLayout(0, 8, fp6_format=fmt))
+    # Include a midpoint (ties to even) and an out-of-range value (saturates).
+    values[0], values[31] = values[1] / 2, 100
+    out = torch.empty_like(values)
+    _fp6_cast_tile[(1, )](values, desc, out)
+    expected = fp6_values(fmt, codes).to(float_dtype)
+    torch.testing.assert_close(buf[0], pack_fp6(codes))
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    assert torch.equal(out.signbit(), expected.signbit())
+
+
+@gluon.jit
 def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(a_desc.dtype, [128, 128], a_desc.layout)
     b = ttgl.allocate_shared_memory(b_desc.dtype, [128, 128], b_desc.layout)

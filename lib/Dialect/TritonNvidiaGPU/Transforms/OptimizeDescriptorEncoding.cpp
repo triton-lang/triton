@@ -1,5 +1,6 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
@@ -32,12 +33,16 @@ bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
     // Only 128-byte swizzling is supported for padded FP4 TMA descriptors.
     // MMA operands can still use padded layouts with smaller swizzles.
     return !nvmma.getTransposed() &&
+           (!nvmma.getFp6Type() || nvmma.getSwizzlingByteWidth() != 32) &&
            (!nvmma.getFp4Padded() || nvmma.getSwizzlingByteWidth() == 128);
   return false;
 }
 
 Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
     Attribute enc, ArrayRef<int64_t> shape, Type elementType) {
+  if (isFP6(elementType) &&
+      ttg::NVMMASharedEncodingAttr::getFp6Type(enc) != elementType)
+    return {}; // The tensor map must use the packed FP6 format.
   if (isCompatibleSharedEncoding(enc))
     return enc;
 
@@ -94,6 +99,9 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
 Attribute NvidiaGPUAssignDescriptorMemoryLayouts::buildFallbackSharedEncoding(
     mlir::MLIRContext *ctx, ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
     ttg::CGAEncodingAttr cgaLayout, Type elementType) {
+  if (isFP6(elementType))
+    return ttg::NVMMASharedEncodingAttr::get(ctx, 0, false, 8, false, cgaLayout,
+                                             elementType);
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, cgaLayout,
                                            elementType, /*fp4Padded*/ false);
 }

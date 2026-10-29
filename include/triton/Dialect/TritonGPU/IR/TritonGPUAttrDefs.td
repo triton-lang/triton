@@ -496,7 +496,8 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout, ::mlir::Type());
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout,
+                     ::mlir::isFP6(eltTy) ? eltTy : ::mlir::Type());
     }]>
   ];
 

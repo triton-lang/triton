@@ -4634,6 +4634,9 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
                                        LayoutEncodingTrait lhs,
                                        LayoutEncodingTrait rhs) {
+  if (NVMMASharedEncodingAttr::getFp6Type(lhs) !=
+      NVMMASharedEncodingAttr::getFp6Type(rhs))
+    return false;
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;

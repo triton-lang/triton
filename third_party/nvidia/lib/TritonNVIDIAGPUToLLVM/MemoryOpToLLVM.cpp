@@ -82,7 +82,8 @@ LogicalResult lowerLdStMatrix(
   auto *ctx = loc.getContext();
   assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
          "expected register broadcasting to be removed by the caller");
-  if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding())) {
+  if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding()) ||
+      NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
     return failure();
   }
   if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(memDescType).second !=
@@ -113,6 +114,45 @@ LogicalResult lowerLdStMatrix(
   return failure();
 }
 
+// TMA expands 16 FP6 codes into a 16-byte atom containing 12 packed
+// payload bytes. Locate the code in that payload before reading it.
+static SmallVector<Value> loadFP6Codes(Location loc, RankedTensorType regTy,
+                                       const LinearLayout &regLayout,
+                                       MemDescType memTy,
+                                       SharedMemoryObject smem,
+                                       RewriterBase &rewriter,
+                                       const NVIDIA::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned axis = getOrder(memTy).front();
+  SmallVector<Value> bytes, shifts;
+  for (auto &index : emitIndices(loc, rewriter, targetInfo, regLayout, regTy,
+                                 /*withCTAOffset=*/true)) {
+    Value col = index[axis];
+    Value bit = b.mul(b.and_(col, b.i32_val(15)), b.i32_val(6));
+    bytes.push_back(
+        b.add(b.and_(col, b.i32_val(-16)), b.lshr(bit, b.i32_val(3))));
+    shifts.push_back(b.and_(bit, b.i32_val(7)));
+  }
+  auto offsets = computeBlockLocalOffsets(loc, memTy, regLayout, bytes, axis,
+                                          rewriter, targetInfo);
+  auto addrs =
+      materializeLocalAddrs(loc, memTy, smem, i8_ty, offsets, rewriter);
+  SmallVector<Value> codes;
+  for (auto [addr, shift] : llvm::zip_equal(addrs, shifts)) {
+    // Only read a second payload byte when the field crosses a byte boundary.
+    Value next = b.zext(i32_ty, b.icmp_ugt(shift, b.i32_val(2)));
+    Value hiPtr = b.gep(addr.ptr.getType(), i8_ty, addr.ptr, next);
+    Value lo = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                      i8_ty, b.true_val());
+    Value hi = targetInfo.loadDShared(rewriter, loc, hiPtr, addr.ctaId, i8_ty,
+                                      b.true_val());
+    Value pair =
+        b.or_(b.zext(i32_ty, lo), b.shl(b.zext(i32_ty, hi), b.i32_val(8)));
+    codes.push_back(b.trunc(i8_ty, b.and_(b.lshr(pair, shift), b.i32_val(63))));
+  }
+  return codes;
+}
+
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -138,10 +178,12 @@ public:
     llvm::SmallVector<Value> values;
     auto regLayout =
         toLinearLayout(dstTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto result =
-        lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
-                        rewriter, targetInfo, getTypeConverter());
-    if (failed(result)) {
+    if (NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
+      values = loadFP6Codes(op.getLoc(), dstTy, regLayout, memDescType, smemObj,
+                            rewriter, targetInfo);
+    } else if (failed(lowerLdStMatrix(op.getLoc(), regLayout, memDescType,
+                                      values, smemObj, rewriter, targetInfo,
+                                      typeConverter))) {
       return failure();
     }
     auto value = packUniqueTensorElements(op.getLoc(), typeConverter, values,

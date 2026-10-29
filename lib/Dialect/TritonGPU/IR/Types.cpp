@@ -100,9 +100,10 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   if (shape.empty()) {
     return emitError() << "rank 0 memdesc is not allowed";
   }
-  if (NVMMASharedEncodingAttr::getFp6Type(encoding) &&
-      !elementType.isInteger(8))
-    return emitError() << "FP6 shared tiles require i8 storage";
+  if (auto fp6 = NVMMASharedEncodingAttr::getFp6Type(encoding))
+    if (!elementType.isInteger(8) && elementType != fp6)
+      return emitError()
+             << "FP6 shared tiles require i8 or matching FP6 storage";
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (bitwidth != 1 && bitwidth < 8)
     return emitError() << "element type bit width must be 1 or at least 8; got "

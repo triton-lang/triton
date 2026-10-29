@@ -183,9 +183,7 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
         # FP6 tensor coordinates count logical values.
         align_bytes = 64 if fn_name == "async_store" and desc.block_shape[-1] == 64 else 128
     dtype = desc.dtype
-    assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
-    elem_bytes = dtype.primitive_bitwidth // 8
-    align = align_bytes // elem_bytes
+    align = align_bytes // dtype.itemsize
 
     coord = ttgl.to_tensor(coord, _semantic=_semantic)
     rem = coord.__mod__(align, _semantic=_semantic)
@@ -468,9 +466,12 @@ def make_tensor_descriptor(
     padding_option = _unwrap_if_constexpr(padding_option)
     block_shape = _unwrap_if_constexpr(block_shape)
     layout = _unwrap_if_constexpr(layout)
+    dtype = base.dtype.element_ty
+    if dtype.is_fp6() and dtype.name[3:] != layout.fp6_format:
+        raise ValueError("FP6 descriptor dtype must match the layout format")
     if layout.fp6_format is not None:
-        if base.dtype.element_ty != ttgl.uint8:
-            raise ValueError("FP6 tensor maps require uint8 storage")
+        if dtype != ttgl.uint8 and not dtype.is_fp6():
+            raise ValueError("FP6 tensor maps require FP6 or uint8 storage")
         validate_fp6_box(block_shape[-1], _unwrap_if_constexpr(shape[-1]), map(_unwrap_if_constexpr, strides[:-1]),
                          padding_option)
 
@@ -482,7 +483,7 @@ def make_tensor_descriptor(
     if len(block_shape) != ndim:
         raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(block_shape)}")
     assert isinstance(base.dtype, ttgl.pointer_type)
-    elem_size = base.dtype.element_ty.primitive_bitwidth // 8
+    elem_size = dtype.itemsize
     contig_dim_size = ttgl._unwrap_if_constexpr(block_shape[-1])
     if contig_dim_size * elem_size < 16:
         raise ValueError(

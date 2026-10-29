@@ -96,31 +96,27 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    auto values = dyn_cast<SplatElementsAttr>(op.getValue());
-    if (!values)
+    auto splat = dyn_cast<SplatElementsAttr>(value);
+    Type elemType = getElementTypeOrSelf(op.getType());
+    if (!splat && (!isFP6(elemType) || !isa<FloatAttr>(value)))
       return failure();
-    auto loc = op->getLoc();
-    LLVM::ConstantOp arithConstantOp;
-    auto elemType = values.getElementType();
-    Attribute val;
-    if (type::isFloat(elemType)) {
-      val = values.getValues<FloatAttr>()[0];
-    } else if (type::isInt(elemType)) {
-      val = values.getValues<IntegerAttr>()[0];
-    } else {
-      llvm::errs() << "ArithConstantSplatOpConversion get unsupported type: "
-                   << value.getType() << "\n";
+    Attribute literal = splat ? splat.getSplatValue<Attribute>() : value;
+    if (isFP6(elemType)) {
+      auto bits = cast<FloatAttr>(literal).getValue().bitcastToAPInt();
+      literal = rewriter.getI8IntegerAttr(bits.getZExtValue());
+      elemType = rewriter.getI8Type();
+    } else if (type::isFloat8(elemType)) {
+      elemType = rewriter.getI8Type();
+    } else if (!type::isFloat(elemType) && !type::isInt(elemType)) {
       return failure();
     }
-    // Lower FP8 constant to int8 constant since FP8 types are not supported on
-    // LLVM IR.
-    if (type::isFloat8(elemType))
-      elemType = rewriter.getIntegerType(8);
-    auto constOp = LLVM::ConstantOp::create(rewriter, loc, elemType, val);
-    auto typeConverter = getTypeConverter();
-    auto llStruct = SplatOpConversion::convertSplatLikeOp(
-        elemType, op.getType(), constOp, typeConverter, rewriter, loc);
-    rewriter.replaceOp(op, llStruct);
+    Value result =
+        LLVM::ConstantOp::create(rewriter, op.getLoc(), elemType, literal);
+    if (splat)
+      result = SplatOpConversion::convertSplatLikeOp(elemType, op.getType(),
+                                                     result, getTypeConverter(),
+                                                     rewriter, op.getLoc());
+    rewriter.replaceOp(op, result);
     return success();
   }
 };

@@ -257,7 +257,7 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
   return converter;
 }
 
-static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
+static ConverterT makeNativeFpConverter(Type srcTy, Type dstTy, bool useFp32) {
   return [srcTy, dstTy,
           useFp32](Location loc, ConversionPatternRewriter &rewriter,
                    const SmallVector<Value> &values) -> SmallVector<Value> {
@@ -272,9 +272,13 @@ static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
         hi = b.fpext(f32_ty, hi);
       }
       // The first scalar operand fills the high half of the packed result.
-      result = NVVM::ConvertF32x2ToF8x2Op::create(
-          rewriter, loc, vec_ty(i8_ty, 2), hi, lo, NVVM::FPRoundingMode::RN,
-          NVVM::SaturationMode::SATFINITE, false, dstTy);
+      if (isFP6(dstTy))
+        result = NVVM::ConvertF32x2ToF6x2Op::create(
+            rewriter, loc, vec_ty(i8_ty, 2), hi, lo, false, dstTy);
+      else
+        result = NVVM::ConvertF32x2ToF8x2Op::create(
+            rewriter, loc, vec_ty(i8_ty, 2), hi, lo, NVVM::FPRoundingMode::RN,
+            NVVM::SaturationMode::SATFINITE, false, dstTy);
     } else {
       Value packed = packLLVector(loc, values, rewriter);
       if (srcTy.isF16()) {
@@ -284,6 +288,9 @@ static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
         result = NVVM::ConvertBF16x2ToF8x2Op::create(
             rewriter, loc, vec_ty(i8_ty, 2), packed, NVVM::FPRoundingMode::RN,
             NVVM::SaturationMode::SATFINITE, false, dstTy);
+      } else if (isFP6(srcTy)) {
+        result = NVVM::ConvertF6x2ToF16x2Op::create(
+            rewriter, loc, vec_ty(f16_ty, 2), packed, srcTy, false);
       } else {
         result = NVVM::ConvertF8x2ToF16x2Op::create(
             rewriter, loc, vec_ty(f16_ty, 2), packed, srcTy, false);
@@ -352,6 +359,8 @@ struct FpToFpOpConversion
     // Require PTX 9.2 to support both directions.
     bool hasPackedBf16 = computeCapability >= 100 && ptxVersion >= 92;
 
+    if (isFP6(srcTy) || isFP6(dstTy))
+      return {makeNativeFpConverter(srcTy, dstTy, isFP6(dstTy)), 2};
     if (computeCapability < 89 &&
         (isa<Float8E4M3FNType>(srcTy) || isa<Float8E4M3FNType>(dstTy))) {
       llvm::report_fatal_error("Conversion from/to f8e4m3nv is only supported "
@@ -362,11 +371,11 @@ struct FpToFpOpConversion
           (srcTy.isF16() || srcTy.isBF16() || srcTy.isF32()) &&
           roundingMode == RoundingMode::RTNE) {
         bool useFp32 = srcTy.isF32() || (srcTy.isBF16() && !hasPackedBf16);
-        return {makeNativeFp8Converter(srcTy, dstTy, useFp32), 2};
+        return {makeNativeFpConverter(srcTy, dstTy, useFp32), 2};
       }
       if (isa<Float8E4M3FNType, Float8E5M2Type>(srcTy) && dstTy.isF16() &&
           !roundingMode.has_value())
-        return {makeNativeFp8Converter(srcTy, dstTy, false), 2};
+        return {makeNativeFpConverter(srcTy, dstTy, false), 2};
     }
 
     DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
@@ -418,6 +427,8 @@ struct FpToFpOpConversion
     auto srcElementType = getElementTypeOrSelf(op.getSrc());
     auto dstElementType = getElementTypeOrSelf(op.getResult());
     auto roundingMode = op.getRounding();
+    if (srcElementType == dstElementType)
+      return {operands[0][0]};
 
     if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
@@ -437,8 +448,6 @@ struct FpToFpOpConversion
         isa<Float16Type, BFloat16Type, Float32Type, Float64Type>(
             dstElementType)) {
       Value value = operands[0][0];
-      if (srcElementType == dstElementType)
-        return {value};
       unsigned srcWidth = srcElementType.getIntOrFloatBitWidth();
       unsigned dstWidth = dstElementType.getIntOrFloatBitWidth();
       if (srcWidth < dstWidth)
@@ -455,15 +464,16 @@ struct FpToFpOpConversion
                           isa<Float8E5M2Type>(dstElementType) &&
                           roundingMode == RoundingMode::RTNE;
     bool useFP16IntermediateSrc =
-        (srcElementType.isF32() &&
+        (srcElementType.isF32() && !isFP6(dstElementType) &&
          (!(llvm::isa<Float8E5M2Type>(dstElementType) ||
             (computeCapability >= 89 &&
              llvm::isa<Float8E4M3FNType>(dstElementType))) ||
           roundingMode.value() == RoundingMode::RTZ)) ||
         (useSoftwareFp8 && srcElementType.isBF16());
-    bool isDstFP32 = dstElementType.isF32();
+    bool widenFromFP16 = dstElementType.isF32() ||
+                         (isFP6(srcElementType) && dstElementType.isBF16());
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
-    Type dstType = isDstFP32 ? f16_ty : dstElementType;
+    Type dstType = widenFromFP16 ? f16_ty : dstElementType;
     auto [cvtFunc, numElements] =
         getConversionFunc(srcType, dstType, roundingMode);
     SmallVector<Value> inVals;
@@ -485,9 +495,12 @@ struct FpToFpOpConversion
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
-    if (isDstFP32)
-      for (Value &v : outVals)
+    if (widenFromFP16)
+      for (Value &v : outVals) {
         v = convertFp16ToFp32(loc, rewriter, v);
+        if (dstElementType.isBF16())
+          v = b.fptrunc(elemTy, v);
+      }
     // Pack values
     return outVals;
   }

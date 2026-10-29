@@ -24,6 +24,14 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     llvm::report_fatal_error(msg);
   }
   auto sharedEnc = cast<ttg::SharedEncodingTrait>(encoding);
+  if (isa_and_nonnull<DescriptorStoreOp>(op) &&
+      isFP6(descType.getElementType())) {
+    // TMA store takes a byte lane per code, unlike the grouped load layout.
+    auto mma = cast<ttg::NVMMASharedEncodingAttr>(sharedEnc);
+    sharedEnc = ttg::NVMMASharedEncodingAttr::get(
+        op->getContext(), mma.getSwizzlingByteWidth(), false, 8, false,
+        mma.getCGALayout());
+  }
   if (descType.getShape() == tensorType.getShape())
     return sharedEnc;
 
