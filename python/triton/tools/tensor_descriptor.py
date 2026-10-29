@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any
-from triton.language import float6e2m3, float6e3m2
+import triton.language as tl
 from triton._utils import canonicalize_dtype, fp6_logical_shape, validate_block_shape, validate_fp6_box
 
 
@@ -26,7 +26,7 @@ class TensorDescriptor:
             if not self.dtype.is_fp6() or canonicalize_dtype(self.base.dtype) != "u8":
                 raise ValueError("a descriptor dtype override requires FP6 on a uint8 base")
             self.base = reinterpret(self.base, self.dtype)
-        if self.base.dtype in (float6e2m3, float6e3m2):
+        if self.base.dtype in (tl.float6e2m3, tl.float6e3m2):
             if self.round_f32_to_tf32 or (check_address and self.base.data_ptr() % 32):
                 raise ValueError("FP6 tensor maps require a 32-byte aligned base and no TF32 rounding")
             validate_fp6_box(self.block_shape[-1], self.shape[-1], self.strides[:-1], self.padding, host=True)
@@ -50,6 +50,6 @@ class TensorDescriptor:
     def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False, dtype=None):
         """Infer logical extents from storage. An FP6 dtype interprets uint8 rows as packed codes."""
         shape = tensor.shape
-        if (dtype or tensor.dtype) in (float6e2m3, float6e3m2):
+        if (dtype or tensor.dtype) in (tl.float6e2m3, tl.float6e3m2):
             shape = fp6_logical_shape(shape)
         return TensorDescriptor(tensor, shape, tensor.stride(), block_shape, padding, round_f32_to_tf32, dtype)
