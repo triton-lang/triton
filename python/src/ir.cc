@@ -1292,7 +1292,7 @@ void init_triton_ir(py::module_ &m) {
                   RoundingModeAttr::get(self.getBuilder().getContext(),
                                         roundingMode.value()));
             else
-              return self.create<FpToFpOp>(dstType, src);
+              return self.create<FpToFpOp>(dstType, src, RoundingModeAttr{});
           },
           py::arg("src"), py::arg("dstType"), py::arg("roundingMode").none())
       // Conversions for standard LLVM builtin types
@@ -1318,7 +1318,8 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("create_fp_ext",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-             return self.create<arith::ExtFOp>(dstType, src);
+             return self.create<arith::ExtFOp>(dstType, src,
+                                               arith::FastMathFlagsAttr{});
            })
       .def("create_fp_trunc",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {

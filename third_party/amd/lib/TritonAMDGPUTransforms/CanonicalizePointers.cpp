@@ -1704,10 +1704,12 @@ public:
 
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
+          op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     else
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, TypeRange{}, ValueRange{operands}, op->getAttrs());
+          op, TypeRange{}, ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };
@@ -1739,8 +1741,9 @@ public:
       operands[i] = newPtr;
     }
 
-    rewriter.replaceOpWithNewOp<SourceOp>(op, op->getResultTypes(),
-                                          ValueRange{operands}, op->getAttrs());
+    rewriter.replaceOpWithNewOp<SourceOp>(
+        op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+        op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };

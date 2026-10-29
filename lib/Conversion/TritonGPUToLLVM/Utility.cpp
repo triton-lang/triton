@@ -1478,7 +1478,8 @@ LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
 LLVM::CallIntrinsicOp
 createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args) {
-  auto op = LLVM::CallIntrinsicOp::create(builder, loc, types, args);
+  auto op = LLVM::CallIntrinsicOp::create(builder, loc, types, args,
+                                          LLVM::CallIntrinsicOp::Properties{});
   op.getProperties().setIntrin(builder.getStringAttr(intrinsic));
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
