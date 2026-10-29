@@ -14,7 +14,9 @@ auto convertValue(Value value, const FloatType &scalarToType,
                   PatternRewriter &rewriter) -> mlir::Value {
   auto fromType = cast<RankedTensorType>(value.getType());
   auto toType = fromType.cloneWith(std::nullopt, scalarToType);
-  return T::create(rewriter, value.getLoc(), toType, value).getResult();
+  return T::create(rewriter, value.getLoc(), TypeRange{toType},
+                   ValueRange{value}, typename T::Properties{})
+      .getResult();
 }
 
 auto splitF32(Value input, unsigned N, PatternRewriter &rewriter)

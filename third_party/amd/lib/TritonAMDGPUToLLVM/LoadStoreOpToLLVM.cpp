@@ -2758,8 +2758,9 @@ struct AsyncCopyMbarrierArriveOpConversion
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
-    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(rewriter, loc, {},
-                                                             smemObj.getBase());
+    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(
+        rewriter, loc, TypeRange{}, smemObj.getBase(),
+        ROCDL::DsAtomicAsyncBarrierArriveOp::Properties{});
     rewriter.replaceOp(op, newOp);
     return success();
   }

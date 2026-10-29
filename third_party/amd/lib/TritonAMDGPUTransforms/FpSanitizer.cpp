@@ -30,7 +30,8 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
   if (isa<FloatType>(elemTy)) {
     if (elemTy == dstElemTy)
       return scale;
-    return tt::FpToFpOp::create(rewriter, loc, scaleTy.clone(dstElemTy), scale);
+    return tt::FpToFpOp::create(rewriter, loc, scaleTy.clone(dstElemTy), scale,
+                                tt::RoundingModeAttr{});
   }
 
   auto elemIntTy = dyn_cast<IntegerType>(elemTy);
@@ -78,7 +79,8 @@ struct ScaledUpcastFp8OpPattern
     auto dstElemTy = cast<FloatType>(dstTy.getElementType());
 
     Value upcasted = tt::FpToFpOp::create(
-        rewriter, loc, op.getInput().getType().clone(dstElemTy), op.getInput());
+        rewriter, loc, op.getInput().getType().clone(dstElemTy), op.getInput(),
+        tt::RoundingModeAttr{});
 
     auto scale = convertScaleElemType(rewriter, loc, op.getScale(), dstElemTy);
     if (!scale)
