@@ -2648,10 +2648,8 @@ NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                 unsigned elementBitWidth, bool fp4Padded,
                                 CGAEncodingAttr CGALayout, Type fp6Type) {
   if (fp6Type && (!isa<Float6E2M3FNType, Float6E3M2FNType>(fp6Type) ||
-                  elementBitWidth != 8 || fp4Padded ||
-                  !llvm::is_contained({0, 64, 128}, swizzlingByteWidth)))
-    return emitError()
-           << "FP6 requires byte storage and 0, 64 or 128-byte swizzling";
+                  elementBitWidth != 8 || fp4Padded))
+    return emitError() << "FP6 requires byte storage without FP4 padding";
   if (elementBitWidth == 0)
     return emitError() << "elementBitWidth must be non-zero";
   if (!llvm::is_contained({0, 32, 64, 128}, swizzlingByteWidth))

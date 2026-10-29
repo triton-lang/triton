@@ -195,14 +195,10 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   auto newLayout = NVMMASharedEncodingAttr::get(
       vType.getContext(), vType.getShape(), newOrder, cgaLayout,
       vType.getElementType(), isMMAv5Fp4Padded);
-  if (isFP6(vType.getElementType())) {
-    // FP6 has no 32-byte swizzle mode.
-    unsigned swizzle = newLayout.getSwizzlingByteWidth();
+  if (isFP6(vType.getElementType()))
     newLayout = NVMMASharedEncodingAttr::get(
-        vType.getContext(), swizzle == 32 ? 0 : swizzle,
-        newLayout.getTransposed(), 8, false, cgaLayout,
-        vType.getElementType());
-  }
+        vType.getContext(), newLayout.getSwizzlingByteWidth(),
+        newLayout.getTransposed(), 8, false, cgaLayout, vType.getElementType());
   auto newType = MemDescType::get(vType.getShape(), vType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);

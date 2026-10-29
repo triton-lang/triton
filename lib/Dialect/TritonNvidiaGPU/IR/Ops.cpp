@@ -696,6 +696,8 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     return op->emitOpError("FP6 loads require a matching opaque tile and "
                            "stores require byte lanes");
   if (fp6) {
+    if (nvmma.getSwizzlingByteWidth() == 32)
+      return op->emitOpError("FP6 TMA does not support 32-byte swizzling");
     if ((!memDesc.getElementType().isInteger(8) &&
          memDesc.getElementType() != fp6) ||
         !isa<TensorDescType>(desc) ||
