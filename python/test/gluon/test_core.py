@@ -4892,6 +4892,7 @@ def _fp6_cast_tile(src, desc, out):
     x = ttgl.load(src + i).to(desc.dtype)
     ttgl.store(out + i, x.to(out.dtype.element_ty))
     stage = ttgl.allocate_shared_memory(desc.dtype, [1, 128], ttgl.NVMMASharedLayout(0, 8), x[None, :])
+    ttgl.static_assert(stage.nbytes_per_cta == 128 and desc.nbytes_per_cta == 96)
     fence_async_shared()
     tma.async_store(desc, [0, 0], stage)
     tma.store_wait(0)
@@ -4908,11 +4909,14 @@ def test_fp6_tma_cast(fmt, float_dtype):
     buf = torch.empty((1, 96), device="cuda", dtype=torch.uint8)
     desc = TensorDescriptor.from_tensor(triton.reinterpret(buf, dtype), [1, 128],
                                         ttgl.NVMMASharedLayout(0, 8, fp6_format=fmt))
+    # Include a midpoint (ties to even) and an out-of-range value (saturates).
+    values[0], values[31] = values[1] / 2, 100
     out = torch.empty_like(values)
     _fp6_cast_tile[(1, )](values, desc, out)
+    expected = fp6_values(fmt, codes).to(float_dtype)
     torch.testing.assert_close(buf[0], pack_fp6(codes))
-    torch.testing.assert_close(out, values, atol=0, rtol=0)
-    assert torch.equal(out.signbit(), values.signbit())
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    assert torch.equal(out.signbit(), expected.signbit())
 
 
 @gluon.jit

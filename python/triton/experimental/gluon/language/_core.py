@@ -313,7 +313,8 @@ class shared_memory_descriptor_type(base_type):
         else:
             cga_layout = self.layout.cga_layout
         shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
-        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
+        bitwidth = 8 if self.element_ty.is_fp6() else self.element_ty.primitive_bitwidth
+        return math.prod(shape_per_cta) * bitwidth // 8
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
