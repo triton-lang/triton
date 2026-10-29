@@ -190,14 +190,13 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
            "memory to remove the need to transpose the tensor in registers.";
   }
 
-  Attribute SharedMemorySpace =
-      SharedMemorySpaceAttr::get(vType.getContext());
+  Attribute SharedMemorySpace = SharedMemorySpaceAttr::get(vType.getContext());
   auto cgaLayout = getCGALayout(vType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
       vType.getContext(), vType.getShape(), newOrder, cgaLayout,
       vType.getElementType(), isMMAv5Fp4Padded);
   auto newType = MemDescType::get(vType.getShape(), vType.getElementType(),
-                                 newLayout, SharedMemorySpace);
+                                  newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
   return LocalAllocOp::create(rewriter, arg.getLoc(), newType, arg);
 }
