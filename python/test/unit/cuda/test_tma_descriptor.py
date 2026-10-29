@@ -147,8 +147,9 @@ def test_fp6_tma_roundtrip(fmt, width, host, row, with_allocator):
     dtype = tl.float6e2m3 if fmt == "e2m3" else tl.float6e3m2
     codes = torch.arange(width, device="cuda", dtype=torch.int32) % 64
     x = fp6_values(fmt, codes)
-    # Include an exact midpoint, saturation and a signed zero.
+    # A premature f32-to-f16 conversion would round both midpoint cases down.
     x[0], codes[0] = x[1].item() / 2, 0
+    x[2], codes[2] = torch.nextafter(x[0], x[1]), 1
     x[1], codes[1] = 100, 31
     x[32] = -0.0
     initial = torch.randint(0, 64, (3, row), device="cuda", dtype=torch.int32)
