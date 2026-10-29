@@ -49,11 +49,14 @@ class _tensor_descriptor_type_base(base_type):
 
     @property
     def nbytes_per_cta(self) -> int:
+        nbytes = self.block_type.nbytes
+        if self.layout.fp6_format is not None:
+            nbytes = nbytes // 4 * 3
         cga_layout = self.layout.cga_layout
         if len(cga_layout) == 0:
-            return self.block_type.nbytes
+            return nbytes
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
-        return self.block_type.nbytes // num_cta_splits
+        return nbytes // num_cta_splits
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         raise NotImplementedError
@@ -169,6 +172,9 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     align_bytes = 16
     if desc.layout.fp4_padded:
         align_bytes = 64
+    if desc.layout.fp6_format is not None:
+        # FP6 tensor coordinates count logical values.
+        align_bytes = 64 if fn_name == "async_store" and desc.block_shape[-1] == 64 else 128
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8
@@ -454,6 +460,19 @@ def make_tensor_descriptor(
 ) -> tensor_descriptor:
     padding_option = _unwrap_if_constexpr(padding_option)
     block_shape = _unwrap_if_constexpr(block_shape)
+    layout = _unwrap_if_constexpr(layout)
+    if layout.fp6_format is not None:
+        width = block_shape[-1]
+        if width not in (64, 128) or base.dtype.element_ty != ttgl.uint8 or padding_option != "zero":
+            raise ValueError("FP6 tensor maps require uint8 storage, zero padding and a 64/128-value box")
+        align = 16 if width == 64 else 32
+        for s in strides[:-1]:
+            s = _unwrap_if_constexpr(s)
+            if isinstance(s, int) and s % align:
+                raise ValueError(f"FP6 outer byte strides must be multiples of {align}")
+        inner = _unwrap_if_constexpr(shape[-1])
+        if isinstance(inner, int) and inner % width:
+            raise ValueError("FP6 innermost extent must be a multiple of the box width")
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):

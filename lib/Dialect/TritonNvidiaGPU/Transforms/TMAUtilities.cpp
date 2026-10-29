@@ -104,6 +104,8 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
+  if (gpu::NVMMASharedEncodingAttr::getFp6Type(encoding))
+    return TMA_B6X16_P32;
   if (fp4Padded)
     return TMA_B4X16_P64;
 

@@ -76,7 +76,8 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
     auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return NVMMASharedEncodingAttr::get(
         ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
+        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc,
+        nvmmaEnc.getFp6Type());
   }
   if (auto swizEnc = dyn_cast<SwizzledSharedEncodingAttr>(encoding)) {
     auto existingCga = swizEnc.getCGALayout();

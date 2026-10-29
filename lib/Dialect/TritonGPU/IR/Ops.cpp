@@ -590,6 +590,9 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
+  if (NVMMASharedEncodingAttr::getFp6Type(srcType.getEncoding()) !=
+      NVMMASharedEncodingAttr::getFp6Type(dstType.getEncoding()))
+    return emitOpError("reshape must preserve the FP6 tile format");
   if (product(dstType.getShape()) != product(srcType.getShape())) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
@@ -629,7 +632,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CGALayout);
+            mmaEncoding.getFp4Padded(), CGALayout, mmaEncoding.getFp6Type());
         auto srcLL = toLinearLayout(srcShape, srcEnc);
         auto dstLL = toLinearLayout(dstShape, candidateEncoding);
         if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
@@ -694,6 +697,9 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
+  if (NVMMASharedEncodingAttr::getFp6Type(srcTy.getEncoding()) !=
+      NVMMASharedEncodingAttr::getFp6Type(dstTy.getEncoding()))
+    return emitOpError("cannot reinterpret an FP6 MMA tile as another format");
 
   // Padded layout creates some "holes". The hole patterns of the source and
   // the destination layouts must be equal.
@@ -951,6 +957,9 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 }
 
 LogicalResult LocalAllocOp::verify() {
+  if (getSrc() && NVMMASharedEncodingAttr::getFp6Type(getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
   if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
@@ -961,6 +970,9 @@ LogicalResult LocalAllocOp::verify() {
 
 // LocalStoreOp
 LogicalResult LocalStoreOp::verify() {
+  if (NVMMASharedEncodingAttr::getFp6Type(getDst().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
   if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
@@ -971,6 +983,9 @@ LogicalResult LocalStoreOp::verify() {
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
+  if (NVMMASharedEncodingAttr::getFp6Type(getSrc().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
                                     "result")))
     return failure();
@@ -979,6 +994,9 @@ LogicalResult LocalLoadOp::verify() {
 
 // LocalGatherOp
 LogicalResult LocalGatherOp::verify() {
+  if (NVMMASharedEncodingAttr::getFp6Type(getSrc().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   auto srcTy = getSrc().getType();
   auto indicesTy = cast<RankedTensorType>(getIndices().getType());
   auto dstTy = cast<RankedTensorType>(getType());

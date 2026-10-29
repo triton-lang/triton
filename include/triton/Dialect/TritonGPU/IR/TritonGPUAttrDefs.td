@@ -474,10 +474,19 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "bool":$transposed,
     "unsigned":$elementBitWidth,
     "bool":$fp4Padded,
-    "CGAEncodingAttr":$CGALayout
+    "CGAEncodingAttr":$CGALayout,
+    OptionalParameter<"::mlir::Type">:$fp6Type
   );
 
+  let skipDefaultBuilders = 1;
   let builders = [
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "bool":$fp4Padded,
+                     "CGAEncodingAttr":$CGALayout,
+                     CArg<"::mlir::Type", "{}">:$fp6Type), [{
+      return $_get(context, swizzlingByteWidth, transposed, elementBitWidth,
+                   fp4Padded, CGALayout, fp6Type);
+    }]>,
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
@@ -487,7 +496,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout, ::mlir::Type());
     }]>
   ];
 
@@ -497,6 +506,11 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     static unsigned getDefaultSwizzlingByteWidth(
         ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
         CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
+
+    static Type getFp6Type(Attribute encoding) {
+      auto nvmma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
+      return nvmma ? nvmma.getFp6Type() : Type();
+    }
 
     int getPerPhase() const;
     int getMaxPhase() const;

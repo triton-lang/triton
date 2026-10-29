@@ -364,6 +364,8 @@ class NVMMASharedLayout(SharedLayout):
         rank (int): Rank of the tensor.
         transposed (bool): Whether the layout is transposed.
         fp4_padded (bool): Whether FP4 padding is used.
+        fp6_format (Optional[str]): "e2m3" or "e3m2" for an opaque FP6 TMA-load/MMA tile.
+            Its 16-byte shared atoms hold 16 packed FP6 values and four padding bytes.
         cga_layout (Optional[List[List[int]]]): Bases describing CTA tiling.
     """
     swizzle_byte_width: int
@@ -372,6 +374,7 @@ class NVMMASharedLayout(SharedLayout):
     transposed: bool = False
     fp4_padded: bool = False
     cga_layout: List[List[int]] = field(default_factory=list)
+    fp6_format: str | None = None
 
     def __post_init__(self):
         super().__setattr__("swizzle_byte_width", _unwrap_if_constexpr(self.swizzle_byte_width))
@@ -390,6 +393,11 @@ class NVMMASharedLayout(SharedLayout):
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
 
+        super().__setattr__("fp6_format", _unwrap_if_constexpr(self.fp6_format))
+        if self.fp6_format is not None:
+            assert self.fp6_format in ("e2m3", "e3m2")
+            assert self.element_bitwidth == 8 and not self.fp4_padded
+            assert self.swizzle_byte_width in (0, 64, 128)
         if self.fp4_padded:
             assert self.swizzle_byte_width == 128, "fp4_padded only supports 128 byte swizzling"
             assert self.element_bitwidth == 8, "fp4_padded is only supported for element_bitwidth=8"
@@ -402,11 +410,12 @@ class NVMMASharedLayout(SharedLayout):
             self.fp4_padded,
             self.cga_layout,
             self.rank,
+            self.fp6_format or "",
         )
 
     @staticmethod
     @constexpr_function
-    def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, cga_layout=None):
+    def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, cga_layout=None, fp6_format=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.
 
         This picks the largest swizzle pattern compatible with the shape, which
@@ -440,16 +449,18 @@ class NVMMASharedLayout(SharedLayout):
             rank=rank,
             transposed=transposed,
             fp4_padded=fp4_padded,
+            fp6_format=fp6_format,
             cga_layout=cga_layout,
         )
 
     def mangle(self) -> str:
         cga_layout = "_".join("~".join(map(str, vec)) for vec in self.cga_layout) if self.cga_layout else ""
-        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.rank}_{self.transposed}_{self.fp4_padded}_{cga_layout}_NVMMA"
+        fp6 = f"_{self.fp6_format}" if self.fp6_format else ""
+        return f"NVMMA{fp6}_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.rank}_{self.transposed}_{self.fp4_padded}_{cga_layout}_NVMMA"
 
     def __hash__(self):
         return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
-                     tuple(tuple(vec) for vec in self.cga_layout) if self.cga_layout else None))
+                     self.fp6_format, tuple(tuple(vec) for vec in self.cga_layout) if self.cga_layout else None))
 
 
 @dataclass(frozen=True, eq=True)

@@ -4842,6 +4842,101 @@ def test_split_auto_layout_execution():
     torch.testing.assert_close(output, ref)
 
 
+@gluon.jit
+def _fp6_store_tile(src, dst, x, WIDTH: ttgl.constexpr):
+    fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, fp6_format="e2m3")
+    desc = tma.make_tensor_descriptor(dst, [3, 128], [96, 1], [1, WIDTH], fmt)
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    i = ttgl.arange(0, WIDTH, layout=ttgl.SliceLayout(0, layout))
+    lanes = ttgl.load(src + i).expand_dims(0)
+    stage = ttgl.allocate_shared_memory(ttgl.uint8, [1, WIDTH], ttgl.NVMMASharedLayout(0, 8), lanes)
+    fence_async_shared()
+    tma.async_store(desc, [1, x], stage)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="Requires SM100 or SM103")
+@pytest.mark.parametrize("width", [64, 128])
+def test_fp6_tma_store_contiguous(width, with_allocator):
+    if width == 64 and not is_blackwell_ultra():
+        pytest.skip("64-value TMA stores require SM103")
+    src = torch.randint(0, 256, (width, ), device="cuda", dtype=torch.uint8)
+    dst = torch.full((3, 96), 0xa5, device="cuda", dtype=torch.uint8)
+    expected = dst.clone()
+    codes = (src.int() & 63).reshape(-1, 4)
+    words = codes[:, 0] | codes[:, 1] << 6 | codes[:, 2] << 12 | codes[:, 3] << 18
+    packed = torch.stack((words, words >> 8, words >> 16), dim=1).byte().flatten()
+    expected[1, 96 - packed.numel():] = packed
+    kernel = _fp6_store_tile[(1, )](src, dst, 128 - width, width)
+    assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
+    torch.testing.assert_close(dst, expected)
+
+
+@gluon.jit
+def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.constexpr, PV: ttgl.constexpr):
+    a = ttgl.allocate_shared_memory(a_desc.dtype, [128, 128], a_desc.layout)
+    b = ttgl.allocate_shared_memory(b_desc.dtype, [128, 128], b_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+    tma.async_load(a_desc, [0, 0], bar, a)
+    tma.async_load(b_desc, [0, 0], bar, b)
+    mbarrier.wait(bar, phase=0)
+    if not PV:
+        b = b.permute((1, 0))
+    acc = allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], col_stride=1))
+    if MX:
+        a_scale = allocate_tensor_memory(ttgl.uint8, [128, 4], TensorMemoryScalesLayout())
+        b_scale = allocate_tensor_memory(ttgl.uint8, [128, 4], TensorMemoryScalesLayout())
+        layout: ttgl.constexpr = a_scale.get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        groups = ttgl.arange(0, 4, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 4 + groups[None, :]
+        a_scale.store(ttgl.load(sa + offsets))
+        b_scale.store(ttgl.load(sb + offsets))
+        tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e4m3", FMT, use_acc=False, mbarriers=[bar])
+    else:
+        tcgen05_mma(a, b, acc, use_acc=False, mbarriers=[bar])
+    mbarrier.wait(bar, phase=1)
+    mbarrier.invalidate(bar)
+    r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, acc.get_reg_layout()))
+    c = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, acc.get_reg_layout()))
+    ttgl.store(out + 128 * r[:, None] + c[None, :], acc.load())
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="Requires SM100 or SM103")
+@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
+@pytest.mark.parametrize("mx", [False, True], ids=["fp6", "mxfp6"])
+@pytest.mark.parametrize("pv", [False, True], ids=["qk", "pv"])
+def test_fp6_tma_mma_attention_operand(fmt, mx, pv):
+    a = torch.randint(-2, 3, (128, 128), device="cuda").to(torch.float8_e4m3fn)
+    raw = torch.randint(0, 256, (128, 96), device="cuda", dtype=torch.uint8)
+    a_desc = TensorDescriptor.from_tensor(a, [128, 128], ttgl.NVMMASharedLayout(128, 8))
+    b_desc = TensorDescriptor.from_tensor(raw, [128, 128], ttgl.NVMMASharedLayout(128, 8, fp6_format=fmt))
+    sa = torch.randint(126, 129, (128, 4), dtype=torch.uint8, device="cuda")
+    sb = torch.randint_like(sa, 126, 129)
+    out = torch.empty((128, 128), device="cuda")
+    kernel = _fp6_mma_tile[(1, )](a_desc, b_desc, sa, sb, out, fmt, mx, pv)
+    kind = "mxf8f6f4.block_scale.block32" if mx else "f8f6f4"
+    assert f"tcgen05.mma.cta_group::1.kind::{kind}" in kernel.asm["ptx"]
+
+    octets = raw.int().reshape(128, -1, 3)
+    words = octets[..., 0] | octets[..., 1] << 8 | octets[..., 2] << 16
+    codes = torch.stack([(words >> shift) & 63 for shift in (0, 6, 12, 18)], dim=-1).reshape(128, 128)
+    mant_bits, bias = (3, 1) if fmt == "e2m3" else (2, 3)
+    exponents = (codes & 31) >> mant_bits
+    mant = (codes & ((1 << mant_bits) - 1)).float() / (1 << mant_bits) + (exponents != 0)
+    b = torch.ldexp(mant, exponents.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
+    a = a.float()
+    b = b if pv else b.T
+    if mx:
+        a *= torch.exp2(sa.float() - 127).repeat_interleave(32, dim=1)
+        b = b * torch.exp2(sb.float() - 127).repeat_interleave(32, dim=1).T
+    torch.testing.assert_close(out, a @ b, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_minimal():
     M = 128
