@@ -358,7 +358,7 @@ Interfaces: `InferTypeOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative</td></tr>
 </table>
 
 #### Operands:
@@ -455,7 +455,7 @@ Interfaces: `InferTypeOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>num</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>num</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute whose value is non-negative</td></tr>
 </table>
 
 #### Operands:
