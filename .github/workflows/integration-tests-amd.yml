@@ -282,7 +282,7 @@ jobs:
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
-      image: tritonci/triton-amd-ci:rocm10.2.0a20261012-pytorch2.16.0a0-gfx942-gfx950-gfx1250-r1
+      image: tritonci/triton-amd-ci:rocm10.3.0a20261029-pytorch2.16.0a0-gfx942-gfx950-gfx1250-r1
       options: >-
         --security-opt seccomp=unconfined --user root
         --volume /home/runner/.triton:/github/home/.triton
@@ -403,7 +403,6 @@ jobs:
 
           k_core="test_load_store_same_ptr or test_atomic_cas"  # expensive
           k_core+=" or (test_scan2d and shape365) or (test_scan2d and shape869)"
-          k_core+=" or (test_scaled_dot and 128-64-128-True-False-False-e2m1-e4m3-4-16-1)"
 
           k_desc="tensor_descriptor_reduce"
 
