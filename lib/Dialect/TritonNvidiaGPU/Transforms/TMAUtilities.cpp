@@ -38,10 +38,6 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
   return ttg::updateEncodingForShape(op, sharedEnc, tensorType);
 }
 
-int getTMATransferBitWidth(Type elementType) {
-  return isFP6(elementType) ? 6 : getIntOrFloatOrPtrBitWidth(elementType);
-}
-
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
   auto kBlock = StringAttr::get(memDescType.getContext(), "block");
   return ttg::toLinearLayout(memDescType)
