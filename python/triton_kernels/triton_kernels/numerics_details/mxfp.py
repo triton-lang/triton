@@ -5,11 +5,11 @@ import math
 import triton
 import torch
 import torch.nn.functional as F
-from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
+from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp, _upcast_mxfp4_to_fp8
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, _quantize_mxfp8_fn, _quantize_mxfp4_fn, _quantize_nvfp4_fn
 from triton.tools.mxfp import fp8e8m0_to_float32
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
+from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty, convert_layout
 from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 # -----------------------------------------------------------------------------
@@ -92,6 +92,78 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
         )
     # TODO: return tensor object instead of its storage
     return y_value.storage.data, y_scale.storage.data
+
+def _check_mxfp4_to_fp8_layouts(tensor, scale, axis):
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
+
+    value_layout, scale_layout = tensor.storage.layout, scale.storage.layout
+    if isinstance(value_layout, StridedLayout) and isinstance(scale_layout, StridedLayout):
+        return
+    if (isinstance(value_layout, HopperFP8MXValueLayout)
+            and isinstance(scale_layout, HopperFP8MXScaleLayout)
+            and value_layout.mx_axis == scale_layout.mx_axis == axis):
+        return
+    raise NotImplementedError("FP8 decoding supports only strided value/scale pairs or "
+                              "HopperFP8MX value/scale pairs with the operand's MX axis")
+
+
+def _mxfp4_scales_in_fp8_range(scale):
+    data = scale.storage.data
+    valid = (data >= 122) & (data <= 133)
+    if not isinstance(scale.storage.layout, StridedLayout):
+        layout = scale.storage.layout
+        rows, k = scale.shape[-2:]
+        if layout.mx_axis == -2:
+            rows, k = k, rows
+        tm, tk = layout.tile_shape
+        tk //= 32
+        mt, kt = triton.cdiv(rows, tm), triton.cdiv(k, tk)
+        # Ignore padding in the stored [row tile, K tile, scale, row] order.
+        row = torch.arange(mt * tm, device=data.device).reshape(mt, 1, 1, tm)
+        col = torch.arange(kt * tk, device=data.device).reshape(1, kt, tk, 1)
+        valid = valid.reshape(*scale.shape[:-2], mt, kt, tk, tm) | (row >= rows) | (col >= k)
+    return bool(valid.all())
+
+
+def upcast_mxfp4_to_fp8(tensor, scale, *, out: torch.Tensor, axis: int = -1):
+    """Decode strided or HopperFP8MX storage into caller-owned, K-last E4M3 storage.
+
+    The caller must ensure E8M0 scale bytes are in [122, 133] for exact conversion.
+    """
+    assert axis in (-1, -2)
+    if not isinstance(tensor, Tensor):
+        tensor = wrap_torch_tensor(tensor, dtype=FP4)
+    if not isinstance(scale, Tensor):
+        scale = wrap_torch_tensor(scale)
+    _check_mxfp4_to_fp8_layouts(tensor, scale, axis)
+    assert tensor.dtype == FP4
+    shape = tuple(tensor.shape)
+    if axis == -2:
+        shape = (*shape[:-2], shape[-1], shape[-2])
+    assert tuple(out.shape) == shape and out.is_contiguous()
+    assert shape[-1] % 32 == 0
+    scale_shape = list(tensor.shape)
+    scale_shape[axis] //= 32
+    assert list(scale.shape) == scale_shape
+    assert tensor.storage.data.dtype == scale.storage.data.dtype == torch.uint8
+    assert out.dtype == torch.float8_e4m3fn
+    assert tensor.device == scale.device == out.device
+    value_tile = scale_tile = (0, 0)
+    if isinstance(tensor.storage.layout, StridedLayout):
+        values = convert_layout(tensor, StridedLayout(axis)).data.movedim(axis, -1).contiguous()
+        scales = convert_layout(scale, StridedLayout(axis)).data.movedim(axis, -1).contiguous()
+    else:
+        value_tile = tensor.storage.layout.tile_shape
+        scale_tile = scale.storage.layout.tile_shape
+        values, scales = tensor.storage.data, scale.storage.data
+        assert values.is_contiguous() and scales.is_contiguous()
+    n_elements = out.numel() // 2
+    if n_elements:
+        _upcast_mxfp4_to_fp8[(triton.cdiv(n_elements, 512),)](
+            values, scales, out, n_elements, shape[-2], shape[-1],
+            *value_tile, *scale_tile, BLOCK=512)
+    return out
+
 
 def upcast_from_mxfp(
     tensor: torch.Tensor,

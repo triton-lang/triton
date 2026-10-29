@@ -159,7 +159,7 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
 @dataclass
 class MatmulAllocation:
     device: str
-    output: tuple[tuple[int], torch.dtype]
+    output: tuple[tuple[int], torch.dtype] | None
     scratchpads: dict[str, tuple]
 
 def init_allocation(x, w, precision_config, fused_activation,
@@ -196,15 +196,18 @@ def init_allocation(x, w, precision_config, fused_activation,
     return MatmulAllocation(x.device, output, scratchpad)
 
 def apply_allocation(allocation: MatmulAllocation, output):
-    dtype = dtype_to_torch_dtype(allocation.output[1])
     ret = dict()
-    if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=dtype)
+    if allocation.output is not None:
+        dtype = dtype_to_torch_dtype(allocation.output[1])
+        if output is None:
+            output = torch.empty(allocation.output[0], device=allocation.device, dtype=dtype)
+        else:
+            if output.ndim == 2:
+                output = output[None, :, :]
+            assert output.shape == allocation.output[0]
+        ret["output"] = output[None, :, :]
     else:
-        if output.ndim == 2:
-            output = output[None, :, :]
-        assert output.shape == allocation.output[0]
-    ret["output"] = output[None, :, :]
+        assert output is None
     ret["scratchpad"] = {
         k: torch.empty(v[0], device=allocation.device, dtype=v[1])
             for k, v in allocation.scratchpads.items()
@@ -245,6 +248,49 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     set_idle_sms(num_idle_sms)
 
+def _prepare_hopper_fp8_mxfp4(a, b, precision_config):
+    """Validate MXFP4 inputs for conversion into FP8 scratchpads, preserving their storage."""
+    if not (is_cuda() and target_info.cuda_capability_geq(9, 0)
+            and not target_info.cuda_capability_geq(10, 0)):
+        return {}
+    fp4_types = (FP4, torch.uint8)
+    fp8_types = (FP8_E4M3FN, torch.float8_e4m3fn)
+    if (a.dtype not in fp4_types + fp8_types or b.dtype not in fp4_types + fp8_types
+            or not (a.dtype in fp4_types or b.dtype in fp4_types)):
+        return {}
+    from .tensor_details.layout_details.hopper_fp8 import HopperFP8MXValueLayout
+    from .numerics_details.mxfp import _check_mxfp4_to_fp8_layouts, _mxfp4_scales_in_fp8_range
+
+    operands = ((a, precision_config.a_mx_scale, precision_config.a_microblock_size,
+                 precision_config.a_mx_tensor_scale),
+                (b, precision_config.b_mx_scale, precision_config.b_microblock_size,
+                 precision_config.b_mx_tensor_scale))
+    for values, scales, block_size, tensor_scale in operands:
+        scale_data = scales.data if isinstance(scales, Tensor) else scales
+        if (tensor_scale is not None
+                or values.dtype in fp8_types and scales is not None
+                or values.dtype in fp4_types and (scale_data is None or block_size != 32
+                                                   or scale_data.dtype != torch.uint8)):
+            return {}
+
+    prepared = {}
+    for name, (values, scales, _, _), axis in zip(("a_fp8", "b_fp8"), operands, (-1, -2)):
+        if values.dtype in fp8_types:
+            continue
+        if not isinstance(values, Tensor):
+            values = wrap_torch_tensor(values, dtype=FP4)
+        if not isinstance(scales, Tensor):
+            scales = wrap_torch_tensor(scales)
+        _check_mxfp4_to_fp8_layouts(values, scales, axis)
+        prepared[name] = (values, scales)
+    for _, scales in prepared.values():
+        if not _mxfp4_scales_in_fp8_range(scales):
+            if any(isinstance(x, Tensor) and isinstance(x.storage.layout, HopperFP8MXValueLayout) for x in (a, b)):
+                raise ValueError("Hopper FP8 decoding requires E8M0 scale bytes in [122, 133]")
+            return {}
+    return prepared
+
+
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
     b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -283,6 +329,11 @@ def matmul(a, b, bias,
     matmul kernel for MXFP4 weights. This can add rounding error.
     That path defaults to BF16 output unless out_dtype or c is supplied.
 
+    On Hopper, MXFP4/FP8 and MXFP4/MXFP4 inputs with E8M0 scale bytes
+    122 through 133 have a reference lowering through materialized FP8
+    operands. It accepts strided storage and HopperFP8MX value/scale layouts.
+    Both storage paths decode directly into FP8 buffers. Output defaults to BF16.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -307,6 +358,25 @@ def matmul(a, b, bias,
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
+    prepared_inputs = _prepare_hopper_fp8_mxfp4(a, b, precision_config)
+    if prepared_inputs:
+        from .numerics_details.mxfp import upcast_mxfp4_to_fp8
+
+        # Input conversion precedes kernel selection, which needs the FP8 dtype and strides.
+        input_allocation = MatmulAllocation(a.device, None, {
+            name: (tuple(values.shape) if name == "a_fp8" else
+                   (*values.shape[:-2], values.shape[-1], values.shape[-2]), torch.float8_e4m3fn)
+            for name, (values, _) in prepared_inputs.items()
+        })
+        input_memory = apply_allocation(input_allocation, None)["scratchpad"]
+        for name, (values, scales) in prepared_inputs.items():
+            upcast_mxfp4_to_fp8(values, scales, out=input_memory[name], axis=-1 if name == "a_fp8" else -2)
+        a = input_memory.get("a_fp8", a)
+        if "b_fp8" in input_memory:
+            b = input_memory["b_fp8"].movedim(-1, -2)
+        precision_config = replace(precision_config, a_mx_scale=None, b_mx_scale=None,
+                                   a_microblock_size=None, b_microblock_size=None,
+                                   out_dtype=precision_config.out_dtype or torch.bfloat16)
     if fused_activation is None:
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
@@ -837,9 +907,27 @@ def apply_precision(x_tri, w_tri, precision_config):
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
+        if isinstance(x, Tensor):
+            x = convert_layout(x, StridedLayout(-1)).data
+        if x.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            x = x.float()
         if scale is None:
             return x.clone()
         return x.float() * scale
+
+    prepared_inputs = _prepare_hopper_fp8_mxfp4(x_tri, w_tri, precision_config)
+    if prepared_inputs:
+        # Supported values are exactly representable in FP8; the reference can decode directly to FP32.
+        decoded = {}
+        for name, (values, scales) in prepared_inputs.items():
+            axis = -1 if name == "a_fp8" else -2
+            canonical = StridedLayout(axis)
+            values = convert_layout(values, canonical).data
+            scales = convert_layout(scales, canonical).data
+            decoded[name] = upcast_from_mxfp(values, scales, torch.float32, axis=axis)
+        x_tri = decoded.get("a_fp8", x_tri)
+        w_tri = decoded.get("b_fp8", w_tri)
+        return apply(x_tri, flex_ctx.lhs_data.scale), apply(w_tri, flex_ctx.rhs_data.scale)
 
     if precision_config.a_mx_scale is not None:
         a_scale = precision_config.a_mx_scale
