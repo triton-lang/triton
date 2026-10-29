@@ -2043,6 +2043,73 @@ def test_warpgroup_mma(ASYNC):
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
 
 
+@gluon.jit
+def native_width_mma_kernel(A, B, C, Out, N: ttgl.constexpr, K: ttgl.constexpr, INSTR_N: ttgl.constexpr,
+                            USE_ACC: ttgl.constexpr = True, ASYNC: ttgl.constexpr = False):
+    BLOCK_N: ttgl.constexpr = triton.next_power_of_2(INSTR_N)
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(
+        [3, 0], [4, 1], [16, INSTR_N, 256 // A.dtype.element_ty.primitive_bitwidth])
+    m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, layout))
+    n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout))
+    k_a = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+    k_b = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+    acc = ttgl.load(C + m[:, None] * BLOCK_N + n[None, :])
+    acc = ttgl.convert_layout(acc, mma_layout)
+    for start in range(K // 32):
+        a = ttgl.load(A + m[:, None] * K + start * 32 + k_a[None, :])
+        b = ttgl.load(B + (start * 32 + k_b[:, None]) * N + n[None, :], n[None, :] < N, 0.0)
+        sa = ttgl.allocate_shared_memory(A.dtype.element_ty, [64, 32],
+                                         ttgl.NVMMASharedLayout(32, A.dtype.element_ty.primitive_bitwidth), a)
+        sb = ttgl.allocate_shared_memory(
+            B.dtype.element_ty, [32, BLOCK_N],
+            ttgl.NVMMASharedLayout(32, B.dtype.element_ty.primitive_bitwidth, transposed=True), b)
+        fence_async_shared()
+        acc = hopper.warpgroup_mma(sa, sb, acc, use_acc=USE_ACC or start > 0, precision="tf32",
+                                   max_num_imprecise_acc=32, is_async=ASYNC)
+        if ASYNC:
+            acc = hopper.warpgroup_mma_wait(deps=[acc])
+    acc = ttgl.convert_layout(acc, layout)
+    ttgl.store(Out + m[:, None] * (BLOCK_N + 2) + n[None, :], acc)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize("instr_n", range(8, 257, 8))
+def test_warpgroup_mma_native_width_codegen(instr_n):
+    compiled = native_width_mma_kernel.warmup(torch.float8_e4m3fn, torch.float8_e4m3fn, torch.float32, torch.float32,
+                                              instr_n, 32, instr_n, grid=(1, ))
+    widths = re.findall(r"wgmma\.mma_async\.sync\.aligned\.m64n(\d+)k32\.f32\.e4m3\.e4m3", compiled.asm["ptx"])
+    assert widths == [str(instr_n)]
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize("dtype, instr_n",
+                         [(torch.float8_e4m3fn, n) for n in [24, 48, 64, 72, 80, 88, 96, 112, 128, 160, 192, 248]] +
+                         [(dtype, n)
+                          for dtype in [torch.float16, torch.bfloat16, torch.float32]
+                          for n in [24, 80, 248]])
+@pytest.mark.parametrize("k", [32, 128, 640])
+@pytest.mark.parametrize("use_acc, is_async", [(True, False), (False, True)])
+def test_warpgroup_mma_native_width(dtype, instr_n, k, use_acc, is_async):
+    torch.manual_seed(42)
+    block_n = triton.next_power_of_2(instr_n)
+    a = (torch.randn((64, k), device="cuda") * 32).round().div(128).to(dtype)
+    b = (torch.randn((k, instr_n), device="cuda") * 32).round().div(128).to(dtype)
+    c = torch.randn((64, block_n), device="cuda") * 0.25
+    out = torch.full((66, block_n + 2), -12345.0, device="cuda")
+    compiled = native_width_mma_kernel[(1, )](a, b, c, out[1:, 1:], instr_n, k, instr_n, use_acc, is_async)
+    expected = a.float().cpu() @ b.float().cpu()
+    if use_acc:
+        expected += c[:, :instr_n].cpu()
+    torch.testing.assert_close(out[1:65, 1:instr_n + 1].cpu(), expected, atol=2e-4, rtol=2e-4)
+    torch.testing.assert_close(out[1:65, instr_n + 1:block_n + 1], c[:, instr_n:], atol=0, rtol=0)
+    assert torch.all(out[[0, 65], :] == -12345.0)
+    assert torch.all(out[:, [0, block_n + 1]] == -12345.0)
+    instr_k = 256 // a.element_size() // 8
+    widths = set(re.findall(rf"wgmma\.mma_async\.sync\.aligned\.m64n(\d+)k{instr_k}\.f32", compiled.asm["ptx"]))
+    assert widths == {str(instr_n)}
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("M", [64, 128])
 @pytest.mark.parametrize("N", [64, 128, 256])

@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -558,6 +559,27 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_64x16) {
                       {S("block"), {}},
                   },
                   {S("dim0"), S("dim1")}));
+  }
+}
+
+TEST_F(LinearLayoutConversionsTest, MMAv3_NativeWidths) {
+  for (unsigned n = 8; n <= 256; n += 8) {
+    unsigned paddedN = llvm::PowerOf2Ceil(n);
+    auto layout = toLinearLayout({64, paddedN}, mma(3, 0, {16, n, 32}, {4, 1}));
+    for (unsigned reg = 0; reg < paddedN / 2; ++reg) {
+      for (unsigned lane = 0; lane < 32; ++lane) {
+        for (unsigned warp = 0; warp < 4; ++warp) {
+          auto coords = layout.apply({{S("register"), reg},
+                                      {S("lane"), lane},
+                                      {S("warp"), warp},
+                                      {S("block"), 0}});
+          EXPECT_EQ(coords[0].second,
+                    16 * warp + lane / 4 + 8 * ((reg / 2) % 2));
+          EXPECT_EQ(coords[1].second, 8 * (reg / 4) + 2 * (lane % 4) + reg % 2);
+          EXPECT_EQ(coords[1].second < n, reg < n / 2);
+        }
+      }
+    }
   }
 }
 

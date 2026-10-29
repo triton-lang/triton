@@ -235,6 +235,9 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let description = [{
     $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
+    For a non-power-of-two instruction N, the logical N dimension is rounded
+    up to a power of two. Only the first instruction-N columns participate in
+    the MMA; the remaining columns preserve $c, irrespective of $useC.
   }];
 
   let arguments = (ins

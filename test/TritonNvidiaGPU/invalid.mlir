@@ -2281,3 +2281,27 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
   tt.return
 }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 80, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @wgmma_padded_n_multiple_tiles(%a: !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory>, %b: !ttg.memdesc<32x256xf8E4M3FN, #shared, #ttg.shared_memory>, %c: tensor<64x256xf32, #mma>) {
+    // expected-error @below {{non-power-of-two WGMMA widths require one padded N tile per CTA and warpsPerCTA[1] = 1}}
+    %0 = ttng.warp_group_dot %a, %b, %c : !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory> * !ttg.memdesc<32x256xf8E4M3FN, #shared, #ttg.shared_memory> -> tensor<64x256xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 80, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @wgmma_padded_n_fp16_accumulator(%a: !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory>, %b: !ttg.memdesc<32x128xf8E4M3FN, #shared, #ttg.shared_memory>, %c: tensor<64x128xf16, #mma>) {
+    // expected-error @below {{non-power-of-two WGMMA widths require shared-memory floating-point operands and FP32 accumulation}}
+    %0 = ttng.warp_group_dot %a, %b, %c : !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory> * !ttg.memdesc<32x128xf8E4M3FN, #shared, #ttg.shared_memory> -> tensor<64x128xf16, #mma>
+    tt.return
+  }
+}

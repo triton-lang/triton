@@ -25,6 +25,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -206,13 +207,15 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
   auto instrMNK = mmaEncoding.getInstrShape();
   auto accSize = 2 * (instrMNK[1] / 4);
+  unsigned paddedN = llvm::PowerOf2Ceil(instrMNK[1]);
+  auto accStride = paddedN / 2;
   unsigned M = 4 * instrMNK[0];
   unsigned N = instrMNK[1];
   unsigned K = instrMNK[2];
   bool zeroAcc = isZeroFillConst(c);
   auto warpSize = mmaEncoding.getWarpsPerCTA();
-  auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
-                                               instrMNK[1] * warpSize[1]};
+  auto shapePerCTATile =
+      SmallVector<unsigned>{instrMNK[0] * warpSize[0], paddedN * warpSize[1]};
   unsigned mmaSizeM = shapePerCTATile[0];
   unsigned mmaSizeN = shapePerCTATile[1];
   unsigned mmaSizeK = instrMNK[2];
@@ -260,11 +263,20 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   Operation *startSequence = NVVM::WgmmaFenceAlignedOp::create(rewriter, loc);
   SmallVector<Value> mmaResults;
+  // Keep the logical padding untouched. Only accSize values per tile are
+  // operands/results of the native instruction.
+  if (paddedN != N)
+    mmaResults = fc;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
       llvm::SmallVector<Value> mmaOut =
-          loadReg(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize,
+          loadReg(rewriter, loc, fc, (m * numRepN + n) * accStride, accSize,
                   startSequence);
+      // Partial accumulators are added to d with ordinary FP32 additions,
+      // so the instruction's useC predicate alone cannot discard the input.
+      if (needsPartialAccumulator && useCOperand)
+        for (Value &value : mmaOut)
+          value = tb.select(useCOperand, value, tb.f32_val(0));
       llvm::SmallVector<Type> elemTypes;
       for (Value accEl : mmaOut)
         elemTypes.push_back(accEl.getType());
@@ -352,6 +364,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         }
       }
       auto acc = unpackLLElements(loc, d, rewriter);
+      if (paddedN != N) {
+        std::copy(acc.begin(), acc.end(),
+                  mmaResults.begin() + (m * numRepN + n) * accStride);
+        continue;
+      }
       for (int i = 0; i < acc.size(); ++i) {
         mmaResults.push_back(acc[i]);
       }

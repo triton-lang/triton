@@ -323,6 +323,20 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("unsupported MMA version for the given operands");
 
   auto aElemTy = getA().getType().getElementType();
+  auto instrN = nvmmaEnc.getInstrShape()[1];
+  if (!llvm::isPowerOf2_32(instrN)) {
+    if (instrN < 8 || instrN > 256 || instrN % 8)
+      return emitOpError(
+          "WGMMA instruction N must be a multiple of 8 in [8, 256]");
+    if (!resTy.getElementType().isF32() ||
+        !isa<MemDescType>(getA().getType()) || !isa<FloatType>(aElemTy))
+      return emitOpError("non-power-of-two WGMMA widths require shared-memory "
+                         "floating-point operands and FP32 accumulation");
+    if (nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
+        retShapePerCTA[1] != llvm::PowerOf2Ceil(instrN))
+      return emitOpError("non-power-of-two WGMMA widths require one padded N "
+                         "tile per CTA and warpsPerCTA[1] = 1");
+  }
   if (getMaxNumImpreciseAcc() < 32 &&
       (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
       resTy.getElementType().isF32()) {

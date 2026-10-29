@@ -111,6 +111,12 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     Perform warpgroup MMA (Tensor Core) operations.
     acc = a * b + (acc if use_acc else 0)
 
+    For a non-power-of-two instruction N, the logical N dimension must be
+    the next power of two and ``warps_per_cta[1]`` must be 1. Only the first
+    instruction-N columns are updated; padding columns retain their input
+    accumulator values, including when ``use_acc=False``. This mode requires
+    shared-memory floating-point operands and FP32 accumulation.
+
     Args:
         a (tensor or shared_memory_descriptor): Left hand side operand.
         b (shared_memory_descriptor): Right hand side operand.

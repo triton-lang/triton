@@ -59,13 +59,21 @@ if __name__ == "__main__" and not is_hopper():
 #
 #   224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32, 24, 16, 8
 #
-# `n` must be chosen such that it evenly divides into `BLOCK_N`, the inner
+# For power-of-two widths, `n` must evenly divide `BLOCK_N`, the inner
 # dimension of the MMA tile, and it must be less than or equal to `maxN`, where
 # `maxN` is computed as:
 #
 #     mReps = ceildiv(M, m)
 #     nReps = ceildiv(num_warps, mReps)
 #     maxN = max(N // nReps, 8)
+#
+# Non-power-of-two floating-point widths use one native instruction tile along
+# N with a power-of-two logical container. For example, choose `n=80`,
+# `BLOCK_N=128`, and `warps_per_cta=[4, 1]` for a native m64n80 instruction.
+# Both operands must be in shared memory and the accumulator must be FP32.
+# Columns [0, 80) are updated; columns [80, 128) retain their input accumulator
+# values even with `use_acc=False`. Mask loads and stores to the active width.
+# The padded container does not cause an m64n128 instruction to be emitted.
 #
 # warpgroup_mma divides the MMA across warps using `warps_per_cta`, in the
 # same way `BlockedLayout.warps_per_cta` tiles a tensor across warps. The
