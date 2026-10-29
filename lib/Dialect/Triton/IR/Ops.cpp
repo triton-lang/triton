@@ -996,6 +996,8 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   auto retShape = argTy.getShape().vec();
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
+  if (axis < 0 || axis > argTy.getRank())
+    return emitOptionalError(loc, "axis out of bounds for expand_dims");
   retShape.insert(retShape.begin() + axis, 1);
   // infer encoding
   Attribute argEncoding = argTy.getEncoding();
