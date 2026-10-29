@@ -5,10 +5,13 @@ import hashlib
 import io
 import json
 import pytest
+import runpy
+import sys
 import tarfile
 import tempfile
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import triton
 
@@ -154,3 +157,99 @@ def test_amd_codegen_download_mirror(artifact, mirror, monkeypatch, tmp_path):
         "https://oaitriton.blob.core.windows.net/public/llvm-builds")
     assert downloads == [f"{base}/{name}.tar.gz"]
     assert result.read_bytes() == contents
+
+
+@pytest.mark.parametrize("backends", [None, (), ("nvidia", ), ("amd", ), ("nvidia", "amd")])
+@pytest.mark.parametrize("build_proton", [False, True])
+def test_backend_dependency_downloads(backends, build_proton, monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    import build_helpers
+
+    downloads = []
+    monkeypatch.setattr(build_helpers, "download_and_copy_amd_codegen", lambda args: downloads.append("amd"))
+    monkeypatch.setattr(build_helpers, "download_and_copy", lambda **kwargs: downloads.append(kwargs["name"]))
+    args = ["download_and_copy_dependencies", "--triton-cache-path", str(tmp_path / "cache")]
+    if backends is not None:
+        args.extend(["--backends", *backends])
+    if build_proton:
+        args.append("--build-proton")
+
+    build_helpers.main(args)
+
+    selected = ("nvidia", "amd") if backends is None else backends
+    expected = ["amd"] if "amd" in selected else []
+    if "nvidia" in selected:
+        expected.extend(["nvcc", "cuobjdump", "nvdisasm", "nvcc-crt", "cudart", "cupti", "cupti", "cupti-blackwell"])
+    elif build_proton:
+        expected.extend(["nvcc-crt", "cudart", "cupti", "cupti", "cupti-blackwell"])
+    assert downloads == expected
+
+
+@pytest.fixture
+def build_setup(monkeypatch):
+    import setuptools
+
+    # Load the packaging functions without installing packages or preparing backends.
+    monkeypatch.setenv("TRITON_CODEGEN_BACKENDS", "")
+    monkeypatch.delenv("TRITON_PLUGIN_DIRS", raising=False)
+    monkeypatch.setenv("TRITON_BUILD_PROTON", "OFF")
+    monkeypatch.setattr(setuptools, "setup", lambda **kwargs: None)
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    root = Path(__file__).resolve().parents[4]
+    setup = runpy.run_path(str(root / "setup.py"))
+    return setup["get_packages"].__globals__
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, ["nvidia", "amd"]),
+    ("", []),
+    ("nvidia", ["nvidia"]),
+    ("amd", ["amd"]),
+    (" amd ; nvidia ; amd ", ["amd", "nvidia"]),
+])
+def test_codegen_backends_selection(value, expected, build_setup, monkeypatch):
+    if value is None:
+        monkeypatch.delenv("TRITON_CODEGEN_BACKENDS")
+    else:
+        monkeypatch.setenv("TRITON_CODEGEN_BACKENDS", value)
+    assert build_setup["get_codegen_backends"]() == expected
+
+
+def test_codegen_backends_invalid(build_setup, monkeypatch):
+    monkeypatch.setenv("TRITON_CODEGEN_BACKENDS", "example")
+    with pytest.raises(ValueError, match="Use TRITON_PLUGIN_DIRS for external backends"):
+        build_setup["get_codegen_backends"]()
+
+
+@pytest.mark.parametrize("selected", [(), ("nvidia", ), ("example", )])
+def test_backend_packages_selection(selected, build_setup, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(build_setup, "__file__", str(tmp_path / "setup.py"))
+    for package in ("triton", "triton/backends"):
+        directory = tmp_path / "python" / package
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "__init__.py").touch()
+
+    available = {}
+    for name in ("nvidia", "amd", "example"):
+        source = tmp_path / "third_party" / name / "backend"
+        (source / "nested").mkdir(parents=True)
+        (source / "__init__.py").touch()
+        (source / "nested/__init__.py").touch()
+        link = tmp_path / "python/triton/backends" / name
+        link.symlink_to(source, target_is_directory=True)
+        available[name] = SimpleNamespace(name=name, backend_dir=str(source), install_dir=str(link), language_dir=None,
+                                          tools_dir=None, is_external=name == "example")
+    # GPU links represent a prior editable install; retain the external plugin.
+    monkeypatch.setitem(build_setup, "backends", [available[name] for name in selected])
+    if "example" not in selected:
+        Path(available["example"].install_dir).unlink()
+    packages = set(build_setup["get_packages"]())
+    assert build_setup["get_entry_points"]()["triton.backends"] == [
+        f"{name} = triton.backends.{name}" for name in selected
+    ]
+    build_setup["add_link_to_backends"](external_only=True)
+    for name in available:
+        assert (f"triton.backends.{name}" in packages) == (name in selected)
+        assert (f"triton.backends.{name}.nested" in packages) == (name in selected)
+        assert Path(available[name].install_dir).is_symlink() == (name in selected)

@@ -827,8 +827,9 @@ def _nvidia_toolchain_available():
     return _plat.machine() in ("x86_64", "aarch64", "arm64")
 
 
-def download_and_copy_dependencies(helper_args: BuildHelperArgs):
-    download_and_copy_amd_codegen(helper_args)
+def download_and_copy_dependencies(helper_args: BuildHelperArgs, backends=("nvidia", "amd"), build_proton=False):
+    if "amd" in backends:
+        download_and_copy_amd_codegen(helper_args)
 
     if not _nvidia_toolchain_available():
         print("WARNING: NVIDIA toolchain binaries are not available for this "
@@ -837,6 +838,10 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         return
 
     for package in get_nvidia_toolchain_packages():
+        # Proton uses CUDA headers and CUPTI even without the NVIDIA codegen backend.
+        profiler_dependency = package.name in ("nvcc-crt", "cudart", "cupti", "cupti-blackwell")
+        if "nvidia" not in backends and not (build_proton and profiler_dependency):
+            continue
         download_and_copy(
             name=package.name,
             src_func=lambda system, arch, version, package=package:
@@ -896,9 +901,13 @@ def main(argv=None):
 
     download_parser = subparsers.add_parser(
         "download_and_copy_dependencies",
-        help="Download and copy NVIDIA toolchain dependencies",
+        help="Download and copy GPU backend and profiler dependencies",
     )
     add_common_args(download_parser)
+    download_parser.add_argument("--backends", nargs="*", default=["nvidia", "amd"],
+                                 help="Selected in-tree codegen backends (defaults to nvidia and amd)")
+    download_parser.add_argument("--build-proton", action="store_true",
+                                 help="Download CUDA headers and CUPTI dependencies for the Proton profiler")
 
     write_vars_parser = subparsers.add_parser(
         "write_thirdparty_cmake_vars",
@@ -917,7 +926,7 @@ def main(argv=None):
     parsed_args = parser.parse_args(argv)
     helper_args = normalize_parsed_args(parsed_args)
     if parsed_args.command == "download_and_copy_dependencies":
-        download_and_copy_dependencies(helper_args)
+        download_and_copy_dependencies(helper_args, parsed_args.backends, parsed_args.build_proton)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
     if os.path.exists(helper_args.archives_path) and not check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS"):
