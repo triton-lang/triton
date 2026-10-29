@@ -21,6 +21,7 @@ namespace llvm {
 class AAResults;
 class AssumptionCache;
 class BasicAAResult;
+class ScopedNoAliasAAResult;
 class LiveIntervals;
 class MachineDominatorTree;
 class MachineLoopInfo;
@@ -106,6 +107,7 @@ private:
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<AAResults> AA;
   std::unique_ptr<BasicAAResult> BasicAA;
+  std::unique_ptr<ScopedNoAliasAAResult> ScopedAA;
 
   /// Set up alias analysis for the function.
   void setupAliasAnalysis();
