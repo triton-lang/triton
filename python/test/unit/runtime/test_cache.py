@@ -1,6 +1,7 @@
 import expecttest
 import importlib.util
 import itertools
+import io
 import json
 import multiprocessing
 import os
@@ -22,7 +23,33 @@ import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
-from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+from triton.runtime.cache import FileCacheManager, RemoteCacheManager, triton_key
+
+
+@pytest.mark.parametrize("frontend_module", [
+    "_runtime.py",
+    "language/_semantic.py",
+    "language/_layouts.py",
+    "language/nvidia/ampere/__init__.py",
+])
+def test_gluon_frontend_changes_invalidate_cache(frontend_module, monkeypatch):
+    frontend_path = pathlib.Path(triton.__file__).parent / "experimental" / "gluon" / frontend_module
+    changed_source = frontend_path.read_bytes() + b"\n# Changed Gluon frontend.\n"
+    original_open = open
+
+    def changed_open(filename, mode="r", *args, **kwargs):
+        if filename == str(frontend_path) and mode == "rb":
+            return io.BytesIO(changed_source)
+        return original_open(filename, mode, *args, **kwargs)
+
+    try:
+        triton_key.cache_clear()
+        original_key = triton_key()
+        monkeypatch.setattr("builtins.open", changed_open)
+        triton_key.cache_clear()
+        assert triton_key() != original_key
+    finally:
+        triton_key.cache_clear()
 
 
 @pytest.mark.parametrize("backend, options_type, arch", [
