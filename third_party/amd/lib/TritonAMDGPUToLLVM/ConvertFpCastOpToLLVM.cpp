@@ -2563,10 +2563,7 @@ struct FpToFpOpConversion
         (srcElementType.isF16() && dstElementType.isBF16());
     if (useFp32Intermediate)
       roundingMode = roundingMode.value_or(RoundingMode::RTNE);
-    auto converter =
-        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
-                     dstElementType, maxElementsPerThread, roundingMode);
-    if (converter == nullptr) {
+    auto emitUnsupported = [&]() {
       std::string rmError;
       if (roundingMode.has_value())
         rmError = std::string(" with rounding mode ") +
@@ -2574,12 +2571,18 @@ struct FpToFpOpConversion
       op->emitError("Unsupported conversion from ")
           << srcElementType << " to " << dstElementType << rmError;
       return SmallVector<Value>{};
-    }
+    };
+    auto converter =
+        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
+                     dstElementType, maxElementsPerThread, roundingMode);
+    if (converter == nullptr)
+      return emitUnsupported();
 
-    setFunctionAttributes(op);
-
+    // A converter reports a rounding mode it does not support with zero
+    // elements or by failing to convert.
     const size_t numElements = converter->getNumElements();
-    assert(numElements && "number of elements must be greater than zero");
+    if (numElements == 0)
+      return emitUnsupported();
 
     // extract a chunk of input element defined by the converter (i.e., the
     // instruction property) filled the rest of the values with undefs if the
@@ -2598,8 +2601,10 @@ struct FpToFpOpConversion
                                     : Fp16ToFp32OneValue(loc, rewriter, v);
 
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
-    assert(maybeOutVals.has_value());
+    if (!maybeOutVals)
+      return emitUnsupported();
     auto outVals = maybeOutVals.value();
+    setFunctionAttributes(op);
 
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
