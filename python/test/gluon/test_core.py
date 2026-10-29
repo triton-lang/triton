@@ -4874,7 +4874,7 @@ def test_fp6_tma_store_contiguous(width, with_allocator):
 
 
 @gluon.jit
-def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.constexpr, PV: ttgl.constexpr):
+def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(a_desc.dtype, [128, 128], a_desc.layout)
     b = ttgl.allocate_shared_memory(b_desc.dtype, [128, 128], b_desc.layout)
     bar = mbarrier.allocate_mbarrier()
@@ -4883,7 +4883,7 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.con
     tma.async_load(a_desc, [0, 0], bar, a)
     tma.async_load(b_desc, [0, 0], bar, b)
     mbarrier.wait(bar, phase=0)
-    if not PV:
+    if TRANSPOSE_B:
         b = b.permute((1, 0))
     acc = allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], col_stride=1))
     if MX:
@@ -4909,8 +4909,8 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.con
                     reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
 @pytest.mark.parametrize("mx", [False, True], ids=["fp6", "mxfp6"])
-@pytest.mark.parametrize("pv", [False, True], ids=["qk", "pv"])
-def test_fp6_tma_mma_attention_operand(fmt, mx, pv):
+@pytest.mark.parametrize("transpose_b", [True, False], ids=["transposed_b", "b"])
+def test_fp6_tma_mma_operand(fmt, mx, transpose_b):
     a = torch.randint(-2, 3, (128, 128), device="cuda").to(torch.float8_e4m3fn)
     raw = torch.randint(0, 256, (128, 96), device="cuda", dtype=torch.uint8)
     a_desc = TensorDescriptor.from_tensor(a, [128, 128], ttgl.NVMMASharedLayout(128, 8))
@@ -4918,7 +4918,7 @@ def test_fp6_tma_mma_attention_operand(fmt, mx, pv):
     sa = torch.randint(126, 129, (128, 4), dtype=torch.uint8, device="cuda")
     sb = torch.randint_like(sa, 126, 129)
     out = torch.empty((128, 128), device="cuda")
-    kernel = _fp6_mma_tile[(1, )](a_desc, b_desc, sa, sb, out, fmt, mx, pv)
+    kernel = _fp6_mma_tile[(1, )](a_desc, b_desc, sa, sb, out, fmt, mx, transpose_b)
     kind = "mxf8f6f4.block_scale.block32" if mx else "f8f6f4"
     assert f"tcgen05.mma.cta_group::1.kind::{kind}" in kernel.asm["ptx"]
 
@@ -4930,7 +4930,7 @@ def test_fp6_tma_mma_attention_operand(fmt, mx, pv):
     mant = (codes & ((1 << mant_bits) - 1)).float() / (1 << mant_bits) + (exponents != 0)
     b = torch.ldexp(mant, exponents.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
     a = a.float()
-    b = b if pv else b.T
+    b = b.T if transpose_b else b
     if mx:
         a *= torch.exp2(sa.float() - 127).repeat_interleave(32, dim=1)
         b = b * torch.exp2(sb.float() - 127).repeat_interleave(32, dim=1).T
