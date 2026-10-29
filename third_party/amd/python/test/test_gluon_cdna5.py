@@ -4054,7 +4054,7 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
 
     # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
     out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
@@ -4511,7 +4511,7 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
     inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
     # Store gathered data to output using TDM
