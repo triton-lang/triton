@@ -1377,7 +1377,9 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (isa<FloatType>(elementType) && !isFP6(elementType))
+  if (isa<FloatType>(elementType) && !isFP6(elementType) &&
+      scaleType != ScaleDotElemType::E2M3 &&
+      scaleType != ScaleDotElemType::E3M2)
     return elementType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:
@@ -1488,15 +1490,11 @@ LogicalResult TCGen5MMAScaledOp::verify() {
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
       getScaledMMAOperandType(getB().getType().getElementType(), getBType());
-  for (auto [mem, format] : {std::pair{getA().getType(), getAType()},
-                             std::pair{getB().getType(), getBType()}}) {
+  for (auto [mem, type] : {std::pair{getA().getType(), atype},
+                           std::pair{getB().getType(), btype}}) {
     auto fp6 = NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding());
-    bool isFp6 =
-        format == ScaleDotElemType::E2M3 || format == ScaleDotElemType::E3M2;
-    if ((isFp6 || fp6) &&
-        fp6 != getScaledMMAOperandType(mem.getElementType(), format))
-      return emitOpError(
-          "FP6 MMA format must match the TMA-loaded shared tile");
+    if ((isFP6(type) || fp6) && fp6 != type)
+      return emitOpError("FP6 MMA format must match the shared tile");
   }
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))

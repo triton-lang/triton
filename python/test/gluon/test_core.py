@@ -16,6 +16,8 @@ from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
+    fp6_values,
+    pack_fp6,
     is_rubin,
     is_hip,
     is_hip_rdna,
@@ -4864,9 +4866,7 @@ def test_fp6_tma_store_contiguous(width, with_allocator):
     src = torch.randint(0, 256, (width, ), device="cuda", dtype=torch.uint8)
     dst = torch.full((3, 96), 0xa5, device="cuda", dtype=torch.uint8)
     expected = dst.clone()
-    codes = (src.int() & 63).reshape(-1, 4)
-    words = codes[:, 0] | codes[:, 1] << 6 | codes[:, 2] << 12 | codes[:, 3] << 18
-    packed = torch.stack((words, words >> 8, words >> 16), dim=1).byte().flatten()
+    packed = pack_fp6(src.int() & 63)
     expected[1, 96 - packed.numel():] = packed
     kernel = _fp6_store_tile[(1, )](src, dst, 128 - width, width)
     assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
@@ -4912,9 +4912,9 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.con
 @pytest.mark.parametrize("transpose_b", [True, False], ids=["transposed_b", "b"])
 def test_fp6_tma_mma_operand(fmt, mx, transpose_b):
     a = torch.randint(-2, 3, (128, 128), device="cuda").to(torch.float8_e4m3fn)
-    raw = torch.randint(0, 256, (128, 96), device="cuda", dtype=torch.uint8)
+    codes = torch.randint(0, 64, (128, 128), device="cuda", dtype=torch.int32)
     a_desc = TensorDescriptor.from_tensor(a, [128, 128], ttgl.NVMMASharedLayout(128, 8))
-    b_desc = TensorDescriptor.from_tensor(raw, [128, 128], ttgl.NVMMASharedLayout(128, 8, fp6_format=fmt))
+    b_desc = TensorDescriptor.from_tensor(pack_fp6(codes), [128, 128], ttgl.NVMMASharedLayout(128, 8, fp6_format=fmt))
     sa = torch.randint(126, 129, (128, 4), dtype=torch.uint8, device="cuda")
     sb = torch.randint_like(sa, 126, 129)
     out = torch.empty((128, 128), device="cuda")
@@ -4922,13 +4922,7 @@ def test_fp6_tma_mma_operand(fmt, mx, transpose_b):
     kind = "mxf8f6f4.block_scale.block32" if mx else "f8f6f4"
     assert f"tcgen05.mma.cta_group::1.kind::{kind}" in kernel.asm["ptx"]
 
-    octets = raw.int().reshape(128, -1, 3)
-    words = octets[..., 0] | octets[..., 1] << 8 | octets[..., 2] << 16
-    codes = torch.stack([(words >> shift) & 63 for shift in (0, 6, 12, 18)], dim=-1).reshape(128, 128)
-    mant_bits, bias = (3, 1) if fmt == "e2m3" else (2, 3)
-    exponents = (codes & 31) >> mant_bits
-    mant = (codes & ((1 << mant_bits) - 1)).float() / (1 << mant_bits) + (exponents != 0)
-    b = torch.ldexp(mant, exponents.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
+    b = fp6_values(fmt, codes)
     a = a.float()
     b = b.T if transpose_b else b
     if mx:

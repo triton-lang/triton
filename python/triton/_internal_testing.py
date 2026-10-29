@@ -35,6 +35,19 @@ tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 _PROCESS_POOL = None
 
 
+def fp6_values(fmt, codes):
+    mantissa, bias = (3, 1) if fmt == "e2m3" else (2, 3)
+    exp = (codes & 31) >> mantissa
+    fraction = (codes & ((1 << mantissa) - 1)).float() / (1 << mantissa)
+    return torch.ldexp(fraction + (exp != 0), exp.clamp_min(1) - bias) * (1 - 2 * (codes >> 5))
+
+
+def pack_fp6(codes):
+    groups = codes.reshape(*codes.shape[:-1], -1, 4)
+    words = groups[..., 0] | groups[..., 1] << 6 | groups[..., 2] << 12 | groups[..., 3] << 18
+    return torch.stack([words, words >> 8, words >> 16], -1).byte().flatten(-2)
+
+
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
