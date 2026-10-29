@@ -402,7 +402,8 @@ class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = [
-        'fp4e2m1x2', 'fp8e8m0fnu', 'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64'
+        'fp4e2m1x2', 'fp6e2m3', 'fp6e3m2', 'fp8e8m0fnu', 'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16',
+        'bf16', 'fp32', 'fp64'
     ]
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
@@ -421,7 +422,7 @@ class dtype(base_type):
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
         self.primitive_bitwidth = get_primitive_bitwidth(name)
-        self.itemsize = self.primitive_bitwidth // 8
+        self.itemsize = 1 if self.is_fp6() else self.primitive_bitwidth // 8
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
             self.int_bitwidth = self.primitive_bitwidth
@@ -432,6 +433,8 @@ class dtype(base_type):
             if name == 'fp4e2m1x2':
                 self.fp_mantissa_width = 1
                 self.exponent_bias = 1
+            elif self.is_fp6():
+                self.fp_mantissa_width, self.exponent_bias = (3, 1) if name == 'fp6e2m3' else (2, 3)
             elif name == 'fp8e8m0fnu':
                 self.fp_mantissa_width = 0
                 self.exponent_bias = 127
@@ -491,6 +494,9 @@ class dtype(base_type):
 
     def is_fp32(self):
         return self.name == 'fp32'
+
+    def is_fp6(self):
+        return self.name in ("fp6e2m3", "fp6e3m2")
 
     def is_fp64(self):
         return self.name == 'fp64'
@@ -601,6 +607,11 @@ class dtype(base_type):
         out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.is_fp6():
+            options = getattr(builder, 'options', None)
+            if options and getattr(options, 'arch', None) not in ('sm100', 'sm103'):
+                raise ValueError('FP6 requires SM100 or SM103')
+            return builder.get_fp6e2m3_ty() if self.name == 'fp6e2m3' else builder.get_fp6e3m2_ty()
         if self.name == 'fp4e2m1x2':
             return builder.get_fp4e2m1x2_ty()
         if self.name == 'fp8e8m0fnu':
@@ -845,6 +856,8 @@ float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
 float4e2m1x2 = dtype('fp4e2m1x2')
+float6e2m3 = dtype('fp6e2m3')
+float6e3m2 = dtype('fp6e3m2')
 float8e8m0fnu = dtype('fp8e8m0fnu')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
@@ -2341,18 +2354,22 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     the other input is also upcasted to :code:`fp16` element type instead.
     This behavior is experimental and may be subject to change in the future.
 
+    On SM100 and SM103, use float6e2m3 or float6e3m2 tensors for FP6 operands.
+    Pair them with FP6 or FP8 and supply E8M0 scales per group of 32 values.
+    A scale of None represents unity.
+
     :param lhs: The first tensor to be multiplied.
-    :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
+    :type lhs: 2D tensor representing fp4, fp6, fp8, fp16 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor. Shape should be [M, K//group_size] when lhs is [M, K], where group_size is 32 if scales type are `e8m0`.
     :type lhs_scale: e8m0 type represented as an uint8 tensor, or None.
-    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m3`, :code:`e3m2`, :code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
-    :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
+    :type rhs: 2D tensor representing fp4, fp6, fp8, fp16 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor. Shape should be [N, K//group_size] where rhs is [K, N].
                       Important: Do NOT transpose rhs_scale
     :type rhs_scale: e8m0 type represented as an uint8 tensor, or None.
-    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m3`, :code:`e3m2`, :code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     :param lhs_k_pack: If false, the lhs tensor is packed into uint8 along M dimension.
@@ -2550,6 +2567,7 @@ def make_tensor_descriptor(
     strides: List[tensor],
     block_shape: List[constexpr],
     padding_option="zero",
+    dtype=None,
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2559,6 +2577,12 @@ def make_tensor_descriptor(
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
+    :param dtype: For packed FP6 storage, pass float6e2m3 or float6e3m2 on a uint8 base.
+        The inner extent and coordinates count values. Outer strides count bytes.
+        Use 128 contiguous values (96 bytes) for loads and stores on SM100/SM103.
+        SM103 also supports stores of 64 values (48 bytes) with a device-built descriptor.
+        The inner extent and starting column must be multiples of the box width.
+        Align the base and outer strides to 32 bytes for 128 values, or 16 bytes for 64.
 
     Notes
     *****
@@ -2601,6 +2625,11 @@ def make_tensor_descriptor(
     """
 
     padding_option = _unwrap_if_constexpr(padding_option)
+    dtype = _unwrap_if_constexpr(dtype)
+    if dtype is not None and dtype != base.dtype.element_ty:
+        if not dtype.is_fp6() or base.dtype.element_ty != uint8:
+            raise ValueError("a descriptor dtype override requires FP6 on a uint8 base")
+        base = _semantic.cast(base, pointer_type(dtype))
     return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
 
 

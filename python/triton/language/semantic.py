@@ -642,7 +642,7 @@ class TritonSemantic(Generic[TensorTy]):
             # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
             # which raises a type error for non-zero values.
             value = 0
-        if dtype.name == "fp8e4b15":
+        if dtype.name == "fp8e4b15" or dtype.is_fp6():
             # Validate target support
             dtype.to_ir(self.builder)
             value = self.make_tensor(self.builder.get_fp32(value), tl.float32)
@@ -869,6 +869,18 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
+
+        if src_sca_ty.is_fp6():
+            half_type = src_ty.with_element_ty(tl.float16) if src_ty.is_block() else tl.float16
+            half = self.make_tensor(self.builder.create_fp_to_fp(input.handle, half_type.to_ir(self.builder), None),
+                                    half_type)
+            return self.cast(half, dst_sca_ty)
+        if dst_sca_ty.is_fp6():
+            if use_custom_rounding:
+                raise ValueError("FP6 conversion supports round-to-nearest-even")
+            value = self.cast(input, tl.float32)
+            return self.make_tensor(
+                self.builder.create_fp_to_fp(value.handle, dst_ty.to_ir(self.builder), ir.ROUNDING_MODE.RTNE), dst_ty)
 
         # Keep FP16 <-> BF16 intact so backends can select a native conversion.
         if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
@@ -1665,6 +1677,11 @@ class TritonSemantic(Generic[TensorTy]):
         If float_format is subbyte, make sure it's packed as uint8 and return it.
         Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
         """
+        if float_format in ("e2m3", "e3m2"):
+            expected = tl.float6e2m3 if float_format == "e2m3" else tl.float6e3m2
+            if val.dtype != expected:
+                raise ValueError(f"{float_format} requires {expected} operands")
+            return val
         triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16":
                      tl.float16}.get(float_format)
         if triton_ty is None:
@@ -1711,7 +1728,7 @@ class TritonSemantic(Generic[TensorTy]):
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
-        allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
+        allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "bf16", "fp16"}
         assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
         assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
         rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
@@ -1755,6 +1772,20 @@ class TritonSemantic(Generic[TensorTy]):
                                                 rhs_k_pack)
         self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
                                  None if rhs_scale_is_none else rhs_scale, scale_factor)
+        # The native block32 instruction takes two E8M0 scale operands.
+        # Supply unity for a plain FP6/FP8 operand in an otherwise scaled dot.
+        if lhs.dtype.is_fp6() or rhs.dtype.is_fp6():
+            if not all(t.is_fp6() or t.is_fp8() for t in (lhs.dtype, rhs.dtype)):
+                raise ValueError("FP6 scaled dot requires FP6 or FP8 operands")
+            if scale_factor != 32 or K % 32:
+                raise ValueError("FP6 scaled dot requires groups of 32 values")
+            for scale, absent in ((lhs_scale, lhs_scale_is_none), (rhs_scale, rhs_scale_is_none)):
+                if not absent and scale.dtype not in (tl.uint8, tl.float8e8m0fnu):
+                    raise ValueError("FP6 scaled dot requires E8M0 scales")
+            if lhs_scale_is_none:
+                lhs_scale_handle = self.full([*lhs.type.shape[:-2], M, K // 32], 127, tl.uint8).handle
+            if rhs_scale_is_none:
+                rhs_scale_handle = self.full([*rhs.type.shape[:-2], N, K // 32], 127, tl.uint8).handle
         return self.make_tensor(
             self.builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                            rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
@@ -2020,8 +2051,17 @@ class TritonSemantic(Generic[TensorTy]):
         if len(block_shape) != ndim:
             raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
         assert isinstance(base.dtype, tl.pointer_type), f"base must be a pointer type, got {base.dtype}"
-        elem_size = base.dtype.element_ty.primitive_bitwidth // 8
+        elem_size = base.dtype.element_ty.itemsize
         contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
+        if base.dtype.element_ty.is_fp6():
+            if contig_dim_size not in (64, 128) or padding_option != "zero":
+                raise ValueError("FP6 tensor maps require a 64/128-value box and zero padding")
+            alignment = 16 if contig_dim_size == 64 else 32
+            if any(isinstance(s := tl._unwrap_if_constexpr(stride), int) and s % alignment for stride in strides[:-1]):
+                raise ValueError(f"FP6 outer byte strides must be multiples of {alignment}")
+            inner = tl._unwrap_if_constexpr(shape[-1])
+            if isinstance(inner, int) and inner % contig_dim_size:
+                raise ValueError("FP6 inner extent must be a multiple of the box width")
         if contig_dim_size * elem_size < 16:
             raise ValueError(
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"

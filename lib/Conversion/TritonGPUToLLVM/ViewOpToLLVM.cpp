@@ -96,7 +96,22 @@ struct ArithConstantSplatOpConversion
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto value = op.getValue();
-    auto values = dyn_cast<SplatElementsAttr>(op.getValue());
+    auto values = dyn_cast<SplatElementsAttr>(value);
+    if (isFP6(getElementTypeOrSelf(op.getType()))) {
+      auto literal = values ? values.getSplatValue<FloatAttr>()
+                            : dyn_cast<FloatAttr>(value);
+      if (!literal)
+        return failure();
+      auto code = literal.getValue().bitcastToAPInt().getZExtValue();
+      auto i8 = rewriter.getI8Type();
+      Value byte = LLVM::ConstantOp::create(rewriter, op.getLoc(), i8,
+                                            rewriter.getI8IntegerAttr(code));
+      if (values)
+        byte = SplatOpConversion::convertSplatLikeOp(
+            i8, op.getType(), byte, getTypeConverter(), rewriter, op.getLoc());
+      rewriter.replaceOp(op, byte);
+      return success();
+    }
     if (!values)
       return failure();
     auto loc = op->getLoc();

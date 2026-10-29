@@ -696,7 +696,9 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     return op->emitOpError("FP6 loads require a matching opaque tile and "
                            "stores require byte lanes");
   if (fp6) {
-    if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
+    if ((!memDesc.getElementType().isInteger(8) &&
+         memDesc.getElementType() != fp6) ||
+        !isa<TensorDescType>(desc) ||
         (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
       return op->emitOpError(
           "FP6 only supports tiled TMA loads and stores with byte storage");
@@ -1373,7 +1375,7 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (isa<FloatType>(elementType))
+  if (isa<FloatType>(elementType) && !isFP6(elementType))
     return elementType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:

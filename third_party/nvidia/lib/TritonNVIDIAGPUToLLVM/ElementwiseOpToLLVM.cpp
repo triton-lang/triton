@@ -419,6 +419,32 @@ struct FpToFpOpConversion
     auto dstElementType = getElementTypeOrSelf(op.getResult());
     auto roundingMode = op.getRounding();
 
+    if (isFP6(srcElementType) || isFP6(dstElementType)) {
+      SmallVector<Value> pair{operands[0][0]};
+      pair.push_back(operands.size() > 1 ? operands[1][0] : pair.front());
+      Value packed;
+      if (isFP6(dstElementType)) {
+        if (!srcElementType.isF32())
+          for (Value &v : pair)
+            v = b.fpext(f32_ty, v);
+        packed = NVVM::ConvertF32x2ToF6x2Op::create(
+            rewriter, loc, vec_ty(i8_ty, 2), pair[1], pair[0], false,
+            dstElementType);
+      } else {
+        packed = NVVM::ConvertF6x2ToF16x2Op::create(
+            rewriter, loc, vec_ty(f16_ty, 2), packLLVector(loc, pair, rewriter),
+            srcElementType, false);
+      }
+      auto values = unpackLLVector(loc, packed, rewriter);
+      values.resize(std::min<size_t>(2, operands.size()));
+      if (isFP6(srcElementType) && !dstElementType.isF16())
+        for (Value &v : values) {
+          v = b.fpext(f32_ty, v);
+          if (dstElementType.isBF16())
+            v = b.fptrunc(elemTy, v);
+        }
+      return values;
+    }
     if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");

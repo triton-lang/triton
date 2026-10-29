@@ -76,6 +76,8 @@ from .core import (
     float32,
     float64,
     float4e2m1x2,
+    float6e2m3,
+    float6e3m2,
     float8e8m0fnu,
     float8e4b15,
     float8e4nv,
@@ -208,6 +210,8 @@ __all__ = [
     "float32",
     "float64",
     "float4e2m1x2",
+    "float6e2m3",
+    "float6e3m2",
     "float8e8m0fnu",
     "float8e4b15",
     "float8e4nv",
@@ -362,6 +366,8 @@ def str_to_ty(name, c):
 
     tys = {
         "fp4e2m1x2": float4e2m1x2,
+        "fp6e2m3": float6e2m3,
+        "fp6e3m2": float6e3m2,
         "fp8e8m0fnu": float8e8m0fnu,
         "fp8e4nv": float8e4nv,
         "fp8e4b8": float8e4b8,

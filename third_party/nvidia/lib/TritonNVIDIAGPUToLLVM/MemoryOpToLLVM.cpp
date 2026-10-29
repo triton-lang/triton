@@ -113,6 +113,45 @@ LogicalResult lowerLdStMatrix(
   return failure();
 }
 
+// TMA expands 16 FP6 codes into a 16-byte atom containing 12 packed
+// payload bytes. Locate the code in that payload before reading it.
+static SmallVector<Value> loadFP6Codes(Location loc, RankedTensorType regTy,
+                                       const LinearLayout &regLayout,
+                                       MemDescType memTy,
+                                       SharedMemoryObject smem,
+                                       RewriterBase &rewriter,
+                                       const NVIDIA::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned axis = getOrder(memTy).front();
+  SmallVector<Value> bytes, shifts;
+  for (auto &index : emitIndices(loc, rewriter, targetInfo, regLayout, regTy,
+                                 /*withCTAOffset=*/true)) {
+    Value col = index[axis];
+    Value bit = b.mul(b.and_(col, b.i32_val(15)), b.i32_val(6));
+    bytes.push_back(
+        b.add(b.and_(col, b.i32_val(-16)), b.lshr(bit, b.i32_val(3))));
+    shifts.push_back(b.and_(bit, b.i32_val(7)));
+  }
+  auto offsets = computeBlockLocalOffsets(loc, memTy, regLayout, bytes, axis,
+                                          rewriter, targetInfo);
+  auto addrs =
+      materializeLocalAddrs(loc, memTy, smem, i8_ty, offsets, rewriter);
+  SmallVector<Value> codes;
+  for (auto [addr, shift] : llvm::zip_equal(addrs, shifts)) {
+    // Only read a second payload byte when the field crosses a byte boundary.
+    Value next = b.zext(i32_ty, b.icmp_ugt(shift, b.i32_val(2)));
+    Value hiPtr = b.gep(addr.ptr.getType(), i8_ty, addr.ptr, next);
+    Value lo = targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
+                                      i8_ty, b.true_val());
+    Value hi = targetInfo.loadDShared(rewriter, loc, hiPtr, addr.ctaId, i8_ty,
+                                      b.true_val());
+    Value pair =
+        b.or_(b.zext(i32_ty, lo), b.shl(b.zext(i32_ty, hi), b.i32_val(8)));
+    codes.push_back(b.trunc(i8_ty, b.and_(b.lshr(pair, shift), b.i32_val(63))));
+  }
+  return codes;
+}
+
 struct LocalLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp> {
 public:
@@ -138,10 +177,12 @@ public:
     llvm::SmallVector<Value> values;
     auto regLayout =
         toLinearLayout(dstTy).removeZeroBasesAlongDim(str_attr("register"));
-    auto result =
-        lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
-                        rewriter, targetInfo, getTypeConverter());
-    if (failed(result)) {
+    if (NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
+      values = loadFP6Codes(op.getLoc(), dstTy, regLayout, memDescType, smemObj,
+                            rewriter, targetInfo);
+    } else if (failed(lowerLdStMatrix(op.getLoc(), regLayout, memDescType,
+                                      values, smemObj, rewriter, targetInfo,
+                                      typeConverter))) {
       return failure();
     }
     auto value = packUniqueTensorElements(op.getLoc(), typeConverter, values,
@@ -180,10 +221,37 @@ struct LocalAllocOpConversion
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
     auto values =
         unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
-    auto result =
-        lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
-                        rewriter, targetInfo, getTypeConverter());
-    if (failed(result)) {
+    if (NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
+      // The TMA lowering assigns 16 contiguous codes to each thread. Pack
+      // four codes into three bytes, with four padding bytes after each atom.
+      auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+      auto reg = str_attr("register");
+      auto dims = standardOutDimNames(ctx, memDescType.getRank());
+      auto order = applyPermutation(dims, getOrder(memDescType));
+      if (regLayout.transposeOuts(order).getNumConsecutiveInOut() < 16)
+        return op.emitError(
+            "FP6 packing requires 16 contiguous register values");
+      SmallVector<Value> packed;
+      for (unsigned i = 0; i < values.size(); i += 16) {
+        for (unsigned j = 0; j < 16; j += 4) {
+          Value word = b.i32_val(0);
+          for (unsigned k = 0; k < 4; ++k)
+            word = b.or_(word, b.shl(b.zext(i32_ty, values[i + j + k]),
+                                     b.i32_val(6 * k)));
+          for (unsigned k = 0; k < 3; ++k)
+            packed.push_back(b.trunc(i8_ty, b.lshr(word, b.i32_val(8 * k))));
+        }
+        packed.append(4, b.i8_val(0));
+      }
+      auto cvt = invertAndComposeStore(toLinearLayout(memDescType), regLayout);
+      packed = broadcastAs(packed,
+                           regLayout.resizeInDim(reg, cvt.getInDimSize(reg)));
+      lowerLocalLdSt(op.getLoc(), ctx, cvt, packed, i8_ty, memDescType, smemObj,
+                     rewriter, targetInfo,
+                     makeSharedStoreEmitter(targetInfo, b.true_val()));
+    } else if (failed(lowerLdStMatrix(op.getLoc(), regLayout, memDescType,
+                                      values, smemObj, rewriter, targetInfo,
+                                      getTypeConverter()))) {
       return failure();
     }
 

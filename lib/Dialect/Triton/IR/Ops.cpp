@@ -1226,6 +1226,14 @@ LogicalResult FpToFpOp::verify() {
     dstType = dstTensorType.getElementType();
   if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
     srcType = srcTensorType.getElementType();
+  if (srcType != dstType && (isFP6(srcType) || isFP6(dstType))) {
+    Type other = isFP6(srcType) ? dstType : srcType;
+    if (!other.isF16() && !other.isBF16() && !other.isF32())
+      return emitOpError(
+          "FP6 conversion requires an f16, bf16 or f32 operand or result");
+    if (isFP6(dstType) && getRounding() != RoundingMode::RTNE)
+      return emitOpError("FP6 conversion requires round-to-nearest-even");
+  }
   if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");

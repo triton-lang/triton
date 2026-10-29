@@ -15,6 +15,8 @@ triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
                           Value desc);
 
+int getTMATransferBitWidth(Type elementType);
+
 bool hasCGABroadcast(gpu::MemDescType memDescType);
 
 Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc);
