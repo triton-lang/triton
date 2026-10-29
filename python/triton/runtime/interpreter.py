@@ -1060,8 +1060,9 @@ class ReduceScanOpInterface:
         self.combine_fn = combine_fn
 
     def check_axis(self, shape, axis):
-        if axis is not None and axis >= len(shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {shape}")
+        axis = tl.core._unwrap_if_constexpr(axis)
+        if axis is not None:
+            self.axis = tl.core._wrap_axis(axis, len(shape))
 
     def check_tensor(self, input):
         for arg in input:
