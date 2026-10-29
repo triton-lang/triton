@@ -138,6 +138,21 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
          << elemSize;
 }
 
+bool isNarrowFP6Map(TensorDescType type) {
+  return ttg::NVMMASharedEncodingAttr::getFp6Type(type.getSharedLayout()) &&
+         getTMABlockShape(type, false, ttg::TMAMode::Tiled).back() == 64;
+}
+
+Value updateTMADesc(OpBuilder &builder, Location loc, Value src, Value base) {
+  auto type = cast<TensorDescType>(src.getType());
+  auto scratch = ttg::GlobalScratchAllocOp::create(
+      builder, loc, getPointerType(builder.getI8Type()), TMA_SIZE_BYTES,
+      TMA_ALIGN, UnitAttr());
+  TensormapUpdateOp::create(builder, loc, scratch, src, base);
+  TensormapFenceproxyAcquireOp::create(builder, loc, scratch);
+  return ReinterpretTensorDescOp::create(builder, loc, type, scratch);
+}
+
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder) {
   using namespace mlir;

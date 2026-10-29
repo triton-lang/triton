@@ -4845,30 +4845,42 @@ def test_split_auto_layout_execution():
 
 
 @gluon.jit
-def _fp6_store_tile(src, dst, x, WIDTH: ttgl.constexpr):
+def _fp6_store_tile(src, dst, x, desc, WIDTH: ttgl.constexpr, REBASE: ttgl.constexpr):
     fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, fp6_format="e2m3")
-    desc = tma.make_tensor_descriptor(dst, [3, 128], [96, 1], [1, WIDTH], fmt)
+    if desc is None:
+        desc = tma.make_tensor_descriptor(dst, [5, 128], [96, 1], [1, WIDTH], fmt)
+    elif REBASE:
+        desc = desc.with_base(dst)
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     i = ttgl.arange(0, WIDTH, layout=ttgl.SliceLayout(0, layout))
     lanes = ttgl.load(src + i).expand_dims(0)
     stage = ttgl.allocate_shared_memory(ttgl.uint8, [1, WIDTH], ttgl.NVMMASharedLayout(0, 8), lanes)
     fence_async_shared()
-    tma.async_store(desc, [1, x], stage)
+    tma.async_store(desc, [2 * ttgl.program_id(0) + 1, x], stage)
     tma.store_wait(0)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
                     reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("width", [64, 128])
-def test_fp6_tma_store_contiguous(width, with_allocator):
+@pytest.mark.parametrize("source", ["device", "host", "host_rebased"])
+def test_fp6_tma_store_contiguous(width, source, with_allocator):
     if width == 64 and not is_blackwell_ultra():
         pytest.skip("64-value TMA stores require SM103")
     src = torch.randint(0, 256, (width, ), device="cuda", dtype=torch.uint8)
-    dst = torch.full((3, 96), 0xa5, device="cuda", dtype=torch.uint8)
+    dst = torch.full((5, 96), 0xa5, device="cuda", dtype=torch.uint8)
     expected = dst.clone()
     packed = pack_fp6(src.int() & 63)
-    expected[1, 96 - packed.numel():] = packed
-    kernel = _fp6_store_tile[(1, )](src, dst, 128 - width, width)
+    expected[1::2, 96 - packed.numel():] = packed
+    base = dst.clone() if source == "host_rebased" else dst
+    desc = None if source == "device" else TensorDescriptor.from_tensor(base, [1, width],
+                                                                        ttgl.NVMMASharedLayout(0, 8, fp6_format="e2m3"))
+    kernel = _fp6_store_tile[(2, )](src, dst, 128 - width, desc, width, source == "host_rebased")
+    if source == "host_rebased":
+        assert (base == 0xa5).all()
+    if source != "device":
+        assert "tensormap.replace.tile.box_dim" not in kernel.asm["ptx"]
+        assert ("tensormap.replace.tile.elemtype" in kernel.asm["ptx"]) == (width == 64)
     assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
     torch.testing.assert_close(dst, expected)
 

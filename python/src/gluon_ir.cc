@@ -722,6 +722,11 @@ void init_gluon_ir(py::module_ &m) {
              check(ty.getEncoding(), "expected a memdesc with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
+      .def("create_tensormap_with_base",
+           [](GluonOpBuilder &self, Value desc, Value base) {
+             return ttng::updateTMADesc(self.getBuilder(), self.getLastLoc(),
+                                        desc, base);
+           })
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
               Attribute layout) -> Type {
