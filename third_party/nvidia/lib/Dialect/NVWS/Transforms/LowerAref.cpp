@@ -133,6 +133,8 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
+  Value producerCompletionMbars;
+  Value consumerCompletionMbars;
   int depth;
   SmallVector<Value> buffers;
 };
@@ -141,7 +143,9 @@ Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                       Value stage,
                       std::optional<PartitionWsTagIds> partitionWsTagIds,
                       StageCluster stageCluster) {
-  auto barrier = createSingleBufferView(rewriter, aref.emptyMbars, stage);
+  Value barriers = aref.consumerCompletionMbars ? aref.consumerCompletionMbars
+                                                : aref.emptyMbars;
+  auto barrier = createSingleBufferView(rewriter, barriers, stage);
   assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
@@ -151,7 +155,9 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                      Value stage,
                      std::optional<PartitionWsTagIds> partitionWsTagIds,
                      StageCluster stageCluster) {
-  auto barrier = createSingleBufferView(rewriter, aref.fullMbars, stage);
+  Value mbars = aref.producerCompletionMbars ? aref.producerCompletionMbars
+                                             : aref.fullMbars;
+  auto barrier = createSingleBufferView(rewriter, mbars, stage);
   assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
@@ -168,6 +174,33 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
     kinds.push_back(cast<AsyncOpAttr>(asyncKind).getValue());
   }
   return kinds;
+}
+
+DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
+  DenseSet<MMAv5OpInterface> mmav5Ops;
+  // Consumers read the buffers either from the enter op or through an
+  // aref.buffer op on its token (e.g. a tensor-memory scale operand).
+  SmallVector<Value> buffers(getEnter.getBuffers());
+  for (Operation *user : getEnter.getToken().getUsers())
+    if (auto bufferOp = dyn_cast<ArefBufferOp>(user))
+      llvm::append_range(buffers, bufferOp.getBuffers());
+  for (Value buffer : buffers) {
+    for (auto consumer : buffer.getUsers()) {
+      if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+        mmav5Ops.insert(mmav5);
+      } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
+        // Collect the MMAs themselves: the top-level users returned here are
+        // their ancestors in the loop body, e.g. an scf.if around the MMA.
+        getTopLevelUsersInLoop(consumer, forOp, [&](Operation *user) {
+          auto mmav5 = dyn_cast<MMAv5OpInterface>(user);
+          if (mmav5)
+            mmav5Ops.insert(mmav5);
+          return bool(mmav5);
+        });
+      }
+    }
+  }
+  return mmav5Ops;
 }
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
@@ -226,37 +259,112 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
-Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount) {
-  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
+Value createBarrierArray(ImplicitLocOpBuilder &initBuilder,
+                         ImplicitLocOpBuilder &cleanupBuilder, int numBarriers,
+                         int arrivalCount, bool twoCTAs) {
+  Value barrierAlloc = createScalarAlloc(initBuilder, initBuilder.getI64Type(),
+                                         numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    InitBarrierOp::create(b1, barrierView, arrivalCount);
+    Value barrierView = createSingleBufferView(initBuilder, barrierAlloc, i);
+    InitBarrierOp::create(initBuilder, barrierView, arrivalCount);
   }
-  // Invalidate and deallocate the barriers.
   for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(b2, barrierAlloc, i);
-    InvalBarrierOp::create(b2, barrierView);
+    Value barrierView = createSingleBufferView(cleanupBuilder, barrierAlloc, i);
+    InvalBarrierOp::create(cleanupBuilder, barrierView);
   }
-  LocalDeallocOp::create(b2, barrierAlloc);
+  LocalDeallocOp::create(cleanupBuilder, barrierAlloc);
   return barrierAlloc;
 }
 
-ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
+void setArefBarrierInsertionPoints(
+    ArefCreateOp op, ImplicitLocOpBuilder &initBuilder,
+    ImplicitLocOpBuilder &cleanupBuilder,
+    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
+  initBuilder.setInsertionPoint(op);
+  cleanupBuilder.setInsertionPoint(op->getBlock()->getTerminator());
+
+  // Initialize before conditional specialization; keep loop-local lifetimes.
+  if (gpu::lookupNumCTAs(op) > 1 &&
+      !op->getParentOfType<LoopLikeOpInterface>()) {
+    auto &entry = op->getParentOfType<triton::FuncOp>().getBody().front();
+    initBuilder.setInsertionPointToStart(&entry);
+    cleanupBuilder.setInsertionPoint(entry.getTerminator());
+  }
+  if (!nvidia_gpu::getModuleTwoCTAs(op))
+    return;
+
+  // Wait for peer-CTA releases before invalidating aref barriers.
+  auto &barrier = teardownBarriers[cleanupBuilder.getBlock()];
+  if (!barrier)
+    barrier = ClusterBarrierOp::create(cleanupBuilder, /*relaxed=*/false);
+  cleanupBuilder.setInsertionPointAfter(barrier);
+}
+
+ArefValue
+createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
+                   DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
+  // Empty barriers protect the next write; full barriers protect reads.
+  // MMA completion already covers both CTAs. Only independent per-CTA
+  // accesses need an additional join; mixed signals first complete locally.
+  // Ordinary reads ("reads" below) are per-CTA reads.
+  //
+  // clang-format off
+  // Producer              Consumers           empty consumerCompletion producerCompletion full
+  // Per-CTA               Per-CTA             local absent             absent             local
+  // Per-CTA               Two-CTA MMA         local absent             absent             pair
+  // Per-CTA               Two-CTA MMA + reads local absent             local              pair
+  // Two-CTA MMA           Ordinary reads      pair  absent             absent             local
+  // Two-CTA MMA           Two-CTA MMA         local absent             absent             local
+  // Two-CTA MMA           Two-CTA MMA + reads pair  local              absent             local
+  // clang-format on
+  auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
+  int depth = getArefDepth(bufferType);
+  bool hasTwoCTAConsumer = llvm::any_of(
+      mmav5Ops, [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
+  bool hasSynchronousConsumer =
+      llvm::any_of(op->getUsers(), [](Operation *user) {
+        auto exit = dyn_cast<ArefGetExitOp>(user);
+        return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
+                                          AsyncOp::NONE);
+      });
+  bool hasTwoCTAProducer =
+      getModuleTwoCTAs(op) && llvm::any_of(op->getUsers(), [](Operation *user) {
+        auto exit = dyn_cast<ArefPutExitOp>(user);
+        return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
+                                          AsyncOp::TC5MMA);
+      });
+  bool needsEmptyJoin = hasTwoCTAProducer && hasSynchronousConsumer;
+  bool needsFullJoin = hasTwoCTAConsumer && !hasTwoCTAProducer;
+  bool needsProducerCompletion = needsFullJoin && hasSynchronousConsumer;
+  bool needsConsumerCompletion = needsEmptyJoin && hasTwoCTAConsumer;
   BarrierCount count = getArrivalCount(op);
+  ImplicitLocOpBuilder initBuilder(op.getLoc(), op);
+  ImplicitLocOpBuilder cleanupBuilder(op.getLoc(), op);
+  setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
+                                teardownBarriers);
 
-  auto arefTy = op.getType();
-  auto arefBufTypes = llvm::to_vector(llvm::map_range(
-      arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
-  auto depth = getArefDepth(arefBufTypes[0]);
+  Value consumerCompletionMbars;
+  if (needsConsumerCompletion)
+    consumerCompletionMbars = createBarrierArray(
+        initBuilder, cleanupBuilder, depth, count.consumerPendingCount,
+        /*twoCTAs=*/false);
+  Value emptyMbars = createBarrierArray(
+      initBuilder, cleanupBuilder, depth,
+      consumerCompletionMbars ? 1 : count.consumerPendingCount, needsEmptyJoin);
+  Value producerCompletionMbars;
+  if (needsProducerCompletion)
+    producerCompletionMbars = createBarrierArray(
+        initBuilder, cleanupBuilder, depth, count.producerPendingCount,
+        /*twoCTAs=*/false);
+  Value fullMbars = createBarrierArray(
+      initBuilder, cleanupBuilder, depth,
+      producerCompletionMbars ? 1 : count.producerPendingCount, needsFullJoin);
 
-  ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
-  b2.setInsertionPoint(op->getBlock()->getTerminator());
-
-  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
-
-  return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
+  return ArefValue{emptyMbars,
+                   fullMbars,
+                   producerCompletionMbars,
+                   consumerCompletionMbars,
+                   depth,
                    op.getOperands()};
 }
 
@@ -379,6 +487,17 @@ void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                      rewriter);
 }
 
+void insertCTAJoin(PatternRewriter &rewriter, Operation *op, Value barriers,
+                   Value stage, Value phase) {
+  auto barrier = createSingleBufferView(rewriter, barriers, stage);
+  assignStageCluster(barrier.getDefiningOp(), getPartitionWsTagIds(op),
+                     getStageCluster(op), rewriter);
+  auto arrive = ArriveBarrierOp::create(rewriter, op->getLoc(), barrier, 1);
+  assignStageCluster(arrive, getPartitionWsTagIds(op), getStageCluster(op),
+                     rewriter);
+  insertWaitOp(rewriter, op, barrier, phase, stage);
+}
+
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
                        ArefValue arefVal,
                        const DenseSet<MMAv5OpInterface> &mmav5Ops,
@@ -392,6 +511,17 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
                       getPartitionWsTagIds(op), getStageCluster(op));
 
   insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
+  if (arefVal.consumerCompletionMbars) {
+    // The empty wait observes the previous iteration; this join starts the
+    // next.
+    auto one = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
+    auto phase = arith::XOrIOp::create(rewriter, loc, op.getPhase(), one);
+    assignStageCluster(one, getPartitionWsTagIds(op), getStageCluster(op),
+                       rewriter);
+    assignStageCluster(phase, getPartitionWsTagIds(op), getStageCluster(op),
+                       rewriter);
+    insertCTAJoin(rewriter, op, arefVal.emptyMbars, op.getStage(), phase);
+  }
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -471,6 +601,10 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
+  // Ordinary readers keep their per-CTA completion waits.
+  if (arefVal.producerCompletionMbars && !getAsyncMMAv5Consumers(op).empty())
+    insertCTAJoin(rewriter, op, arefVal.fullMbars, op.getStage(),
+                  op.getPhase());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -618,20 +752,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         continue;
       }
 
-      for (auto consumer : getEnter->getUsers()) {
-        if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
-          mmav5Ops.insert(mmav5);
-        } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          // Collect the MMAs themselves: the top-level users returned here are
-          // their ancestors in the loop body, e.g. an scf.if around the MMA.
-          getTopLevelUsersInLoop(consumer, forOp, [&](Operation *user) {
-            auto mmav5 = dyn_cast<MMAv5OpInterface>(user);
-            if (mmav5)
-              mmav5Ops.insert(mmav5);
-            return bool(mmav5);
-          });
-        }
-      }
+      for (MMAv5OpInterface mma : getAsyncMMAv5Consumers(getEnter))
+        mmav5Ops.insert(mma);
     }
   }
   return mmav5Ops;
@@ -644,7 +766,6 @@ public:
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
-    auto aref = createAndInitMbar(op, rewriter);
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
 
@@ -653,6 +774,7 @@ public:
     // consumer mmav5 ops requires the corresponding get enter op to be still
     // used in the IR, collect them here.
     auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
+    auto aref = createArefBarriers(op, mmav5Ops, teardownBarriers);
 
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
@@ -689,6 +811,7 @@ public:
 
 private:
   unsigned defaultNumStages;
+  mutable DenseMap<Block *, ClusterBarrierOp> teardownBarriers;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -854,6 +977,23 @@ void combineArefs(scf::ForOp loop) {
   llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
       liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
+    // Combining erases the original arefs, so require a single get-enter.
+    // Schematic IR from test_tma_matmul_mixed_consumers:
+    //   %a_ref = nvws.aref.create %a_buffer ...
+    //   %b_ref = nvws.aref.create %b_buffer ...
+    //   scf.for ... {
+    //     %a_aux, %t0 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %aux = ttg.local_load %a_aux ...
+    //     %a_mma, %t1 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %b_mma, %t2 = nvws.aref.get.enter %b_ref[%stage, %phase] ...
+    //     ttng.tc_gen5_mma %a_mma, %b_mma, ...
+    //   }
+    // Combining the MMA get-enters erases %a_ref and %b_ref, but the get-enter
+    // producing %a_aux still uses %a_ref.
+    if (llvm::any_of(getEnterOp.getAref().getUsers(), [&](Operation *user) {
+          return isa<ArefGetEnterOp>(user) && user != getEnterOp;
+        }))
+      continue;
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
       assert(hasPartition(getEnterOp));

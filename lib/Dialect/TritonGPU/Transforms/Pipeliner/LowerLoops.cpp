@@ -65,12 +65,20 @@ bool mustLoadToRegisters(Operation *op) {
     return true;
 
   Attribute loadEncoding;
+  auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
   if (auto descLoad = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
     loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, tensorType,
                                                          descLoad.getDesc());
   }
-  return loadEncoding && (loadEncoding != alloc.getType().getEncoding());
+  // A TMA buffer feeds the alloc in place when the two encodings describe the
+  // same layout, even if spelled differently (e.g. an unswizzled nvmma
+  // descriptor behind a shared_linear TMEM-copy scale sink).
+  auto allocEncoding = alloc.getType().getEncoding();
+  return loadEncoding && loadEncoding != allocEncoding &&
+         !ttg::areLayoutsEquivalent(
+             tensorType.getShape(),
+             cast<ttg::LayoutEncodingTrait>(loadEncoding),
+             cast<ttg::LayoutEncodingTrait>(allocEncoding));
 }
 
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
@@ -279,12 +287,47 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-static bool allUsersAreMMAv5(Operation *op) {
-  return llvm::all_of(op->getUsers(), [](Operation *user) {
+// Whether the shared-memory buffer of `value` is read by an MMAv5 op: as an
+// operand, through views, selects and scf.if/scf.for yields, or copied to
+// tensor memory (block scales). A value consumed through registers is read by
+// each CTA from its own buffer.
+static bool reachesMMAv5(Value value) {
+  SmallVector<Value> worklist = {value};
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+    for (OpOperand &use : v.getUses()) {
+      Operation *user = use.getOwner();
+      if (isa<ttng::MMAv5OpInterface, ttng::TMEMCopyOp>(user))
+        return true;
+      if (isa<ttg::LocalAllocOp, arith::SelectOp>(user) ||
+          user->hasTrait<OpTrait::MemDescViewTrait>()) {
+        llvm::append_range(worklist, user->getResults());
+      } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+        Operation *parent = yield->getParentOp();
+        unsigned idx = use.getOperandNumber();
+        if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
+          worklist.push_back(ifOp.getResult(idx));
+        } else if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+          worklist.push_back(loop.getRegionIterArgs()[idx]);
+          worklist.push_back(loop.getResult(idx));
+        }
+      }
+    }
+  }
+  return false;
+}
+
+static bool hasNonMMAUsers(Operation *op) {
+  return llvm::any_of(op->getUsers(), [](Operation *user) {
     if (user->hasTrait<OpTrait::MemDescViewTrait>())
-      return allUsersAreMMAv5(user);
-    // MMA completion waits only track operand lifetimes.
-    return isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp>(user);
+      return hasNonMMAUsers(user);
+    // tcgen05.cp feeding a scaled MMA is issued by the lead CTA like the MMA
+    // itself, so the two-CTA load barrier covers it as well.
+    return !isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp, ttng::TMEMCopyOp>(
+        user);
   });
 }
 
@@ -389,20 +432,34 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
+    // A two-CTA MMA reads both CTAs' halves of its operands. A group read only
+    // by the MMA uses the pair barrier (in the leader, which issues the MMA) to
+    // cover the peer's bytes. A group also read outside the MMA keeps per-CTA
+    // barriers, so each CTA waits for its own bytes, then a cluster barrier
+    // tells the leader that the peer's half landed. A group that never reaches
+    // a two-CTA MMA needs no cluster-wide synchronization.
+    bool feedsMMA = false, readOutsideMMA = false;
+    for (Operation *op : group) {
+      feedsMMA |= reachesMMAv5(op->getResult(0));
+      readOutsideMMA |=
+          mustLoadToRegisters(op) || hasNonMMAUsers(*op->getUsers().begin());
+    }
+    bool usePairBarrier = twoCTAs && feedsMMA && !readOutsideMMA;
+    bool needsClusterBarrier = twoCTAs && feedsMMA && readOutsideMMA;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
-      int loadSize = product(getShapePerCTA(tensorTy));
+      // Count the bytes each CTA receives: the shared buffer's CTA layout, not
+      // the register tensor's, decides it (a buffer broadcast across a CTA
+      // pair, e.g. two-CTA MMA scales for B, lands whole in every CTA).
+      Attribute bufferEncoding = asyncLoads[op].sharedEncoding;
+      int loadSize =
+          bufferEncoding
+              ? product(getShapePerCTA(bufferEncoding, tensorTy.getShape()))
+              : product(getShapePerCTA(tensorTy));
       sizeInBytes +=
           loadSize * getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) / 8;
     }
 
-    bool mmaOnly = llvm::all_of(group, [](Operation *load) {
-      if (mustLoadToRegisters(load))
-        return false;
-      // mustLoadToRegisters established a single LocalAllocOp user.
-      return allUsersAreMMAv5(*load->getUsers().begin());
-    });
-    bool usePairBarrier = twoCTAs && mmaOnly;
     Value barrierAlloc = triton::createBarrierAlloc(
         forOp, numBuffers, /*arriveCount=*/1, usePairBarrier);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
@@ -418,7 +475,7 @@ void createTMABarrierAndWait(
         builder, barrierAlloc, loadGroup.extractIdx);
     Operation *waitOp =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
-    if (twoCTAs && !mmaOnly) {
+    if (needsClusterBarrier) {
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
 
@@ -822,6 +879,26 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   Value barrierSlice =
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+  // A two-CTA MMA's completion arrives on the barrier copy of both CTAs, but
+  // each CTA's wait only proves that its own copy completed. Without
+  // back-pressure the leader can reuse a slot while the peer has not yet
+  // observed its previous phase: two completions flip the peer's copy back to
+  // the parity it waits for, and it waits forever. Both CTAs of the pair
+  // acknowledge a completion they observed on `ackSlice`, a pair barrier in
+  // the leader's shared memory, and the leader waits for the acknowledgments
+  // of the slot's previous use before it issues an MMA into the slot again
+  // (waits on a pair barrier are leader-only, like the MMA). A fresh barrier
+  // passes the wait on the previous parity, so the first round does not block.
+  Value ackSlice;
+  if (mma.getTwoCtas()) {
+    // One arrival per CTA: the lowering scales a pair barrier's count by the
+    // CTAs that arrive on it.
+    Value ackAlloc = createBarrierAlloc(forOp, numStages, /*arriveCount=*/1,
+                                        /*twoCTAs=*/true);
+    ackSlice = triton::createSingleBufferView(builder, ackAlloc, barrierIdx);
+    Value previousPhase = arith::XOrIOp::create(builder, phase, one);
+    ttng::WaitBarrierOp::create(builder, ackSlice, previousPhase);
+  }
   mma.addCompletionBarrier(barrierSlice, vTrue);
   mma.setIsAsync(true);
 
@@ -839,6 +916,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  if (ackSlice)
+    ttng::ArriveBarrierOp::create(builder, ackSlice, 1);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
@@ -851,7 +930,11 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         continue;
       }
       auto [loadStage, loadCluster] = schedule[topLevelUser];
-      if (loadStage < mainWaitStage) {
+      // A read in the main wait's stage but an earlier cluster also runs
+      // before that wait.
+      if (loadStage < mainWaitStage ||
+          (loadStage == mainWaitStage &&
+           schedule.clusters.isBefore(loadCluster, mainWaitCluster))) {
         builder.setStageCluster({loadStage, loadCluster});
         builder.setInsertionPoint(load);
         ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);

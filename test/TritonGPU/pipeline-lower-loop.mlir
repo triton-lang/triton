@@ -1934,14 +1934,20 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-wa
     tt.return %3 : tensor<256x128xf16, #blockedC>
   }
 
-  // MMA-only descriptor views use a pair barrier; the register load uses per-CTA barriers.
+  // Descriptor views feeding only MMA do not need a cluster barrier.
+  // A load group that never reaches the two-CTA MMA keeps per-CTA barriers:
+  // each CTA waits for its own bytes, with no cluster barrier.
+  // Both CTAs acknowledge each MMA completion on a pair barrier after their
+  // completion wait, so the leader never reuses a completion slot that the
+  // peer has not observed.
   // CHECK-LABEL: @two_cta_wait_unrelated_load_group
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}}two_ctas
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttng.wait_barrier {{.*}} deps
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
-  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttg.local_load
   // CHECK: "test.consume"
   tt.func public @two_cta_wait_unrelated_load_group(%arg0: !tt.tensordesc<256x64xf16, #sharedA>, %arg1: !tt.tensordesc<64x128xf16, #sharedB>, %arg2: !tt.tensordesc<256x64xf16, #sharedA>, %arg3: i32) -> tensor<256x128xf16, #blockedC> {
