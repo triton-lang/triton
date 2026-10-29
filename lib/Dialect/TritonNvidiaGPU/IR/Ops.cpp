@@ -696,6 +696,8 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     return op->emitOpError("FP6 loads require a matching opaque tile and "
                            "stores require byte lanes");
   if (fp6) {
+    if (nvmma.getSwizzlingByteWidth() == 32)
+      return op->emitOpError("FP6 TMA does not support 32-byte swizzling");
     if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
         (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
       return op->emitOpError(
@@ -1373,7 +1375,8 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (isa<FloatType>(elementType))
+  if (scaleType != ScaleDotElemType::E2M3 &&
+      scaleType != ScaleDotElemType::E3M2 && isa<FloatType>(elementType))
     return elementType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:
@@ -1484,15 +1487,11 @@ LogicalResult TCGen5MMAScaledOp::verify() {
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
       getScaledMMAOperandType(getB().getType().getElementType(), getBType());
-  for (auto [mem, format] : {std::pair{getA().getType(), getAType()},
-                             std::pair{getB().getType(), getBType()}}) {
+  for (auto [mem, type] : {std::pair{getA().getType(), atype},
+                           std::pair{getB().getType(), btype}}) {
     auto fp6 = NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding());
-    bool isFp6 =
-        format == ScaleDotElemType::E2M3 || format == ScaleDotElemType::E3M2;
-    if ((isFp6 || fp6) &&
-        fp6 != getScaledMMAOperandType(mem.getElementType(), format))
-      return emitOpError(
-          "FP6 MMA format must match the TMA-loaded shared tile");
+    if ((isa<Float6E2M3FNType, Float6E3M2FNType>(type) || fp6) && fp6 != type)
+      return emitOpError("FP6 MMA format must match the shared tile");
   }
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))

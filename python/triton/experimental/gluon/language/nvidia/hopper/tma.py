@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+from triton._utils import validate_fp6_box
 from triton.language.core import base_type, base_value, _CachePolicy
 from ..ampere import CachePolicy
 import triton.experimental.gluon.language._core as ttgl
@@ -53,8 +54,6 @@ class _tensor_descriptor_type_base(base_type):
         if self.layout.fp6_format is not None:
             nbytes = nbytes // 4 * 3
         cga_layout = self.layout.cga_layout
-        if len(cga_layout) == 0:
-            return nbytes
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
         return nbytes // num_cta_splits
 
@@ -462,17 +461,10 @@ def make_tensor_descriptor(
     block_shape = _unwrap_if_constexpr(block_shape)
     layout = _unwrap_if_constexpr(layout)
     if layout.fp6_format is not None:
-        width = block_shape[-1]
-        if width not in (64, 128) or base.dtype.element_ty != ttgl.uint8 or padding_option != "zero":
-            raise ValueError("FP6 tensor maps require uint8 storage, zero padding and a 64/128-value box")
-        align = 16 if width == 64 else 32
-        for s in strides[:-1]:
-            s = _unwrap_if_constexpr(s)
-            if isinstance(s, int) and s % align:
-                raise ValueError(f"FP6 outer byte strides must be multiples of {align}")
-        inner = _unwrap_if_constexpr(shape[-1])
-        if isinstance(inner, int) and inner % width:
-            raise ValueError("FP6 innermost extent must be a multiple of the box width")
+        if base.dtype.element_ty != ttgl.uint8:
+            raise ValueError("FP6 tensor maps require uint8 storage")
+        validate_fp6_box(block_shape[-1], _unwrap_if_constexpr(shape[-1]), map(_unwrap_if_constexpr, strides[:-1]),
+                         padding_option)
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):

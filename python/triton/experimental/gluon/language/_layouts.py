@@ -397,7 +397,6 @@ class NVMMASharedLayout(SharedLayout):
         if self.fp6_format is not None:
             assert self.fp6_format in ("e2m3", "e3m2")
             assert self.element_bitwidth == 8 and not self.fp4_padded
-            assert self.swizzle_byte_width in (0, 64, 128)
         if self.fp4_padded:
             assert self.swizzle_byte_width == 128, "fp4_padded only supports 128 byte swizzling"
             assert self.element_bitwidth == 8, "fp4_padded is only supported for element_bitwidth=8"
