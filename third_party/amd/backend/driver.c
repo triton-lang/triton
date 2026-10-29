@@ -4,7 +4,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
+#include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -703,6 +705,7 @@ bool extractPointer(void *ptr, PyObject *obj) {
     return false;
   }
   if (!PyLong_Check(ret)) {
+    Py_DECREF(ret);
     PyErr_SetString(PyExc_TypeError,
                     "data_ptr method of Pointer object must return 64-bit int");
     return false;
@@ -715,10 +718,15 @@ bool extractPointer(void *ptr, PyObject *obj) {
   hipError_t status = hipSymbolTable.hipPointerGetAttribute(
       dev_ptr, HIP_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
   if (status == hipErrorInvalidValue) {
-    PyErr_Format(PyExc_ValueError, "Pointer argument (at %d) cannot be "
-                                   "accessed from Triton (cpu tensor?)");
+    PyErr_SetString(PyExc_ValueError,
+                    "Pointer argument cannot be accessed from Triton "
+                    "(cpu tensor?)");
     // Clear and ignore HIP error
     (void)hipSymbolTable.hipGetLastError();
+    return false;
+  }
+  if (status != hipSuccess) {
+    gpuAssert(status, __FILE__, __LINE__);
     return false;
   }
   return true;
@@ -1127,6 +1135,215 @@ cleanup:
   return NULL;
 }
 
+typedef union {
+  hipDeviceptr_t ptr;
+  int8_t i8;
+  int16_t i16;
+  int32_t i32;
+  int64_t i64;
+  uint8_t u8;
+  uint16_t u16;
+  uint32_t u32;
+  uint64_t u64;
+  float f32;
+  double f64;
+} HIPLaunchArg;
+
+typedef struct {
+  PyObject_HEAD vectorcallfunc vectorcall;
+  hipFunction_t function;
+  int num_warps;
+  int num_ctas;
+  int shared_mem;
+  int launch_cooperative_grid;
+  int warp_size;
+  Py_ssize_t num_args;
+  Py_ssize_t num_call_args;
+  uint8_t *arg_types;
+  Py_ssize_t *arg_indices;
+  HIPLaunchArg *arg_storage;
+  void **kernel_params;
+} HIPPreboundLauncher;
+
+static void HIPPreboundLauncher_dealloc(HIPPreboundLauncher *self) {
+  PyMem_Free(self->arg_types);
+  PyMem_Free(self->arg_indices);
+  PyMem_Free(self->arg_storage);
+  PyMem_Free(self->kernel_params);
+  Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *HIPPreboundLauncher_vectorcall(PyObject *callable,
+                                                PyObject *const *args,
+                                                size_t nargsf,
+                                                PyObject *kwnames) {
+  HIPPreboundLauncher *self = (HIPPreboundLauncher *)callable;
+  Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+  if (kwnames && PyTuple_GET_SIZE(kwnames) != 0) {
+    PyErr_SetString(PyExc_TypeError,
+                    "HIPPreboundLauncher accepts positional arguments only");
+    return NULL;
+  }
+  if (nargs != 4 + self->num_call_args) {
+    PyErr_Format(PyExc_TypeError,
+                 "HIPPreboundLauncher expected %zd arguments, got %zd",
+                 4 + self->num_call_args, nargs);
+    return NULL;
+  }
+
+  long grid_x_long = PyLong_AsLong(args[0]);
+  long grid_y_long = PyLong_AsLong(args[1]);
+  long grid_z_long = PyLong_AsLong(args[2]);
+  uint64_t stream = PyLong_AsUnsignedLongLong(args[3]);
+  if (PyErr_Occurred())
+    return NULL;
+  if (grid_x_long < INT_MIN || grid_x_long > INT_MAX || grid_y_long < INT_MIN ||
+      grid_y_long > INT_MAX || grid_z_long < INT_MIN || grid_z_long > INT_MAX) {
+    PyErr_SetString(PyExc_OverflowError,
+                    "HIP launch grid dimension does not fit in an int");
+    return NULL;
+  }
+  int grid_x = (int)grid_x_long;
+  int grid_y = (int)grid_y_long;
+  int grid_z = (int)grid_z_long;
+  if (grid_x == 0 || grid_y == 0 || grid_z == 0)
+    Py_RETURN_NONE;
+
+  for (Py_ssize_t i = 0; i < self->num_args; ++i) {
+    Extractor extractor = getExtractor(self->arg_types[i]);
+    PyObject *arg = args[4 + self->arg_indices[i]];
+    if (!extractor.extract(&self->arg_storage[i], arg))
+      return NULL;
+  }
+
+  _launch(grid_x, grid_y, grid_z, self->num_warps, self->num_ctas,
+          self->launch_cooperative_grid, self->shared_mem, self->warp_size,
+          (hipStream_t)(uintptr_t)stream, self->function, self->kernel_params);
+  if (PyErr_Occurred())
+    return NULL;
+  Py_RETURN_NONE;
+}
+
+static PyObject *HIPPreboundLauncher_new(PyTypeObject *type, PyObject *args,
+                                         PyObject *kwargs) {
+  unsigned long long function;
+  int num_warps, num_ctas, shared_mem, launch_cooperative_grid, warp_size;
+  int num_call_args;
+  PyObject *arg_type_codes;
+  PyObject *arg_indices;
+  static char *kwlist[] = {"function",
+                           "num_warps",
+                           "num_ctas",
+                           "shared_mem",
+                           "launch_cooperative_grid",
+                           "warp_size",
+                           "arg_type_codes",
+                           "arg_indices",
+                           "num_call_args",
+                           NULL};
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kwargs, "KiiiiiOOi", kwlist, &function, &num_warps, &num_ctas,
+          &shared_mem, &launch_cooperative_grid, &warp_size, &arg_type_codes,
+          &arg_indices, &num_call_args))
+    return NULL;
+  if (!PyBytes_Check(arg_type_codes)) {
+    PyErr_SetString(PyExc_TypeError, "arg_type_codes must be bytes");
+    return NULL;
+  }
+  if (num_call_args < 0) {
+    PyErr_SetString(PyExc_ValueError, "num_call_args must be non-negative");
+    return NULL;
+  }
+
+  PyObject *indices =
+      PySequence_Fast(arg_indices, "arg_indices must be a sequence");
+  if (!indices)
+    return NULL;
+  Py_ssize_t num_args = PyBytes_GET_SIZE(arg_type_codes);
+  if (PySequence_Fast_GET_SIZE(indices) != num_args) {
+    Py_DECREF(indices);
+    PyErr_SetString(PyExc_ValueError,
+                    "arg_type_codes and arg_indices must have equal length");
+    return NULL;
+  }
+
+  HIPPreboundLauncher *self = (HIPPreboundLauncher *)type->tp_alloc(type, 0);
+  if (!self) {
+    Py_DECREF(indices);
+    return NULL;
+  }
+  self->vectorcall = HIPPreboundLauncher_vectorcall;
+  self->function = (hipFunction_t)(uintptr_t)function;
+  self->num_warps = num_warps;
+  self->num_ctas = num_ctas;
+  self->shared_mem = shared_mem;
+  self->launch_cooperative_grid = launch_cooperative_grid;
+  self->warp_size = warp_size;
+  self->num_args = num_args;
+  self->num_call_args = num_call_args;
+  self->arg_types = NULL;
+  self->arg_indices = NULL;
+  self->arg_storage = NULL;
+  self->kernel_params = NULL;
+
+  size_t num_slots = (size_t)num_args + 2;
+  self->arg_types = PyMem_Malloc((size_t)(num_args > 0 ? num_args : 1));
+  self->arg_indices =
+      PyMem_Malloc((size_t)(num_args > 0 ? num_args : 1) * sizeof(Py_ssize_t));
+  self->arg_storage = PyMem_Calloc(num_slots, sizeof(HIPLaunchArg));
+  self->kernel_params = PyMem_Malloc(num_slots * sizeof(void *));
+  if (!self->arg_types || !self->arg_indices || !self->arg_storage ||
+      !self->kernel_params) {
+    Py_DECREF(indices);
+    Py_DECREF(self);
+    return PyErr_NoMemory();
+  }
+
+  const uint8_t *type_codes =
+      (const uint8_t *)PyBytes_AS_STRING(arg_type_codes);
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    uint8_t type_code = type_codes[i];
+    Extractor extractor = getExtractor(type_code);
+    if (!extractor.extract || type_code == EXTRACTOR_TDMDESC_INDEX ||
+        extractor.size > sizeof(HIPLaunchArg)) {
+      Py_DECREF(indices);
+      Py_DECREF(self);
+      PyErr_Format(PyExc_TypeError,
+                   "unsupported pre-bound HIP argument type code %u",
+                   type_code);
+      return NULL;
+    }
+    Py_ssize_t arg_index =
+        PyLong_AsSsize_t(PySequence_Fast_GET_ITEM(indices, i));
+    if (PyErr_Occurred() || arg_index < 0 || arg_index >= num_call_args) {
+      Py_DECREF(indices);
+      Py_DECREF(self);
+      if (!PyErr_Occurred())
+        PyErr_SetString(PyExc_ValueError, "argument index is out of range");
+      return NULL;
+    }
+    self->arg_types[i] = type_code;
+    self->arg_indices[i] = arg_index;
+    self->kernel_params[i] = &self->arg_storage[i];
+  }
+  Py_DECREF(indices);
+  self->kernel_params[num_args] = &self->arg_storage[num_args];
+  self->kernel_params[num_args + 1] = &self->arg_storage[num_args + 1];
+  return (PyObject *)self;
+}
+
+static PyTypeObject HIPPreboundLauncherType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.amd._HIPPreboundLauncher",
+    .tp_basicsize = sizeof(HIPPreboundLauncher),
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_VECTORCALL,
+    .tp_vectorcall_offset = offsetof(HIPPreboundLauncher, vectorcall),
+    .tp_call = PyVectorcall_Call,
+    .tp_dealloc = (destructor)HIPPreboundLauncher_dealloc,
+    .tp_new = HIPPreboundLauncher_new,
+    .tp_doc = "HIP launcher with invariant launch state bound once.",
+};
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided hsaco into HIP driver"},
@@ -1167,6 +1384,9 @@ PyMODINIT_FUNC PyInit_hip_utils(void) {
   if (PyType_Ready(&PyKernelArgType) < 0) {
     return NULL;
   }
+  if (PyType_Ready(&HIPPreboundLauncherType) < 0) {
+    return NULL;
+  }
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL) {
     return NULL;
@@ -1178,6 +1398,9 @@ PyMODINIT_FUNC PyInit_hip_utils(void) {
   PyModule_AddIntConstant(m, "ARG_CONSTEXPR", ARG_CONSTEXPR);
   PyModule_AddIntConstant(m, "ARG_KERNEL", ARG_KERNEL);
   PyModule_AddIntConstant(m, "ARG_TUPLE", ARG_TUPLE);
+  Py_INCREF(&HIPPreboundLauncherType);
+  PyModule_AddObject(m, "_HIPPreboundLauncher",
+                     (PyObject *)&HIPPreboundLauncherType);
 
   return m;
 }

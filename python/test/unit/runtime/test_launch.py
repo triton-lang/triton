@@ -11,6 +11,85 @@ import triton.language as tl
 from triton._internal_testing import is_cuda, is_hip, run_in_process
 
 
+@triton.jit
+def _hip_prebound_scale_kernel(x, output, n_elements, scale, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    values = tl.load(x + offsets, mask=mask)
+    tl.store(output + offsets, values * scale, mask=mask)
+
+
+@triton.jit
+def _hip_prebound_tuple_kernel(output, inputs):
+    tl.store(output, tl.load(inputs[0]) * inputs[1])
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP pre-bound launcher is AMD-specific")
+def test_hip_prebound_launcher(device) -> None:
+    n_elements = 256
+    x = torch.randn(n_elements, device=device)
+    output = torch.empty_like(x)
+
+    compiled = _hip_prebound_scale_kernel[(1, )](x, output, n_elements, 2.0, BLOCK_SIZE=n_elements)
+    assert compiled._prebound_launcher is not None
+    torch.testing.assert_close(output, x * 2.0)
+
+    _hip_prebound_scale_kernel[(1, )](x, output, n_elements, 3.0, BLOCK_SIZE=n_elements)
+    torch.testing.assert_close(output, x * 3.0)
+
+    _hip_prebound_scale_kernel[(0, )](x, output, n_elements, 4.0, BLOCK_SIZE=n_elements)
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP pre-bound launcher is AMD-specific")
+def test_hip_prebound_launcher_falls_back_for_hooks(device, monkeypatch) -> None:
+    n_elements = 256
+    x = torch.randn(n_elements, device=device)
+    output = torch.empty_like(x)
+    compiled = _hip_prebound_scale_kernel[(1, )](x, output, n_elements, 2.0, BLOCK_SIZE=n_elements)
+    assert compiled._prebound_launcher is not None
+
+    def fail_prebound_launch(*args):
+        raise AssertionError("pre-bound launcher must not run while launch hooks are active")
+
+    monkeypatch.setattr(compiled, "_prebound_launcher", fail_prebound_launch)
+    hook_calls = []
+
+    def enter_hook(metadata):
+        hook_calls.append(metadata)
+
+    triton.knobs.runtime.launch_enter_hook.add(enter_hook)
+    try:
+        _hip_prebound_scale_kernel[(1, )](x, output, n_elements, 3.0, BLOCK_SIZE=n_elements)
+    finally:
+        triton.knobs.runtime.launch_enter_hook.remove(enter_hook)
+
+    assert len(hook_calls) == 1
+    torch.testing.assert_close(output, x * 3.0)
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP pre-bound launcher is AMD-specific")
+def test_hip_prebound_launcher_rejects_cpu_pointer(device) -> None:
+    n_elements = 256
+    gpu_x = torch.randn(n_elements, device=device)
+    x = torch.randn(n_elements, device="cpu")
+    output = torch.empty(n_elements, device=device)
+    compiled = _hip_prebound_scale_kernel[(1, )](gpu_x, output, n_elements, 2.0, BLOCK_SIZE=n_elements)
+    assert compiled._prebound_launcher is not None
+
+    with pytest.raises(ValueError, match="cpu tensor"):
+        _hip_prebound_scale_kernel[(1, )](x, output, n_elements, 2.0, BLOCK_SIZE=n_elements)
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP pre-bound launcher is AMD-specific")
+def test_hip_prebound_launcher_falls_back_for_tuple(device) -> None:
+    x = torch.tensor([3.0], device=device)
+    output = torch.empty_like(x)
+    compiled = _hip_prebound_tuple_kernel[(1, )](output, (x, 2.0))
+
+    assert compiled._prebound_launcher is None
+    torch.testing.assert_close(output, x * 2.0)
+
+
 def test_metadata() -> None:
 
     used_hook = False
