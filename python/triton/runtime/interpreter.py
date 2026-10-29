@@ -628,7 +628,7 @@ class InterpreterBuilder:
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_fneg = lambda self, input: self.unary_op(input, np.negative)
-    create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
+    create_mul = lambda self, lhs, rhs, nsw=False: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_approx_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
@@ -636,7 +636,7 @@ class InterpreterBuilder:
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
     create_srem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_urem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
-    create_add = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
+    create_add = lambda self, lhs, rhs, nsw=False: self.binary_op(lhs, rhs, np.add)
     create_sub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_shl = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.left_shift)
     create_lshr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)

@@ -34,6 +34,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: @integer_overflow_flags
+  tt.func private @integer_overflow_flags(%a: i32, %b: i32) -> (i32, i32, i32, i32, i32, i32, i32, i32) {
+    // COMMON: llvm.add %arg0, %arg1 : i32
+    // COMMON: llvm.add %arg0, %arg1 overflow<nsw> : i32
+    // COMMON: llvm.add %arg0, %arg1 overflow<nuw> : i32
+    // COMMON: llvm.add %arg0, %arg1 overflow<nsw, nuw> : i32
+    // COMMON: llvm.mul %arg0, %arg1 : i32
+    // COMMON: llvm.mul %arg0, %arg1 overflow<nsw> : i32
+    // COMMON: llvm.mul %arg0, %arg1 overflow<nuw> : i32
+    // COMMON: llvm.mul %arg0, %arg1 overflow<nsw, nuw> : i32
+    %add = arith.addi %a, %b : i32
+    %add_nsw = arith.addi %a, %b overflow<nsw> : i32
+    %add_nuw = arith.addi %a, %b overflow<nuw> : i32
+    %add_both = arith.addi %a, %b overflow<nsw, nuw> : i32
+    %mul = arith.muli %a, %b : i32
+    %mul_nsw = arith.muli %a, %b overflow<nsw> : i32
+    %mul_nuw = arith.muli %a, %b overflow<nuw> : i32
+    %mul_both = arith.muli %a, %b overflow<nsw, nuw> : i32
+    tt.return %add, %add_nsw, %add_nuw, %add_both, %mul, %mul_nsw, %mul_nuw, %mul_both : i32, i32, i32, i32, i32, i32, i32, i32
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @tensor_integer_overflow_flags
+  tt.func private @tensor_integer_overflow_flags(%a: tensor<512xi32, #blocked>, %b: tensor<512xi32, #blocked>) -> tensor<512xi32, #blocked> {
+    // COMMON-COUNT-2: llvm.add {{.*}} overflow<nsw> : i32
+    // COMMON-COUNT-2: llvm.mul {{.*}} overflow<nsw> : i32
+    %add = arith.addi %a, %b overflow<nsw> : tensor<512xi32, #blocked>
+    %mul = arith.muli %add, %b overflow<nsw> : tensor<512xi32, #blocked>
+    tt.return %mul : tensor<512xi32, #blocked>
+  }
+}
+
+// -----
+
 #shared = #ttg.amd_rotating_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
