@@ -158,6 +158,14 @@ class tensor_descriptor(_tensor_descriptor_value_base):
                  layout: NVMMASharedLayout):
         super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_type)
 
+    @builtin
+    def with_base(self, base, _semantic=None):
+        """Return a copy of this tiled descriptor at a new, equally aligned base address."""
+        if not base.dtype.is_ptr() or base.dtype.element_ty != self.dtype:
+            raise ValueError("replacement base must point to the descriptor element type")
+        handle = _semantic.builder.create_tensormap_with_base(self.handle, base.handle)
+        return tensor_descriptor(handle, self.shape, self.strides, self.block_type, self.layout)
+
 
 class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 

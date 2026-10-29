@@ -12,14 +12,14 @@ TRITON_MAX_TENSOR_NUMEL = 1048576
 
 
 def fp6_logical_shape(shape):
-    if shape[-1] % 96:
-        raise ValueError("packed FP6 rows must contain a multiple of 96 bytes")
-    return [*shape[:-1], shape[-1] // 96 * 128]
+    if shape[-1] % 48:
+        raise ValueError("packed FP6 rows must contain a multiple of 48 bytes")
+    return [*shape[:-1], shape[-1] // 3 * 4]
 
 
 def validate_fp6_box(width, inner, outer_strides, padding, *, host=False):
-    if width not in ((128, ) if host else (64, 128)) or padding != "zero":
-        raise ValueError("FP6 requires zero padding and a 128-value box (64 for device stores on SM103)")
+    if width not in (64, 128) or padding != "zero":
+        raise ValueError("FP6 requires zero padding and a 128-value box (64 for stores on SM103)")
     if (host or isinstance(inner, int)) and inner % width:
         raise ValueError("FP6 inner extent must be a multiple of the box width")
     alignment = width // 4

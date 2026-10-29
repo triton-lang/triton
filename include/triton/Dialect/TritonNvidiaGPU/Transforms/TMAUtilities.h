@@ -27,6 +27,10 @@ Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc);
 FailureOr<int> getTMASwizzleMode(Location loc, triton::TensorDescInterface ty);
 FailureOr<int> getTMAElementType(Location loc, triton::TensorDescInterface ty);
 
+bool isNarrowFP6Map(TensorDescType type);
+Value updateTMADesc(OpBuilder &builder, Location loc, Value src,
+                    Value base = {});
+
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);
 
