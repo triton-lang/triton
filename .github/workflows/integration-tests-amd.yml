@@ -435,7 +435,6 @@ jobs:
             -k "not ($k_runtime)" -p no:forked \
             python/test/unit/test_debug.py \
             python/test/unit/runtime
-          # 24 workers peaks ~161GiB on ROCm 10.3 (CI hosts ~125GiB); 12 stays ~82GiB.
           run_rocjitsu_pytest 12 2 \
             -k "not ($k_core or $k_desc or $k_tdm_store)" \
             --deselect "python/test/unit/language/test_core.py::test_cat_nd[rank=1,dim=0]" \
