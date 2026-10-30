@@ -474,7 +474,6 @@ struct AssignCGALayoutsPass
     if (numCTAs == 1)
       return;
 
-    // Rewriting shared producers may erase operations ahead of the walk.
     SmallVector<Operation *> consumers;
     mod.walk([&](Operation *op) {
       if (isa<triton::DotOp, triton::ReduceOp>(op))
