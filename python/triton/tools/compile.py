@@ -175,12 +175,15 @@ def compile_kernel(args: CompileArgs):
     ty_to_cpp = triton.runtime.driver.active.map_python_to_cpp_type
     backend_name = target.backend
 
+    signature = ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)])
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
         "bin_size": len(asm),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
+        "signature": signature,
+        # follows the stream parameter; empty when every argument is constexpr
+        "trailing_signature": f", {signature}" if signature else "",
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
         "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch

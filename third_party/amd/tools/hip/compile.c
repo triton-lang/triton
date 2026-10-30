@@ -50,7 +50,7 @@ void load_{kernel_name}() {{
 /*
 {kernel_docstring}
 */
-hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
+hipError_t {kernel_name}(hipStream_t stream{trailing_signature}) {{
     if ({kernel_name}_func == NULL)
        load_{kernel_name}();
     unsigned int gX = {gridX};
