@@ -1935,6 +1935,18 @@ def test_dot_fp16_accumulator():
     run_parser(fp16_acc_kernel)
 
 
+def test_dot_acc_dtype_mismatch():
+
+    @triton.jit
+    def kernel():
+        c = tl.zeros([32, 32], dtype=tl.float32)
+        a = tl.full([32, 32], 1, dtype=tl.int8)
+        tl.dot(a, a, c)
+
+    with pytest.raises(CompilationError, match="expected accumulator dtype int32"):
+        run_parser(kernel)
+
+
 # ===-----------------------------------------------------------------------===#
 # Loop-carried variable lowering
 # ===-----------------------------------------------------------------------===#
