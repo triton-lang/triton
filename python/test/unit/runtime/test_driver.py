@@ -429,6 +429,20 @@ def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
     assert report["phases"]["unit"]["warmed_test_misses"] == 1
 
 
+def test_benchmark_cache_flush_does_not_write(device):
+    # `do_bench` flushes L2 between timed calls. Writing the flush buffer leaves
+    # 256 MiB of dirty lines in L2, and the next kernel then pays for their
+    # write-back inside its own timing window (issue #12554), so the flush must
+    # read the buffer rather than write it.
+    driver = triton.runtime.driver.active
+    cache = driver.get_empty_cache_for_benchmark()
+    cache.fill_(1)
+    before = cache.sum().item()
+    driver.clear_cache(cache)
+    assert cache.sum().item() == before, \
+        "the L2 flush wrote to the buffer, so its dirty lines are billed to the next timed kernel"
+
+
 def test_is_lazy():
     from importlib import reload
     driver_module = sys.modules["triton.runtime.driver"]

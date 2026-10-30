@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
+from .runtime.jit import jit
 
 
 @functools.lru_cache(maxsize=None)
@@ -135,6 +136,33 @@ def _collect_proton_scope_times(database, prefix):
     for node in database:
         visit(node)
     return [time for _, time in sorted(scope_times)]
+
+
+@jit
+def _read_flush_kernel(X, n, BLOCK: tl.constexpr):
+    off = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    keep = tl.sum(tl.load(X + off, mask=off < n))
+    # The store never executes; it only stops the load above from being removed.
+    if keep == 123456.0:
+        tl.store(X, keep)
+
+
+def _flush_l2(cache):
+    """Evict whatever is in L2 by reading ``cache``, without writing it.
+
+    ``do_bench`` uses a buffer larger than L2 to push the previous workload out
+    of the cache between timed calls. Writing that buffer leaves its lines dirty,
+    and the next kernel pays for writing them back inside its own timing window
+    (issue #12554); a read evicts the same lines and leaves them clean. A plain
+    streaming read is used rather than ``torch.sum``: the reduction torch picks
+    for this size is multi-pass, and its own traffic perturbs short kernels.
+    """
+    import torch
+
+    x = cache.view(torch.float32)
+    block = 1024
+    grid = ((x.numel() + block - 1) // block, )
+    _read_flush_kernel[grid](x, x.numel(), block)
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
