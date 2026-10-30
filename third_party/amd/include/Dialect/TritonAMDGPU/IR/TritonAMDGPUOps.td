@@ -1042,8 +1042,11 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
     partial TDM copy: bit `n` (LSB = warp 0) means warp `n` carries a
     real descriptor; bits above `num_warps - 1` must be zero. Same data
     lands in shared memory either way: `K = popcount(hint)` active warps
-    cover the block, while inactive warps still issue the TDM instruction
-    with a null descriptor.
+    cover the block, while inactive warps still issue the TDM instruction.
+    Without a barrier, inactive warps use a null descriptor (`pred = 0`).
+    With a barrier, they retain the descriptor's predicate and use a NOP
+    descriptor (`tile_dim0 = 0`, workgroup mask cleared), so they copy no
+    data but still arrive at the barrier when the predicate is enabled.
 
     For "all warps participate", omit the attribute (preferred) or pass
     a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is

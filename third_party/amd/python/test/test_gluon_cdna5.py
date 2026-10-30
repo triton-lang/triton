@@ -3302,6 +3302,152 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
     assert torch.equal(b_triton, a)
 
 
+# With an mbarrier, a TDM op arrives once per warp, including warps the copy leaves idle, so the tests below init
+# the barrier with num_warps. Loads are read right after mbarrier.wait without tdm.async_wait, so a missing arrival
+# hangs and an extra one shows up as stale data.
+def _random_i32(shape):
+    return torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+
+
+@gluon.jit
+def _tdm_mbarrier_last_load_kernel(a_ptr, b_ptr, out_a_ptr, out_b_ptr, A_BLOCK_M: ttgl.constexpr,
+                                   A_BLOCK_N: ttgl.constexpr, B_BLOCK_N: ttgl.constexpr, NUM_ITERS: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [num_warps, 1], [1, 0])
+
+    num_tiles = ttgl.num_programs(0) * NUM_ITERS
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(num_tiles * A_BLOCK_M, A_BLOCK_N),
+                                                       strides=(A_BLOCK_N, 1), block_shape=(A_BLOCK_M, A_BLOCK_N),
+                                                       layout=SHARED_LAYOUT)
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(num_tiles, B_BLOCK_N), strides=(64, 1),
+                                                       block_shape=(1, B_BLOCK_N), layout=SHARED_LAYOUT)
+    a_smem = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+    b_smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+    ttgl.amd.cdna5.mbarrier.init(bar, count=num_warps)
+
+    a_offs_m = ttgl.arange(0, A_BLOCK_M, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    a_offs_n = ttgl.arange(0, A_BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    b_offs_m = ttgl.arange(0, 1, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    b_offs_n = ttgl.arange(0, B_BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    for i in range(NUM_ITERS):
+        tile_idx = ttgl.program_id(0) * NUM_ITERS + i
+        # Only the B load carries the mbarrier. B leaves most warps idle, and their arrivals must still wait for
+        # their share of the A load.
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [tile_idx * A_BLOCK_M, 0], a_smem)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [tile_idx, 0], b_smem, mbarrier=bar)
+        ttgl.amd.cdna5.mbarrier.wait(bar, i % 2)
+        a = a_smem.load(REG_LAYOUT)
+        b = b_smem.load(REG_LAYOUT)
+        ttgl.store(out_a_ptr + (tile_idx * A_BLOCK_M + a_offs_m)[:, None] * A_BLOCK_N + a_offs_n[None, :], a)
+        ttgl.store(out_b_ptr + (tile_idx + b_offs_m)[:, None] * B_BLOCK_N + b_offs_n[None, :], b)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_tdm_mbarrier_last_load_covers_prior(num_warps):
+    A_BLOCK_M, A_BLOCK_N = 128, 128
+    B_BLOCK_N = 2
+    NUM_ITERS = 32
+    NUM_PROGRAMS = 16
+    num_tiles = NUM_PROGRAMS * NUM_ITERS
+    a = _random_i32((num_tiles * A_BLOCK_M, A_BLOCK_N))
+    b = _random_i32((num_tiles, 64))
+    out_a = torch.zeros_like(a).cuda()
+    out_b = torch.zeros((num_tiles, B_BLOCK_N), dtype=torch.int32).cuda()
+
+    _tdm_mbarrier_last_load_kernel[(NUM_PROGRAMS, )](a.cuda(), b.cuda(), out_a, out_b, A_BLOCK_M, A_BLOCK_N, B_BLOCK_N,
+                                                     NUM_ITERS, num_warps=num_warps)
+
+    assert torch.equal(out_a.cpu(), a)
+    assert torch.equal(out_b.cpu(), b[:, :B_BLOCK_N])
+
+
+@gluon.jit
+def _tdm_gather_mbarrier_kernel(inp_ptr, out_ptr, idx_ptr, M_inp, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr,
+                                NUM_ITERS: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [num_warps, 1], [1, 0])
+
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(M_inp, BLOCK_N), strides=(BLOCK_N, 1),
+                                                     block_shape=(NUM_INDICES, BLOCK_N), layout=SHARED_LAYOUT)
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+    ttgl.amd.cdna5.mbarrier.init(bar, count=num_warps)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    offs_m = ttgl.arange(0, NUM_INDICES, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    for i in range(NUM_ITERS):
+        rows = ttgl.load(idx_ptr + i * NUM_INDICES + idx_offs)
+        ttgl.amd.cdna5.tdm.async_gather(desc, rows, smem, mbarrier=bar)
+        ttgl.amd.cdna5.mbarrier.wait(bar, i % 2)
+        tile = smem.load(REG_LAYOUT)
+        ttgl.store(out_ptr + (i * NUM_INDICES + offs_m)[:, None] * BLOCK_N + offs_n[None, :], tile)
+
+
+@gluon.jit
+def _tdm_scatter_mbarrier_kernel(inp_ptr, out_ptr, idx_ptr, M_out, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr,
+                                 NUM_ITERS: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [num_warps, 1], [1, 0])
+
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, BLOCK_N), strides=(BLOCK_N, 1),
+                                                     block_shape=(NUM_INDICES, BLOCK_N), layout=SHARED_LAYOUT)
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+    ttgl.amd.cdna5.mbarrier.init(bar, count=num_warps)
+
+    idx_offs = ttgl.arange(0, NUM_INDICES, layout=IDX_LAYOUT)
+    offs_m = ttgl.arange(0, NUM_INDICES, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    for i in range(NUM_ITERS):
+        smem.store(ttgl.load(inp_ptr + (i * NUM_INDICES + offs_m)[:, None] * BLOCK_N + offs_n[None, :]))
+        rows = ttgl.load(idx_ptr + i * NUM_INDICES + idx_offs)
+        ttgl.amd.cdna5.tdm.async_scatter(desc, rows, smem, mbarrier=bar)
+        ttgl.amd.cdna5.mbarrier.wait(bar, i % 2)
+        # Phase completion isn't yet known to cover the scatter's reads of smem.
+        ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("op", ["gather", "scatter"])
+@pytest.mark.parametrize("indices_per_warp, warps_per_cta", [
+    pytest.param(8, [2, 2], id="redundant_single_chunk"),
+    pytest.param(16, [4, 1], id="active_multichunk"),
+    pytest.param(16, [2, 2], id="redundant_multichunk"),
+])
+def test_tdm_gather_scatter_mbarrier_count(op, indices_per_warp, warps_per_cta):
+    # int32 indices are issued in chunks of eight. Isolate missing arrivals from
+    # redundant warps and extra arrivals from multiple chunks before combining them.
+    idx_layout = ttgl.SliceLayout(1, ttgl.BlockedLayout([indices_per_warp, 1], [1, 32], warps_per_cta, [1, 0]))
+    num_indices, num_warps = indices_per_warp * warps_per_cta[0], 4
+    BLOCK_N = 64
+    M = 512
+    num_iters = 5
+    torch.manual_seed(42)
+    indices = torch.randperm(M)[:num_iters * num_indices].to(torch.int32)
+
+    if op == "gather":
+        inp = _random_i32((M, BLOCK_N))
+        out = torch.zeros((num_iters * num_indices, BLOCK_N), dtype=torch.int32).cuda()
+        _tdm_gather_mbarrier_kernel[(1, )](inp.cuda(), out, indices.cuda(), M, BLOCK_N, num_indices, num_iters,
+                                           idx_layout, num_warps=num_warps)
+        ref = inp[indices.long()]
+    else:
+        inp = _random_i32((num_iters * num_indices, BLOCK_N))
+        out = torch.zeros((M, BLOCK_N), dtype=torch.int32).cuda()
+        _tdm_scatter_mbarrier_kernel[(1, )](inp.cuda(), out, indices.cuda(), M, BLOCK_N, num_indices, num_iters,
+                                            idx_layout, num_warps=num_warps)
+        ref = torch.zeros((M, BLOCK_N), dtype=torch.int32)
+        ref[indices.long()] = inp
+
+    assert torch.equal(out.cpu(), ref)
+
+
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_tdm_load_pred():
 
