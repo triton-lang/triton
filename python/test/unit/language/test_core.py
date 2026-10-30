@@ -133,9 +133,6 @@ def check_type_supported(dtype, device):
             pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
             pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
-    if is_interpreter():
-        if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
-            pytest.skip("bfloat16 is not supported in the interpreter")
 
 
 def get_src_element_ty_size(dtype_str):
@@ -443,6 +440,7 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
+@pytest.mark.interpreter
 def test_bfloat16_mul_rounds_to_nearest_even(device):
     # A bf16 multiply has to round to nearest even. Hardware multiply-accumulate
     # instructions that write a bf16 result may truncate instead, which is off by
@@ -2144,6 +2142,8 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == "bfloat16":
+        pytest.skip("bfloat16 atomics are not supported in the interpreter")
     shape0, shape1 = shape
     # triton kernel
 
@@ -2223,6 +2223,8 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == "bfloat16":
+        pytest.skip("bfloat16 atomics are not supported in the interpreter")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -2247,6 +2249,8 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
                                                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_interpreter() and dtype_x_str == "bfloat16":
+        pytest.skip("bfloat16 atomics are not supported in the interpreter")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -5697,6 +5701,8 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
 def test_masked_load_shared_memory(dtype, device):
 
     check_type_supported(dtype, device)  # bfloat16 on cc < 80 will not be tested
+    if is_interpreter() and dtype == torch.bfloat16:
+        pytest.skip("bfloat16 dot is not supported in the interpreter")
 
     M = 32
     N = 32

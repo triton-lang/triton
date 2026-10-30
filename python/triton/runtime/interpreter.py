@@ -276,6 +276,15 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     return output.astype(output_unint_dtype).reshape(input.shape)
 
 
+def _is_float_stored_as_bits(handle):
+    # numpy has no bfloat16 or fp8 types, so their values are stored as raw bits.
+    return handle.dtype.scalar.is_floating() and np.issubdtype(handle.data.dtype, np.integer)
+
+
+def _bits_to_fp32(handle):
+    return _convert_float(handle.data, handle.dtype.scalar, tl.float32, None).view(np.float32)
+
+
 def _erf(x):
     # Numpy does not support erf
     return math.erf(x)
@@ -625,6 +634,14 @@ class InterpreterBuilder:
             # other integer type. Compute in a wider integer domain and
             # truncate back to one bit to match the GPU backend (issue #10919).
             output = (op(lhs.data.astype(np.int8), rhs.data.astype(np.int8)) & 1).astype(np.bool_)
+        elif _is_float_stored_as_bits(lhs) and _is_float_stored_as_bits(rhs):
+            # The raw bits can't be operated on directly, so compute in float32
+            # and round back. float32 has more than twice the precision of these
+            # types, so the result is still correctly rounded. A bitwise op with
+            # an integer operand (e.g. fp8e4b15 abs) still works on the bits.
+            output = op(_bits_to_fp32(lhs), _bits_to_fp32(rhs))
+            if tl_dtype.is_floating():
+                output = _convert_float(output, tl.float32, tl_dtype, _ir.ROUNDING_MODE.RTNE)
         else:
             output = op(lhs.data, rhs.data)
 
@@ -736,7 +753,7 @@ class InterpreterBuilder:
         if propagate_nans == _ir.PROPAGATE_NAN.NONE:
             return self.binary_op(self.binary_op(arg, lo, np.fmax), hi, np.fmin)
         else:
-            return self.ternary_op(arg, lo, hi, np.clip)
+            return self.binary_op(self.binary_op(arg, lo, np.maximum), hi, np.minimum)
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
@@ -748,6 +765,10 @@ class InterpreterBuilder:
             ret = _interpreter.fma_fp64(*np.broadcast_arrays(x.data, y.data, z.data))
         elif dtype == np.float32:
             ret = _interpreter.fma_fp32(*np.broadcast_arrays(x.data, y.data, z.data))
+        elif _is_float_stored_as_bits(z):
+            product = np.multiply(_bits_to_fp32(x), _bits_to_fp32(y), dtype=np.float64)
+            ret = np.add(product, _bits_to_fp32(z), dtype=np.float64)
+            ret = _convert_float(ret, tl.float64, z.dtype.scalar, _ir.ROUNDING_MODE.RTNE)
         else:
             product = np.multiply(x.data, y.data, dtype=np.float64)
             ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
@@ -755,6 +776,9 @@ class InterpreterBuilder:
 
     # unary functions
     def unary_op(self, arg, op):
+        if _is_float_stored_as_bits(arg):
+            output = _convert_float(op(_bits_to_fp32(arg)), tl.float32, arg.dtype.scalar, _ir.ROUNDING_MODE.RTNE)
+            return TensorHandle(output, arg.dtype.scalar)
         return TensorHandle(op(arg.data), arg.dtype.scalar)
 
     def create_fabs(self, arg):
@@ -1162,11 +1186,19 @@ class ReduceOps(ReduceScanOpInterface):
             ret.append(self.to_tensor(data, input[i].dtype))
         return ret
 
+    def numpy_reduce(self, input, reduce_op):
+        if not _is_float_stored_as_bits(input.handle):
+            return self.to_tensor(reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+        # Reduce the float32 values rather than the raw bits.
+        ret = reduce_op(_bits_to_fp32(input.handle), axis=self.axis, keepdims=self.keep_dims)
+        ret = _convert_float(np.asarray(ret), tl.float32, input.dtype, _ir.ROUNDING_MODE.RTNE)
+        return self.to_tensor(ret, input.dtype)
+
     def min_max(self, input, reduce_op):
-        return self.to_tensor(reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+        return self.numpy_reduce(input, reduce_op)
 
     def sum(self, input):
-        return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+        return self.numpy_reduce(input, np.sum)
 
     def apply_impl(self, input):
         if self.combine_fn is tl.standard._elementwise_max_ignore_nan:
