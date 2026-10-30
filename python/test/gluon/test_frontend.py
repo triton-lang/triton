@@ -2212,7 +2212,7 @@ def libdevice_kernel():
 
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
-    libdevice.fma(a, b, c)
+    ttgl.fma(a, b, c)
 
     libdevice.isnan(a)
     libdevice.isinf(a)
@@ -2234,7 +2234,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_4 = arith.constant dense<4.000000e+00> : tensor<4x32xf32, #blocked>
     %0 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %1 = tt.extern_elementwise %cst_0, %cst_2 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
-    %2 = tt.extern_elementwise %cst_0, %cst_2, %cst_4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %2 = math.fma %cst_0, %cst_2, %cst_4 : tensor<4x32xf32, #blocked>
     %3 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %cst_5 = arith.constant dense<0> : tensor<4x32xi32, #blocked>
@@ -2257,7 +2257,7 @@ def libdevice_implicit_broadcast_kernel():
     c = ttgl.full([4], 4, ttgl.float32, ttgl.SliceLayout(1, layout))[:, None]
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
-    libdevice.fma(a, b, c)
+    ttgl.fma(a, b, c)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -2282,9 +2282,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %5 = tt.extern_elementwise %cst_0, %4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %6 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
     %7 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %8 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %9 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %10 = tt.extern_elementwise %cst_0, %8, %9 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %8 = math.fma %cst_0, %6, %7 : tensor<4x32xf32, #blocked>
     tt.return
   }
 }
