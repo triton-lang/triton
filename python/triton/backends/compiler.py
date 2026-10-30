@@ -52,8 +52,8 @@ class BaseBackend(metaclass=ABCMeta):
         ir_name [str] => Function[(src: str, metadata: dict) -> str|bytes]
         The value of each entry may populate a `metadata` dictionary.
         Stages will be run sequentially (in inseriton order) and can communicate using `metadata`.
-        All stages are expected to return a `str` object, except for the last stage which returns
-        a `bytes` object for execution by the launcher.
+        A stage returns a `str` object, or a `bytes` object for a binary. The last stage returns
+        the `bytes` object the launcher executes.
         `language` is the frontend that produced `src` (e.g. `Language.TRITON` or `Language.GLUON`).
         """
         raise NotImplementedError
