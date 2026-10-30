@@ -740,15 +740,17 @@ class InterpreterBuilder:
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
-    def create_fma(self, x, y, z):
+    def create_fma(self, x, y, z, rounding_mode=None):
         # An fma rounds once, but multiplying and then adding rounds twice.
         # float64 intermediate rounding is safe for float16, but not float32.
+        rounding = {None: 0, "rn": 0, "rz": 1, "rd": 2, "ru": 3}[rounding_mode]
         dtype = z.data.dtype
         if dtype == np.float64:
-            ret = _interpreter.fma_fp64(*np.broadcast_arrays(x.data, y.data, z.data))
+            ret = _interpreter.fma_fp64(*np.broadcast_arrays(x.data, y.data, z.data), rounding)
         elif dtype == np.float32:
-            ret = _interpreter.fma_fp32(*np.broadcast_arrays(x.data, y.data, z.data))
+            ret = _interpreter.fma_fp32(*np.broadcast_arrays(x.data, y.data, z.data), rounding)
         else:
+            assert rounding == 0, "directed fma rounding is only supported for fp32/fp64"
             product = np.multiply(x.data, y.data, dtype=np.float64)
             ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
         return TensorHandle(ret, z.dtype.scalar)
