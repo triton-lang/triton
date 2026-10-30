@@ -2713,7 +2713,8 @@ struct AsyncTDMIntrinsicWaitConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getCount());
-    rewriter.eraseOp(op);
+    // Drop the result AsyncToken
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };

@@ -19,6 +19,7 @@ add_triton_library(TritonAMDGPUTransforms
   Pipeliner/LowerLoops.cpp
   Pipeliner/LDSEncoding.cpp
   Pipeliner/StreamOps.cpp
+  Pipeliner/SubtileFusion.cpp
   Pipeliner/TDMStoresPipeline.cpp
   MfmaGroup.cpp
   WmmaGroup.cpp
