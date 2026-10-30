@@ -1003,9 +1003,7 @@ def reduce_backward(
     # If we reinterpret the dtype (e.g., flex/float8), use the reinterpreted view's strides.
     dx_view = x_flex.reinterpret(dx)
     stride_xr, stride_x0, stride_x1 = _get_strides(dx_view, dim)
-    stride_xmxr = stride_xmx0 = stride_xmx1 = 0
-    if x_mxscale is not None:
-        stride_xmxr, stride_xmx0, stride_xmx1 = x_mx_strides
+    stride_xmxr, stride_xmx0, stride_xmx1 = _get_strides(x_mxscale, dim, x_mx_strides)
 
     stride_mr, stride_m0, stride_m1 = _get_strides(mask, dim, mask_strides)
     stride_sr, stride_s0, stride_s1 = _get_strides(scale, dim, scale_strides)
