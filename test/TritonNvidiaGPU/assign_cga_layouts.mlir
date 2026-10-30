@@ -4,6 +4,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#slice0 = #ttg.slice<{dim = 0, parent = #blocked}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @reduce_loaded_plus_constant
@@ -27,6 +28,61 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.reduce.return %v : f32
     }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice>
     tt.return %r : tensor<128xf32, #slice>
+  }
+
+  // CHECK-LABEL: tt.func @reduce_rematerializes_shared_load
+  // CHECK-NOT: tt.load
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$PLANNED]]>
+  // CHECK-NOT: tt.load
+  // CHECK: "tt.reduce"(%[[LOAD]])
+  // CHECK: "tt.reduce"(%[[LOAD]])
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  // E2E-LABEL: tt.func @reduce_rematerializes_shared_load
+  // E2E: %[[LOAD:.*]] = tt.load
+  // E2E-NOT: tt.load
+  // E2E: "tt.reduce"(%[[LOAD]])
+  // E2E: "tt.reduce"(%[[LOAD]])
+  // E2E-NOT: tt.load
+  // E2E: tt.return
+  tt.func @reduce_rematerializes_shared_load(%ptrs: tensor<128x128x!tt.ptr<f32>, #blocked>) -> (tensor<128xf32, #slice>, tensor<128xf32, #slice>) {
+    %x = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #blocked>
+    %sum = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice>
+    %max = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.maximumf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice>
+    tt.return %sum, %max : tensor<128xf32, #slice>, tensor<128xf32, #slice>
+  }
+
+  // CHECK-LABEL: tt.func @reduce_does_not_rematerialize_conflicting_axes
+  // CHECK-NOT: tt.load
+  // CHECK: %[[LOAD:.*]] = tt.load %arg0 : tensor<128x128x!tt.ptr<f32>, #[[$ORIG]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[ROWS:.*]] = ttg.convert_layout %[[LOAD]]
+  // CHECK: "tt.reduce"(%[[ROWS]]) <{axis = 0 : i32}>
+  // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[LOAD]]
+  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 1 : i32}>
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  tt.func @reduce_does_not_rematerialize_conflicting_axes(%ptrs: tensor<128x128x!tt.ptr<f32>, #blocked>) -> (tensor<128xf32, #slice0>, tensor<128xf32, #slice>) {
+    %x = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #blocked>
+    %rows = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice0>
+    %cols = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice>
+    tt.return %rows, %cols : tensor<128xf32, #slice0>, tensor<128xf32, #slice>
   }
 }
 
@@ -279,6 +335,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #shared_a = #ttg.dot_op<{opIdx = 0, parent = #shared_default}>
 #shared_b = #ttg.dot_op<{opIdx = 1, parent = #shared_default}>
+#shared_slice = #ttg.slice<{dim = 0, parent = #shared_src}>
 
 // CHECK-DAG: #[[$SHARED_ORIG:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 4]{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
 // CHECK-DAG: #[[$SHARED_LOAD:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 4]{{.*}}CGALayout = {{\[\[0, 1\]\]}}}>
@@ -350,6 +407,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %d0 = tt.dot %a0, %bd, %c0 : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
     %d1 = tt.dot %a1, %bd, %c1 : tensor<256x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<256x128xf32, #shared_default>
     tt.return %d0, %d1 : tensor<128x128xf32, #shared_default>, tensor<256x128xf32, #shared_default>
+  }
+
+  // CHECK-LABEL: tt.func @dot_reduce_rematerialize_shared_load
+  // CHECK-NOT: tt.load
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$SHARED_LOAD]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[B:.*]] = ttg.convert_layout %[[LOAD]] : tensor<32x128xf16, #[[$SHARED_LOAD]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$SHARED_DOT]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[B]],
+  // CHECK: "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  tt.func @dot_reduce_rematerialize_shared_load(%ptrs: tensor<32x128x!tt.ptr<f16>, #shared_src>, %a: tensor<128x32xf16, #shared_a>, %c: tensor<128x128xf32, #shared_default>) -> (tensor<128x128xf32, #shared_default>, tensor<128xf16, #shared_slice>) {
+    %b = tt.load %ptrs : tensor<32x128x!tt.ptr<f16>, #shared_src>
+    %bd = ttg.convert_layout %b : tensor<32x128xf16, #shared_src> -> tensor<32x128xf16, #shared_b>
+    %dot = tt.dot %a, %bd, %c : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    %max = "tt.reduce"(%b) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %v = arith.maximumf %lhs, %rhs : f16
+      tt.reduce.return %v : f16
+    }) : (tensor<32x128xf16, #shared_src>) -> tensor<128xf16, #shared_slice>
+    tt.return %dot, %max : tensor<128x128xf32, #shared_default>, tensor<128xf16, #shared_slice>
   }
 }
 
