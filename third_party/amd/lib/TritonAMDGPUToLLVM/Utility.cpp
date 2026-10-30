@@ -919,7 +919,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   };
 
   // For padded encodings restrict vec by the min interval
-  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
+  auto paddedEnc = triton::gpu::getPaddedEncoding(dstEnc);
   if (paddedEnc) {
     unsigned maxAllowedVecSize = paddedEnc.getMinInterval();
     // Without scattering support, padding can only be inserted at warp
@@ -967,7 +967,8 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
   LinearLayout sharedLayout;
   if (paddedEnc) {
-    sharedLayout = paddedEnc.getLinearComponent();
+    sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(dstAllocShape, dstEnc);
   } else {
     sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
 

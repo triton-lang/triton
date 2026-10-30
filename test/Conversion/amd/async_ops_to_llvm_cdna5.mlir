@@ -237,6 +237,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// Test async_copy_local_to_global from a partitioned layout wrapping a padded
+// layout.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#inner_padded = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [8, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_copy_local_to_global_partitioned_padded
+  tt.func public @async_copy_local_to_global_partitioned_padded(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable>
+    // CHECK-COUNT-2: llvm.amdgcn.global.store.async.from.lds.b128
+    // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
+    %1 = amdg.async_copy_local_to_global %0, %arg0 : !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that minInterval = 2 of a partitioned layout's padded pieces limits
+// async_copy_local_to_global to 64-bit stores (4 per thread).
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#inner_padded = #ttg.padded_shared<[2:+2] {order = [1, 0], shape = [8, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_copy_local_to_global_partitioned_padded_limited_vec
+  tt.func public @async_copy_local_to_global_partitioned_padded_limited_vec(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable>
+    // CHECK-COUNT-4: llvm.amdgcn.global.store.async.from.lds.b64
+    // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
+    %1 = amdg.async_copy_local_to_global %0, %arg0 : !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that minInterval = 2 of a partitioned layout's padded pieces limits
+// async_copy_global_to_local to 64-bit loads (4 per thread).
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#inner_padded = #ttg.padded_shared<[2:+2] {order = [1, 0], shape = [8, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_copy_global_to_local_partitioned_padded_limited_vec
+  tt.func public @async_copy_global_to_local_partitioned_padded_limited_vec(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable>
+    // CHECK-COUNT-4: rocdl.global.load.async.to.lds.b64
+    // CHECK-NOT: rocdl.global.load.async.to.lds
+    %1 = ttg.async_copy_global_to_local %arg0, %0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #partitioned, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // Test that minInterval limits vectorization for async_copy_global_to_local
 // sizePerThread = [1, 4] would normally allow 128-bit (4 x f32) loads,
 // but minInterval = 2 limits to 64-bit (2 x f32) loads
