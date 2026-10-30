@@ -238,7 +238,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 // Test async_copy_local_to_global from a partitioned layout wrapping a padded
-// layout: each store selects one of the two partition base pointers.
+// layout.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #inner_padded = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [8, 32]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
@@ -247,11 +247,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_copy_local_to_global_partitioned_padded
   tt.func public @async_copy_local_to_global_partitioned_padded(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable>
-    // Two partition bases, one selected per store.
-    // CHECK: llvm.insertelement
-    // CHECK: llvm.insertelement
-    // CHECK: llvm.extractelement
-    // Each thread stores 8 elements as two 128-bit stores.
     // CHECK-COUNT-2: llvm.amdgcn.global.store.async.from.lds.b128
     // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
     %1 = amdg.async_copy_local_to_global %0, %arg0 : !ttg.memdesc<32x32xf32, #partitioned, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>

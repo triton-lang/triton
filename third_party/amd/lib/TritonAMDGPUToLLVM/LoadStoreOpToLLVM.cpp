@@ -1279,8 +1279,7 @@ struct AsyncCopyLocalToGlobalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings (standalone or inside a partitioned layout)
-    // restrict vec by the min interval
+    // For padded encodings restrict vec by the min interval
     auto srcEnc = srcTy.getEncoding();
     if (triton::gpu::isPaddedEncoding(srcEnc)) {
       vec = std::min(vec, triton::gpu::getMinInterval(srcEnc));
