@@ -252,7 +252,7 @@ def ceil(x, _semantic=None):
 
 
 @core.builtin
-def fma(x, y, z, rounding_mode=None, _semantic=None):
+def fma(x, y, z, rounding_mode="rn", _semantic=None):
     """
     Computes the element-wise fused multiply-add of :code:`x`, :code:`y`, and
     :code:`z`: ``x * y + z`` with a single rounding.
@@ -261,8 +261,8 @@ def fma(x, y, z, rounding_mode=None, _semantic=None):
     :param y: the second multiplicand
     :param z: the addend
     :param rounding_mode: the rounding mode for the final result. Must be a
-        compile-time constant: ``None`` or ``"rn"`` (round to nearest, ties to
-        even; the default), ``"rz"`` (round toward zero), ``"rd"`` (round
+        compile-time constant: ``"rn"`` (round to nearest, ties to even; the
+        default), ``"rz"`` (round toward zero), ``"rd"`` (round
         toward negative infinity), or ``"ru"`` (round toward positive
         infinity). The directed modes (``"rz"``, ``"rd"``, ``"ru"``) are only
         supported for ``fp32`` and ``fp64`` operands: NVIDIA PTX provides
@@ -277,14 +277,14 @@ def fma(x, y, z, rounding_mode=None, _semantic=None):
         ``__ocml_fma_rt*`` device functions.
     """
     rounding_mode = core._unwrap_if_constexpr(rounding_mode)
-    if rounding_mode is not None and rounding_mode not in ("rn", "rz", "rd", "ru"):
+    if rounding_mode not in ("rn", "rz", "rd", "ru"):
         raise ValueError(f"Invalid rounding mode: {rounding_mode}. "
                          "Supported rounding modes are 'rn', 'rz', 'rd' and 'ru'.")
     x = core._unwrap_if_constexpr(x)
     y = core._unwrap_if_constexpr(y)
     z = core._unwrap_if_constexpr(z)
     x, y, z = _semantic.ternary_op_type_checking_impl(x, y, z)
-    if rounding_mode not in (None, "rn") and x.type.scalar.name not in ("fp32", "fp64"):
+    if rounding_mode != "rn" and x.type.scalar.name not in ("fp32", "fp64"):
         raise ValueError(f"rounding_mode='{rounding_mode}' is only supported for fp32 and fp64 operands, "
                          f"but got {x.type.scalar.name}. Half-precision FMA is round-to-nearest-even only "
                          "on NVIDIA and has no directed libdevice equivalent to preserve.")
