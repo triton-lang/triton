@@ -138,6 +138,10 @@ class CUDAOptions:
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
+    # Select the REMOTE logical domain instead of DEFAULT.
+    # cuStreamSetAttribute can map these names to physical domains on the stream.
+    # Set that mapping before graph capture, which copies it into the kernel nodes.
+    remote_domain: bool = False
     clc: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
@@ -153,6 +157,8 @@ class CUDAOptions:
     fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
+        if type(self.remote_domain) is not bool:
+            raise ValueError("remote_domain must be bool")
         if self.max_occupancy is not None and (type(self.max_occupancy) is not int or self.max_occupancy <= 0):
             raise ValueError("max_occupancy must be a positive integer or None")
         default_libdir = Path(__file__).parent / 'lib'

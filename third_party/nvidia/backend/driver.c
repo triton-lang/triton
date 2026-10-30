@@ -998,13 +998,16 @@ cleanup:
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
-                    int shared_memory, CUstream stream, CUfunction function,
-                    void **params) {
+                    int remote_domain, int shared_memory, CUstream stream,
+                    CUfunction function, void **params) {
   if (gridX * gridY * gridZ > 0) {
-    // 4 attributes that we can currently pass maximum
-    CUlaunchAttribute launchAttr[4];
+    // Shared memory, PDL, cooperative launch, domain, and two cluster
+    // attributes.
+    CUlaunchAttribute launchAttr[6];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+    static int driver_version = 0;
     if (cuLaunchKernelExHandle == NULL) {
+      CUDA_CHECK(cuDriverGetVersion(&driver_version));
       cuLaunchKernelExHandle = getLaunchKernelExHandle();
     }
     CUlaunchConfig config;
@@ -1044,6 +1047,18 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
       CUlaunchAttribute coopAttr = {.id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE,
                                     .value = 1};
       launchAttr[num_attrs] = coopAttr;
+      ++num_attrs;
+    }
+
+    // CUDA 11 drivers do not recognize the memory synchronization domain
+    // attribute.
+    if (remote_domain || driver_version >= 12000) {
+      CUlaunchAttribute domainAttr = {};
+      domainAttr.id = CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN;
+      domainAttr.value.memSyncDomain = remote_domain
+                                           ? CU_LAUNCH_MEM_SYNC_DOMAIN_REMOTE
+                                           : CU_LAUNCH_MEM_SYNC_DOMAIN_DEFAULT;
+      launchAttr[num_attrs] = domainAttr;
       ++num_attrs;
     }
 
@@ -1456,6 +1471,7 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   uint64_t _function;
   int launch_cooperative_grid;
   int launch_pdl;
+  int remote_domain;
   int num_warps, num_ctas, shared_memory;
   PyObject *launch_metadata = NULL;
   PyObject *launch_enter_hook = NULL;
@@ -1465,12 +1481,12 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
-  if (!PyArg_ParseTuple(args, "iiiKKpp(iii)OOOOOOy*O", &gridX, &gridY, &gridZ,
-                        &_stream, &_function, &launch_cooperative_grid,
-                        &launch_pdl, &num_warps, &num_ctas, &shared_memory,
-                        &launch_metadata, &launch_enter_hook, &launch_exit_hook,
-                        &global_scratch_obj, &profile_scratch_obj,
-                        &arg_annotations, &signature, &kernel_args)) {
+  if (!PyArg_ParseTuple(
+          args, "iiiKKppp(iii)OOOOOOy*O", &gridX, &gridY, &gridZ, &_stream,
+          &_function, &launch_cooperative_grid, &launch_pdl, &remote_domain,
+          &num_warps, &num_ctas, &shared_memory, &launch_metadata,
+          &launch_enter_hook, &launch_exit_hook, &global_scratch_obj,
+          &profile_scratch_obj, &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
 
@@ -1540,8 +1556,8 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
 
   Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid,
-          launch_pdl, shared_memory, (CUstream)_stream, (CUfunction)_function,
-          params);
+          launch_pdl, remote_domain, shared_memory, (CUstream)_stream,
+          (CUfunction)_function, params);
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {
     goto cleanup;

@@ -302,6 +302,7 @@ class CudaLauncher(object):
         self.profile_scratch_align = metadata.profile_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
+        self.remote_domain = metadata.remote_domain
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
@@ -348,8 +349,8 @@ class CudaLauncher(object):
         num_warps, num_ctas, _ = kernel_metadata
         kernel_metadata = (num_warps, num_ctas, self.shared)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
-                    kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
-                    profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
+                    self.remote_domain, kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook,
+                    global_scratch, profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
 
 
 class CudaDriver(GPUDriver):
