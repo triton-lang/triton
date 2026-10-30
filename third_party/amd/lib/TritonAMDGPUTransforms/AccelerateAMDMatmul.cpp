@@ -30,7 +30,6 @@ namespace mlir {
 
 namespace {
 using triton::amdgpu::ISAFamily;
-using triton::amdgpu::kWmmaRestrictedInstsFeature;
 using triton::amdgpu::TargetFeatures;
 
 constexpr char AttrDecomposedDotScaledSource[] =
@@ -394,7 +393,8 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
   } else {
     if (oldElemType.isF16() && newElemType.isF32())
       castedTensor =
-          arith::ExtFOp::create(rewriter, loc, castedType, convertedTensor);
+          arith::ExtFOp::create(rewriter, loc, castedType, convertedTensor,
+                                arith::FastMathFlagsAttr{});
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           arith::TruncFOp::create(rewriter, loc, castedType, convertedTensor);
@@ -758,6 +758,9 @@ public:
 
   LogicalResult matchAndRewrite(tt::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    if (isa_and_nonnull<ttg::AMDWmmaEncodingAttr>(
+            dotOp.getResult().getType().getEncoding()))
+      return failure();
     dotOp.emitRemark() << "Decomposing scaled dot operation into regular dot "
                           "operation with explicit scaling.";
     return ttg::DecomposeScaledBlocked::matchAndRewrite(dotOp, rewriter);
@@ -1082,14 +1085,11 @@ public:
 class ScaledBlockedToScaledWMMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int wmmaVersion;
-  SmallVector<StringRef> unsupportedFeatures;
 
 public:
   ScaledBlockedToScaledWMMAF8F6F4(MLIRContext *context, int wmmaVersion,
-                                  ArrayRef<StringRef> unsupportedFeatures,
                                   PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
-        unsupportedFeatures(unsupportedFeatures) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1098,11 +1098,6 @@ public:
     if (wmmaVersion != 3) {
       return rewriter.notifyMatchFailure(
           dotOp, "F8F6F4 scaled dot is only natively supported on CDNA5");
-    }
-    if (llvm::is_contained(unsupportedFeatures, kWmmaRestrictedInstsFeature)) {
-      return rewriter.notifyMatchFailure(
-          dotOp, "scaled wmma instructions are not supported on this "
-                 "architecture");
     }
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -1281,7 +1276,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
   Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
                                 .cloneWith(std::nullopt, promotedType);
-  return triton::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+  return triton::FpToFpOp::create(builder, loc, tensorPromotedType, operand,
+                                  RoundingModeAttr{});
 }
 
 // Promote operands of dot op if the existing combination is not natively
@@ -1644,8 +1640,8 @@ struct TritonAMDGPUAccelerateMatmulPass
         targetFeatures.getUnsupportedWmmaFeatures();
     switch (isaFamily) {
     case ISAFamily::CDNA5:
-      mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
-          context, wmmaVersion, unsupportedWmmaFeatures, /*benefit=*/4);
+      mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(context, wmmaVersion,
+                                                        /*benefit=*/4);
       mfmaPatterns.add<DecomposeAMDScaledBlocked>(context, targetFeatures,
                                                   /*benefit=*/3);
       mfmaPatterns.add<BlockedToWMMA>(context, wmmaVersion,

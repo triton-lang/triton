@@ -73,7 +73,8 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   if (isa<FloatType>(scaleTy.getElementType())) {
     auto scaleType = scaleTy.clone(computeType);
     return cast<TypedValue<RankedTensorType>>(
-        FpToFpOp::create(rewriter, loc, scaleType, scale).getResult());
+        FpToFpOp::create(rewriter, loc, scaleType, scale, RoundingModeAttr{})
+            .getResult());
   }
 
   // Choose an fp type that can fit the scale value.
@@ -143,13 +144,11 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   auto interface = cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
   Attribute broadcastEncoding;
   auto result = interface->inferReshapeOpEncoding(
-      resultShape, dstEncoding, broadcastShape, broadcastEncoding,
-      /*allowReorder=*/false, loc);
+      resultShape, dstEncoding, broadcastShape, broadcastEncoding, loc);
   assert(succeeded(result));
   Attribute srcEncoding;
-  result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
-                                             scaleTy.getShape(), srcEncoding,
-                                             /*allowReorder=*/false, loc);
+  result = interface->inferReshapeOpEncoding(
+      expandedShape, broadcastEncoding, scaleTy.getShape(), srcEncoding, loc);
   assert(succeeded(result));
 
   auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
@@ -163,9 +162,9 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
   // We know this layout avoids having any layout conversions after we expand
   // the scales, so mark the layout as efficient. Otherwise, forward layout
   // propagation may try to sink the convert layout.
-  auto expandScale = ReshapeOp::create(
-      rewriter, loc, expandType, scale,
-      /*allow_reorder=*/nullptr, /*efficient_layout=*/rewriter.getUnitAttr());
+  auto expandScale =
+      ReshapeOp::create(rewriter, loc, expandType, scale,
+                        /*efficient_layout=*/rewriter.getUnitAttr());
   // Broadcast the dimension to the microscaling factor.
   auto broadcastType = RankedTensorType::get(
       broadcastShape, scaleTy.getElementType(), broadcastEncoding);
@@ -245,7 +244,8 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   } else {
     auto vType16 = v.getType().clone(computeType);
     v = cast<TypedValue<RankedTensorType>>(
-        FpToFpOp::create(rewriter, loc, vType16, v).getResult());
+        FpToFpOp::create(rewriter, loc, vType16, v, RoundingModeAttr{})
+            .getResult());
   }
   if (!scale)
     return v;
