@@ -252,6 +252,41 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("reset_period", [0, 2, 4])
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr):
+        acc = tl.zeros((256, 16), tl.float32)
+        for k in range(8):
+            a = A.load([0, k * 16])
+            b = B.load([k * 16, 0])
+            acc = tl.dot(a, b, acc)
+            # Some snapshots are followed by accumulation into the same buffer.
+            if k % 2 == 0:
+                C.store([(k // 2) * 256, 0], acc)
+            if RESET_PERIOD:
+                if k % RESET_PERIOD == 0:
+                    acc = tl.zeros((256, 16), tl.float32)
+
+    a = torch.ones((256, 128), device=device, dtype=torch.float16)
+    b = torch.ones((128, 16), device=device, dtype=torch.float16)
+    c = torch.empty((1024, 16), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, [256, 16])
+    b_desc = TensorDescriptor.from_tensor(b, [16, 16])
+    c_desc = TensorDescriptor.from_tensor(c, [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
+
+    values = {0: [16, 48, 80, 112], 2: [16, 32, 32, 32], 4: [16, 32, 64, 32]}[reset_period]
+    expected = torch.tensor(values, device=device, dtype=torch.float32)
+    torch.testing.assert_close(c.view(4, 256, 16), expected[:, None, None].expand(4, 256, 16), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
