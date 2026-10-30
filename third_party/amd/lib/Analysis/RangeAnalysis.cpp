@@ -116,23 +116,6 @@ void inferResultRangesPID(Operation *op, uint64_t max,
                              /*isSigned*/ resTy.isSigned()));
 }
 
-void inferResultRanges(tt::MakeRangeOp *op, SetIntRangeFn setResultRange) {
-  auto result = op->getResult();
-  RankedTensorType resTy = result.getType();
-  assert(llvm::isa<IntegerType>(resTy.getElementType()) && "expected int type");
-  IntegerType elTy = llvm::cast<IntegerType>(resTy.getElementType());
-  auto bitWidth = mlir::ConstantIntRanges::getStorageBitwidth(elTy);
-  // NOTE: make_range(begin, end) yields a half open interval, [begin, end).
-  setResultRange(result,
-                 ConstantIntRanges::range(
-                     /*min*/ {/*numBits*/ bitWidth, /*val*/ op->getStart(),
-                              /*isSigned*/ elTy.isSigned()},
-                     /*max*/
-                     {/*numBits*/ bitWidth, /*val*/ op->getEnd() - 1,
-                      /*isSigned*/ elTy.isSigned()},
-                     /*isSigned*/ elTy.isSigned()));
-}
-
 void inferResultRanges(tt::GatherOp *op, ArrayRef<ConstantIntRanges> argRanges,
                        SetIntRangeFn setResultRange) {
   assert(argRanges.size() == 2 && "expected two arg ranges");
@@ -559,8 +542,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
   };
 
   // Ops with fixed/constant ranges.
-  if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
-          op)) {
+  if (llvm::isa<GetProgramIdOp, HistogramOp, GetNumProgramsOp>(op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
           int axis = getPIDOp.getAxisAsInt();
@@ -571,9 +553,6 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
         })
         .Case<GetNumProgramsOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
-        })
-        .Case<MakeRangeOp>([&](MakeRangeOp makeROp) {
-          inferResultRanges(&makeROp, joinCallback);
         })
         .Case<HistogramOp>([&](HistogramOp histOp) {
           return inferResultRangesMaxNonNegSigned(histOp, joinCallback);
