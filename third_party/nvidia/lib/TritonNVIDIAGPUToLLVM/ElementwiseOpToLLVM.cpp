@@ -531,7 +531,8 @@ struct FmaOpConversion
     std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
     if (!rounding.has_value() ||
         rounding.value() == arith::RoundingMode::to_nearest_even) {
-      return {LLVM::FMAOp::create(rewriter, loc, elemTy, operands[0])};
+      return {LLVM::FMAOp::create(rewriter, loc, elemTy, operands[0][0],
+                                  operands[0][1], operands[0][2])};
     }
     // The NVPTX backend ignores the rounding mode of the constrained FMA
     // intrinsic (it always emits fma.rn), so use the NVVM operation, which

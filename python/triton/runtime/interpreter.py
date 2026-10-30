@@ -740,10 +740,10 @@ class InterpreterBuilder:
 
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
-    def create_fma(self, x, y, z, rounding_mode=None):
+    def create_fma(self, x, y, z, rounding_mode="rn"):
         # An fma rounds once, but multiplying and then adding rounds twice.
         # float64 intermediate rounding is safe for float16, but not float32.
-        rounding = {None: 0, "rn": 0, "rz": 1, "rd": 2, "ru": 3}[rounding_mode]
+        rounding = {"rn": 0, "rz": 1, "rd": 2, "ru": 3}[rounding_mode]
         dtype = z.data.dtype
         if dtype == np.float64:
             ret = _interpreter.fma_fp64(*np.broadcast_arrays(x.data, y.data, z.data), rounding)

@@ -175,11 +175,7 @@ class Libdevice(ExternLibrary):
         func_strs = func_str.split("(")
         func_name = func_strs[0].replace("@", "")
         op_name = func_name.replace("__nv_", "")
-        if 'ieee' in op_name:
-            return None
-        # FMA is provided by tl.fma (including directed rounding modes), so
-        # do not generate libdevice wrappers for it.
-        if op_name.startswith("fma"):
+        if 'ieee' in op_name or op_name.startswith("fma"):
             return None
         # Get arg_types
         arg_strs = func_strs[1].split(",")

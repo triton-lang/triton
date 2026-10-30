@@ -1413,19 +1413,19 @@ void init_triton_ir(py::module_ &m) {
       .def(
           "create_fma",
           [](TritonOpBuilder &self, Value &a, Value &b, Value &c,
-             std::optional<std::string> roundingMode) -> Value {
-            if (!roundingMode.has_value() || roundingMode.value() == "rn")
+             std::string roundingMode) -> Value {
+            if (roundingMode == "rn")
               return Value(self.create<math::FmaOp>(a, b, c));
             arith::RoundingMode mode;
-            if (roundingMode.value() == "rz")
+            if (roundingMode == "rz")
               mode = arith::RoundingMode::toward_zero;
-            else if (roundingMode.value() == "rd")
+            else if (roundingMode == "rd")
               mode = arith::RoundingMode::downward;
-            else if (roundingMode.value() == "ru")
+            else if (roundingMode == "ru")
               mode = arith::RoundingMode::upward;
             else
               throw std::invalid_argument("Invalid fma rounding mode: " +
-                                          roundingMode.value());
+                                          roundingMode);
             auto roundingAttr = arith::RoundingModeAttr::get(
                 self.getBuilder().getContext(), mode);
             auto fastMathAttr = arith::FastMathFlagsAttr::get(
@@ -1435,7 +1435,7 @@ void init_triton_ir(py::module_ &m) {
                                              b, c, fastMathAttr, roundingAttr));
           },
           py::arg("a"), py::arg("b"), py::arg("c"),
-          py::arg("roundingMode").none())
+          py::arg("roundingMode") = "rn")
       .def("create_shl",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::ShLIOp>(lhs, rhs));
