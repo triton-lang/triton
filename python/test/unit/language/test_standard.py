@@ -121,6 +121,34 @@ def test_sort(M, N, k, descending, dtype_str, device):
     assert (y == z).all(), (y, z)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_member_and_negative_dim(descending, device):
+
+    @triton.jit
+    def kernel(X, B, Z_SORT, Z_TOPK, Z_MERGE, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+               descending: tl.constexpr):
+        offs_m = tl.arange(0, M)[:, None]
+        offs_n = offs_m * N + tl.arange(0, N)[None, :]
+        x = tl.load(X + offs_n)
+        tl.store(Z_SORT + offs_n, x.sort(dim=-1, descending=descending))
+        tl.store(Z_TOPK + offs_m * K + tl.arange(0, K)[None, :], tl.topk(x, K, dim=-1, descending=descending))
+        tl.store(Z_MERGE + offs_n, tl.bitonic_merge(tl.load(B + offs_n), dim=-1, descending=descending))
+
+    M, N, K = 8, 16, 4
+    x = torch.randn((M, N), device=device)
+    # rows that rise then fall, as bitonic_merge expects
+    half = torch.sort(x[:, :N // 2])[0]
+    b = torch.cat([half, half.flip(-1)], dim=-1).contiguous()
+    z_sort = torch.empty_like(x)
+    z_topk = torch.empty((M, K), device=device)
+    z_merge = torch.empty_like(x)
+    kernel[(1, )](x, b, z_sort, z_topk, z_merge, M, N, K, descending)
+    torch.testing.assert_close(z_sort, torch.sort(x, descending=descending)[0], atol=0, rtol=0)
+    torch.testing.assert_close(z_topk, torch.topk(x, K, largest=descending).values, atol=0, rtol=0)
+    torch.testing.assert_close(z_merge, torch.sort(b, descending=descending)[0], atol=0, rtol=0)
+
+
 # ---------------
 # test flip op
 # ---------------
