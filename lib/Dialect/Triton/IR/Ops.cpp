@@ -575,6 +575,15 @@ void MakeRangeOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   });
 }
 
+void MakeRangeOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
+                                    SetIntRangeFn setResultRange) {
+  // The attributes are signed i32 bounds, even though the result is signless.
+  // make_range uses a half-open interval; integer ranges use closed bounds.
+  setResultRange(getResult(),
+                 ConstantIntRanges::fromSigned(getStartAttr().getValue(),
+                                               getEndAttr().getValue() - 1));
+}
+
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
   if (adaptor.getStart() + 1 == adaptor.getEnd()) {
