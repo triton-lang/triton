@@ -7,6 +7,7 @@ This proposal outlines the design and implementation of **GSan**, a triton/gluon
 ## **1.1. Goals**
 
 * Detect unsynchronized read-after-write, write-after-write and write-after-read violations
+* Within a CTA, treat conflicting accesses to the same shadow cell as unordered until a CTA-wide barrier orders the earlier access. A global read barrier orders prior reads, and a global write barrier orders prior writes. This uses the existing per-SM vector clock and can report same-thread accesses. Warp-specialized kernels retain CTA-level tracking.
 * Support peer-to-peer accesses within a single node NVLink domain
 * Cover all communication patterns needed by existing code
 * Support all TritonGPU memory access operators including: ld/st, atom, cp.async, and cp.async.bulk (aka TMA) operations.
@@ -21,8 +22,6 @@ This proposal outlines the design and implementation of **GSan**, a triton/gluon
 * Detect races with non-triton/gluon code.
   * We assume that all relevant code will be visible to the instrumentation.
   * This means we miss races outwith instrumented code, and may detect a false-positive if uninstrumented synchronization primitives are used.
-* Detect races between the threads within the same CTA, e.g. no thread barrier between reading and writing to the same memory location.
-  * This may be possible as an extension, but generally we will assume that the IR executes as a single synchronous program.
 
 # **2\. Proposed Algorithm**
 

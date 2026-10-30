@@ -200,6 +200,8 @@ extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(void *, const void *,
 extern "C" GSAN_DEVICE void
 __triton_gsan_grid_dependency_wait(void *, const void *, gsan::uint64_t,
                                    unsigned, unsigned, unsigned) {}
+extern "C" GSAN_DEVICE void __triton_gsan_cta_barrier(void *, int, int,
+                                                      const char *, unsigned) {}
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_init(void *, int) {}
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_sync(void *, void *,
                                                                int, int, int,

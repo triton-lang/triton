@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import inspect
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 import torch
@@ -82,6 +83,31 @@ def _waw_kernel(ptr, scratch_ptr, counter_ptr, WIDTH: gl.constexpr):
         while gl.atomic_add(counter_ptr, 0, sem="relaxed") != 1:
             pass
         gl.store(ptr + offsets, 2)
+
+
+@triton.jit
+def _same_cta_kernel(ptr, out, KIND: tl.constexpr, SYNC: tl.constexpr):
+    offsets = tl.arange(0, 128)
+    if KIND == "alias":
+        tl.store(ptr + offsets % 64, offsets)
+        return
+    if KIND == "war" or KIND == "war-rmw" or KIND == "rar":
+        tl.store(out + offsets, tl.load(ptr + offsets))
+    elif KIND == "release-raw":
+        tl.atomic_store(ptr + offsets, 1, sem="release")
+    else:
+        tl.store(ptr + offsets, 1)
+    if SYNC:
+        tl.debug_barrier()
+        offsets = offsets ^ 64
+    if KIND == "raw" or KIND == "release-raw" or KIND == "rar":
+        tl.store(out + 128 + offsets, tl.load(ptr + offsets))
+    elif KIND == "raw-poll":
+        tl.atomic_poll(ptr + offsets, 1, sem="relaxed")
+    elif KIND == "war-rmw":
+        tl.atomic_add(ptr + offsets, 2, sem="relaxed")
+    else:
+        tl.store(ptr + offsets, 2)
 
 
 @triton.jit
@@ -730,6 +756,59 @@ def _run_failure_case(case: str, shadow_granularity: int | None = None, *, runne
     assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
     assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
+
+
+def _run_same_cta(kind, barrier):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros(128, dtype=torch.int32, device="cuda")
+        out = torch.empty(256, dtype=torch.int32, device="cuda")
+    if barrier in (None, "all"):
+        _same_cta_kernel[(1, )](target, out, kind, barrier is not None, num_warps=4)
+    else:
+        # The frontend emits an all-memory barrier. Narrow its TTGIR mask to
+        # exercise the ordering contract of compiler-generated barriers.
+        compiled = _same_cta_kernel.warmup(target, out, kind, True, grid=(1, ), num_warps=4)
+        ttgir = compiled.asm["ttgir"]
+        assert ttgir.count("ttg.barrier all") == 1
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "same_cta.ttgir"
+            path.write_text(ttgir.replace("ttg.barrier all", f"ttg.barrier {barrier}"))
+            triton.compile(str(path), options={"instrumentation_mode": "gsan"})[(1, 1, 1)](target, out)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind,barrier,marker,error", [
+    ("alias", None, "tl.store(ptr + offsets % 64", "Write after write race detected"),
+    ("raw", None, "tl.store(out + 128", "Read after write race detected"),
+    ("release-raw", None, "tl.store(out + 128", "Read after write race detected"),
+    ("raw-poll", None, "tl.atomic_poll(ptr + offsets", "Read after write race detected"),
+    ("war-rmw", None, "tl.atomic_add(ptr + offsets", "Write after read race detected"),
+    ("war", None, "tl.store(ptr + offsets, 2)", "Write after read race detected"),
+    ("waw", None, "tl.store(ptr + offsets, 2)", "Write after write race detected"),
+    ("raw", "global_read", "tl.store(out + 128", "Read after write race detected"),
+    ("waw", "global_read", "tl.store(ptr + offsets, 2)", "Write after write race detected"),
+    ("war", "global_write", "tl.store(ptr + offsets, 2)", "Write after read race detected"),
+    ("raw", "local", "tl.store(out + 128", "Read after write race detected"),
+])
+def test_same_cta_unordered_access(kind, barrier, marker, error):
+    _run_failure_case(kind, runner=_run_same_cta, runner_args=(kind, barrier), source_function=_same_cta_kernel.fn,
+                      marker=marker, error=error)
+
+
+@pytest.mark.parametrize("kind,barrier", [
+    ("rar", None),
+    ("raw", "all"),
+    ("release-raw", "all"),
+    ("war", "all"),
+    ("waw", "all"),
+    ("raw", "global_write"),
+    ("waw", "global_write"),
+    ("war", "global_read"),
+])
+def test_same_cta_ordered_or_read_only(kind, barrier, fresh_knobs):
+    _run_same_cta(kind, barrier)
 
 
 # Test races at every cell size with byte accesses, plus the default-pool word

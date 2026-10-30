@@ -31,7 +31,7 @@ pytestmark = [
 def with_write_once_gsan(fresh_knobs, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     pool = create_mem_pool(write_once=True, shadow_granularity=shadow_granularity)
-    normal_pool = create_mem_pool()
+    normal_pool = create_mem_pool(shadow_granularity=min(4, shadow_granularity))
     # Both pools must outlive the use_mem_pool context. PyTorch cannot destroy
     # an inner pool while the outer pool is still active.
     with torch.cuda.use_mem_pool(normal_pool):
@@ -79,6 +79,7 @@ def _write_once_mixed_pointers_kernel(compact, normal, out, GRANULARITY: gl.cons
     offsets = gl.arange(0, 128, layout=gl.BlockedLayout([GRANULARITY], [32], [4], [0]))
     ptrs = gl.where(offsets // GRANULARITY % 2 == 0, compact + offsets, normal + offsets)
     gl.store(ptrs, offsets)
+    gl.barrier()
     value = gl.load(ptrs)
     gl.store(out + offsets, value)
 

@@ -108,6 +108,11 @@ struct ThreadState {
 
   thread_id_t threadId;
 
+  // Last local reads and writes ordered by their respective CTA barriers.
+  epoch_t readBarrierEpoch;
+  epoch_t writeBarrierEpoch;
+  epoch_t writeBarrierToken;
+
   // Local vector clock, shape [numThreads]
   // Followed by the clock buffer, shape [clockBufferSize, numThreads]
   epoch_t vectorClock[];

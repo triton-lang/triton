@@ -74,7 +74,8 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
                                        op.getResult(), op.getSem(),
                                        op.getScope());
   if (ttg::lookupNumCTAs(op) == 1)
-    ttg::BarrierOp::create(builder, op.getLoc(), ttg::AddrSpace::Local);
+    ttg::BarrierOp::create(builder, op.getLoc(),
+                           ttg::AddrSpace::Local | ttg::AddrSpace::GlobalRead);
   else
     ttng::ClusterBarrierOp::create(builder, op.getLoc());
 }
@@ -505,6 +506,7 @@ public:
       callOp.erase();
     }
 
+    bool warpSpecialized = false;
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
@@ -567,9 +569,13 @@ public:
             ExperimentalGSanGridDependencyWaitOp::create(b, op.getLoc());
           })
           .Case([&](ttg::WarpSpecializeOp op) {
+            warpSpecialized = true;
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
     });
+
+    if (!warpSpecialized)
+      module->setAttr("tti.gsan_cta_barriers", builder.getUnitAttr());
 
     if (instrumentMBarriers)
       instrumentMBarrierOps(module, mbarrierScratch);

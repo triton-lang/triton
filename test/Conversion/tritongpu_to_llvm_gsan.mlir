@@ -9,12 +9,19 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.store %{{.*}} : i8, !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK-2: ld.global
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.call @__triton_gsan_cta_barrier
   // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK-2: st.global
+  // CHECK: nvvm.bar.warp.sync
+  // CHECK-NOT: llvm.call @__triton_gsan_cta_barrier
+  // CHECK: llvm.return
   tt.func @load_store(%ptrs: tensor<256x!tt.ptr<f32>, #blocked>, %mask: tensor<256xi1, #blocked>,
                       %other: tensor<256xf32, #blocked>, %vals: tensor<256xf32, #blocked>) {
     %loaded = tt.load %ptrs, %mask, %other : tensor<256x!tt.ptr<f32>, #blocked>
+    ttg.barrier global_read|global_write
     tt.store %ptrs, %vals, %mask : tensor<256x!tt.ptr<f32>, #blocked>
+    ttg.barrier warp local
     tt.return
   }
 }
@@ -535,11 +542,14 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_init
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
   // CHECK: atom.global.gpu.release
+  // CHECK-NOT: llvm.call @__triton_gsan_cta_barrier
+  // CHECK: llvm.return
   tt.func @atomic_cluster_sync_warp_specialized(%ptr: !tt.ptr<i32>) {
     ttg.warp_specialize()
     default {
       %one = arith.constant 1 : i32
       %release = tt.atomic_rmw add, release, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+      ttg.barrier global_write
       ttg.warp_yield
     }
     partition0() num_warps(4) {

@@ -99,7 +99,8 @@ def _assert_atomic_rmw_shadow(real_address: int, expected_scope: AtomicScope, *,
 def _assert_atomic_read_only_shadow(real_address: int, expected_scope: AtomicScope) -> None:
     cell = shadow_cell_from_address(real_address)
     tid = cell.read_clocks[0].thread_id
-    epoch = thread_state_from_smid(tid).vector_clock[tid]
+    epoch = cell.read_clocks[0].epoch
+    assert 0 < epoch <= thread_state_from_smid(tid).vector_clock[tid]
 
     assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
     assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope)
@@ -1247,10 +1248,10 @@ def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dt
     target[::stride] = expected
     if timeout is not None:
         target[::2 * stride] = 0
-    out = torch.empty(block_size, dtype=torch.bool, device="cuda")
+    out = torch.empty(block_size, dtype=dtype, device="cuda")
 
     _atomic_poll_tensor_kernel[(1, )](target, out, block_size, stride, sem, scope, timeout, num_warps=4)
-    torch.testing.assert_close(out, target[::stride] == expected)
+    torch.testing.assert_close(out, (target[::stride] == expected).to(dtype))
 
     for index in range(block_size):
         for byte_offset in range(0, target.element_size(), with_gsan):
@@ -1555,7 +1556,7 @@ def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements: gl.constexpr, s
 @triton.jit
 def _device_tma_masked_store_kernel(ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
     desc = tl.make_tensor_descriptor(ptr, [m_size, n_size], [stride_0, 1], [BLOCK, BLOCK])
-    values = tl.full((BLOCK, BLOCK), 1, dtype=tl.int32)
+    values = tl.full((BLOCK, BLOCK), 1, dtype=ptr.dtype.element_ty)
     desc.store([row_idx, col_idx], values)
 
 
@@ -1692,12 +1693,15 @@ def _scatter_reference(dst: torch.Tensor, src: torch.Tensor, x_offsets: torch.Te
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
-def test_gluon_async_copy_updates_shadow(with_gsan):
+def test_gluon_async_copy_updates_shadow(fresh_knobs, shadow_granularity):
     block = 128
-    start_idx = 8 if with_gsan == 16 else 5
-    n_elements = 116 if with_gsan == 16 else 117
+    start_idx = 8 if shadow_granularity == 16 else 5
+    n_elements = 116 if shadow_granularity == 16 else 117
     padded = 160
-    inp = torch.arange(padded, dtype=torch.float32, device="cuda")
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool(shadow_granularity=shadow_granularity)
+    with torch.cuda.use_mem_pool(pool):
+        inp = torch.arange(padded, dtype=torch.float32, device="cuda")
     out = torch.zeros_like(inp)
     shadow0 = [_shadow_cells_for_tensor(inp)]
     changed_mask = torch.zeros((1, inp.numel()), dtype=torch.bool)
@@ -1781,7 +1785,9 @@ def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col
     last_col = min(col_idx + block, n_size)
     valid_rows = max(last_row - first_row, 0)
     valid_cols = max(last_col - first_col, 0)
-    target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
+    # Descriptor emulation can issue scalar stores from different lanes.
+    dtype = torch.int64 if with_gsan == 8 and not is_hopper_or_newer() else torch.int32
+    target_storage = torch.zeros((padded_m, padded_n), dtype=dtype, device="cuda")
     target = target_storage[:m_size, :n_size]
     shadow0 = _shadow_cells_for_tensor(target_storage)
     changed_mask = _masked_tma_change_mask(target_storage, m_size, n_size, row_idx, col_idx, block)

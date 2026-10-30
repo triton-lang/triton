@@ -1,4 +1,5 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
@@ -44,6 +45,8 @@ static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
     "__triton_gsan_atomic_begin_scalar";
 static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
     "__triton_gsan_atomic_end_scalar";
+static constexpr StringLiteral kGSanCTABarrierRuntimeFn =
+    "__triton_gsan_cta_barrier";
 static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
 static constexpr StringLiteral kGSanKernelExitRuntimeFn =
     "__triton_gsan_kernel_exit";
@@ -85,6 +88,8 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
+  } else if (funcName == kGSanCTABarrierRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanClusterBarrierInitRuntimeFn) {
     argTys = {ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanClusterBarrierSyncRuntimeFn) {
@@ -1027,6 +1032,37 @@ public:
   }
 };
 
+// Preserve the TTGIR ordering mask before CUDA lowers it to a full barrier.
+struct GSanCTABarrierOpConversion
+    : public ConvertOpToLLVMPattern<ttg::BarrierOp> {
+  using ConvertOpToLLVMPattern<ttg::BarrierOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttg::BarrierOp op, OpAdaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if ((!op.hasGlobalRead() && !op.hasGlobalWrite()) ||
+        !op->getParentOfType<ModuleOp>()->hasAttr("tti.gsan_cta_barriers"))
+      return failure();
+
+    Location loc = op.getLoc();
+    auto state = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(state))
+      return failure();
+    auto func =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanCTABarrierRuntimeFn);
+    auto source = materializeSourceLocation(rewriter, loc);
+    // All pre-barrier accesses finish before thread zero advances the epoch,
+    // and every thread observes the update before its next access.
+    mlir::gpu::BarrierOp::create(rewriter, loc);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    b.call(func, ValueRange{*state, b.i32_val(op.hasGlobalRead()),
+                            b.i32_val(op.hasGlobalWrite()), source.file,
+                            source.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 template <typename OpTy>
 struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
@@ -1321,6 +1357,8 @@ void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const TargetInfoBase &targetInfo) {
+  patterns.add<GSanCTABarrierOpConversion>(
+      typeConverter, patternBenefitPrioritizeOverLLVMConversions + 1);
   patterns.add<GSanInitOpConversion>(typeConverter);
   patterns.add<
       GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
