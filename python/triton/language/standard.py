@@ -23,6 +23,7 @@ def _is_power_of_two(i):
 
 
 _get_int_dtype = constexpr_function(core.get_int_dtype)
+_wrap_axis = constexpr_function(core._wrap_axis)
 
 # -----------------------
 # Standard library
@@ -492,7 +493,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     :type descending: bool, optional
     """
     # handle default dimension or check that it is the most minor dim
-    _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
 
     if k is not None:
@@ -564,7 +565,7 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
 @jit
 def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     # handle default dimension or check that it is the most minor dim
-    _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
     n_dims: core.constexpr = _log2(x.shape[-1])
     return _bitonic_merge(x, n_dims, descending, n_dims)
