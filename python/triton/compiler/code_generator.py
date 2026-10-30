@@ -1454,12 +1454,12 @@ class CodeGenerator(ast.NodeVisitor):
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
             prototype = ASTFunction([], arg_types, dict())
-            generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
-                                      function_name=fn_name, function_types=self.function_ret_types,
-                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.def_file_line_number,
-                                      begin_col=fn.def_file_col_number, options=self.builder.options,
-                                      codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
-                                      caller_context=caller_context, is_gluon=self.is_gluon)
+            generator = type(self)(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
+                                   function_name=fn_name, function_types=self.function_ret_types, noinline=fn.noinline,
+                                   file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                                   begin_col=fn.def_file_col_number, options=self.builder.options,
+                                   codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
+                                   caller_context=caller_context, is_gluon=self.is_gluon)
             try:
                 generator.visit(fn.parse())
             except Exception as e:
@@ -1775,7 +1775,8 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     constants = {fn.arg_names[i[0]]: src.constants[i] for i in leaves}
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
-    generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
+    generator_cls = codegen_fns.get("code_generator_class") or CodeGenerator
+    generator = generator_cls(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),
                               jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.def_file_line_number,
                               begin_col=fn.def_file_col_number, options=options, codegen_fns=codegen_fns,
                               module_map=module_map, module=module, is_gluon=fn.is_gluon())
