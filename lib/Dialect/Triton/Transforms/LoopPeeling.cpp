@@ -20,13 +20,20 @@ void peelLoopEpilogue(
   Value lowerBound = forOp.getLowerBound();
   Value upperBound = forOp.getUpperBound();
   Value step = forOp.getStep();
-  Value newUpperBound = arith::SubIOp::create(rewriter, loc, upperBound, step);
+  Value newUpperBound;
+  if (forOp.getUnsignedCmp())
+    newUpperBound =
+        getUnsignedBoundAfterPeeling(rewriter, loc, upperBound, step, 1);
+  else
+    newUpperBound = arith::SubIOp::create(rewriter, loc, upperBound, step);
 
   rewriter.setInsertionPointAfter(forOp);
   Value lastIV = getLastInductionValue(rewriter, forOp);
 
-  auto cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
-                                    lowerBound, upperBound);
+  auto predicate = forOp.getUnsignedCmp() ? arith::CmpIPredicate::ult
+                                          : arith::CmpIPredicate::slt;
+  auto cond =
+      arith::CmpIOp::create(rewriter, loc, predicate, lowerBound, upperBound);
 
   // Create an if op to execute the peeled iteration
   IRMapping map;

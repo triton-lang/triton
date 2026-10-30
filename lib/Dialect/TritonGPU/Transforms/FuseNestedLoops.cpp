@@ -284,7 +284,13 @@ static unsigned getIntTypeWidth(Type type) {
 
 // Generate IR to compute the number of iterations of a loop.
 static Value computeNumIters(ImplicitLocOpBuilder &b, Value lowerBound,
-                             Value upperBound, Value step) {
+                             Value upperBound, Value step, bool unsignedCmp) {
+  if (unsignedCmp) {
+    // Clamp empty ranges before subtraction so their distance cannot wrap.
+    Value lb = arith::MinUIOp::create(b, lowerBound, upperBound);
+    Value diff = arith::SubIOp::create(b, upperBound, lb);
+    return arith::CeilDivUIOp::create(b, diff, step);
+  }
   // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
   // This works even if step is negative.
   Value diff = arith::SubIOp::create(b, upperBound, lowerBound);
@@ -295,19 +301,24 @@ static Value computeNumIters(ImplicitLocOpBuilder &b, Value lowerBound,
 // Generate IR to compute the number of iterations of a loop.
 static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
   return computeNumIters(b, loop.getLowerBound(), loop.getUpperBound(),
-                         loop.getStep());
+                         loop.getStep(), loop.getUnsignedCmp());
 }
 
 // Cast an integer or index value to an integer or index `type`, if necessary.
-static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
-                                Type type) {
+static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value, Type type,
+                                bool isUnsigned = false) {
   if (value.getType() == type)
     return value;
-  if (isa<IndexType>(value.getType()) || isa<IndexType>(type))
+  if (isa<IndexType>(value.getType()) || isa<IndexType>(type)) {
+    if (isUnsigned)
+      return arith::IndexCastUIOp::create(b, type, value);
     return arith::IndexCastOp::create(b, type, value);
+  }
   if (cast<IntegerType>(value.getType()).getWidth() >
       cast<IntegerType>(type).getWidth())
     return arith::TruncIOp::create(b, type, value);
+  if (isUnsigned)
+    return arith::ExtUIOp::create(b, type, value);
   return arith::ExtSIOp::create(b, type, value);
 }
 
@@ -568,6 +579,18 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
                           getIntTypeWidth(loop.op.getInductionVar().getType()));
   }
   auto intTy = b.getIntegerType(intTyWidth);
+  bool unsignedCounts =
+      outer.getUnsignedCmp() || llvm::any_of(innerLoops, [](InnerLoop &loop) {
+        return loop.op.getUnsignedCmp();
+      });
+  auto castNumIters = [&](Value count, bool unsignedCmp) {
+    if (unsignedCounts && !unsignedCmp) {
+      Value zero =
+          arith::ConstantOp::create(b, b.getIntegerAttr(count.getType(), 0));
+      count = arith::MaxSIOp::create(b, count, zero);
+    }
+    return castIntIfNecessary(b, count, intTy, unsignedCmp);
+  };
   bool allInvariant = llvm::all_of(
       innerLoops, [](InnerLoop &loop) { return loop.isOuterLoopInvariant(); });
 
@@ -577,7 +600,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // len_jk = len(range(lbjk, ubjk, stepjk))
     Value lenInner;
     if (loop.isOuterLoopInvariant())
-      lenInner = castIntIfNecessary(b, computeNumIters(b, loop.op), intTy);
+      lenInner =
+          castNumIters(computeNumIters(b, loop.op), loop.op.getUnsignedCmp());
     else
       lenInner = createPoisonOrZero(b, intTy);
     lenInners.push_back(lenInner);
@@ -586,6 +610,11 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   auto intTyCst = [&](int64_t v) {
     return arith::ConstantOp::create(b, IntegerAttr::get(intTy, v));
   };
+  auto atLeastOne = [&](Value count) -> Value {
+    if (unsignedCounts)
+      return arith::MaxUIOp::create(b, intTyCst(1), count);
+    return arith::MaxSIOp::create(b, intTyCst(1), count);
+  };
 
   // inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
   unsigned N = innerLoops.size() - 1;
@@ -593,14 +622,13 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   for (auto [loop, lenInner] : llvm::zip(innerLoops, lenInners)) {
     if (!loop.isOuterLoopInvariant())
       continue;
-    innerLen = arith::AddIOp::create(
-        b, innerLen, arith::MaxSIOp::create(b, intTyCst(1), lenInner));
+    innerLen = arith::AddIOp::create(b, innerLen, atLeastOne(lenInner));
   }
   innerLen = arith::SubIOp::create(b, innerLen, intTyCst(N));
 
   // total_iters = len_i * inner_len
   Value totalIters = arith::MulIOp::create(
-      b, castIntIfNecessary(b, lenOuter, intTy), innerLen);
+      b, castNumIters(lenOuter, outer.getUnsignedCmp()), innerLen);
 
   // Generate a loop to compute the total number of iterations for inner loops
   // whose bounds are not outer loop invariant.
@@ -608,6 +636,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   auto peeledLen =
       scf::ForOp::create(b, outer.getLowerBound(), outer.getUpperBound(),
                          outer.getStep(), {totalIters});
+  peeledLen.setUnsignedCmp(outer.getUnsignedCmp());
   totalIters = peeledLen.getRegionIterArg(0);
   mapping.map(outer.getInductionVar(), peeledLen.getInductionVar());
   b.setInsertionPointToStart(peeledLen.getBody());
@@ -619,13 +648,13 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       if (!mapping.contains(op))
         b.clone(*op, mapping);
     }
-    Value numIters =
-        computeNumIters(b, mapping.lookupOrDefault(loop.op.getLowerBound()),
-                        mapping.lookupOrDefault(loop.op.getUpperBound()),
-                        mapping.lookupOrDefault(loop.op.getStep()));
-    numIters = castIntIfNecessary(b, numIters, intTy);
+    Value numIters = computeNumIters(
+        b, mapping.lookupOrDefault(loop.op.getLowerBound()),
+        mapping.lookupOrDefault(loop.op.getUpperBound()),
+        mapping.lookupOrDefault(loop.op.getStep()), loop.op.getUnsignedCmp());
+    numIters = castNumIters(numIters, loop.op.getUnsignedCmp());
     // Accumulate into the total number of iterations.
-    numIters = arith::MaxSIOp::create(b, intTyCst(1), numIters);
+    numIters = atLeastOne(numIters);
     totalIters = arith::AddIOp::create(b, totalIters, numIters);
   }
   scf::YieldOp::create(b, totalIters);
@@ -692,6 +721,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // for _ in range(total_iters):
   auto fused =
       scf::ForOp::create(b, intTyCst(0), totalIters, intTyCst(1), fusedInits);
+  fused.setUnsignedCmp(unsignedCounts);
   // Replace the outer loop args with the args in the fused loop args.
   for (auto [arg, fusedArg] :
        llvm::zip(outer.getRegionIterArgs(),
@@ -722,8 +752,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     //   jk = lbjk
     Value innerStartT = intTyCst(0);
     for (unsigned i = 0; i < k; ++i) {
-      innerStartT = arith::AddIOp::create(
-          b, innerStartT, arith::MaxSIOp::create(b, intTyCst(1), lenInners[i]));
+      innerStartT =
+          arith::AddIOp::create(b, innerStartT, atLeastOne(lenInners[i]));
     }
     innerStartT = arith::SubIOp::create(b, innerStartT, intTyCst(k));
     Value prologueCond =
@@ -750,11 +780,9 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     prologue.moveBefore(thenBlock, thenBlock->end());
 
     if (k == 0) {
-      // Increment `i` and replace its uses inside the prologue.
+      // Increment `i` for the prologue.
       b.setInsertionPointToStart(thenBlock);
       i = arith::AddIOp::create(b, curI, outer.getStep());
-      mlir::replaceAllUsesInRegionWith(outer.getInductionVar(), i,
-                                       prologueIf.getThenRegion());
 
       // Compute the variant inner loop lengths.
       IRMapping mapping;
@@ -768,10 +796,10 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
         lenInner =
             computeNumIters(b, mapping.lookupOrDefault(loop.op.getLowerBound()),
                             mapping.lookupOrDefault(loop.op.getUpperBound()),
-                            mapping.lookupOrDefault(loop.op.getStep()));
-        lenInner = castIntIfNecessary(b, lenInner, intTy);
-        innerLen = arith::AddIOp::create(
-            b, innerLen, arith::MaxSIOp::create(b, intTyCst(1), lenInner));
+                            mapping.lookupOrDefault(loop.op.getStep()),
+                            loop.op.getUnsignedCmp());
+        lenInner = castNumIters(lenInner, loop.op.getUnsignedCmp());
+        innerLen = arith::AddIOp::create(b, innerLen, atLeastOne(lenInner));
       }
     }
 
@@ -787,6 +815,11 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       thenOuts.push_back(innerLen);
     }
     scf::YieldOp::create(b, thenOuts);
+    if (k == 0) {
+      // Include uses introduced by the sliced bounds and the lower-bound yield.
+      mlir::replaceAllUsesInRegionWith(outer.getInductionVar(), i,
+                                       prologueIf.getThenRegion());
+    }
 
     // In the `else` region, just yield the last values of jk, the outputs, and
     // the iter args.
@@ -835,10 +868,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     b.setInsertionPointAfter(prologueIf);
     Value innerEndT = arith::AddIOp::create(
         b, innerStartT, castIntIfNecessary(b, lenInners[k], intTy));
-    Value ge =
-        arith::CmpIOp::create(b, arith::CmpIPredicate::sge, T, innerStartT);
-    Value lt =
-        arith::CmpIOp::create(b, arith::CmpIPredicate::slt, T, innerEndT);
+    Value ge = arith::CmpIOp::create(b,
+                                     unsignedCounts ? arith::CmpIPredicate::uge
+                                                    : arith::CmpIPredicate::sge,
+                                     T, innerStartT);
+    Value lt = arith::CmpIOp::create(b,
+                                     unsignedCounts ? arith::CmpIPredicate::ult
+                                                    : arith::CmpIPredicate::slt,
+                                     T, innerEndT);
     Value bodyCond = arith::AndIOp::create(b, ge, lt);
 
     // The outputs will be the outputs of the inner loop body and the next jk.

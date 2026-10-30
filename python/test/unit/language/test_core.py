@@ -6797,6 +6797,94 @@ def test_for_loop_operand_signedness(lower, upper, step, use_tl_range, device):
     assert out.tolist() == [len(expected), sum(expected)]
 
 
+@pytest.mark.parametrize("dtype", ["int32", "uint32", "int64", "uint64"])
+@pytest.mark.parametrize("iterator", ["range", "tl.range"])
+@pytest.mark.parametrize("lo_offset, hi_offset, step", [
+    (-7, -3, 1),
+    (-2, 2, 1),
+    (-2, 3, 2),
+    (3, 7, 1),
+    (2, -2, 1),
+    (2, 2, 1),
+    (2, -2, -1),
+])
+def test_for_loop_comparison_signedness(dtype, iterator, lo_offset, hi_offset, step, device):
+
+    @triton.jit
+    def kernel(Bounds, Value, Out, STEP: tl.constexpr):
+        lo = tl.load(Bounds)
+        hi = tl.load(Bounds + 1)
+        trips = 0
+        acc = 0
+        for i in range(lo, hi, STEP):
+            trips += 1
+            acc += tl.load(Value) + (i - lo).to(tl.int32)
+        tl.store(Out, trips)
+        tl.store(Out + 1, acc)
+
+    kernel = patch_kernel(kernel, {"range(lo, hi, STEP)": f"{iterator}(lo, hi, STEP)"})
+    unsigned = dtype.startswith("uint")
+    boundary = 2**(np.dtype(dtype).itemsize * 8 - 1) if unsigned else 0
+    lo, hi = boundary + lo_offset, boundary + hi_offset
+    bounds = to_triton(np.array([lo, hi], dtype=dtype), device=device)
+    value = torch.tensor([7], dtype=torch.int32, device=device)
+    out = torch.empty((2, ), dtype=torch.int32, device=device)
+    compiled = kernel.warmup(bounds, value, out, step, grid=(1, ))
+    assert ("scf.for unsigned" in compiled.asm["ttir"]) == unsigned
+    kernel[(1, )](bounds, value, out, step)
+    expected = [len(range(lo, hi, step)), sum(7 + i - lo for i in range(lo, hi, step))]
+    assert out.tolist() == expected
+
+
+@pytest.mark.parametrize("dtype", ["uint32", "uint64"])
+@pytest.mark.parametrize("num_stages", [1, 3, 5])
+@pytest.mark.parametrize("flatten", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("block", [32, 64])
+@pytest.mark.parametrize("bounds_case", ["sign_boundary", "zero", "max", "large_step", "max_distance"])
+def test_for_loop_unsigned_matmul(dtype, num_stages, flatten, empty, block, bounds_case, device):
+
+    @triton.jit
+    def kernel(Bounds, In, Out, NUM_STAGES: tl.constexpr, FLATTEN: tl.constexpr, BLOCK: tl.constexpr):
+        lo = tl.load(Bounds)
+        hi = tl.load(Bounds + 1)
+        step = tl.load(Bounds + 2)
+        offsets = tl.arange(0, BLOCK)[:, None] * BLOCK + tl.arange(0, BLOCK)[None, :]
+        acc = tl.full((BLOCK, BLOCK), 0, tl.float32)
+        b = tl.full((BLOCK, BLOCK), 1, tl.float16)
+        for _ in tl.range(2, flatten=FLATTEN):
+            index = 0
+            for i in tl.range(lo, hi, step, num_stages=NUM_STAGES):
+                a = tl.load(In + index * BLOCK * BLOCK + offsets)
+                acc = tl.dot(a, b, acc)
+                index += 1
+        tl.store(Out + offsets, acc)
+
+    bits = np.dtype(dtype).itemsize * 8
+    boundary = 2**(bits - 1)
+    large_step = 2**(bits - 2) + 1
+    lo, hi, step = {
+        "sign_boundary": (boundary - 2, boundary + 2, 1),
+        "zero": (0, 1, 1),
+        "max": (2**bits - 2, 2**bits - 1, 1),
+        "large_step": (0, 2 * large_step + 1, large_step),
+        "max_distance": (0, 2**bits - 1, (2**bits - 1) // 3),
+    }[bounds_case]
+    if empty:
+        hi = lo
+    bounds = to_triton(np.array([lo, hi, step], dtype=dtype), device=device)
+    x = torch.ones((4, block, block), dtype=torch.float16, device=device)
+    out = torch.empty((block, block), dtype=torch.float32, device=device)
+    compiled = kernel.warmup(bounds, x, out, num_stages, flatten, block, grid=(1, ))
+    assert "scf.for unsigned" in compiled.asm["ttgir"]
+    if flatten:
+        assert compiled.asm["ttgir"].count("scf.for") == 1
+    if is_cuda() and torch.cuda.get_device_capability()[0] >= 8 and num_stages > 1:
+        assert "ttg.async_copy_global_to_local" in compiled.asm["ttgir"]
+    kernel[(1, )](bounds, x, out, num_stages, flatten, block)
+    torch.testing.assert_close(out, torch.full_like(out, 2 * block * len(range(lo, hi, step))))
+
+
 @pytest.mark.interpreter
 def test_if_else(device):
 
