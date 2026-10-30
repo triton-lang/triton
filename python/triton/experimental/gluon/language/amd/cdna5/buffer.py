@@ -28,11 +28,25 @@ def make_buffer_descriptor(base, num_records, _semantic=None) -> buffer_descript
     only if ``soffset + offset + size <= num_records``. Out-of-bounds loads return zero and out-of-bounds
     stores are dropped, so ``num_records=0`` disables every access.
 
-    The check applies per hardware access. An access that ends within ``num_records`` is in bounds as a
-    whole. One that crosses it is checked in 4-byte pieces, and a piece is in bounds only if it ends at
-    least 4 bytes before ``num_records``: elements of that access near the bound are out of bounds too,
-    even when they fit. So the check is exact per element when no access crosses ``num_records``, such
-    as with accesses of one element, or with a ``num_records`` that is a multiple of the access size.
+    The check applies per hardware access, not per element. An access that ends within ``num_records`` is
+    in bounds as a whole. One that crosses it is checked in 4-byte pieces, and a piece is in bounds only if
+    it ends at least 4 bytes before ``num_records``, so elements near the bound can be out of bounds even
+    though they fit. How many elements an access holds is up to the compiler: it vectorizes based on the
+    alignment of ``base`` and ``offsets`` and on the mask, but not on ``num_records``. So near the bound,
+    the result can depend on vectorization. For example, loading ``offsets = [0, 1, 2, ...]`` (a store
+    drops the same elements):
+
+    - int32 elements and ``num_records = 20``: with one element per access, elements 0 to 4 are loaded.
+      With four per access (16 bytes), the access holding elements 4 to 7 crosses the bound, and element
+      4 reads zero too: its piece ends at byte 20, not 4 bytes before the bound.
+    - int8 elements and ``num_records = 10``: with one element per access, elements 0 to 9 are loaded.
+      With sixteen per access, the access holding elements 0 to 15 crosses the bound, and only its first
+      piece (elements 0 to 3) is in bounds.
+
+    To bound each element exactly, keep accesses from crossing ``num_records``: make it and ``soffset``
+    (in bytes) multiples of 16 bytes, the widest access, or also mask the elements past the bound, e.g.
+    ``mask=offsets < n`` with ``num_records = n * 4`` for int32 and no ``soffset``. The compiler only
+    vectorizes an access as far as its mask allows, so no access the mask keeps crosses the bound.
 
     The descriptor is as aligned as ``base``: use :func:`~triton.experimental.gluon.language.multiple_of`
     on ``base`` to let accesses through it vectorize when the compiler can't prove the alignment.
