@@ -419,18 +419,49 @@ tt.func @dependent_inner_loop(%lbi: i64, %ubi: i64, %stepi: i64) {
 // CHECK-LABEL: @upcast_i16_to_i32
 // CHECK-SAME: [[LBI:%.*]]: i32, [[UBI:%.*]]: i32, [[STEPI:%.*]]: i32, [[LBJ:%.*]]: i16, [[UBJ:%.*]]: i16, [[STEPJ:%.*]]: i16
 tt.func @upcast_i16_to_i32(%lbi: i32, %ubi: i32, %stepi: i32, %lbj: i16, %ubj: i16, %stepj: i16) {
-  // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]] : i32
-  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]] : i32
-  // CHECK-NEXT: [[DIFF_J:%.*]] = arith.subi [[UBJ]], [[LBJ]] : i16
-  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ]] : i16
+  // Loop lengths are computed in an integer type twice as wide as the bounds.
+  // CHECK:      [[LBI_EXT:%.*]] = arith.extsi [[LBI]] : i32 to i64
+  // CHECK-NEXT: [[UBI_EXT:%.*]] = arith.extsi [[UBI]] : i32 to i64
+  // CHECK-NEXT: [[STEPI_EXT:%.*]] = arith.extsi [[STEPI]] : i32 to i64
+  // CHECK-NEXT: [[DIFF_I:%.*]] = arith.subi [[UBI_EXT]], [[LBI_EXT]] : i64
+  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI_EXT]] : i64
+  // CHECK-NEXT: [[LBJ_EXT:%.*]] = arith.extsi [[LBJ]] : i16 to i32
+  // CHECK-NEXT: [[UBJ_EXT:%.*]] = arith.extsi [[UBJ]] : i16 to i32
+  // CHECK-NEXT: [[STEPJ_EXT:%.*]] = arith.extsi [[STEPJ]] : i16 to i32
+  // CHECK-NEXT: [[DIFF_J:%.*]] = arith.subi [[UBJ_EXT]], [[LBJ_EXT]] : i32
+  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ_EXT]] : i32
 
-  // CHECK: arith.extsi [[LEN_J]] : i16 to i32
+  // CHECK: arith.maxsi [[LEN_J]], %c1_i32 : i32
+  // CHECK: arith.trunci [[LEN_I]] : i64 to i32
   scf.for %i = %lbi to %ubi step %stepi : i32 {
     scf.for %j = %lbj to %ubj step %stepj : i16 {
       "body"(%i, %j) : (i32, i16) -> ()
     }
   } {"ttg.always-fuse"}
   tt.return
+}
+
+// `ub - lb` of the outer loop overflows i32, but the loop itself does not: it
+// runs 6 times over -2147483643, ..., 536870917, so the fused loop must run
+// 6 * 3 = 18 times.
+// CHECK-LABEL: @trip_count_diff_overflows_i32
+tt.func @trip_count_diff_overflows_i32() -> i32 {
+  %lb = arith.constant -2147483643 : i32
+  %ub = arith.constant 1073741824 : i32
+  %step = arith.constant 536870912 : i32
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  // CHECK: [[C18:%.*]] = arith.constant 18 : i32
+  // CHECK: scf.for %{{.*}} = %c0_i32 to [[C18]] step %c1_i32
+  %0 = scf.for %i = %lb to %ub step %step iter_args(%acc = %c0_i32) -> i32 : i32 {
+    %1 = scf.for %j = %c0_i32 to %c3_i32 step %c1_i32 iter_args(%a = %acc) -> i32 : i32 {
+      %2 = arith.addi %a, %c1_i32 : i32
+      scf.yield %2 : i32
+    }
+    scf.yield %1 : i32
+  } {"ttg.always-fuse"}
+  tt.return %0 : i32
 }
 
 // CHECK-LABEL: @upcast_index_to_i64
