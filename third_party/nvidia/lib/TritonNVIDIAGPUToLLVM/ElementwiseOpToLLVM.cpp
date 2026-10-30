@@ -3,8 +3,10 @@
 #include "TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -516,6 +518,43 @@ struct FDivOpConversion
   }
 };
 
+struct FmaOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
+  using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+    if (!rounding.has_value() ||
+        rounding.value() == arith::RoundingMode::to_nearest_even) {
+      return {LLVM::FMAOp::create(rewriter, loc, elemTy, operands[0])};
+    }
+    // The NVPTX backend ignores the rounding mode of the constrained FMA
+    // intrinsic (it always emits fma.rn), so use the NVVM operation, which
+    // carries the rounding mode into PTX (fma.rz/fma.rm/fma.rp).
+    NVVM::FPRoundingMode nvvmRounding;
+    switch (rounding.value()) {
+    case arith::RoundingMode::toward_zero:
+      nvvmRounding = NVVM::FPRoundingMode::RZ;
+      break;
+    case arith::RoundingMode::downward:
+      nvvmRounding = NVVM::FPRoundingMode::RM;
+      break;
+    case arith::RoundingMode::upward:
+      nvvmRounding = NVVM::FPRoundingMode::RP;
+      break;
+    default:
+      return {};
+    }
+    return {NVVM::FmaOp::create(rewriter, loc, elemTy, operands[0][0],
+                                operands[0][1], operands[0][2], nvvmRounding)};
+  }
+};
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -876,6 +915,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FmaOpConversion>(typeConverter, axisInfoAnalysis,
+                                benefit.getBenefit() + 1);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,

@@ -55,6 +55,14 @@ struct PackedArithOpConversion
                                    Location loc) const {
     if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
+    // Packed FMA is round-to-nearest-even only; directed rounding must go
+    // through the generic constrained-FMA lowering.
+    if constexpr (std::is_same_v<SourceOp, math::FmaOp>) {
+      std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+      if (rounding.has_value() &&
+          rounding.value() != arith::RoundingMode::to_nearest_even)
+        return {};
+    }
 
     SmallVector<Value> packedOperands;
     for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
@@ -429,6 +437,66 @@ struct ClampFOpConversion
     return {med};
   }
 };
+struct FmaDirectedOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaDirectedOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<math::FmaOp, FmaDirectedOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+    if (!rounding.has_value() ||
+        rounding.value() == arith::RoundingMode::to_nearest_even)
+      return {};
+    // CDNA3 (gfx942), CDNA4 (gfx950) and CDNA5 (gfx1250) select the FMA
+    // rounding mode through the wavefront MODE register (FP_ROUND: 0 =
+    // nearest-even, 1 = +inf, 2 = -inf, 3 = toward-zero); there is no
+    // per-instruction encoding, and the AMDGPU backend emits a plain
+    // v_fma for the constrained intrinsic without changing MODE. Set
+    // FP_ROUND around the constrained FMA (whose FP-environment token
+    // keeps it between the mode writes) and restore round-to-nearest.
+    int32_t hwMode;
+    LLVM::RoundingMode llvmRounding;
+    switch (rounding.value()) {
+    case arith::RoundingMode::toward_zero:
+      hwMode = 3;
+      llvmRounding = LLVM::RoundingMode::TowardZero;
+      break;
+    case arith::RoundingMode::downward:
+      hwMode = 2;
+      llvmRounding = LLVM::RoundingMode::TowardNegative;
+      break;
+    case arith::RoundingMode::upward:
+      hwMode = 1;
+      llvmRounding = LLVM::RoundingMode::TowardPositive;
+      break;
+    default:
+      return {};
+    }
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // MODE register ID = 1, FP_ROUND offset = 0, width = 4. The value sets
+    // both the single-precision field [1:0] and the double/half field [3:2].
+    constexpr int32_t kFpRoundLoc = 1 | (0 << 6) | ((4 - 1) << 11);
+    int32_t modeVal = hwMode | (hwMode << 2);
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.s.setreg", {},
+        {b.i32_val(kFpRoundLoc), b.i32_val(modeVal)});
+    MLIRContext *ctx = rewriter.getContext();
+    Value result = LLVM::ConstrainedFMAIntr::create(
+        rewriter, loc, elemTy, operands[0][0], operands[0][1], operands[0][2],
+        LLVM::RoundingModeAttr::get(ctx, llvmRounding),
+        LLVM::FPExceptionBehaviorAttr::get(ctx,
+                                           LLVM::FPExceptionBehavior::Ignore));
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                    {b.i32_val(kFpRoundLoc), b.i32_val(0)});
+    return {result};
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -520,6 +588,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
+  patterns.add<FmaDirectedOpConversion>(typeConverter, axisInfoAnalysis,
+                                        benefit.getBenefit() + 1);
   triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                               axisInfoAnalysis, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
