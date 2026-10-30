@@ -216,6 +216,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
         significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
             (1 << input_dtype.fp_mantissa_width) - 1)
+    if input_dtype == tl.float8e4nv:
+        magnitude = input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)
+        input_nan = magnitude == (1 << (input_dtype.primitive_bitwidth - 1)) - 1
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype in (tl.float8e4b8, tl.float8e5b16):
+        input_nan = input_bin == (1 << (input_dtype.primitive_bitwidth - 1))
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype == tl.float8e4b15:
+        input_nan = np.zeros(input_bin.shape, dtype=bool)
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    else:
+        nonfinite_input = input_exponent == (1 << input_exponent_width) - 1
+        input_nan = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+        input_inf = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) == 0)
     sign_output = sign
     # Include the leading bit and align subnormal results before rounding.
     full_significand = significand | (1 << input_dtype.fp_mantissa_width)
@@ -237,20 +251,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     exponent_output = np.minimum(output_exponent, max_exponent)
     exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
     significand_output = retained & ((1 << output_dtype.fp_mantissa_width) - 1)
-    if not input_dtype.is_fp8() and not output_dtype.is_fp8():
-        # Reserved source exponents represent infinities/NaNs, not finite exponents.
-        nonfinite = input_exponent == (1 << input_exponent_width) - 1
-        input_nan = nonfinite & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+    if not output_dtype.is_fp8():
+        nonfinite = input_nan | input_inf
         overflow = (output_exponent >= max_exponent) & ~nonfinite
         if rounding_mode == _ir.ROUNDING_MODE.RTNE:
             exponent_output[overflow] = max_exponent
             significand_output[overflow] = 0
-            significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
         else:
             exponent_output[overflow] = max_exponent - 1
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
         exponent_output[nonfinite] = max_exponent
-        significand_output[nonfinite & ~input_nan] = 0
+        significand_output[input_inf] = 0
+        # if the input was NaN but conversion erased all its mantissa bits,
+        # set one bit so the output remains NaN.
+        significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
