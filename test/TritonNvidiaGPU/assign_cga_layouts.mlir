@@ -771,3 +771,103 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %dot : tensor<1x128x128xf32, #blocked>
   }
 }
+
+// -----
+
+#direct_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#direct_target = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#direct_a = #ttg.dot_op<{opIdx = 0, parent = #direct_default}>
+#direct_b = #ttg.dot_op<{opIdx = 1, parent = #direct_default}>
+
+// CHECK-DAG: #[[$DIRECT_TARGET:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Load directly in the dot operand encoding. Cleanup folds the constant and
+  // output boundary conversions, leaving one load, two dots, and no converts.
+  // CHECK-LABEL: tt.func @dot_rematerializes_shared_operand_load
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg2, %arg3] : !tt.tensordesc<32x128xf16> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$DIRECT_TARGET]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[LOAD]],
+  // CHECK: tt.dot %{{.*}}, %[[LOAD]],
+  // E2E-LABEL: tt.func @dot_rematerializes_shared_operand_load
+  // E2E-NOT: ttg.convert_layout
+  // E2E-NOT: tt.descriptor_load
+  // E2E: %[[LOAD:.*]] = tt.descriptor_load
+  // E2E-NEXT: %[[D0:.*]] = tt.dot %{{.*}}, %[[LOAD]], %{{.*}}
+  // E2E-NEXT: %[[D1:.*]] = tt.dot %{{.*}}, %[[LOAD]], %[[D0]]
+  // E2E-NEXT: tt.store %arg1, %[[D1]]
+  // E2E-NEXT: tt.return
+  // E2E-NEXT: }
+  // PIPELINE-LABEL: tt.func @dot_rematerializes_shared_operand_load
+  // PIPELINE-NOT: ttg.convert_layout
+  // PIPELINE-NOT: tt.descriptor_load
+  // PIPELINE: %[[LOAD:.*]] = tt.descriptor_load
+  // PIPELINE-NEXT: %[[D0:.*]] = tt.dot %{{.*}}, %[[LOAD]], %{{.*}}
+  // PIPELINE-NEXT: %[[D1:.*]] = tt.dot %{{.*}}, %[[LOAD]], %[[D0]]
+  // PIPELINE-NEXT: tt.store %arg1, %[[D1]]
+  // PIPELINE-NEXT: tt.return
+  // PIPELINE-NEXT: }
+  tt.func @dot_rematerializes_shared_operand_load(%desc: !tt.tensordesc<32x128xf16>, %out: tensor<128x128x!tt.ptr<f32>, #direct_target>, %i: i32, %j: i32) {
+    %a = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #direct_a>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #direct_default>
+    %b = tt.descriptor_load %desc[%i, %j] : !tt.tensordesc<32x128xf16> -> tensor<32x128xf16, #direct_b>
+    %d0 = tt.dot %a, %b, %c : tensor<128x32xf16, #direct_a> * tensor<32x128xf16, #direct_b> -> tensor<128x128xf32, #direct_default>
+    %d1 = tt.dot %a, %b, %d0 : tensor<128x32xf16, #direct_a> * tensor<32x128xf16, #direct_b> -> tensor<128x128xf32, #direct_default>
+    %result = ttg.convert_layout %d1 : tensor<128x128xf32, #direct_default> -> tensor<128x128xf32, #direct_target>
+    tt.store %out, %result : tensor<128x128x!tt.ptr<f32>, #direct_target>
+    tt.return
+  }
+}
+
+// -----
+
+#reduce_source = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
+
+// CHECK-DAG: #[[$REDUCE_TARGET:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1\], \[2\]\]}}}>
+// E2E-DAG: #[[$REDUCE_TARGET:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1\], \[2\]\]}}}>
+// PIPELINE-DAG: #[[$REDUCE_TARGET:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1\], \[2\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // One shared load, two scalar reductions, and no layout conversions.
+  // CHECK-LABEL: tt.func @reduce_rematerializes_shared_operand_load
+  // CHECK-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
+  // CHECK-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // CHECK-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // CHECK-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32
+  // CHECK-NEXT: }
+  // E2E-LABEL: tt.func @reduce_rematerializes_shared_operand_load
+  // E2E-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
+  // E2E-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // E2E-NOT: ttg.convert_layout
+  // E2E: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // E2E-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // E2E-NOT: ttg.convert_layout
+  // E2E: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // E2E-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32
+  // E2E-NEXT: }
+  // PIPELINE-LABEL: tt.func @reduce_rematerializes_shared_operand_load
+  // PIPELINE-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
+  // PIPELINE-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // PIPELINE-NOT: ttg.convert_layout
+  // PIPELINE: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // PIPELINE-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
+  // PIPELINE-NOT: ttg.convert_layout
+  // PIPELINE: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
+  // PIPELINE-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32
+  // PIPELINE-NEXT: }
+  tt.func @reduce_rematerializes_shared_operand_load(%desc: !tt.tensordesc<256xf32>, %offset: i32) -> (f32, f32) {
+    %x = tt.descriptor_load %desc[%offset] : !tt.tensordesc<256xf32> -> tensor<256xf32, #reduce_source>
+    %sum = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<256xf32, #reduce_source>) -> f32
+    %max = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.maximumf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<256xf32, #reduce_source>) -> f32
+    tt.return %sum, %max : f32, f32
+  }
+}
