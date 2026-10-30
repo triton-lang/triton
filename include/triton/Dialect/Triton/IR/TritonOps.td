@@ -12,6 +12,7 @@ include "mlir/Interfaces/FunctionInterfaces.td" // FunctionOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/InferIntRangeInterface.td"
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 
@@ -969,7 +970,8 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
 //
 // Make Range Op
 //
-def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
+def TT_MakeRangeOp : TT_Op<"make_range", [Pure,
+    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>]> {
     let summary = "make range";
 
     let description = [{
