@@ -27,6 +27,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -392,6 +393,11 @@ struct WaitBarrierOpConversion
 
     waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
     ptxBuilder.launch(rewriter, loc, void_ty(ctx));
+    // Only the CTAs that actually waited advance their local GSan cutoffs.
+    if (op->getParentOfType<ModuleOp>()->hasAttr("tti.gsan_cta_barriers") &&
+        failed(mlir::triton::emitGSanCTABarrier(op, rewriter, /*reads=*/true,
+                                                /*writes=*/true, pred)))
+      return failure();
     rewriter.eraseOp(op);
     return success();
   }

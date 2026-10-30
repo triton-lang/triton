@@ -506,7 +506,6 @@ public:
       callOp.erase();
     }
 
-    bool warpSpecialized = false;
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
@@ -569,13 +568,18 @@ public:
             ExperimentalGSanGridDependencyWaitOp::create(b, op.getLoc());
           })
           .Case([&](ttg::WarpSpecializeOp op) {
-            warpSpecialized = true;
+            // Worker partitions start after the fork and finish before the
+            // default group resumes. Both rendezvous order global accesses.
+            auto global =
+                ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite;
+            ttg::BarrierOp::create(b, op.getLoc(), global);
+            b.setInsertionPointAfter(op);
+            ttg::BarrierOp::create(b, op.getLoc(), global);
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
           });
     });
 
-    if (!warpSpecialized)
-      module->setAttr("tti.gsan_cta_barriers", builder.getUnitAttr());
+    module->setAttr("tti.gsan_cta_barriers", builder.getUnitAttr());
 
     if (instrumentMBarriers)
       instrumentMBarrierOps(module, mbarrierScratch);

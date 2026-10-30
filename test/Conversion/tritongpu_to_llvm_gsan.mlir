@@ -542,7 +542,8 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_init
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync
   // CHECK: atom.global.gpu.release
-  // CHECK-NOT: llvm.call @__triton_gsan_cta_barrier
+  // CHECK: llvm.call @__triton_gsan_cta_barrier
+  // CHECK: llvm.call @__triton_gsan_cta_barrier
   // CHECK: llvm.return
   tt.func @atomic_cluster_sync_warp_specialized(%ptr: !tt.ptr<i32>) {
     ttg.warp_specialize()

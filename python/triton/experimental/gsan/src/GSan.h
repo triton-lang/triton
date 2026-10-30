@@ -106,9 +106,12 @@ struct ThreadState {
   // Reader-writer lock controlling access to the vector clock and clock buffer
   uint32_t lock;
 
+  // A shadow clock was recorded since the last full local barrier.
+  uint32_t hasLocalAccess;
+
   thread_id_t threadId;
 
-  // Last local reads and writes ordered by their respective CTA barriers.
+  // Last local reads and writes ordered by a barrier or an atomic acquire.
   epoch_t readBarrierEpoch;
   epoch_t writeBarrierEpoch;
   epoch_t writeBarrierToken;

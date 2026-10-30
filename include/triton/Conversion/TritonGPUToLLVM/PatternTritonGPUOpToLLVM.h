@@ -109,6 +109,10 @@ void populateInstrumentationToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateFpSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns);
 
+LogicalResult emitGSanCTABarrier(Operation *op,
+                                 ConversionPatternRewriter &rewriter, bool reads,
+                                 bool writes, Value pred = {});
+
 void populateGSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                 RewritePatternSet &patterns,
                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,

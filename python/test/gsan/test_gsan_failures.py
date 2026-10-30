@@ -11,7 +11,7 @@ import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia import ampere, hopper
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
@@ -19,7 +19,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
 )
 
-from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
+from triton._internal_testing import is_ampere_or_newer, is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental.gsan import create_mem_pool
 from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -108,6 +108,63 @@ def _same_cta_kernel(ptr, out, KIND: tl.constexpr, SYNC: tl.constexpr):
         tl.atomic_add(ptr + offsets, 2, sem="relaxed")
     else:
         tl.store(ptr + offsets, 2)
+
+
+@gluon.jit
+def _ws_publish(ptr, ready):
+    gl.store(ptr + 1, gl.load(ptr) + 1)
+    ampere.mbarrier.arrive(ready)
+
+
+@gluon.jit(noinline=True)
+def _ws_consume(ptr, ready, repeat_write: gl.constexpr):
+    ampere.mbarrier.wait(ready, phase=0)
+    gl.store(ptr + 2, gl.load(ptr + 1) + 1)
+    if repeat_write:
+        gl.store(ptr + 2, 4)
+
+
+@gluon.jit
+def _ws_store(ptr, value: gl.constexpr):
+    gl.store(ptr, value)
+
+
+@gluon.jit
+def _ws_atomic_publish(ptr):
+    gl.store(ptr + 1, gl.load(ptr + 3) + 7)
+    gl.atomic_store(ptr, 1, sem="release", scope="cta")
+
+
+@gluon.jit
+def _ws_atomic_consume(ptr, sem: gl.constexpr):
+    gl.atomic_poll(ptr, 1, sem=sem, scope="cta")
+    gl.store(ptr + 2, gl.load(ptr + 1))
+    gl.store(ptr + 3, 8)
+
+
+@gluon.jit
+def _ws_skipped_wait(ptr, ready):
+    gl.store(ptr, 1)
+    ampere.mbarrier.wait(ready, phase=0, pred=gl.program_id(0) != 0)
+    gl.store(ptr, 2)
+
+
+@gluon.jit
+def _ws_local_race_kernel(ptr, case: gl.constexpr):
+    if case == "acquire" or case == "relaxed":
+        gl.warp_specialize([(_ws_atomic_publish, (ptr, )), (_ws_atomic_consume, (ptr, case))], [1])
+        return
+    ready = ampere.mbarrier.allocate_mbarrier()
+    ampere.mbarrier.init(ready, count=1)
+    if case == "cross-partition":
+        gl.warp_specialize([(_ws_store, (ptr, 1)), (_ws_store, (ptr, 2))], [1])
+    elif case == "skipped-wait":
+        gl.warp_specialize([(_ws_store, (ptr + 1, 1)), (_ws_skipped_wait, (ptr, ready))], [1])
+    else:
+        gl.store(ptr, 1)
+        gl.warp_specialize([(_ws_publish, (ptr, ready)), (_ws_consume, (ptr, ready, case == "after-wait"))], [1])
+        gl.store(ptr + 3, gl.load(ptr + 2) + 1)
+    ampere.mbarrier.invalidate(ready)
 
 
 @triton.jit
@@ -809,6 +866,42 @@ def test_same_cta_unordered_access(kind, barrier, marker, error):
 ])
 def test_same_cta_ordered_or_read_only(kind, barrier, fresh_knobs):
     _run_same_cta(kind, barrier)
+
+
+def _run_ws_local_race(case):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros(4, dtype=torch.int32, device="cuda")
+    _ws_local_race_kernel[(1, )](target, case, num_warps=4)
+    torch.cuda.synchronize()
+    return target.tolist()
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="mbarriers require Ampere or newer")
+def test_same_cta_warp_specialize_mbarrier_handoff(fresh_knobs):
+    assert _run_ws_local_race("handoff") == [1, 2, 3, 4]
+
+
+def test_same_cta_warp_specialize_atomic_handoff(fresh_knobs):
+    assert _run_ws_local_race("acquire") == [1, 7, 7, 8]
+
+
+def test_same_cta_warp_specialize_relaxed_poll():
+    _run_failure_case("relaxed", runner=_run_ws_local_race, runner_args=("relaxed",),
+                      source_function=_ws_atomic_consume.fn, marker="gl.store(ptr + 2, gl.load(ptr + 1))",
+                      error="Read after write race detected")
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="mbarriers require Ampere or newer")
+@pytest.mark.parametrize("case,source,marker", [
+    ("cross-partition", _ws_store, "gl.store(ptr, value)"),
+    ("skipped-wait", _ws_skipped_wait, "gl.store(ptr, 2)"),
+    ("after-wait", _ws_consume, "gl.store(ptr + 2, 4)"),
+])
+def test_same_cta_warp_specialize_unordered_write(case, source, marker):
+    _run_failure_case(case, runner=_run_ws_local_race, runner_args=(case,), source_function=source.fn, marker=marker,
+                      error="Write after write race detected")
 
 
 # Test races at every cell size with byte accesses, plus the default-pool word

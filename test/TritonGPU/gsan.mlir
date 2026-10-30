@@ -124,7 +124,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
-    // CHECK: ttg.warp_specialize(%[[BARRIER:.*]], %[[PRED:.*]], %[[SCRATCH]])
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: ttg.warp_specialize(%[[BARRIER:.*]], %[[PRED:.*]], %[[SCRATCH]])
     ttg.warp_specialize(%barrier, %pred)
     default {
       ttg.warp_yield
@@ -138,6 +139,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       ttng.wait_barrier %partition_barrier, %phase, %partition_pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
       ttg.warp_return
     } : (!ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>, i1) -> ()
+    // CHECK: ttg.barrier global_read|global_write
+    // CHECK-NEXT: tti.experimental_gsan_kernel_exit
     tt.return
   }
 }

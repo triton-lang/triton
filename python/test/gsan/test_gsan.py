@@ -767,7 +767,10 @@ def test_gluon_mbarrier_repeated_phases_reuse_epochs_and_snapshots(with_gsan, ex
     clocks = [shadow_cell_from_address(markers.data_ptr() + i * markers.element_size()).write_clock for i in range(4)]
     assert clocks[0].thread_id != clocks[1].thread_id
     for cta in range(2):
-        assert clocks[cta] == clocks[cta + 2]
+        # Only CTA 0 waits on this shared mbarrier. Its first wait orders
+        # the marker, and the remaining empty phases reuse that epoch.
+        assert clocks[cta + 2].thread_id == clocks[cta].thread_id
+        assert clocks[cta + 2].epoch == clocks[cta].epoch + (cta == 0)
         state = thread_state_from_smid(clocks[cta].thread_id)
         release = shadow_cell_from_address(flags.data_ptr() + cta * flags.element_size()).write_clock
         assert release.is_release
@@ -775,7 +778,7 @@ def test_gluon_mbarrier_repeated_phases_reuse_epochs_and_snapshots(with_gsan, ex
         # Publishing once and importing the peer's completed epoch can create
         # a few snapshots, but the phase count must not control buffer usage.
         assert 0 <= state.clock_buffer_head - release.epoch <= 4
-        assert state.vector_clock[state.thread_id] == clocks[cta].epoch
+        assert state.vector_clock[state.thread_id] == clocks[cta + 2].epoch
     consumer = thread_state_from_smid(clocks[0].thread_id)
     assert consumer.vector_clock[clocks[1].thread_id] == clocks[1].epoch - 1
 
@@ -830,12 +833,14 @@ def test_gluon_mbarrier_preserves_transitively_imported_clocks(with_gsan):
     clocks = [shadow_cell_from_address(markers.data_ptr() + i * markers.element_size()).write_clock for i in range(4)]
     assert len({clock.thread_id for clock in clocks}) == 4
     consumer = thread_state_from_smid(clocks[0].thread_id)
-    for clock in clocks[1:]:
+    for cta, clock in enumerate(clocks[1:], start=1):
         smid = clock.thread_id % num_sms
         previous = shadow_cell_from_address(warm.data_ptr() + smid * warm.element_size()).write_clock
         assert previous.thread_id == clock.thread_id
         assert previous.epoch + 1 == clock.epoch
-        assert consumer.vector_clock[clock.thread_id] == previous.epoch
+        # CTA 2's first wait completes its marker epoch before it publishes
+        # to CTA 0. CTAs 1 and 3 publish with their marker epochs still open.
+        assert consumer.vector_clock[clock.thread_id] == (clock.epoch if cta == 2 else previous.epoch)
     # The zero CTA-layout bases predicate the waits onto the pair leaders.
     # CTA 1 acquires CTA 3 in the second phase, but neither CTA 1 nor CTA 3
     # executes a wait that could acquire CTA 2's newly completed epoch.

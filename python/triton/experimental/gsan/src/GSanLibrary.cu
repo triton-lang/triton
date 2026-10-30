@@ -68,7 +68,7 @@ GSAN_DEVICE void rwLockAcquireWrite(uint32_t &lock) {
 }
 
 GSAN_DEVICE void rwLockReleaseRead(uint32_t &lock) {
-  __scoped_atomic_fetch_sub(&lock, 1, __ATOMIC_RELAXED, __MEMORY_SCOPE_WRKGRP);
+  __scoped_atomic_fetch_sub(&lock, 1, __ATOMIC_RELEASE, __MEMORY_SCOPE_WRKGRP);
 }
 
 GSAN_DEVICE void rwLockReleaseWrite(uint32_t &lock) {
@@ -307,6 +307,8 @@ GSAN_DEVICE void recordCTABarrier(ThreadState *state, bool reads, bool writes) {
     state->writeBarrierEpoch = epoch;
     state->writeBarrierToken = state->clockBufferHead;
   }
+  if (reads && writes)
+    state->hasLocalAccess = 0;
 }
 
 GSAN_DEVICE void initThread(GlobalState *globals, const LaunchState &launch,
@@ -346,15 +348,8 @@ GSAN_DEVICE void initThread(GlobalState *globals, const LaunchState &launch,
   }
 
   if (threadIdx == 0) {
-    // Advance the SM's local epoch; nonlocal components came from the explicit
-    // entry frontier above.
-    // The previous resident CTA on this SM has completed. Warp-specialized
-    // kernels retain the existing CTA-as-one-thread ordering model.
-    if (numThreads == __nvvm_read_ptx_sreg_ntid_x())
-      recordCTABarrier(state, /*reads=*/true, /*writes=*/true);
-    else
-      state->readBarrierEpoch = state->writeBarrierEpoch =
-          state->writeBarrierToken = kMaxEpoch;
+    // The previous resident CTA on this SM has completed.
+    recordCTABarrier(state, /*reads=*/true, /*writes=*/true);
     auto *clock = state->vectorClock;
     assert_msg(loc, clock[tid] != kMaxEpoch, "Vector clock overflowed");
     clock[tid] += 1;
@@ -554,6 +549,21 @@ GSAN_DEVICE void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
   }
   auto *snapshot = getSnapshotForWrite(state, prior, loc);
   mergeVectorClock(state, snapshot);
+  // A release can reach another partition directly or through another CTA.
+  // Order the local accesses it published, leaving later epochs open.
+  auto localEpoch = snapshot[state->threadId];
+  if (state->readBarrierEpoch < localEpoch)
+    state->readBarrierEpoch = localEpoch;
+  epoch_t token = prior.threadId == state->threadId ? prior.epoch : 0;
+  if (state->writeBarrierEpoch < localEpoch) {
+    state->writeBarrierEpoch = localEpoch;
+    // A relayed clock carries our epoch but not our release token. Include
+    // local release tokens already issued when this acquire observes it.
+    if (prior.threadId != state->threadId)
+      token = state->clockBufferHead;
+  }
+  if (state->writeBarrierToken < token)
+    state->writeBarrierToken = token;
 }
 
 GSAN_DEVICE epoch_t publishClusterClock(ThreadState *state, Location loc) {
@@ -561,8 +571,7 @@ GSAN_DEVICE epoch_t publishClusterClock(ThreadState *state, Location loc) {
   // Match a release atomic: publish the pre-barrier clock, then advance the
   // local epoch so later accesses are distinct from the published snapshot.
   epoch_t token = publishCurrentVectorClock(state, loc);
-  if (state->writeBarrierEpoch != kMaxEpoch)
-    recordCTABarrier(state, /*reads=*/true, /*writes=*/true);
+  recordCTABarrier(state, /*reads=*/true, /*writes=*/true);
   incrementThreadEpoch(state, loc);
   rwLockReleaseWrite(state->lock);
   return token;
@@ -803,12 +812,15 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
 }
 
 GSAN_DEVICE ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope) {
+  __scoped_atomic_store_n(&state->hasLocalAccess, 1, __ATOMIC_RELAXED,
+                          __MEMORY_SCOPE_WRKGRP);
   auto tid = state->threadId;
   return ScalarClock{state->vectorClock[tid], tid, scope, false};
 }
 
 GSAN_DEVICE ScalarClock makePublishedClock(ThreadState *state,
                                            AtomicScope scope, epoch_t token) {
+  state->hasLocalAccess = 1;
   return ScalarClock{token, state->threadId, scope, true};
 }
 
@@ -1423,17 +1435,21 @@ extern "C" GSAN_DEVICE void __triton_gsan_grid_dependency_wait(
                             numThreads, barrierId);
 }
 
-extern "C" GSAN_DEVICE void __triton_gsan_cta_barrier(void *globalState,
-                                                      int reads, int writes,
-                                                      const char *file,
-                                                      unsigned line) {
-  if (__nvvm_read_ptx_sreg_tid_x() == 0) {
-    auto *state =
-        gsan::getThreadState(static_cast<gsan::GlobalState *>(globalState));
+extern "C" GSAN_DEVICE void
+__triton_gsan_cta_barrier(void *globalState, int pred, int reads, int writes,
+                          const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto *state =
+      gsan::getThreadState(static_cast<gsan::GlobalState *>(globalState));
+  gsan::rwLockAcquireWrite(state->lock);
+  // Repeated mbarrier phases with no intervening global access must not
+  // consume epochs or invalidate cached release snapshots.
+  if (state->hasLocalAccess) {
     gsan::recordCTABarrier(state, reads, writes);
     gsan::incrementThreadEpoch(state, {file, line});
   }
-  asm volatile("bar.sync 0;" ::: "memory");
+  gsan::rwLockReleaseWrite(state->lock);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_init(void *scratch,

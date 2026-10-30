@@ -89,7 +89,7 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
   } else if (funcName == kGSanCTABarrierRuntimeFn) {
-    argTys = {ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanClusterBarrierInitRuntimeFn) {
     argTys = {ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanClusterBarrierSyncRuntimeFn) {
@@ -1044,20 +1044,9 @@ struct GSanCTABarrierOpConversion
         !op->getParentOfType<ModuleOp>()->hasAttr("tti.gsan_cta_barriers"))
       return failure();
 
-    Location loc = op.getLoc();
-    auto state = getGSanGlobalStateArg(op, rewriter, loc);
-    if (failed(state))
+    if (failed(tt::emitGSanCTABarrier(op, rewriter, op.hasGlobalRead(),
+                                      op.hasGlobalWrite())))
       return failure();
-    auto func =
-        getOrCreateGSanRuntimeFunction(rewriter, kGSanCTABarrierRuntimeFn);
-    auto source = materializeSourceLocation(rewriter, loc);
-    // All pre-barrier accesses finish before thread zero advances the epoch,
-    // and every thread observes the update before its next access.
-    mlir::gpu::BarrierOp::create(rewriter, loc);
-    TritonLLVMOpBuilder b(loc, rewriter);
-    b.call(func, ValueRange{*state, b.i32_val(op.hasGlobalRead()),
-                            b.i32_val(op.hasGlobalWrite()), source.file,
-                            source.line});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1352,6 +1341,29 @@ struct GSanMBarrierWaitOpConversion
 };
 
 } // namespace
+
+LogicalResult mlir::triton::emitGSanCTABarrier(
+    Operation *op, ConversionPatternRewriter &rewriter, bool reads, bool writes,
+    Value pred) {
+  Location loc = op->getLoc();
+  auto state = getGSanGlobalStateArg(op, rewriter, loc);
+  if (failed(state))
+    return failure();
+  auto func =
+      getOrCreateGSanRuntimeFunction(rewriter, kGSanCTABarrierRuntimeFn);
+  auto source = materializeSourceLocation(rewriter, loc);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value issuer = b.icmp_eq(mlir::getThreadId(rewriter, loc), b.i32_val(0));
+  if (pred)
+    issuer = b.and_(issuer, pred);
+  // Finish prior accesses before the update and publish it to the group.
+  // Keeping both barriers in IR lets warp specialization scope them.
+  mlir::gpu::BarrierOp::create(rewriter, loc);
+  b.call(func, ValueRange{*state, b.zext(i32_ty, issuer), b.i32_val(reads),
+                          b.i32_val(writes), source.file, source.line});
+  mlir::gpu::BarrierOp::create(rewriter, loc);
+  return success();
+}
 
 void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
