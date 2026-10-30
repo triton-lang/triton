@@ -41,7 +41,8 @@ def SetFP8Clamping : TritonAMDGPU_Attr<"SetFP8Clamping"> {
 def TritonAMDGPU_CachePolicyGfx9Attr : TritonAMDGPU_Attr<"CachePolicyGfx9"> {
   let mnemonic = "cache_policy_gfx9";
   let description = [{
-    Cache hints for gfx9 (CDNA3/CDNA4) buffer memory accesses.
+    Cache hints for gfx9 (CDNA3/CDNA4) buffer and global-to-LDS memory
+    accesses.
 
     Only the hint bits are held here. The coherence scope bits (SC0/SC1) come
     from the op's `scope` attribute. This attribute is a performance hint and

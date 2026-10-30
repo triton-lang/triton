@@ -193,10 +193,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
                                           num_warps=4)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
-    else:
-        assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -254,10 +251,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
                                                     num_warps=4)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
-    else:
-        assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
+    assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -309,10 +303,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert ("v_pk_mul_f32" if out_dtype == "bf16" else "v_cvt_pk_f16_f32") in pgm.asm["amdgcn"]
-    else:
-        assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch_out)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -4063,7 +4054,7 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
 
     # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
     out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
@@ -4520,7 +4511,7 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
     inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
     # Store gathered data to output using TDM

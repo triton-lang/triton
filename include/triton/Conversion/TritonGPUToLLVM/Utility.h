@@ -52,6 +52,44 @@ namespace mlir::triton {
 
 class ModuleAxisInfoAnalysis;
 
+// Split the mixed attributes accepted by the old aggregate builders.
+template <typename Op> struct BuilderAttributes {
+  typename Op::Properties properties{};
+  SmallVector<NamedAttribute> discardableAttrs;
+};
+
+template <typename Op>
+BuilderAttributes<Op> splitBuilderAttributes(OpBuilder &builder, Location loc,
+                                             ArrayRef<NamedAttribute> attrs) {
+  BuilderAttributes<Op> result;
+  if constexpr (std::is_same_v<typename Op::Properties, EmptyProperties>) {
+    llvm::append_range(result.discardableAttrs, attrs);
+  } else {
+    Op::populateDefaultProperties(
+        OperationName(Op::getOperationName(), builder.getContext()),
+        result.properties);
+    LogicalResult converted = Op::setPropertiesFromAttr(
+        result.properties, builder.getDictionaryAttr(attrs),
+        [&]() { return emitError(loc, "failed to convert properties"); });
+    assert(succeeded(converted) && "failed to convert properties");
+    (void)converted;
+
+    auto properties = dyn_cast_or_null<DictionaryAttr>(
+        Op::getPropertiesAsAttr(builder.getContext(), result.properties));
+    for (NamedAttribute attr : attrs) {
+      StringRef name = attr.getName().getValue();
+      bool isProperty = properties && properties.contains(name);
+      if (name == "operand_segment_sizes")
+        isProperty |= properties && properties.contains("operandSegmentSizes");
+      if (name == "result_segment_sizes")
+        isProperty |= properties && properties.contains("resultSegmentSizes");
+      if (!isProperty)
+        result.discardableAttrs.push_back(attr);
+    }
+  }
+  return result;
+}
+
 // The address of the descriptor's logical origin in its memory space.
 Value getMemDescAddress(RewriterBase &rewriter, Location loc,
                         const LLVMTypeConverter *typeConverter,

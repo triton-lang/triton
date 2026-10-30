@@ -422,7 +422,7 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
                 rewriter, loc, reshapeOp.getSrc(), bitness, scalarToSplatMap);
             Value reshapeNonUniform = tt::ReshapeOp::create(
                 rewriter, loc, reshapeOp.getType(), nonUniform,
-                reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+                reshapeOp.getEfficientLayout());
             return std::make_pair(uniform, reshapeNonUniform);
           })
           .Case<arith::AddIOp>([&](Operation *op) {
@@ -1618,9 +1618,9 @@ public:
         result.getShape(),
         llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
         result.getEncoding());
-    auto newOffset = tt::ReshapeOp::create(
-        rewriter, reshapeOp.getLoc(), newResult, fatPtrOffset,
-        reshapeOp.getAllowReorder(), reshapeOp.getEfficientLayout());
+    auto newOffset =
+        tt::ReshapeOp::create(rewriter, reshapeOp.getLoc(), newResult,
+                              fatPtrOffset, reshapeOp.getEfficientLayout());
     rewriter.replaceOpWithMultiple(reshapeOp, {{fatPtrBase, newOffset}});
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
@@ -1704,10 +1704,12 @@ public:
 
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
+          op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     else
       rewriter.replaceOpWithNewOp<SourceOp>(
-          op, TypeRange{}, ValueRange{operands}, op->getAttrs());
+          op, TypeRange{}, ValueRange{operands}, op.getProperties(),
+          op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };
@@ -1739,8 +1741,9 @@ public:
       operands[i] = newPtr;
     }
 
-    rewriter.replaceOpWithNewOp<SourceOp>(op, op->getResultTypes(),
-                                          ValueRange{operands}, op->getAttrs());
+    rewriter.replaceOpWithNewOp<SourceOp>(
+        op, op->getResultTypes(), ValueRange{operands}, op.getProperties(),
+        op->getDiscardableAttrDictionary().getValue());
     return success();
   }
 };

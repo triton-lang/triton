@@ -1,5 +1,29 @@
 // RUN: triton-opt %s -test-print-alignment -split-input-file -verify-diagnostics=only-expected -o /dev/null
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_alignment(%index: i32) {
+    %zero = arith.constant 0 : i32
+    %stride = arith.constant 256 : i32
+    %owner = ttg.thread_predicate <31, 3>
+    %selected = scf.if %owner -> (i32) {
+      %value = ttg.thread_scope -> (i32) {
+        %offset = arith.muli %index, %stride : i32
+        ttg.thread_yield %offset : i32
+      }
+      scf.yield %value : i32
+    } else {
+      scf.yield %zero : i32
+    }
+    // expected-remark @below {{contiguity = [1], divisibility = [256], constancy = [1]}}
+    %broadcast = ttg.thread_handoff %selected <31, 3> -> <0, 0> : i32
+    // expected-remark @below {{contiguity = [1], divisibility = [256], constancy = [128]}}
+    %values = tt.splat %broadcast : i32 -> tensor<128xi32>
+    tt.return
+  }
+}
+
+// -----
+
 tt.func @cast() {
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1}}
   %cst = arith.constant 1 : i32

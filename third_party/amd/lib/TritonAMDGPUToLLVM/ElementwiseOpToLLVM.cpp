@@ -61,7 +61,7 @@ struct PackedArithOpConversion
       packedOperands.push_back(
           packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
     Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
-                              packedOperands);
+                              packedOperands, typename LLVMOp::Properties{});
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -278,7 +278,8 @@ struct Exp2OpConversion
     if (ftz)
       return {ROCDL::ROCDLExp2::create(rewriter, loc, elemTy, operands[0])};
 
-    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0])};
+    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0],
+                                 LLVM::Exp2Op::Properties{})};
   }
 
 private:

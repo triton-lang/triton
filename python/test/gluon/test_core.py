@@ -529,6 +529,39 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
 
 
 @gluon.jit
+def local_store_sharded_to_replicated_kernel(out, src_cga: ttgl.constexpr, shared_cga: ttgl.constexpr,
+                                             num_replicas: ttgl.constexpr):
+    size: ttgl.constexpr = 32 * ttgl.num_ctas()
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=src_cga)
+    seed_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=shared_cga)
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=shared_cga)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [size], shared_layout, value=ttgl.full((size, ), -1, ttgl.int32,
+                                                                                          layout=seed_layout))
+    ttgl.barrier(cluster=True)
+    offsets = ttgl.arange(0, size, layout=src_layout)
+    smem.store(offsets)
+    ttgl.barrier(cluster=True)
+    # Each CTA reads every 32-element shard from its local replica.
+    for shard in ttgl.static_range(num_replicas):
+        ttgl.store(out + shard * size + offsets, smem.gather(offsets ^ (32 * shard), axis=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("shared_cga", [((0, ), ), ((0, ), (0, )), ((0, ), (1, ))])
+def test_local_store_sharded_to_replicated(shared_cga):
+    src_cga = tuple((1 << bit, ) for bit in range(len(shared_cga)))
+    num_ctas = 1 << len(shared_cga)
+    num_replicas = 1 << shared_cga.count((0, ))
+    skip_if_unsupported_cluster_size(num_ctas)
+    expected = torch.arange(32 * num_ctas, dtype=torch.int32, device="cuda")
+    out = expected.new_empty((num_replicas, expected.numel()))
+    local_store_sharded_to_replicated_kernel[(1, )](out, src_cga, shared_cga, num_replicas, num_warps=1,
+                                                    num_ctas=num_ctas)
+    for shard, values in enumerate(out):
+        torch.testing.assert_close(values, expected ^ (32 * shard))
+
+
+@gluon.jit
 def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
@@ -4467,7 +4500,7 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     def kernel(src, dst, scope: ttgl.constexpr, nontemporal: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
-        policy: ttgl.constexpr = ttgl.amd.cdna3.buffer.CachePolicy(nontemporal=nontemporal)
+        policy: ttgl.constexpr = ttgl.amd.cdna3.CachePolicy(nontemporal=nontemporal)
         src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 64 * 4)
         dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, 64 * 4)
         x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
@@ -4487,6 +4520,33 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     expected = set(scope_bits.split()) | ({"nt"} if nontemporal else set())
     assert bits("buffer_load_dword") == expected
     assert bits("buffer_store_dword") == expected
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("nontemporal", [False, True])
+def test_cache_policy_global_load_to_shared(nontemporal):
+
+    @gluon.jit
+    def kernel(src, dst, nontemporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        policy: ttgl.constexpr = ttgl.amd.cdna4.CachePolicy(nontemporal=nontemporal)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [64], shared)
+        cdna4_async_copy.global_load_to_shared(smem, src + offsets, cache_policy=policy)
+        cdna4_async_copy.commit_group()
+        cdna4_async_copy.wait_group(0)
+        ttgl.barrier()
+        ttgl.store(dst + offsets, smem.load(layout))
+
+    src = torch.arange(64, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, nontemporal, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+    lines = re.findall(r"^\s*global_load_lds_dword .*$", compiled.asm["amdgcn"], re.MULTILINE)
+    assert lines
+    assert all(("nt" in line.split()) == nontemporal for line in lines), lines
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
@@ -8049,7 +8109,8 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     torch.testing.assert_close(out, torch.full_like(out, 31))
     assert values[0].item() == (10 if atomic else 7)
     assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
-    if tile == 128:
+    if tile == 128 and atomic:
         assert compiled.metadata.shared > 0
     if not atomic:
+        assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
