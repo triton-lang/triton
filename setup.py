@@ -367,6 +367,7 @@ class CMakeBuild(build_ext):
             "TRITON_ROCPROFILER_SDK_LIB_PATH",
             "TRITON_NVDISASM_PATH",
             "TRITON_AMD_CODEGEN_PATH",
+            "TRITON_AMD_CODEGEN_LLVM_PATH",
             "TRITON_PTXAS_PATH",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
