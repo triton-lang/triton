@@ -123,7 +123,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("descending", [False, True])
-def test_sort_member_and_negative_dim(descending, device):
+def test_sort_negative_dim(descending, device):
 
     @triton.jit
     def kernel(X, B, Z_SORT, Z_TOPK, Z_MERGE, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
@@ -131,7 +131,7 @@ def test_sort_member_and_negative_dim(descending, device):
         offs_m = tl.arange(0, M)[:, None]
         offs_n = offs_m * N + tl.arange(0, N)[None, :]
         x = tl.load(X + offs_n)
-        tl.store(Z_SORT + offs_n, x.sort(dim=-1, descending=descending))
+        tl.store(Z_SORT + offs_n, tl.sort(x, dim=-1, descending=descending))
         tl.store(Z_TOPK + offs_m * K + tl.arange(0, K)[None, :], tl.topk(x, K, dim=-1, descending=descending))
         tl.store(Z_MERGE + offs_n, tl.bitonic_merge(tl.load(B + offs_n), dim=-1, descending=descending))
 

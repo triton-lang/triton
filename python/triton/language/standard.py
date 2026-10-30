@@ -23,6 +23,7 @@ def _is_power_of_two(i):
 
 
 _get_int_dtype = constexpr_function(core.get_int_dtype)
+_wrap_axis = constexpr_function(core._wrap_axis)
 
 # -----------------------
 # Standard library
@@ -477,16 +478,6 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
     return x
 
 
-@constexpr_function
-def _normalize_dim(dim, shape):
-    # None means the last dimension, and a negative dim counts from the end.
-    if dim is None:
-        dim = len(shape) - 1
-    if dim < 0:
-        dim += len(shape)
-    return dim
-
-
 @jit
 def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
@@ -502,7 +493,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     :type descending: bool, optional
     """
     # handle default dimension or check that it is the most minor dim
-    _dim: core.constexpr = _normalize_dim(dim, x.shape)
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
 
     if k is not None:
@@ -538,7 +529,6 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     return x
 
 
-@core._tensor_member_fn
 @jit
 def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     return sort_impl(x, dim=dim, descending=descending)
@@ -575,10 +565,19 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
 @jit
 def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     # handle default dimension or check that it is the most minor dim
-    _dim: core.constexpr = _normalize_dim(dim, x.shape)
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
     n_dims: core.constexpr = _log2(x.shape[-1])
     return _bitonic_merge(x, n_dims, descending, n_dims)
+
+
+@constexpr_function
+def _get_flip_dim(dim, shape):
+    if dim is None:
+        dim = len(shape) - 1
+    if dim < 0:  # flip doesn't work if dim < 0 because the xor-swap for loop will start/end at the wrong index
+        dim += len(shape)
+    return dim
 
 
 @core._tensor_member_fn
@@ -592,7 +591,7 @@ def flip(x, dim=None):
     :param dim: the dimension to flip along
     :type dim: int
     """
-    _dim: core.constexpr = _normalize_dim(dim, x.shape)
+    _dim: core.constexpr = _get_flip_dim(dim, x.shape)
     core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
