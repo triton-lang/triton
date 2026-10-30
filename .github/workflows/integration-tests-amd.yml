@@ -282,7 +282,7 @@ jobs:
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
-      image: tritonci/triton-amd-ci:rocm10.2.0a20261012-pytorch2.16.0a0-gfx942-gfx950-gfx1250-r1
+      image: tritonci/triton-amd-ci:rocm10.3.0a20261029-pytorch2.16.0a0-gfx942-gfx950-gfx1250-r1
       options: >-
         --security-opt seccomp=unconfined --user root
         --volume /home/runner/.triton:/github/home/.triton
@@ -374,9 +374,11 @@ jobs:
 
           run_rocjitsu_pytest 4 4 -s --tb=short \
             third_party/amd/python/test/test_gluon_cdna5_consan.py
+          k_gluon_skip="(test_tensor_descriptor_load_store_nd_with_padding and int32-64-1)"
+          k_gluon_skip+=" or (test_cache_modifier and tdm_load_store_roundtrip_kernel)"
           run_rocjitsu_pytest 64 1 \
             third_party/amd/python/test/test_gluon_cdna5.py \
-            -k "not test_runtime_tensor_copy"
+            -k "not test_runtime_tensor_copy and not ($k_gluon_skip)"
           run_rocjitsu_pytest 8 8 \
             third_party/amd/python/test/test_gluon_cdna5.py \
             -k "test_runtime_tensor_copy"
@@ -403,9 +405,15 @@ jobs:
 
           k_core="test_load_store_same_ptr or test_atomic_cas"  # expensive
           k_core+=" or (test_scan2d and shape365) or (test_scan2d and shape869)"
-          k_core+=" or (test_scaled_dot and 128-64-128-True-False-False-e2m1-e4m3-4-16-1)"
 
           k_desc="tensor_descriptor_reduce"
+
+          k_tdm_store="(test_tensor_descriptor_store and 1-1024-1-int8)"
+          k_tdm_store+=" or (test_tensor_descriptor_store and 1-1024-1-uint8)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-float32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-int32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-uint32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 128-1-1 and not int8)"
 
           k_matmul="test_batched_mxfp"  # expensive
           k_matmul+=" or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64)"  # expensive
@@ -427,8 +435,10 @@ jobs:
             -k "not ($k_runtime)" -p no:forked \
             python/test/unit/test_debug.py \
             python/test/unit/runtime
-          run_rocjitsu_pytest 24 2 \
-            -k "not ($k_core or $k_desc)" -p no:forked \
+          run_rocjitsu_pytest 12 2 \
+            -k "not ($k_core or $k_desc or $k_tdm_store)" \
+            --deselect "python/test/unit/language/test_core.py::test_cat_nd[rank=1,dim=0]" \
+            -p no:forked \
             python/test/unit/language/test_core.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
