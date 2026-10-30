@@ -416,4 +416,5 @@ class CudaDriver(GPUDriver):
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
 
     def clear_cache(self, cache):
-        cache.zero_()
+        from triton.testing import _flush_l2
+        _flush_l2(cache)
