@@ -335,7 +335,7 @@ tt.func @mma_scaled_lhs_tmem(
 
 // -----
 
-#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
+#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 #tmem = #ttng.tensor_memory
 

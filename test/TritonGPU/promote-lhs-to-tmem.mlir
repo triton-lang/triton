@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-promote-lhs-to-tmem | FileCheck --dump-input-context=50 %s
+// RUN: triton-opt %s -split-input-file -tritongpu-promote-lhs-to-tmem | FileCheck --dump-input-context=50 %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -149,6 +149,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %A_sh = ttg.local_alloc %A_f16 : (tensor<128x128xf16, #blocked2>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
     %acc_tm = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @promote_lhs_cta_redistribution
+  // CHECK: ttng.tc_gen5_mma
+  tt.func public @promote_lhs_cta_redistribution(%a: tensor<128x64xf16, #src>, %b: !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>, %d: !ttg.memdesc<128x128xf32, #acc, #ttng.tensor_memory, mutable>) {
+    %true = arith.constant true
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #src>) -> !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>
+    ttng.tc_gen5_mma %a_shared, %b, %d, %true, %true : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #acc, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

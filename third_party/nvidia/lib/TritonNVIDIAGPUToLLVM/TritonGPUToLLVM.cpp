@@ -8,9 +8,11 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -20,6 +22,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Value.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
@@ -64,8 +68,39 @@ public:
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
                triton::gpu::WarpReturnOp>();
+    // Preserve scope ancestry until memory lowering has finished.
+    addLegalOp<triton::gpu::ThreadScopeOp, triton::gpu::ThreadYieldOp>();
   }
 };
+
+// Memory lowering no longer needs scope ownership. Inline the CFG directly,
+// forwarding yields through continuation block arguments.
+void inlineThreadScopes(ModuleOp mod) {
+  llvm::SmallVector<triton::gpu::ThreadScopeOp> scopes;
+  mod.walk<WalkOrder::PostOrder>(
+      [&](triton::gpu::ThreadScopeOp scope) { scopes.push_back(scope); });
+
+  // Splitting blocks invalidates the walk's sibling iterators.
+  IRRewriter rewriter(mod.getContext());
+  for (auto scope : scopes) {
+    Block *before = scope->getBlock();
+    Block *after = rewriter.splitBlock(before, Block::iterator(scope));
+    for (Type type : scope.getResultTypes())
+      after->addArgument(type, scope.getLoc());
+
+    for (Block &block : scope.getBody()) {
+      if (auto yield =
+              dyn_cast<triton::gpu::ThreadYieldOp>(block.getTerminator())) {
+        rewriter.setInsertionPoint(yield);
+        rewriter.replaceOpWithNewOp<cf::BranchOp>(yield, after,
+                                                  yield.getValues());
+      }
+    }
+    rewriter.mergeBlocks(&scope.getBody().front(), before);
+    rewriter.inlineRegionBefore(scope.getBody(), after);
+    rewriter.replaceOp(scope, after->getArguments());
+  }
+}
 
 void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
   OpBuilder builder(mod.getBodyRegion());
@@ -77,6 +112,28 @@ void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
       builder, mod.getLoc(), arrayTy, /*isConstant=*/false,
       LLVM::Linkage::External, "global_smem", /*value=*/Attribute(),
       /*alignment=*/16, static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
+}
+
+void propagatePointerAlignment(ModuleOp mod) {
+  Builder builder(mod.getContext());
+  mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+    for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+      // Only original Triton pointers carry this attribute, not descriptors.
+      if (!funcOp.getArgAttr(i, "tt.pointee_type"))
+        continue;
+      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(i, "tt.divisibility");
+      if (!attr)
+        continue;
+      auto alignment = attr.getValue().getZExtValue();
+      // AxisInfo gives poison pointer arguments a maximal divisor.
+      if (alignment == 1 || alignment > llvm::Value::MaximumAlignment)
+        continue;
+      auto alignName = LLVM::LLVMDialect::getAlignAttrName();
+      auto existing = funcOp.getArgAttrOfType<IntegerAttr>(i, alignName);
+      if (!existing || existing.getValue().ult(alignment))
+        funcOp.setArgAttr(i, alignName, builder.getI64IntegerAttr(alignment));
+    }
+  });
 }
 
 struct ConvertTritonGPUToLLVM
@@ -131,6 +188,14 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
+
+  // Fold temporary aggregate packing before the pass-boundary verifier walks
+  // these large struct types. The normal verifier still checks the cleaned IR.
+  RewritePatternSet patterns(mod.getContext());
+  LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
+  (void)applyPatternsGreedily(
+      mod, std::move(patterns),
+      GreedyRewriteConfig().setUseTopDownTraversal(true));
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
@@ -213,6 +278,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
 LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
     ModuleOp mod, LLVMTypeConverter &typeConverter, TargetInfo &targetInfo) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+  // Infer all call sites before turning divisibility into an LLVM contract.
+  propagatePointerAlignment(mod);
   RewritePatternSet patterns(mod.getContext());
   populateConversionPatterns(typeConverter, patterns, axisInfoAnalysis,
                              targetInfo);
@@ -223,6 +290,7 @@ LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
 LogicalResult
 ConvertTritonGPUToLLVM::lowerControlFlow(ModuleOp mod,
                                          LLVMTypeConverter &typeConverter) {
+  inlineThreadScopes(mod);
   MLIRContext *context = mod.getContext();
   NvidiaLLVMConversionTarget target(*context);
   target.addIllegalDialect<cf::ControlFlowDialect>();

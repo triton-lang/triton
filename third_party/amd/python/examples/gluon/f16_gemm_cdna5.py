@@ -36,6 +36,11 @@ except ImportError:
     )
 
 
+def skip_if_gfx1250_strict_wmma():
+    if triton.runtime.driver.active.get_current_target().arch == "gfx1250-strict":
+        pytest.skip("gfx1250-strict currently only supports v_wmma_f32_16x16x4_f32")
+
+
 @gluon.jit
 def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
                                          M, N, K,  #
@@ -552,6 +557,7 @@ def _build_multi_cta_gemm_cases():
 @pytest.mark.parametrize("num_warps", [4, 8])
 def test_runtime_gemm_tdm_pipelined_single_cta(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT,
                                                PREFETCH, L2_PREFETCH_DISTANCE, M, N, K, num_warps):
+    skip_if_gfx1250_strict_wmma()
     _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
                                     L2_PREFETCH_DISTANCE, M, N, K, num_warps, [1, 1])
 
@@ -565,6 +571,7 @@ def test_runtime_gemm_tdm_pipelined_single_cta(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BU
 @pytest.mark.parametrize("M,N,K,BLOCK_M,BLOCK_N,BLOCK_K,ctas_per_cga", _build_multi_cta_gemm_cases())
 def test_runtime_gemm_tdm_pipelined_multi_cta(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, NUM_BUFFERS,
                                               TRANSPOSE_B, PERSISTENT, PREFETCH, L2_PREFETCH_DISTANCE, num_warps):
+    skip_if_gfx1250_strict_wmma()
     # In the context of multi-cta, the "block" in _run_runtime_gemm_tdm_pipelined()
     # refers to the chunk of data collectively processed by all CTAs in the cluster.
     # However, the "block" of the testing parameters refers to the chunk of data
@@ -586,6 +593,7 @@ def test_runtime_gemm_tdm_pipelined_multi_cta(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
 @pytest.mark.parametrize("num_warps", [4, 8])
 def test_runtime_swiglu_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
                                            L2_PREFETCH_DISTANCE, M, N, K, num_warps):
+    skip_if_gfx1250_strict_wmma()
     _run_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,
                                     L2_PREFETCH_DISTANCE, M, N, K, num_warps, [1, 1], ACTIVATION="swiglu")
 
@@ -598,6 +606,7 @@ def test_runtime_swiglu_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1]])
 def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK_N, NUM_BUFFERS, TRANSPOSE_B,
                                                                   L2_PREFETCH_DISTANCE, M, N, K, ctas_per_cga):
+    skip_if_gfx1250_strict_wmma()
     num_warps = 4
     BLOCK_K = 128  # 4 subtiles * 32 (wmma kdim)
 
@@ -942,6 +951,7 @@ def gemm_tdm_warp_specialized_kernel(a_ptr, b_ptr, c_ptr,  #
 def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, M, N, K,
                                            NUM_TOTAL_WARPS):
     """Test warp specialized GEMM kernel."""
+    skip_if_gfx1250_strict_wmma()
     if PERSISTENT and NUM_TOTAL_WARPS != 12:
         pytest.skip("Persistent WS kernel uses 12 total warps")
     if not PERSISTENT and NUM_TOTAL_WARPS == 12:
@@ -1024,6 +1034,7 @@ def test_runtime_gemm_tdm_warp_specialized(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFER
 def test_runtime_gemm_tdm_warp_specialized_subtiled(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, M,
                                                     N, K, NUM_TOTAL_WARPS):
     """Test warp specialized GEMM kernel (subtiled variant for large blocks)."""
+    skip_if_gfx1250_strict_wmma()
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 

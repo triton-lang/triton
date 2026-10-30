@@ -30,6 +30,28 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //
+// Value annotations
+//
+def TT_AnnotateOp : TT_Op<"annotate", [Pure, Elementwise,
+                                      SameOperandsAndResultType]> {
+    let summary = "Attach compiler hints to a single value";
+    let description = [{
+        Returns its operand unchanged. Attributes on this operation describe
+        only its result, allowing compiler hints to be attached independently
+        to each result of a multi-result operation, such as a function call.
+        When the operand has a single-result defining operation, the hints can
+        be folded into that operation. Otherwise, the annotation is preserved
+        until lowering to LLVM.
+    }];
+
+    let arguments = (ins TT_Type:$src);
+    let results = (outs TT_Type:$result);
+    let assemblyFormat = "$src attr-dict `:` type($result)";
+    let hasFolder = 1;
+    let hasCanonicalizer = 1;
+}
+
+//
 // Cast Ops
 //
 // Use cast ops in arith:
@@ -554,25 +576,22 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 }
 
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
-                                     SameOperandsAndResultElementType]> {
-    let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
+                                     SameOperandsAndResultElementType,
+                                     EfficientLayoutOpInterface]> {
+    let summary = "reinterpret a tensor to a different shape.";
     let description = [{
         reinterpret a tensor to a different shape.
-
-        If allow_reorder is set the compiler is free to change the order of
-        elements to generate more efficient code.
 
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
     let builders = [
-      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src,
-                     CArg<"bool", "false">:$allowReorder)>
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "Value":$src)>
     ];
 
-    let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
+    let arguments = (ins TT_Tensor:$src, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
-    let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
+    let assemblyFormat = "$src (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
@@ -796,10 +815,9 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are floats if we have a type for them, otherwise (fp4),
-      // they are packed in pairs in an I8Tensor
-      RankedTensorOf<[TT_Float,I8]>:$a,
-      RankedTensorOf<[TT_Float,I8]>:$b,
+      // FP4 inputs are packed pairs, with I8Tensor retained for compatibility.
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
@@ -854,6 +872,11 @@ def TT_ReduceOp: TT_Op<"reduce",
       // Returns the CombineOp iff this ReduceOp's region contains only
       // one CombineOp other than the return, or nullptr if not applicable.
       ::mlir::Operation *getSingleCombiner();
+
+      // Proves that exchanging the two input tuples preserves every result,
+      // comparing pure expression DAGs modulo commutative operand order.
+      // Returns false when the proof fails or the region is unsupported.
+      bool isCommutative();
     }];
 }
 
@@ -1024,7 +1047,8 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure,
 // Gather Op
 //
 def TT_GatherOp : TT_Op<"gather", [Pure,
-    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    DeclareOpInterfaceMethods<InferTypeOpInterface>,
+    EfficientLayoutOpInterface]> {
   let summary = "local gather operation";
   let description = [{
     Gather elements from the input tensor using the indices tensor along a
@@ -1207,8 +1231,8 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
 
 def FuncOp : TT_Op<"func", [
     AffineScope, AutomaticAllocationScope, CallableOpInterface,
-    FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface,
-    HasParent<"ModuleOp">
+    SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove,
+    OpAsmOpInterface, HasParent<"ModuleOp">
 ]> {
   let summary = "An operation with a name containing a single `SSACFG` region";
   let description = [{

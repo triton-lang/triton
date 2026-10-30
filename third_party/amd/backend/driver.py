@@ -7,7 +7,14 @@ from pathlib import Path
 from triton import knobs
 from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    decompose_descriptor,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 from triton.runtime import _allocation
 from triton.runtime.build import compile_module_from_src
 
@@ -52,20 +59,31 @@ def _get_path_to_hip_runtime_dylib():
                                f"'{mmapped_path}' is already loaded; refusing to mix ROCm installations")
         return therock_libhip_path
 
-    # If the shared object is already mmapped to address space, use it.
+    # If the shared object is already mmapped to address space, use it. This
+    # also matches explicitly versioned names.
     mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
     if mmapped_path:
         if os.path.exists(mmapped_path):
             return mmapped_path
         raise RuntimeError(f"memory mapped '{mmapped_path}' in process does not point to a valid {lib_name}")
 
+    # In each location, prefer explicitly versioned names to pin the major
+    # version.
+    lib_names = [f"{lib_name}.7", f"{lib_name}.6", lib_name]
+
     paths = []
 
+    def find_in_dir(d):
+        for name in lib_names:
+            f = os.path.join(d, name)
+            if os.path.exists(f):
+                return f
+            paths.append(f)
+        return None
+
     # Check backend
-    local_lib = os.path.join(os.path.dirname(__file__), "lib", lib_name)
-    if os.path.exists(local_lib):
-        return local_lib
-    paths.append(local_lib)
+    if f := find_in_dir(os.path.join(os.path.dirname(__file__), "lib")):
+        return f
 
     import site
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
@@ -76,36 +94,28 @@ def _get_path_to_hip_runtime_dylib():
     if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
         site_packages = [user_site] + site_packages
     for path in site_packages:
-        path = os.path.join(path, "torch", "lib", lib_name)
-        if os.path.exists(path):
-            return path
-        paths.append(path)
+        if f := find_in_dir(os.path.join(path, "torch", "lib")):
+            return f
 
     # Then try to see if developer provides a HIP runtime dynamic library using LD_LIBARAY_PATH.
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
     if env_ld_library_path:
         for d in env_ld_library_path.split(":"):
-            f = os.path.join(d, lib_name)
-            if os.path.exists(f):
+            if f := find_in_dir(d):
                 return f
-            paths.append(f)
 
     # HIP_PATH should point to HIP SDK root if set
     env_hip_path = os.getenv("HIP_PATH")
     if env_hip_path:
-        hip_lib_path = os.path.join(env_hip_path, "lib", lib_name)
-        if os.path.exists(hip_lib_path):
-            return hip_lib_path
-        paths.append(hip_lib_path)
+        if f := find_in_dir(os.path.join(env_hip_path, "lib")):
+            return f
 
     # if available, `hipconfig --path` prints the HIP SDK root
     try:
         hip_root = subprocess.check_output(["hipconfig", "--path"]).decode().strip()
         if hip_root:
-            hip_lib_path = os.path.join(hip_root, "lib", lib_name)
-            if os.path.exists(hip_lib_path):
-                return hip_lib_path
-            paths.append(hip_lib_path)
+            if f := find_in_dir(os.path.join(hip_root, "lib")):
+                return f
     except (subprocess.CalledProcessError, FileNotFoundError):
         # hipconfig may not be available
         pass
@@ -113,27 +123,24 @@ def _get_path_to_hip_runtime_dylib():
     # ROCm lib dir based on env var
     env_rocm_path = os.getenv("ROCM_PATH")
     if env_rocm_path:
-        rocm_lib_path = os.path.join(env_rocm_path, "lib", lib_name)
-        if os.path.exists(rocm_lib_path):
-            return rocm_lib_path
-        paths.append(rocm_lib_path)
+        if f := find_in_dir(os.path.join(env_rocm_path, "lib")):
+            return f
 
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
-    for loc in locs:
-        if os.path.exists(loc):
-            return loc
-        paths.append(loc)
+    for name in lib_names:
+        locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith("/" + name)]
+        for loc in locs:
+            if os.path.exists(loc):
+                return loc
+            paths.append(loc)
 
     # As a last resort, guess if we have it in some common installation path.
-    common_install_path = os.path.join('/opt/rocm/lib/', lib_name)
-    if os.path.exists(common_install_path):
-        return common_install_path
-    paths.append(common_install_path)
+    if f := find_in_dir("/opt/rocm/lib/"):
+        return f
 
     raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
@@ -188,34 +195,13 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
 def annotate_arguments(signature):
@@ -290,16 +276,15 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
+        signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
+        tensordesc_abi = TensorDescABI.HIP_TDM if tensordesc_meta else TensorDescABI.DECOMPOSED
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.kernel_signature = utils.build_signature_metadata(
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.warp_size = metadata.warp_size
         # Check if cooperative groups are supported on the device.

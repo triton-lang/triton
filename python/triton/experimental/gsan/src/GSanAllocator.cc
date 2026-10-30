@@ -12,9 +12,13 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <random>
 
+#include "AllocatorPython.h"
 #include "GSan.h"
+
+using namespace triton::cuda_allocator;
 
 // #define GSAN_LOG_ALLOCATIONS
 #ifdef GSAN_LOG_ALLOCATIONS
@@ -32,61 +36,6 @@ void gsanFree(void *ptr, ssize_t size, int device, void *stream);
 namespace {
 constexpr size_t kThreadStateHeaderSize =
     offsetof(gsan::ThreadState, vectorClock);
-
-union GSanShareableHandle {
-  int fd;
-  CUmemFabricHandle fabricHandle;
-};
-
-bool isSupportedShareableHandleType(CUmemAllocationHandleType handleType) {
-  return handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR ||
-         handleType == CU_MEM_HANDLE_TYPE_FABRIC;
-}
-
-void *getShareableHandleImportArg(const GSanShareableHandle *handle,
-                                  CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
-    return reinterpret_cast<void *>(static_cast<uintptr_t>(handle->fd));
-  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
-    return const_cast<CUmemFabricHandle *>(&handle->fabricHandle);
-  return nullptr;
-}
-
-void *getShareableHandleExportArg(GSanShareableHandle *handle,
-                                  CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
-    return &handle->fd;
-  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
-    return &handle->fabricHandle;
-  return nullptr;
-}
-
-// We use a tree structure to manage virtual address allocations.
-//
-// This is a binary tree where each node represents a power of two-sized region
-// of memory. Each node tracks the largest free node in its subtree. This
-// allows us to allocate best-fit regions in O(log(AddressSpaceSize)), and same
-// for deallocation.
-//
-// Note that we don't really care about being compact/defragmented in any way,
-// since we can reserve millions of times more virtual memory than there is
-// physical memory.
-// We also are based under the PyTorch CUDACachingAllocator which manages most
-// of the hard parts for us and only asks us to allocate large blocks that it
-// will divide up as needed.
-struct AllocNode {
-  CUdeviceptr virtualAddress = 0;
-  AllocNode *parent = nullptr;
-  std::unique_ptr<AllocNode> leftChild;
-  std::unique_ptr<AllocNode> rightChild;
-  size_t size = 0;
-  size_t maxFreeBlockSize = 0;
-
-  // Allocation handles, used only by leaf nodes
-  CUmemGenericAllocationHandle realHandle = 0;
-  CUmemGenericAllocationHandle shadowHandle = 0;
-  size_t allocSize = 0;
-};
 
 struct GSanConfig {
   int numGPUs = 1;
@@ -108,19 +57,13 @@ struct GSanConfig {
 struct AllocatorState {
   // User memory + shadow memory
   CUdeviceptr reserveBaseAddress = 0;
-  AllocNode treeRoots[2];
+  AllocNode treeRoots[gsan::kNumPools];
 
   // GSan global state
   CUdeviceptr globalStateAddress = 0;
   CUmemGenericAllocationHandle perDeviceHandles[gsan::kMaxGPUs] = {0};
   size_t perDeviceStateSize = 0;
 };
-
-void printCUDAError(CUresult err) {
-  const char *errs = "<unknown error>";
-  cuGetErrorString(err, &errs);
-  fprintf(stderr, "gsan allocator encountered an unexpected error: %s\n", errs);
-}
 
 static AllocatorState *alloc = nullptr;
 static GSanConfig config;
@@ -139,12 +82,7 @@ CUmemAllocationHandleType getRequestedShareableHandleType() {
   if (config.shareableHandleTypeConfigured)
     return config.shareableHandleType;
 
-  const auto *allocConf = getenv("PYTORCH_CUDA_ALLOC_CONF");
-  if (allocConf != nullptr &&
-      strstr(allocConf, "fabric_handles:True") != nullptr) {
-    return CU_MEM_HANDLE_TYPE_FABRIC;
-  }
-  return CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  return defaultShareableHandleType();
 }
 
 int getDeviceRankForCudaDevice(int device) {
@@ -181,151 +119,16 @@ CUresult ensureTopologyConfigured() {
   return CUDA_SUCCESS;
 }
 
-size_t cdiv(size_t num, size_t den) { return (num + (den - 1)) / den; }
-
-size_t roundUp(size_t val, size_t alignment) {
-  return cdiv(val, alignment) * alignment;
+size_t getShadowSize(size_t realMemSize, uintptr_t realAddress) {
+  auto wordSize = cdiv(realMemSize, gsan::getShadowGranularity(realAddress));
+  return wordSize * gsan::getShadowCellSize(realAddress);
 }
 
-size_t getShadowSize(size_t realMemSize, uintptr_t address) {
-  bool writeOnce = gsan::isWriteOnceAddress(address);
-  return cdiv(realMemSize, gsan::getShadowGranularity(writeOnce)) *
-         gsan::getShadowCellSize(writeOnce);
-}
-
-bool isLeaf(const AllocNode *node) {
-  return node->leftChild == nullptr && node->rightChild == nullptr;
-}
-
-void recomputeNodeState(AllocNode *node) {
-  assert((node->leftChild == nullptr) == (node->rightChild == nullptr) &&
-         "allocator tree node should have both children or none");
-
-  if (isLeaf(node)) {
-    assert(
-        (node->maxFreeBlockSize == 0 || node->maxFreeBlockSize == node->size) &&
-        "leaf nodes should be either fully free or fully allocated");
-    return;
-  }
-
-  node->maxFreeBlockSize = std::max(node->leftChild->maxFreeBlockSize,
-                                    node->rightChild->maxFreeBlockSize);
-}
-
-void recomputeToRoot(AllocNode *node) {
-  for (AllocNode *curr = node; curr != nullptr; curr = curr->parent)
-    recomputeNodeState(curr);
-}
-
-void splitNode(AllocNode *node) {
-  assert(isLeaf(node));
-  assert(node->maxFreeBlockSize == node->size);
-  const size_t halfSize = node->size / 2;
-  auto left = std::make_unique<AllocNode>();
-  auto right = std::make_unique<AllocNode>();
-
-  left->virtualAddress = node->virtualAddress;
-  left->size = halfSize;
-  left->maxFreeBlockSize = halfSize;
-  left->parent = node;
-
-  right->virtualAddress = node->virtualAddress + halfSize;
-  right->size = halfSize;
-  right->maxFreeBlockSize = halfSize;
-  right->parent = node;
-
-  node->leftChild = std::move(left);
-  node->rightChild = std::move(right);
-  node->maxFreeBlockSize = halfSize;
-}
-
-AllocNode *allocateNode(AllocNode *root, size_t allocSize) {
-  AllocNode *node = root;
-  if (node == nullptr || node->maxFreeBlockSize < allocSize)
+AllocNode *findAllocation(CUdeviceptr address) {
+  if (!gsan::isGsanManaged(address, alloc->reserveBaseAddress))
     return nullptr;
-
-  if (isLeaf(node)) {
-    assert(node->maxFreeBlockSize == node->size);
-
-    while (node->size > 1 && (node->size / 2) >= allocSize) {
-      splitNode(node);
-      node = node->leftChild.get();
-    }
-    node->maxFreeBlockSize = 0;
-    recomputeToRoot(node->parent);
-    return node;
-  }
-
-  auto *left = node->leftChild.get();
-  auto *right = node->rightChild.get();
-  const bool leftFits = left->maxFreeBlockSize >= allocSize;
-  const bool rightFits = right->maxFreeBlockSize >= allocSize;
-
-  AllocNode *next = nullptr;
-  // Prefer the tighter-fitting subtree to keep larger blocks available.
-  if (leftFits && rightFits) {
-    next = (left->maxFreeBlockSize <= right->maxFreeBlockSize) ? left : right;
-  } else if (leftFits) {
-    next = left;
-  } else {
-    next = right;
-  }
-  return allocateNode(next, allocSize);
-}
-
-AllocNode *findNodeByAddress(AllocNode *root, CUdeviceptr address) {
-  AllocNode *node = root;
-  while (node != nullptr) {
-    if (address < node->virtualAddress ||
-        address >= node->virtualAddress + node->size)
-      return nullptr;
-
-    if (!node->leftChild && !node->rightChild)
-      return node;
-
-    if (node->rightChild && address >= node->rightChild->virtualAddress) {
-      node = node->rightChild.get();
-    } else {
-      node = node->leftChild.get();
-    }
-  }
-  return nullptr;
-}
-
-bool canCoalesce(const AllocNode *node) {
-  if (node == nullptr)
-    return false;
-  assert((node->leftChild == nullptr) == (node->rightChild == nullptr) &&
-         "allocator tree node should have both children or none");
-  if (!node->leftChild)
-    return false;
-
-  const auto *left = node->leftChild.get();
-  const auto *right = node->rightChild.get();
-  const bool leftFree = left->maxFreeBlockSize == left->size;
-  const bool rightFree = right->maxFreeBlockSize == right->size;
-  return leftFree && rightFree;
-}
-
-void coalesceUp(AllocNode *node) {
-  if (node == nullptr)
-    return;
-  while (node != nullptr && canCoalesce(node)) {
-    node->leftChild.reset();
-    node->rightChild.reset();
-    node->maxFreeBlockSize = node->size;
-    node = node->parent;
-  }
-  recomputeToRoot(node);
-}
-
-void freeNode(AllocNode *leaf) {
-  assert(isLeaf(leaf));
-  leaf->allocSize = 0;
-  leaf->realHandle = 0;
-  leaf->shadowHandle = 0;
-  leaf->maxFreeBlockSize = leaf->size;
-  coalesceUp(leaf->parent);
+  return findNodeByAddress(&alloc->treeRoots[gsan::getPoolIndex(address)],
+                           address);
 }
 
 int gsanEnsureInit() {
@@ -353,27 +156,22 @@ int gsanEnsureInit() {
   alloc->reserveBaseAddress = reserveBase;
   alloc->globalStateAddress = globalsBase;
 
-  for (bool writeOnce : {false, true}) {
-    auto &root = alloc->treeRoots[writeOnce];
-    root.virtualAddress = gsan::getRealBaseAddress(reserveBase, writeOnce);
-    root.size = gsan::getRealCapacity(writeOnce);
-    root.maxFreeBlockSize = root.size;
+  for (int i = 0; i < gsan::kNumPools; ++i) {
+    bool writeOnce = (i & 1) != 0;
+    int granularity = 1 << (i >> 1);
+    auto *root = &alloc->treeRoots[i];
+    root->virtualAddress =
+        gsan::getRealBaseAddress(reserveBase, granularity, writeOnce);
+
+    // Both physical mappings must fit in their respective half of the pool.
+    auto shadowSize = gsan::kPoolReserveSize / 2;
+    auto realSize =
+        granularity * (shadowSize / gsan::getShadowCellSize(writeOnce));
+    realSize = roundDownToPowerOfTwo(std::min(shadowSize, realSize));
+    root->size = realSize;
+    root->maxFreeBlockSize = realSize;
   }
   return 0;
-}
-
-CUresult ensureContext(int device) {
-  CUcontext ctx = 0;
-  CUresult res = cuCtxGetCurrent(&ctx);
-  if (res != CUDA_SUCCESS)
-    return res;
-  if (ctx)
-    return res;
-
-  res = cuDevicePrimaryCtxRetain(&ctx, device);
-  if (res != CUDA_SUCCESS)
-    return res;
-  return cuCtxSetCurrent(ctx);
 }
 
 CUresult refreshConfigForDevice(int device) {
@@ -549,65 +347,12 @@ error:
   return err;
 }
 
-CUresult mapNodeHandles(AllocNode *node,
-                        CUmemGenericAllocationHandle realHandle,
-                        CUmemGenericAllocationHandle shadowHandle,
-                        size_t allocSize, int device, bool *realMapped,
-                        bool *shadowMapped) {
-  assert(node != nullptr);
-  assert(realMapped != nullptr);
-  assert(shadowMapped != nullptr);
-
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(allocSize, node->virtualAddress);
-
-  CUresult err = cuMemMap(node->virtualAddress, allocSize, /*offset*/ 0,
-                          realHandle, /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
-    return err;
-  *realMapped = true;
-
-  err = cuMemMap(shadowAddress, shadowSize, /*offset*/ 0, shadowHandle,
-                 /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
-    return err;
-  *shadowMapped = true;
-
-  CUmemAccessDesc accessDesc = {};
-  accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  accessDesc.location.id = device;
-  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
-  err = cuMemSetAccess(node->virtualAddress, allocSize, &accessDesc, 1);
-  if (err != CUDA_SUCCESS)
-    return err;
-
-  err = cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
-  if (err != CUDA_SUCCESS)
-    return err;
-
-  node->allocSize = allocSize;
-  node->realHandle = realHandle;
-  node->shadowHandle = shadowHandle;
-  return CUDA_SUCCESS;
-}
-
-void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
-  assert(node != nullptr);
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->allocSize, node->virtualAddress);
-  if (shadowMapped)
-    cuMemUnmap(shadowAddress, shadowSize);
-  if (realMapped)
-    cuMemUnmap(node->virtualAddress, node->allocSize);
-}
-
 } // namespace
 
 // TODO: Handle streams?
-static void *gsanMallocImpl(ssize_t size, int device, void *stream,
-                            bool writeOnce) {
-  if (size <= 0)
+void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
+                                int shadowGranularity, bool writeOnce = false) {
+  if (size <= 0 || !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
 
   std::lock_guard lg(mut);
@@ -638,57 +383,70 @@ static void *gsanMallocImpl(ssize_t size, int device, void *stream,
     printCUDAError(err);
     return nullptr;
   }
-  size_t allocSize = roundUp(static_cast<size_t>(size), granularity);
-  AllocNode *node = allocateNode(&alloc->treeRoots[writeOnce], allocSize);
+  // Scale real allocation alignment so fractional shadow-to-real ratios
+  // still produce page-aligned shadow addresses and sizes.
+  size_t alignment =
+      granularity * shadowGranularity /
+      std::gcd(shadowGranularity, gsan::getShadowCellSize(writeOnce));
+  size_t allocSize = roundUp(static_cast<size_t>(size), alignment);
+  auto *root = &alloc->treeRoots[gsan::getPoolIndexForGranularity(
+      shadowGranularity, writeOnce)];
+  AllocNode *node = allocateNode(root, allocSize);
   if (node == nullptr)
     return nullptr;
 
-  CUmemGenericAllocationHandle realHandle = 0;
-  CUmemGenericAllocationHandle shadowHandle = 0;
-  bool realMapped = false;
-  bool shadowMapped = false;
-  auto cuStream = reinterpret_cast<CUstream>(stream);
-  auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  auto shadowSize = getShadowSize(allocSize, node->virtualAddress);
-  err = cuMemCreate(&realHandle, allocSize, &prop, 0);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  err = cuMemCreate(&shadowHandle, shadowSize, &prop, 0);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
-                       &realMapped, &shadowMapped);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  // Zero-initialize shadow memory
-  err = cuMemsetD8Async(shadowAddress, 0, shadowSize, cuStream);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
+  err = createAllocation(node, allocSize,
+                         gsan::getShadowAddress(node->virtualAddress),
+                         getShadowSize(allocSize, node->virtualAddress), prop,
+                         reinterpret_cast<CUstream>(stream));
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    freeNode(node);
+    return nullptr;
+  }
   LOGF("gsanMalloc: %p, 0x%zxu", reinterpret_cast<void *>(node->virtualAddress),
        size);
   return reinterpret_cast<void *>(node->virtualAddress);
-
-error:
-  printCUDAError(err);
-  unmapNodeHandles(node, realMapped, shadowMapped);
-  if (shadowHandle != 0)
-    cuMemRelease(shadowHandle);
-  if (realHandle != 0)
-    cuMemRelease(realHandle);
-  freeNode(node);
-  return nullptr;
 }
 
 extern "C" void *gsanMalloc(ssize_t size, int device, void *stream) {
-  return gsanMallocImpl(size, device, stream, false);
+  return gsanMallocWithGranularity(size, device, stream, 4);
 }
 
 extern "C" void *gsanMallocWriteOnce(ssize_t size, int device, void *stream) {
-  return gsanMallocImpl(size, device, stream, true);
+  return gsanMallocWithGranularity(size, device, stream, 1, true);
+}
+
+extern "C" void *gsanMallocWriteOnce2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2, true);
+}
+
+extern "C" void *gsanMallocWriteOnce4(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 4, true);
+}
+
+extern "C" void *gsanMallocWriteOnce8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8, true);
+}
+
+extern "C" void *gsanMallocWriteOnce16(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 16, true);
+}
+
+extern "C" void *gsanMalloc1(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 1);
+}
+
+extern "C" void *gsanMalloc2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2);
+}
+
+extern "C" void *gsanMalloc8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8);
+}
+
+extern "C" void *gsanMalloc16(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 16);
 }
 
 extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
@@ -702,41 +460,16 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   if (alloc == nullptr)
     return;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       node->virtualAddress != ptr) {
     fprintf(stderr, "gsanFree called with an invalid pointer\n");
     return;
   }
 
-  // Wait for outstanding work on the deallocation stream, including the
-  // allocator's own async shadow memset from gsanMalloc, before unmapping.
-  auto cuStream = reinterpret_cast<CUstream>(stream);
-  CUresult err = cuStreamSynchronize(cuStream);
-  if (err != CUDA_SUCCESS)
-    printCUDAError(err);
-
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->allocSize, node->virtualAddress);
-
-  err = cuMemUnmap(node->virtualAddress, node->allocSize);
-  if (err != CUDA_SUCCESS)
-    printCUDAError(err);
-
-  err = cuMemUnmap(shadowAddress, shadowSize);
-  if (err != CUDA_SUCCESS)
-    printCUDAError(err);
-
-  err = cuMemRelease(node->realHandle);
-  if (err != CUDA_SUCCESS)
-    printCUDAError(err);
-
-  err = cuMemRelease(node->shadowHandle);
-  if (err != CUDA_SUCCESS)
-    printCUDAError(err);
-
-  freeNode(node);
+  releaseAllocation(node, gsan::getShadowAddress(node->virtualAddress),
+                    getShadowSize(node->allocSize, node->virtualAddress),
+                    reinterpret_cast<CUstream>(stream));
 }
 
 void *gsanGetReservePointer() {
@@ -747,10 +480,11 @@ void *gsanGetReservePointer() {
 }
 
 int gsanExportAllocationHandles(void *void_ptr,
-                                GSanShareableHandle *realShareableHandle,
-                                GSanShareableHandle *shadowShareableHandle,
+                                ShareableHandle *realShareableHandle,
+                                ShareableHandle *shadowShareableHandle,
                                 size_t *allocSize,
-                                CUmemAllocationHandleType handleType) {
+                                CUmemAllocationHandleType handleType,
+                                bool includeGranularity) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       allocSize == nullptr || !isSupportedShareableHandleType(handleType)) {
     return -1;
@@ -767,8 +501,7 @@ int gsanExportAllocationHandles(void *void_ptr,
   if (alloc == nullptr)
     return -1;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       ptr < node->virtualAddress ||
       ptr >= node->virtualAddress + node->allocSize) {
@@ -776,22 +509,15 @@ int gsanExportAllocationHandles(void *void_ptr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
+  int defaultGranularity = gsan::isWriteOnceAddress(ptr) ? 1 : 4;
+  if (!includeGranularity &&
+      gsan::getShadowGranularity(ptr) != defaultGranularity)
+    return -2;
 
-  CUresult err = cuMemExportToShareableHandle(
-      getShareableHandleExportArg(realShareableHandle, handleType),
-      node->realHandle, handleType, 0);
+  CUresult err = exportAllocation(node, realShareableHandle,
+                                  shadowShareableHandle, handleType);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
-    return -1;
-  }
-
-  err = cuMemExportToShareableHandle(
-      getShareableHandleExportArg(shadowShareableHandle, handleType),
-      node->shadowHandle, handleType, 0);
-  if (err != CUDA_SUCCESS) {
-    printCUDAError(err);
-    if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
-      close(realShareableHandle->fd);
     return -1;
   }
 
@@ -819,8 +545,7 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
   if (alloc == nullptr)
     return -1;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       ptr < node->virtualAddress ||
       ptr >= node->virtualAddress + node->allocSize) {
@@ -838,8 +563,7 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
   return 0;
 }
 
-int gsanExportRuntimeStateHandle(int device,
-                                 GSanShareableHandle *shareableHandle,
+int gsanExportRuntimeStateHandle(int device, ShareableHandle *shareableHandle,
                                  size_t *allocSize,
                                  CUmemAllocationHandleType handleType) {
   if (shareableHandle == nullptr || allocSize == nullptr ||
@@ -884,13 +608,15 @@ int gsanExportRuntimeStateHandle(int device,
   return 0;
 }
 
-void *
-gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
-                            const GSanShareableHandle *shadowShareableHandle,
-                            CUmemAllocationHandleType handleType,
-                            size_t allocSize, int device, bool writeOnce) {
+void *gsanImportAllocationHandles(const ShareableHandle *realShareableHandle,
+                                  const ShareableHandle *shadowShareableHandle,
+                                  CUmemAllocationHandleType handleType,
+                                  size_t allocSize, int device,
+                                  int shadowGranularity,
+                                  bool writeOnce = false) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
-      !isSupportedShareableHandleType(handleType) || allocSize == 0)
+      !isSupportedShareableHandleType(handleType) || allocSize == 0 ||
+      !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
   if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
       (realShareableHandle->fd < 0 || shadowShareableHandle->fd < 0)) {
@@ -911,46 +637,25 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
     return nullptr;
   }
 
-  AllocNode *node = allocateNode(&alloc->treeRoots[writeOnce], allocSize);
+  auto *root = &alloc->treeRoots[gsan::getPoolIndexForGranularity(
+      shadowGranularity, writeOnce)];
+  AllocNode *node = allocateNode(root, allocSize);
   if (node == nullptr)
     return nullptr;
 
-  CUmemGenericAllocationHandle realHandle = 0;
-  CUmemGenericAllocationHandle shadowHandle = 0;
-  bool realMapped = false;
-  bool shadowMapped = false;
-  err = cuMemImportFromShareableHandle(
-      &realHandle, getShareableHandleImportArg(realShareableHandle, handleType),
-      handleType);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  err = cuMemImportFromShareableHandle(
-      &shadowHandle,
-      getShareableHandleImportArg(shadowShareableHandle, handleType),
-      handleType);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
-                       &realMapped, &shadowMapped);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
+  err = importAllocation(
+      node, allocSize, gsan::getShadowAddress(node->virtualAddress),
+      getShadowSize(allocSize, node->virtualAddress), *realShareableHandle,
+      *shadowShareableHandle, handleType, device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    freeNode(node);
+    return nullptr;
+  }
   return reinterpret_cast<void *>(node->virtualAddress);
-
-error:
-  printCUDAError(err);
-  unmapNodeHandles(node, realMapped, shadowMapped);
-  if (shadowHandle != 0)
-    cuMemRelease(shadowHandle);
-  if (realHandle != 0)
-    cuMemRelease(realHandle);
-  freeNode(node);
-  return nullptr;
 }
 
-int gsanImportRuntimeStateHandle(const GSanShareableHandle *shareableHandle,
+int gsanImportRuntimeStateHandle(const ShareableHandle *shareableHandle,
                                  CUmemAllocationHandleType handleType,
                                  size_t allocSize, int peerDevice, int device) {
   if (shareableHandle == nullptr ||
@@ -1018,68 +723,6 @@ namespace {
 
 constexpr const char *kModuleName = "gsan_allocator";
 
-bool parseIntArg(PyObject *obj, const char *name, int *out) {
-  long value = PyLong_AsLong(obj);
-  if (value == -1 && PyErr_Occurred())
-    return false;
-  if (value < std::numeric_limits<int>::min() ||
-      value > std::numeric_limits<int>::max()) {
-    PyErr_Format(PyExc_OverflowError, "%s is out of range for int", name);
-    return false;
-  }
-  *out = static_cast<int>(value);
-  return true;
-}
-
-bool parseShareableHandleTypeArg(PyObject *obj, const char *name,
-                                 CUmemAllocationHandleType *out) {
-  int handleType = 0;
-  if (!parseIntArg(obj, name, &handleType))
-    return false;
-  if (handleType != CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
-      handleType != CU_MEM_HANDLE_TYPE_FABRIC) {
-    PyErr_Format(PyExc_ValueError, "%s has unsupported value %d", name,
-                 handleType);
-    return false;
-  }
-  *out = static_cast<CUmemAllocationHandleType>(handleType);
-  return true;
-}
-
-bool parseShareableHandleArg(PyObject *obj, const char *name,
-                             CUmemAllocationHandleType handleType,
-                             GSanShareableHandle *out) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
-    return parseIntArg(obj, name, &out->fd);
-
-  if (!PyBytes_Check(obj)) {
-    PyErr_Format(PyExc_TypeError, "%s must be bytes", name);
-    return false;
-  }
-
-  char *data = nullptr;
-  Py_ssize_t size = 0;
-  if (PyBytes_AsStringAndSize(obj, &data, &size) != 0)
-    return false;
-  if (size != static_cast<Py_ssize_t>(sizeof(out->fabricHandle))) {
-    PyErr_Format(PyExc_ValueError, "%s must contain exactly %zu bytes, got %zd",
-                 name, sizeof(out->fabricHandle), size);
-    return false;
-  }
-
-  memcpy(&out->fabricHandle, data, sizeof(out->fabricHandle));
-  return true;
-}
-
-PyObject *shareableHandleToPyObject(const GSanShareableHandle &handle,
-                                    CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
-    return PyLong_FromLong(handle.fd);
-  return PyBytes_FromStringAndSize(
-      reinterpret_cast<const char *>(&handle.fabricHandle),
-      sizeof(handle.fabricHandle));
-}
-
 bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
   unsigned long long value = PyLong_AsUnsignedLongLong(obj);
   if (value == std::numeric_limits<unsigned long long>::max() &&
@@ -1093,18 +736,27 @@ bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
   return true;
 }
 
-bool parseVoidPtrArg(PyObject *obj, void **out) {
-  *out = PyLong_AsVoidPtr(obj);
-  return !(*out == nullptr && PyErr_Occurred());
+bool parseShadowGranularityArg(PyObject *obj, int *out) {
+  if (PyBool_Check(obj) || !parseIntArg(obj, "shadow_granularity", out)) {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError,
+                      "shadow_granularity must be 1, 2, 4, 8, or 16");
+    return false;
+  }
+  if (!gsan::isValidShadowGranularity(*out)) {
+    PyErr_SetString(PyExc_ValueError,
+                    "shadow_granularity must be 1, 2, 4, 8, or 16");
+    return false;
+  }
+  return true;
 }
 
 PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
                    Py_ssize_t nargs) {
-  if (nargs < 2 || nargs > 4) {
-    PyErr_Format(
-        PyExc_TypeError,
-        "%s.malloc expected between 2 and 4 positional arguments, got %zd",
-        kModuleName, nargs);
+  if (nargs < 2 || nargs > 5) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.malloc expected 2 to 5 positional arguments, got %zd",
+                 kModuleName, nargs);
     return nullptr;
   }
 
@@ -1120,10 +772,14 @@ PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (nargs >= 3 && !parseVoidPtrArg(args[2], &stream))
     return nullptr;
 
-  int writeOnce = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+  int writeOnce = nargs >= 4 ? PyObject_IsTrue(args[3]) : 0;
   if (writeOnce < 0)
     return nullptr;
-  return PyLong_FromVoidPtr(gsanMallocImpl(size, device, stream, writeOnce));
+  int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
+  if (nargs == 5 && !parseShadowGranularityArg(args[4], &shadowGranularity))
+    return nullptr;
+  return PyLong_FromVoidPtr(gsanMallocWithGranularity(
+      size, device, stream, shadowGranularity, writeOnce));
 }
 
 PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
@@ -1555,9 +1211,9 @@ PyObject *pyIsWriteOnceAllocation(PyObject *self, PyObject *arg) {
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 2 && nargs != 3) {
+  if (nargs < 2 || nargs > 4) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.export_allocation_handles expected 2 or 3 positional "
+                 "%s.export_allocation_handles expected 2 to 4 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
@@ -1570,7 +1226,7 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
       !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
     return nullptr;
 
-  int writeOnce = nargs == 3 ? PyObject_IsTrue(args[2]) : 0;
+  int writeOnce = nargs >= 3 ? PyObject_IsTrue(args[2]) : 0;
   if (writeOnce < 0)
     return nullptr;
   if (gsan::isWriteOnceAddress(reinterpret_cast<uintptr_t>(ptr)) !=
@@ -1579,22 +1235,36 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                     "write_once does not match the allocation mode");
     return nullptr;
   }
+  int includeGranularity = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+  if (includeGranularity < 0)
+    return nullptr;
 
-  GSanShareableHandle realShareableHandle = {};
-  GSanShareableHandle shadowShareableHandle = {};
+  ShareableHandle realShareableHandle = {};
+  ShareableHandle shadowShareableHandle = {};
   size_t allocSize = 0;
   int rc = gsanExportAllocationHandles(ptr, &realShareableHandle,
                                        &shadowShareableHandle, &allocSize,
-                                       handleType);
+                                       handleType, includeGranularity != 0);
+  if (rc == -2) {
+    PyErr_SetString(PyExc_ValueError,
+                    "Non-default pools require include_granularity=True");
+    return nullptr;
+  }
   if (rc != 0) {
     PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
     return nullptr;
   }
 
+  if (!includeGranularity)
+    return Py_BuildValue(
+        "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
+        shareableHandleToPyObject(shadowShareableHandle, handleType),
+        static_cast<unsigned long long>(allocSize));
   return Py_BuildValue(
-      "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
+      "(NNKi)", shareableHandleToPyObject(realShareableHandle, handleType),
       shareableHandleToPyObject(shadowShareableHandle, handleType),
-      static_cast<unsigned long long>(allocSize));
+      static_cast<unsigned long long>(allocSize),
+      gsan::getShadowGranularity(reinterpret_cast<uintptr_t>(ptr)));
 }
 
 PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
@@ -1634,16 +1304,16 @@ PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 5 && nargs != 6) {
+  if (nargs < 5 || nargs > 7) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.import_allocation_handles expected 5 or 6 positional "
+                 "%s.import_allocation_handles expected 5 to 7 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
 
-  GSanShareableHandle realShareableHandle = {};
-  GSanShareableHandle shadowShareableHandle = {};
+  ShareableHandle realShareableHandle = {};
+  ShareableHandle shadowShareableHandle = {};
   int device = 0;
   CUmemAllocationHandleType handleType =
       CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
@@ -1660,12 +1330,16 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
   if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
     return nullptr;
 
-  int writeOnce = nargs == 6 ? PyObject_IsTrue(args[5]) : 0;
+  int writeOnce = nargs >= 6 ? PyObject_IsTrue(args[5]) : 0;
   if (writeOnce < 0)
     return nullptr;
-  void *ptr =
-      gsanImportAllocationHandles(&realShareableHandle, &shadowShareableHandle,
-                                  handleType, allocSize, device, writeOnce);
+  int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
+  if (nargs == 7 && !parseShadowGranularityArg(args[6], &shadowGranularity))
+    return nullptr;
+
+  void *ptr = gsanImportAllocationHandles(
+      &realShareableHandle, &shadowShareableHandle, handleType, allocSize,
+      device, shadowGranularity, writeOnce);
   if (ptr == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
     return nullptr;
@@ -1692,7 +1366,7 @@ PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
       !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
     return nullptr;
 
-  GSanShareableHandle shareableHandle = {};
+  ShareableHandle shareableHandle = {};
   size_t allocSize = 0;
   int rc = gsanExportRuntimeStateHandle(device, &shareableHandle, &allocSize,
                                         handleType);
@@ -1717,7 +1391,7 @@ PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
-  GSanShareableHandle shareableHandle = {};
+  ShareableHandle shareableHandle = {};
   int peerDevice = 0;
   int device = 0;
   CUmemAllocationHandleType handleType =

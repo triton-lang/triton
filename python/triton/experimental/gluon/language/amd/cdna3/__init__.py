@@ -8,14 +8,19 @@ from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from .._layouts import AMDMFMALayout
 from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
 from ..._semantic import _check
+from ._cache_policy import CachePolicy
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
+# `buffer` stays out of __all__: cdna4 star-imports this module and defines
+# its own `buffer` submodule.
+from . import buffer
+
 __all__ = [
-    "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
-    "get_scaled_upcast_fp4_scale_layout"
+    "CachePolicy", "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max",
+    "buffer_atomic_or", "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma",
+    "scaled_upcast", "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
@@ -100,6 +105,9 @@ def _buffer_atomic_rmw_impl(op, ptr, offsets, value, arch, mask, sem, scope, _se
 @builtin
 def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None):
     """
+    Deprecated. Use :func:`buffer.load <triton.experimental.gluon.language.amd.cdna3.buffer.load>` with a descriptor from
+    :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer load from global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers. This operation will load data
     directly into registers.
@@ -137,6 +145,9 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 @builtin
 def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: GluonSemantic = None):
     """
+    Deprecated. Use :func:`buffer.store <triton.experimental.gluon.language.amd.cdna3.buffer.store>` with a descriptor from
+    :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.
 
@@ -233,7 +244,7 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
 
 """
 AMD Buffer Atomic RMW operations.
-The supported operatios are max, min, add, and, or, xor, xchg.
+The supported operations are max, min, add, and, or, xor, xchg.
 Similar to normal atomic ops: it loads data at ptr plus offsets, do `op` with `value`, and store result to `ptr` plus `offsets` with
 the specified memory semantics and scope.
 

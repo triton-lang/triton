@@ -5,10 +5,11 @@ import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
-from triton.compiler.errors import CompilationError
+from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import pytest
 from typing import NamedTuple
 
@@ -42,6 +43,40 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("dtype", [tl.float32, tl.int32])
+@pytest.mark.parametrize("propagate_nan, valid", [
+    (tl.PropagateNan.NONE, True),
+    (tl.PropagateNan.ALL, True),
+    (None, False),
+    (False, False),
+    (True, False),
+    (0, False),
+    (1, False),
+    ("NONE", False),
+    (tl.PropagateNan, False),
+])
+def test_min_max_propagate_nan_type(op, return_indices, dtype, propagate_nan, valid):
+
+    @triton.jit
+    def kernel(OP: tl.constexpr, RETURN_INDICES: tl.constexpr, DTYPE: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
+        x = tl.full((32, ), 1, DTYPE)
+        if OP == "min":
+            tl.min(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+        else:
+            tl.max(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+
+    args = (op, return_indices, dtype, propagate_nan)
+    if valid:
+        run_parser(kernel, args=args)
+    else:
+        with pytest.raises(CompilationError) as error:
+            run_parser(kernel, args=args)
+        assert isinstance(error.value.__cause__, CompileTimeAssertionFailure)
+        assert "propagate_nan must be a PropagateNan enum value" in str(error.value.__cause__)
+
+
 @pytest.mark.parametrize("scalar", [True, False])
 @pytest.mark.parametrize("src_dtype, dst_dtype", [(tl.bfloat16, tl.float16), (tl.float16, tl.bfloat16)])
 def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
@@ -60,6 +95,29 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
+@pytest.mark.parametrize("dtype, ir_type", [(tl.float4e2m1x2, "!tt.fp4e2m1x2"), (tl.float8e8m0fnu, "f8E8M0FNU")])
+def test_native_float_types(dtype, ir_type):
+    assert dtype.primitive_bitwidth == 8 and dtype.itemsize == 1 and dtype != tl.uint8
+    assert dtype.is_floating() and dtype.kind() == tl.dtype.KIND.FLOATING
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr, MIXED: tl.constexpr = False):
+        offsets = tl.arange(0, 32)
+        value = tl.load(source + offsets)
+        value = value.to(tl.uint8, bitcast=True).to(DTYPE, bitcast=True)
+        value = tl.where(offsets < 16, value, 1.0 if MIXED else value)
+        tl.static_assert(value.dtype == DTYPE)
+        tl.store(output + offsets, value)
+
+    args = (MockTensor(dtype), MockTensor(dtype), dtype)
+    module = run_parser(kernel, args=args)
+    assert module.verify()
+    text = module.str_nodebug()
+    assert ir_type in text and all(op in text for op in ("tt.bitcast", "tt.load", "tt.store"))
+    with pytest.raises(CompilationError, match="Implicit promotion"):
+        run_parser(kernel, args=(*args, True))
+
+
 def test_store_int_to_bool():
 
     @triton.jit
@@ -68,6 +126,18 @@ def test_store_int_to_bool():
         tl.store(output_ptr, value)
 
     run_filecheck_test(kernel, args=(MockTensor(tl.int1), 256))
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_bool_parameter_annotation(flag):
+
+    @triton.jit
+    def kernel(out, flag: bool):
+        # CHECK: arith.select %arg1,
+        tl.store(out, tl.where(flag, 7.0, 9.0))
+        tl.static_assert(flag.dtype == tl.int1)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), flag))
 
 
 @pytest.mark.parametrize("dtype",
@@ -138,6 +208,60 @@ def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
         tl.static_assert(rhs.dtype == expected_dtype)
 
     run_parser(kernel, args=(op, other_dtype, expected_dtype))
+
+
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("dtype", [tl.int8, tl.int32, tl.float32])
+def test_chained_comparison_range(scalar, dtype):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 8)
+        # CHECK: [[X:%.*]] = tt.load
+        x = tl.load(X)
+        # CHECK: [[LOW:%.*]] = arith.cmp{{[if]}} {{[so]}}ge, [[X]],
+        # CHECK: [[HIGH:%.*]] = arith.cmp{{[if]}} {{[so]}}le, [[X]],
+        # CHECK: [[RESULT:%.*]] = arith.andi [[LOW]], [[HIGH]]
+        # CHECK: tt.call {{.*}}([[RESULT]])
+        anchor(0 <= x <= 8)
+
+    run_filecheck_test(kernel, args=(MockTensor(dtype), scalar))
+
+
+def test_chained_comparison_constexpr():
+
+    @triton.jit
+    def kernel():
+        tl.static_assert(0 <= 4 <= 8 < 10)
+        tl.static_assert(not (0 <= 9 <= 8))
+        tl.static_assert(None is None is not False)
+        tl.static_assert(not (1 < 0 < undefined_name))  # noqa: F821
+        tl.static_assert(not (0 < 1 > 2 < undefined_name))  # noqa: F821
+
+    run_parser(kernel)
+
+
+def test_chained_comparison_scalar_promotion():
+
+    @triton.jit
+    def kernel(X):
+        x = tl.load(X + tl.arange(0, 8))
+        anchor(x < 1 < 256)
+
+    # The middle literal remains a constexpr for the second comparison.
+    module = run_parser(kernel, args=(MockTensor(tl.int8), ))
+    assert module.str_nodebug().count("arith.cmpi") == 1
+
+
+def test_chained_comparison_scalar_out_of_range():
+
+    @triton.jit
+    def kernel(X):
+        anchor(0 <= tl.load(X) <= 256)
+
+    with pytest.raises(CompilationError, match="out of range"):
+        run_parser(kernel, args=(MockTensor(tl.int8), ))
 
 
 @pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
@@ -294,8 +418,13 @@ def test_umulhi_scalar_out_of_range():
         run_parser(kernel, args=(MockTensor(tl.int32), ))
 
 
-@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
-@pytest.mark.parametrize("dtype, value", [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)])
+@pytest.mark.parametrize(
+    "op, dtype, value", [(op, dtype, value)
+                         for op in [tl.fma, tl.clamp]
+                         for dtype, value in [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)]] +
+    [(tl.clamp, dtype, 1)
+     for dtype in [tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64]] +
+    [(tl.clamp, tl.int1, True)])
 @pytest.mark.parametrize("tensor_args", range(1, 8))
 def test_ternary_math_scalar_promotion(op, dtype, value, tensor_args):
 
@@ -1230,6 +1359,36 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
+@pytest.mark.parametrize("operand", ["lower", "upper", "step"])
+@pytest.mark.parametrize("src_dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.uint16], ids=str)
+@pytest.mark.parametrize("iv_dtype", [tl.int32, tl.uint32, tl.int64, tl.uint64], ids=str)
+def test_for_loop_operand_extension(jit, operand, src_dtype, iv_dtype):
+    language = tl if jit is triton.jit else gl
+
+    @jit
+    def kernel(X, IV_DTYPE: tl.constexpr, OPERAND: tl.constexpr):
+        value = language.load(X)
+        lower = language.full((), 0, IV_DTYPE)
+        upper = language.full((), 10, IV_DTYPE)
+        step = language.full((), 1, IV_DTYPE)
+        if OPERAND == "lower":
+            lower = value
+        elif OPERAND == "upper":
+            upper = value
+        else:
+            step = value
+        for i in range(lower, upper, step):
+            language.store(X, i)
+
+    module = run_parser(kernel, args=(MockTensor(src_dtype), iv_dtype, operand))
+    widths = f"i{src_dtype.int_bitwidth} to i{iv_dtype.int_bitwidth}"
+    extensions = [line for line in module.str_nodebug().splitlines() if "arith.ext" in line and widths in line]
+    assert len(extensions) == 1
+    expected_op = "arith.extsi" if src_dtype in (tl.int8, tl.int16) else "arith.extui"
+    assert expected_op in extensions[0]
 
 
 @pytest.mark.interpreter

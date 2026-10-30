@@ -146,7 +146,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
 // f16 pairs adjacent logical columns into one canonical TMEM word. At a
 // nonzero row/column base, its two N-halves are disjoint and their union has
@@ -801,7 +801,7 @@ module attributes {test.print_state_plan, "ttg.num-ctas" = 2 : i32, "ttg.num-war
 // The scales are replicated across CTAs too; sharding the word view must not
 // change its physical coverage.
 #scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]]>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, colStride = 1, CGALayout = [[1, 0]]>
 
 // CHECK-LABEL: broadcast_a_scales vs broadcast_a_scales: alias=true
 // CHECK: broadcast_a_scales vs broadcast_b_words: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
@@ -812,6 +812,33 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %scales = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_a_scales"} : () -> !ttg.memdesc<64x4xi8, #scales, #ttng.tensor_memory, mutable>
     %words = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_b_words"} : () -> !ttg.memdesc<256x2xi32, #tmem, #ttng.tensor_memory, mutable>
     %disjoint = ttng.tmem_alloc {tensor_memory_col_offset = 4 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_c_disjoint"} : () -> !ttg.memdesc<256x2xi32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 8, colStride = 1>
+!full = !ttg.memdesc<64x8xf32, #tmem, #ttng.tensor_memory, mutable>
+!padded = !ttg.memdesc<64x1xf32, #tmem, #ttng.tensor_memory, mutable>
+!view = !ttg.memdesc<64x1xf32, #tmem, #ttng.tensor_memory, mutable, 64x8>
+
+// Padding belongs to the allocation; sibling subviews and row banks stay disjoint.
+// CHECK-LABEL: m64_a_padded vs m64_a_padded
+// CHECK: m64_a_padded vs m64_c_last: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false
+// CHECK: m64_a_padded vs m64_d_other: alias=false
+// CHECK: m64_b_first vs m64_c_last: alias=false
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tmem_padding_preserves_subviews_and_row_banks() {
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !full
+    %padded = ttg.memdesc_reinterpret %parent : !full -> !padded
+    %first = ttng.tmem_subslice %parent {offset = 0 : i32} : !full -> !view
+    %last = ttng.tmem_subslice %parent {offset = 7 : i32} : !full -> !view
+    %other = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 16 : i32} : () -> !padded
+    %0 = ttng.tmem_load %padded {test.region_name = "m64_a_padded"} : !padded -> tensor<64x1xf32>
+    %1 = ttng.tmem_load %first {test.region_name = "m64_b_first"} : !view -> tensor<64x1xf32>
+    %2 = ttng.tmem_load %last {test.region_name = "m64_c_last"} : !view -> tensor<64x1xf32>
+    %3 = ttng.tmem_load %other {test.region_name = "m64_d_other"} : !padded -> tensor<64x1xf32>
     tt.return
   }
 }
@@ -851,9 +878,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 131072 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   tt.func public @amd_tdm_gather_scatter_shared_alias(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %tdm_view = ttg.memdesc_subslice %buffer [0, 0] : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128>
     %other = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
-    %gather = amdg.async_tdm_gather %desc[%rows] to %buffer {test.region_name = "amd_tdm_a_gather"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    %scatter = amdg.async_tdm_scatter %desc[%rows] from %buffer {test.region_name = "amd_tdm_b_scatter"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %gather = amdg.async_tdm_gather %desc[%rows] to %tdm_view {test.region_name = "amd_tdm_a_gather"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128> -> !tt.tensordesc<64x128xf16>
+    %scatter = amdg.async_tdm_scatter %desc[%rows] from %tdm_view {test.region_name = "amd_tdm_b_scatter"} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128> -> !tt.tensordesc<64x128xf16>
     %value = ttg.local_load %other {test.region_name = "amd_tdm_c_other"} : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blocked>
     tt.return
   }

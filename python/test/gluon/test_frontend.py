@@ -1,9 +1,9 @@
 import expecttest
+import math
 import pytest
 import re
 from dataclasses import replace
 
-import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -30,6 +30,18 @@ from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+
+@filecheck_test
+@gluon.jit
+def test_chained_comparison_range():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 128, layout=layout)
+    # CHECK: [[LOW:%.*]] = arith.cmpi
+    # CHECK: [[HIGH:%.*]] = arith.cmpi
+    # CHECK: arith.andi [[LOW]], [[HIGH]] : tensor<128xi1, #blocked>
+    result = 0 <= x <= 8
+    ttgl.static_assert(result.type == ttgl.distributed_type(ttgl.int1, [128], layout))
 
 
 @filecheck_test
@@ -132,50 +144,6 @@ def test_inline_asm_frontend_unresolved_layout(layout):
 
     with pytest.raises(CompilationError, match="explicit distributed tensor layouts"):
         run_parser(kernel, *make_args(layout), target=BLACKWELL_TARGET)
-
-
-@pytest.mark.parametrize("elementwise", [False, True])
-def test_inline_asm_shared_amd_compilation(elementwise):
-
-    @gluon.jit
-    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
-        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
-        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
-        if ELEMENTWISE:
-            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
-        else:
-            ttgl.barrier()
-            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
-        ttgl.store(Out + x, y)
-
-    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
-    compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
-    assert "ds_read_b32" in compiled.asm["amdgcn"]
-
-
-@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
-def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
-
-    def fail_driver_access(self):
-        raise AssertionError("Offline compilation must not access the GPU driver")
-
-    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
-
-    @gluon.jit
-    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
-        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
-        ttgl.store(Y + offsets, ttgl.load(X + offsets))
-
-    source = gluon.GluonASTSource(
-        kernel,
-        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
-        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
-        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
-    )
-    compiled = triton.compile(source, target=target)
-    assert "tt.divisibility = 16" in compiled.asm[source.ext]
-    assert compiled.asm[binary]
 
 
 @gluon.jit
@@ -1485,6 +1453,30 @@ def test_math_scalar_promotion(dtype, value, ir_dtype):
     assert f"tensor<128x{ir_dtype}," in comparisons[0]
 
 
+@pytest.mark.parametrize("dtype, bound_dtype, result_dtype", [
+    (ttgl.int8, ttgl.int8, ttgl.int8),
+    (ttgl.uint64, ttgl.uint64, ttgl.uint64),
+    (ttgl.int1, ttgl.int1, ttgl.int1),
+    (ttgl.int8, ttgl.int16, ttgl.int16),
+    (ttgl.int32, ttgl.uint32, ttgl.uint32),
+    (ttgl.uint32, ttgl.int64, ttgl.int64),
+    (ttgl.int32, ttgl.float32, ttgl.float32),
+])
+def test_clamp_integer_broadcast_promotion(dtype, bound_dtype, result_dtype):
+
+    @gluon.jit
+    def kernel(dtype: ttgl.constexpr, bound_dtype: ttgl.constexpr, result_dtype: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        x = ttgl.full([4, 1], 1, dtype, layout)
+        upper = ttgl.full([1, 8], 1, bound_dtype, layout)
+        lower: ttgl.constexpr = False if dtype == ttgl.int1 else 0
+        result = ttgl.clamp(x, lower, upper)
+        ttgl.static_assert(result.dtype == result_dtype)
+        ttgl.static_assert(result.shape == [4, 8])
+
+    run_parser(kernel, args=(dtype, bound_dtype, result_dtype), target=BLACKWELL_TARGET)
+
+
 @gluon.jit
 def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
@@ -1600,7 +1592,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %true = arith.constant true
     %true_0 = arith.constant true
-    %2 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %2 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 {is_async} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -1668,7 +1660,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result_1 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %true = arith.constant true
     %true_2 = arith.constant true
-    %2 = ttng.tc_gen5_mma_scaled %0, %1, %result_1[], %result, %result_0, %true, %true_2 lhs = e5m2 rhs = e5m2 : !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %2 = ttng.tc_gen5_mma_scaled %0, %1, %result_1[], %result, %result_0, %true, %true_2 lhs = e5m2 rhs = e5m2 {is_async} : !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -2220,7 +2212,7 @@ def libdevice_kernel():
 
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
-    libdevice.fma(a, b, c)
+    ttgl.fma(a, b, c)
 
     libdevice.isnan(a)
     libdevice.isinf(a)
@@ -2242,7 +2234,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_4 = arith.constant dense<4.000000e+00> : tensor<4x32xf32, #blocked>
     %0 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %1 = tt.extern_elementwise %cst_0, %cst_2 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
-    %2 = tt.extern_elementwise %cst_0, %cst_2, %cst_4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %2 = math.fma %cst_0, %cst_2, %cst_4 : tensor<4x32xf32, #blocked>
     %3 = tt.extern_elementwise %cst_0 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>) -> tensor<4x32xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %cst_5 = arith.constant dense<0> : tensor<4x32xi32, #blocked>
@@ -2265,7 +2257,7 @@ def libdevice_implicit_broadcast_kernel():
     c = ttgl.full([4], 4, ttgl.float32, ttgl.SliceLayout(1, layout))[:, None]
     libdevice.abs(a)
     libdevice.fast_dividef(a, b)
-    libdevice.fma(a, b, c)
+    ttgl.fma(a, b, c)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -2290,9 +2282,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %5 = tt.extern_elementwise %cst_0, %4 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
     %6 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
     %7 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %8 = tt.broadcast %0 : tensor<1x32xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %9 = tt.broadcast %1 : tensor<4x1xf32, #blocked> -> tensor<4x32xf32, #blocked>
-    %10 = tt.extern_elementwise %cst_0, %8, %9 {libname = "", libpath = "", pure = true, symbol = "..."} : (tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>, tensor<4x32xf32, #blocked>) -> tensor<4x32xf32, #blocked>
+    %8 = math.fma %cst_0, %6, %7 : tensor<4x32xf32, #blocked>
     tt.return
   }
 }
@@ -2344,7 +2334,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.call @triton.language.standard.sum__fp32S16_16SLB1_1_1_32_4_1_1_0_BL_c0_cFalse_cNone(%cst_0) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %1 = tt.call @triton.language.standard.sum__fp32S16_16SLB1_1_1_32_4_1_1_0_BL_c1_cFalse_cNone(%cst_0) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %2 = tt.call @triton.language.standard.sum__fp32S16_16SLB1_1_1_32_4_1_1_0_BL_cNone_cFalse_cNone(%cst_0) : (tensor<16x16xf32, #blocked>) -> f32
-    %3 = tt.call @triton.language.standard.max__fp32S16SLSL0_B1_1_1_32_4_1_1_0_BSLL_c0_cFalse_cTrue_cFalse(%0) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32
+    %3 = tt.call @triton.language.standard.max__fp32S16SLSL0_B1_1_1_32_4_1_1_0_BSLL_c0_cFalse_cTrue_cFalse_cPROPAGATE_NAN.NONE(%0) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32
     %4 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %5:2 = "tt.reduce"(%cst_0, %cst_2) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32, %arg3: f32, %arg4: f32):
@@ -2402,10 +2392,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = ub.poison : f32
     tt.return %2 : f32
   }
-  tt.func private @triton.language.standard.max__fp32S16SLSL0_B1_1_1_32_4_1_1_0_BSLL_c0_cFalse_cTrue_cFalse(%arg0: tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 attributes {noinline = false} {
+  tt.func private @triton.language.standard.max__fp32S16SLSL0_B1_1_1_32_4_1_1_0_BSLL_c0_cFalse_cTrue_cFalse_cPROPAGATE_NAN.NONE(%arg0: tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 attributes {noinline = false} {
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
-      %2 = tt.call @triton.language.standard._elementwise_max__fp32_fp32(%arg1, %arg2) : (f32, f32) -> f32
+      %2 = tt.call @triton.language.standard._elementwise_max_ignore_nan__fp32_fp32(%arg1, %arg2) : (f32, f32) -> f32
       tt.reduce.return %2 : f32
     }) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32
     tt.return %0 : f32
@@ -2413,7 +2403,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1 = ub.poison : f32
     tt.return %1 : f32
   }
-  tt.func private @triton.language.standard._elementwise_max__fp32_fp32(%arg0: f32, %arg1: f32) -> f32 attributes {noinline = false} {
+  tt.func private @triton.language.standard._elementwise_max_ignore_nan__fp32_fp32(%arg0: f32, %arg1: f32) -> f32 attributes {noinline = false} {
     %0 = arith.maxnumf %arg0, %arg1 : f32
     tt.return %0 : f32
   ^bb1:  // no predecessors
@@ -3215,6 +3205,26 @@ def test_atomic_cas():
     ttgl.atomic_cas(offset + ptr, old, new)
 
 
+@pytest.mark.parametrize("op", ["CAS", "RMW"])
+def test_amd_multicta_scalar_atomic_unsupported(op):
+
+    @gluon.jit
+    def kernel(ptr, op: ttgl.constexpr):
+        if op == "CAS":
+            ttgl.atomic_cas(ptr, 0, 1)
+        else:
+            ttgl.atomic_add(ptr, 1)
+
+    ptr = MockTensor(ttgl.int32)
+    args = make_args(ptr, op, num_ctas=2)
+    with pytest.raises(CompilationError) as exc:
+        run_parser(kernel, *args, target=HIP_TARGET_CDNA5)
+    assert f"scalar atomic {op} is not supported in multi-CTA kernels on AMD" in str(exc.value.__cause__)
+
+    run_parser(kernel, *args, target=HOPPER_TARGET)
+    run_parser(kernel, *make_args(ptr, op), target=HIP_TARGET_CDNA5)
+
+
 @gluon.jit
 def amd_mfma_layout_kernel():
     ttgl.full([128, 32], 0, ttgl.float32, layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32, 8],
@@ -3634,70 +3644,6 @@ def test_amd_async_wait(target):
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_wait_group() attributes {noinline = false} {
     %0 = ttg.async_wait {num = 0 : i32}
-    tt.return
-  }
-}
-""")
-
-
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_amd_load_shared_relaxed(target):
-
-    @gluon.jit
-    def kernel():
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-        smem = ttgl.allocate_shared_memory(ttgl.float16, [128, 16], shared)
-        cdna4_async_copy.load_shared_relaxed(smem, blocked)
-
-    mod = run_parser(kernel, target=target)
-    expecttest.assert_expected_inline(
-        anonymize_ir(mod.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel() attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
-    %1 = ttg.local_load %0 {ttg.amdg.syncedViaAsyncWait = true} : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16xf16, #blocked>
-    tt.return
-  }
-}
-""")
-
-
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
-def test_amd_load_shared_relaxed_in_loop(target):
-
-    @gluon.jit
-    def kernel():
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-        smem = ttgl.allocate_shared_memory(ttgl.float16, [128, 16], shared)
-        for i in range(10):
-            cdna4_async_copy.load_shared_relaxed(smem, blocked)
-
-    mod = run_parser(kernel, target=target)
-    expecttest.assert_expected_inline(
-        anonymize_ir(mod.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel() attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
-    %c0_i32 = arith.constant 0 : i32
-    %c10_i32 = arith.constant 10 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %1 = arith.bitcast %c0_i32 : i32 to i32
-    %2 = arith.bitcast %c10_i32 : i32 to i32
-    %3 = arith.bitcast %c1_i32 : i32 to i32
-    %4 = ub.poison : i32
-    scf.for %arg0 = %1 to %2 step %3  : i32 {
-      %5 = ttg.local_load %0 {ttg.amdg.syncedViaAsyncWait = true} : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16xf16, #blocked>
-    }
     tt.return
   }
 }
@@ -4935,6 +4881,69 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+@pytest.mark.parametrize("allow", [None, ("valu", "salu")])
+def test_amd_sched_barrier(target, allow):
+
+    @gluon.jit
+    def kernel(ALLOW: ttgl.constexpr):
+        ttgl.amd.hint.sched_barrier()
+        ttgl.amd.hint.sched_barrier(allow=ALLOW)
+
+    if allow is not None:
+        with pytest.raises(CompilationError, match="Unsupported instruction class"):
+            run_parser(kernel, *make_args(allow), target=target)
+        return
+
+    module = run_parser(kernel, *make_args(allow), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    rocdl.sched.barrier none
+    rocdl.sched.barrier none
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+def test_amd_sched_barrier_placement(target):
+
+    @gluon.jit
+    def kernel(X, Y, Out):
+        x = ttgl.load(X)
+        ttgl.amd.hint.sched_barrier()
+        y = ttgl.load(Y)
+        result = x + y
+        ttgl.amd.hint.sched_barrier(allow=None)
+        ttgl.store(Out, result)
+
+    x = MockTensor(ttgl.float32)
+    y = MockTensor(ttgl.float32)
+    out = MockTensor(ttgl.float32)
+    module = run_parser(kernel, *make_args(x, y, out), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.load %arg0 : !tt.ptr<f32>
+    rocdl.sched.barrier none
+    %1 = tt.load %arg1 : !tt.ptr<f32>
+    %2 = arith.addf %0, %1 : f32
+    rocdl.sched.barrier none
+    tt.store %arg2, %2 : !tt.ptr<f32>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
 def test_amd_warp_pipeline(target):
 
     @gluon.jit
@@ -5816,3 +5825,102 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
     # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
+
+
+@gluon.jit
+def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, KIND: ttgl.constexpr, MULTICAST: ttgl.constexpr):
+    if KIND == "gather" or KIND == "scatter":
+        shape: ttgl.constexpr = [32, desc.block_shape[1]]
+        offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+            1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=desc.layout.cga_layout))
+        offsets = 31 - ttgl.arange(0, 32, layout=offsets_layout)
+    else:
+        shape: ttgl.constexpr = desc.block_shape
+    smem = ttgl.allocate_shared_memory(desc.dtype, shape, desc.layout)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
+    if KIND == "im2col":
+        hopper.tma.async_load_im2col(desc, [0, 0, 0, 0], [0, 0], bar, smem, pred=pred, multicast=MULTICAST,
+                                     cache_policy=POLICY)
+    elif KIND == "gather":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred, multicast=MULTICAST, cache_policy=POLICY)
+    elif KIND == "scatter":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred)
+    elif KIND == "store":
+        hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred)
+    else:
+        hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred, multicast=MULTICAST,
+                              cache_policy=POLICY)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    hopper.mbarrier.invalidate(bar)
+    if KIND == "store":
+        if pred:
+            hopper.tma.async_store(desc, [0] * len(shape), smem, cache_policy=POLICY)
+            hopper.tma.store_wait(0)
+    elif KIND == "scatter":
+        if pred:
+            tma.async_scatter(desc, offsets, 0, smem, cache_policy=POLICY)
+            hopper.tma.store_wait(0)
+
+
+def make_tma_cache_policy_desc(rank=2, kind="load", multicast=False):
+    shape = [16, 32] if kind == "im2col" else [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
+    layout = ttgl.NVMMASharedLayout(0, 16, rank=len(shape), cga_layout=(tuple(0 for _ in shape), ) if multicast else ())
+    data_shape = [1, 1, 16, 32] if kind == "im2col" else shape
+    strides = [math.prod(data_shape[i + 1:]) for i in range(len(data_shape))]
+    inp = MockTensor(ttgl.float16, tuple(data_shape))
+    if kind == "im2col":
+        from triton.experimental.gluon.nvidia.hopper import TensorDescriptorIm2Col
+        return TensorDescriptorIm2Col(inp, data_shape, strides, shape, layout, element_strides=[1, 1, 1, 1],
+                                      pixel_box_lower_corner=[0, 0], pixel_box_upper_corner=[0, 0])
+    block_shape = [1, shape[1]] if kind in ("gather", "scatter") else shape
+    return TensorDescriptor(inp, data_shape, strides, block_shape, layout)
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("policy", [
+    None,
+    ttgl.CachePolicy(),
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last")
+])
+def test_tma_cache_policy_frontend_generic(kind, policy):
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, kind, False), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    if policy is None or policy.eviction_policy == "evict_normal":
+        assert "cachePolicy" not in text
+    else:
+        assert f"cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = {policy.eviction_policy}>" in text
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("primary,fraction,secondary", [
+    ("evict_first", 1.0, "evict_unchanged"),
+    ("evict_last", 1.0, "evict_unchanged"),
+    ("evict_normal", 1.0, "evict_unchanged"),
+    ("evict_last", 0.5, "evict_first"),
+    ("evict_unchanged", 0.25, "evict_first"),
+])
+def test_tma_cache_policy_frontend_typed(kind, primary, fraction, secondary):
+    policy = hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy(primary, fraction, secondary))
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, kind, False), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    assert f"l2_primary = {primary}" in text
+    assert f"l2_secondary = {secondary}" in text
+    assert f"l2_fraction = {fraction:.6e} : f32" in text
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("policy,message", [
+    (hopper.CachePolicy(l1="evict_first"), "TMA operations do not support L1"),
+    (hopper.CachePolicy(cache_modifier="cg"), "TMA operations do not support cache modifiers"),
+    (hopper.CachePolicy(l2_prefetch_size=128), "TMA operations do not support L2 prefetch size"),
+    ("evict_first", "TMA cache_policy must be a CachePolicy"),
+])
+def test_tma_cache_policy_frontend_invalid(kind, policy, message):
+    with pytest.raises(CompilationError, match=message):
+        run_parser(tma_cache_policy_kernel, *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, kind,
+                                                       False), target=BLACKWELL_TARGET)

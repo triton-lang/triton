@@ -1,6 +1,7 @@
 import numpy
 import pytest
 import torch
+import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
 from triton.runtime.jit import MockTensor, JITCallable
@@ -39,7 +40,7 @@ class MockInt(int):
         return super().__new__(cls, value)
 
 
-def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
+def reference_specialize_impl(backend, arg, is_const, specialize_value, align, *, nested=False):
     if arg is None:
         return ("constexpr", None)
     elif isinstance(arg, bool):
@@ -66,7 +67,12 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, constexpr):
         return ("constexpr", arg)
     elif isinstance(arg, tuple):
-        spec = [reference_specialize_impl(backend, x, False, True, True) for x in arg]
+        fields = getattr(arg, "_fields", ())
+        skip = getattr(type(arg), "__triton_do_not_specialize__", ())
+        spec = []
+        for i, x in enumerate(arg):
+            specialize = (not nested or specialize_value) and not (fields and fields[i] in skip)
+            spec.append(reference_specialize_impl(backend, x, False, specialize, True, nested=True))
         make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
         tys = make_tuple([x[0] for x in spec])
         keys = make_tuple([x[1] for x in spec])
@@ -170,6 +176,34 @@ def mock_tensors_to_specialize():
     return [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize()]
 
 
+@pytest.mark.parametrize("handle", [1, 7, 16])
+def test_namedtuple_do_not_specialize(handle):
+
+    class Arguments(namedtuple("Arguments", "handle dynamic default")):
+        __triton_do_not_specialize__ = ("handle", "dynamic")
+
+    pointer = torch.empty(1, device="cpu", dtype=torch.float32)
+    constant = constexpr(3)
+    arg = Arguments(handle, (pointer, constant), (pointer, 1))
+    (types, ), (keys, ) = native_specialize_impl(CUDABackend, (arg, ), False, True, True)
+    assert types == Arguments("i32", ("*fp32", "constexpr"), ("*fp32", "constexpr"))
+    assert keys == Arguments(None, (None, constant), ("D", 1))
+    assert ((types, ), (keys, )) == reference_specialize_impl(CUDABackend, (arg, ), False, True, True)
+
+
+@pytest.mark.parametrize("names,exc,message", [
+    ("handle", TypeError, "must be a tuple of field names"),
+    (("unknown", ), ValueError, "unknown field 'unknown'"),
+])
+def test_namedtuple_do_not_specialize_invalid_fields(names, exc, message):
+
+    class Arguments(namedtuple("Arguments", "handle")):
+        __triton_do_not_specialize__ = names
+
+    with pytest.raises(exc, match=message):
+        native_specialize_impl(CUDABackend, Arguments(1), False, True, True)
+
+
 @pytest.mark.parametrize("input_generator", [
     native_inputs_to_specialize,
     tuples_to_specialize,
@@ -187,3 +221,21 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@pytest.mark.parametrize("torch_name,dtype,canonical", [
+    ("float4_e2m1fn_x2", tl.float4e2m1x2, "fp4e2m1x2"),
+    ("float8_e8m0fnu", tl.float8e8m0fnu, "fp8e8m0fnu"),
+])
+def test_native_dtype_torch_contract(torch_name, dtype, canonical):
+    torch_dtype = getattr(torch, torch_name, None)
+    if torch_dtype is None:
+        pytest.skip(f"Torch does not expose {torch_name}")
+    storage = torch.arange(32, dtype=torch.uint8)
+    native = storage.view(torch_dtype)
+    assert canonicalize_dtype(torch_dtype) == canonicalize_dtype(dtype) == canonical
+    assert dtype.itemsize == torch_dtype.itemsize == 1
+    for backend in (CUDABackend, HIPBackend):
+        for value, name in ((storage, "u8"), (native, canonical), (storage, "u8"), (native, canonical)):
+            signature, _ = native_specialize_impl(backend, value, False, True, True)
+            assert signature == "*" + name

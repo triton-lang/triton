@@ -1,7 +1,6 @@
 #include "Utility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -101,7 +100,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                             clamp);
 
     if (bits < 32)
-      val = b.trunc(int_ty(bits), val);
+      val = b.trunc(int_ty(bits), val, LLVM::IntegerOverflowFlags::nsw);
     if (!valType.isIntOrIndex())
       val = b.bitcast(val, valType);
     return val;
@@ -170,14 +169,13 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     };
     bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
 
-    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::CDNA5) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
-    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
-                isaFamily == ISAFamily::GCN5_1) &&
+    } else if (triton::amdgpu::isCDNA(isaFamily) &&
                (mask < 16 || usePermlaneSwap)) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
@@ -663,13 +661,13 @@ static int32_t getCtrlBitsForCacheModifierOnRDNA3(triton::CacheModifier cm,
 // Load   | .ca |  CU   | RT |
 //        | .cg |  DEV  | RT |
 //        | .cs |  CU   | NT |
-//        | .cv |  SYS  | LU | on gfx1250, this combination bypasses all caches
+//        | .cv |  SYS  | LU | on CDNA5, this combination bypasses all caches
 // -------+-----+-------+----+-
 // Store  | .wb |  CU   | RT |
 //        | .cg |  DEV  | RT |
 //        | .cs |  CU   | NT |
 //        | .wt |  SYS  | RT | behavior for gfx12
-//        | .wt |  SYS  | WB | behavior for gfx1250, bypasses all caches
+//        | .wt |  SYS  | WB | behavior for CDNA5, bypasses all caches
 // -------+-----+-------+----+-
 static int32_t getCtrlBitsForCacheModifierOn_GFX12(triton::CacheModifier cm,
                                                    bool isLoad,
@@ -734,15 +732,69 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
   case ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
 }
 
+FailureOr<int32_t>
+getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
+                           std::optional<triton::MemSyncScope> scope,
+                           bool isLoad,
+                           const mlir::triton::AMD::TargetInfo &targetInfo) {
+  int32_t aux = 0;
+  if (auto gfx9Policy =
+          dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
+              cachePolicy)) {
+    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
+      return op->emitOpError(
+          "the gfx9 cache policy is only supported on CDNA3 and CDNA4");
+    const int ntBit = 0b10;
+    if (gfx9Policy.getNontemporal())
+      aux |= ntBit;
+  } else {
+    auto cm = getCacheModifier(cachePolicy);
+    if (failed(cm))
+      return op->emitOpError(
+          "target cache policy is not supported on AMD targets");
+    aux = getCtrlBitsForCacheModifierOnTarget(*cm, isLoad, targetInfo);
+  }
+  if (scope) {
+    // gfx9 encodes the scope of a non-atomic access in SC[1:0]: none = wave,
+    // SC0 = workgroup, SC1 = agent, SC0|SC1 = system.
+    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
+      return op->emitOpError(
+          "scope on buffer loads and stores is only supported on CDNA3 and "
+          "CDNA4");
+    const int sc0Bit = 0b1, sc1Bit = 0b10000;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      aux |= sc0Bit;
+      break;
+    case triton::MemSyncScope::GPU:
+      aux |= sc1Bit;
+      break;
+    case triton::MemSyncScope::SYSTEM:
+      aux |= sc0Bit | sc1Bit;
+      break;
+    default:
+      return op->emitOpError("unsupported scope on a buffer load or store");
+    }
+  }
+  return aux;
+}
+
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
   Type basePtrType = basePtr.getType();
+  // Accesses through a buffer descriptor behave like ones through a global
+  // pointer to its element type.
+  if (auto desc = dyn_cast<triton::amdgpu::BufferDescType>(basePtrType))
+    basePtrType = triton::PointerType::get(desc.getElementType(),
+                                           triton::PtrAddrSpace::Global);
   auto offsetType = cast<RankedTensorType>(offset.getType());
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
@@ -796,7 +848,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
-  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  auto pointeeBitWidth =
+      triton::getPointeeBitWidth(getPointerTypeWithShape(ptr, offset));
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
@@ -821,9 +874,12 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
-                                      const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+// Returns true if we can perform coalesced write from the source encoding to
+// the destination encoding.
+static bool
+canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
+                                 const LinearLayout &srcToSharedLayout,
+                                 unsigned threadsPerWarp) {
   auto kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -854,7 +910,14 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
 //    produce wrong results if we invalidate the condition in the future
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        DirectToLdsVecInfo vecInfo,
+                        std::string *failureReason) {
+  auto setReason = [&](std::string reason) {
+    if (failureReason)
+      *failureReason = std::move(reason);
+  };
+
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
   if (paddedEnc) {
@@ -872,6 +935,27 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
   if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
     LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
+    std::string guidance =
+        " Increase the provable alignment of the source (e.g. tl.multiple_of "
+        "on the base pointer, or aligning the leading dimensions) so a wider "
+        "vector can be used.";
+    if (vecInfo.maskIsLimiting()) {
+      guidance =
+          " The mask is the limiting factor: the pointers/offsets allow a "
+          "vector of " +
+          std::to_string(vecInfo.fromPtr) + " element(s) but the mask only " +
+          std::to_string(vecInfo.fromMask) +
+          ". A direct-to-LDS copy transfers each lane's whole vector in a "
+          "single transaction, so every vector-width group of mask values must "
+          "be identical. Align the mask boundary to the vector width, or peel "
+          "the ragged remainder into a separate load.";
+    }
+    setReason("the load can only be vectorized to " +
+              std::to_string(vectorSize) + " element(s) (" +
+              std::to_string(vectorSize * elemBitWidth) +
+              " bits), which is narrower than any direct-to-LDS transaction "
+              "width supported on this target." +
+              guidance);
     return false;
   }
 
@@ -906,6 +990,12 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (vectorSize < contig) {
     LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
                                 << contig << ") resulting in strided writes");
+    setReason(
+        "the global load vectorization (" + std::to_string(vectorSize) +
+        ") is smaller than the shared memory contiguity (" +
+        std::to_string(contig) +
+        "), which would require strided LDS writes. Adjust the blocked or "
+        "shared encoding so the two agree.");
     return false;
   }
   // If the requested load is wider than what the layout can write coalesced,
@@ -917,12 +1007,20 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
     LDBG("coalesced load width (" << vectorSize
                                   << ") is not a supported direct-to-LDS load");
+    setReason(
+        "the coalesced " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this target");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
                                         targetInfo.getWarpSize())) {
     LDBG("Does not write coalesced into LDS");
+    setReason("the resulting writes into shared memory are not coalesced for a "
+              "vectorization of " +
+              std::to_string(vectorSize) +
+              " element(s). Adjust the blocked or shared encoding so each warp "
+              "writes a contiguous range.");
     return false;
   }
 

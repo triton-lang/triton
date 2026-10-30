@@ -14,7 +14,9 @@ auto convertValue(Value value, const FloatType &scalarToType,
                   PatternRewriter &rewriter) -> mlir::Value {
   auto fromType = cast<RankedTensorType>(value.getType());
   auto toType = fromType.cloneWith(std::nullopt, scalarToType);
-  return T::create(rewriter, value.getLoc(), toType, value).getResult();
+  return T::create(rewriter, value.getLoc(), TypeRange{toType},
+                   ValueRange{value}, typename T::Properties{})
+      .getResult();
 }
 
 auto splitF32(Value input, unsigned N, PatternRewriter &rewriter)
@@ -156,11 +158,9 @@ public:
 
     // Aux functions
     auto f32ToTF32 = [&](Value value) -> Value {
-      return ElementwiseInlineAsmOp::create(
-                 rewriter, dotOp.getLoc(), value.getType(),
-                 "cvt.rna.tf32.f32 $0, $1;", "=r,r",
-                 /*isPure=*/true, /*pack=*/1, ArrayRef<Value>{value})
-          .getResult()[0];
+      return ExternElementwiseOp::create(
+          rewriter, dotOp.getLoc(), value.getType(), ValueRange{value}, "", "",
+          "llvm.nvvm.f2tf32.rna", /*pure=*/true);
     };
     auto add = [&](Value a, Value b) -> Value {
       return arith::AddFOp::create(rewriter, dotOp.getLoc(), a, b);

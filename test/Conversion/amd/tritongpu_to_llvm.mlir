@@ -1110,8 +1110,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-NOT: rocdl.grid.dim
   // CHECK: llvm.call @callee_zero_scratch
   // CHECK: llvm.func internal @callee_zero_scratch
-  // CHECK-SAME: passthrough = ["noinline", "convergent"]
   // CHECK-SAME: ws_num_warps = 4 : i32
+  // CHECK-SAME: passthrough = ["noinline", "convergent"]
   tt.func public @test_call_zero_scratch_no_grid_ops() attributes {noinline = false} {
     tt.call @callee_zero_scratch() : () -> ()
     tt.return
@@ -1195,5 +1195,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func private @histogram_one_warp_nondefault_result(%src: tensor<128xi32, #histInput>, %mask: tensor<128xi1, #histInput>) -> tensor<2xi32, #histResult> {
     %hist = tt.histogram %src, %mask : tensor<128xi32, #histInput> -> tensor<2xi32, #histResult>
     tt.return %hist : tensor<2xi32, #histResult>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @assert_tensor
+  // Print in divergent control flow, then trap after a uniform barrier.
+  // COMMON: llvm.cond_br %[[FAILED:.*]], ^[[PRINT:.*]], ^[[JOIN:.*]]
+  // COMMON: ^[[PRINT]]:
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON-NOT: s_trap
+  // COMMON: llvm.call @__triton_assert_fail
+  // COMMON-NEXT: llvm.br ^[[JOIN]]
+  // COMMON: ^[[JOIN]]:
+  // COMMON-NEXT: rocdl.s.barrier
+  // COMMON-NEXT: llvm.cond_br %[[FAILED]], ^[[TRAP:.*]], ^[[EXIT:.*]]
+  // COMMON: ^[[TRAP]]:
+  // COMMON-NEXT: llvm.inline_asm {{.*}} "s_trap 2"
+  // COMMON-NEXT: llvm.br ^[[EXIT]]
+  tt.func public @assert_tensor(%arg0: tensor<256xi1, #blocked>) {
+    tt.assert %arg0, "assert text" : tensor<256xi1, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @assert_scalar
+  // Print in divergent control flow, then trap after a uniform barrier.
+  // COMMON: llvm.cond_br %[[FAILED:.*]], ^[[PRINT:.*]], ^[[JOIN:.*]]
+  // COMMON: ^[[PRINT]]:
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON-NOT: s_trap
+  // COMMON: llvm.call @__triton_assert_fail
+  // COMMON-NEXT: llvm.br ^[[JOIN]]
+  // COMMON: ^[[JOIN]]:
+  // COMMON-NEXT: rocdl.s.barrier
+  // COMMON-NEXT: llvm.cond_br %[[FAILED]], ^[[TRAP:.*]], ^[[EXIT:.*]]
+  // COMMON: ^[[TRAP]]:
+  // COMMON-NEXT: llvm.inline_asm {{.*}} "s_trap 2"
+  // COMMON-NEXT: llvm.br ^[[EXIT]]
+  tt.func public @assert_scalar(%arg0: i1) {
+    tt.assert %arg0, "assert text" : i1
+    tt.return
   }
 }

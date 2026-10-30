@@ -1,3 +1,11 @@
+"""
+Asynchronous copies between global and shared memory for CDNA5.
+
+These move data between global memory, addressed by a tensor of pointers, and shared memory without going through
+registers, in both directions (:func:`global_to_shared` and :func:`shared_to_global`). Wait for completion with
+:func:`commit_group` / :func:`wait_group`, or signal an mbarrier with :func:`mbarrier_arrive`.
+"""
+
 from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
@@ -11,7 +19,7 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
     """
     Asynchronously copy elements from global memory to shared memory.
 
-    Requires manual syncronization via :func:`wait_group` before accessing the loaded data.
+    Requires manual synchronization via :func:`wait_group` before accessing the loaded data.
 
     Args:
         smem (shared_memory_descriptor): Destination shared memory descriptor.
@@ -48,7 +56,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     """
     Asynchronously copy elements from shared memory to global memory.
 
-    Requires manual syncronization via :func:`wait_group` before accessing the stored data.
+    Requires manual synchronization via :func:`wait_group` before accessing the stored data.
 
     Args:
         pointer (tensor): Destination pointer tensor.

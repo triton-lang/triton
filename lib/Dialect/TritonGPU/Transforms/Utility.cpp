@@ -117,7 +117,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
       isa<PointerType>(type.getElementType())
           ? cast<PointerType>(type.getElementType()).getPointeeType()
           : type.getElementType();
-  return typeForMem.getIntOrFloatBitWidth();
+  return getIntOrFloatOrPtrBitWidth(typeForMem);
 }
 
 static std::optional<unsigned>
@@ -521,23 +521,20 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
                                            Attribute srcEnc,
-                                           ArrayRef<int64_t> dstShape,
-                                           Attribute dstEncHint = {},
-                                           bool allowReorder = false) {
-  Attribute dstEnc = dstEncHint;
+                                           ArrayRef<int64_t> dstShape) {
+  Attribute dstEnc;
   auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   allowReorder, /*loc=*/std::nullopt);
+                                   /*loc=*/std::nullopt);
   assert(succeeded(result));
   return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
-  return inferReshapeOpDstEncoding(
-      op.getSrc().getType().getShape(), encoding, op.getType().getShape(),
-      op.getType().getEncoding(), op.getAllowReorder());
+  return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
+                                   op.getType().getShape());
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
@@ -552,9 +549,8 @@ static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
   // way.
-  return inferReshapeOpDstEncoding(
-      op.getType().getShape(), encoding, op.getSrc().getType().getShape(),
-      op.getSrc().getType().getEncoding(), op.getAllowReorder());
+  return inferReshapeOpDstEncoding(op.getType().getShape(), encoding,
+                                   op.getSrc().getType().getShape());
 }
 
 static bool isSingleValue(Value value) {
@@ -659,6 +655,17 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
 std::optional<SmallVector<OpOperand *>>
 canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(op)) {
+    auto dstType = broadcast.getType().cloneWithEncoding(targetEncoding);
+    auto srcType = broadcast.getSrc().getType();
+    if (failed(srcType.getEncoding()
+                   .getDialect()
+                   .getRegisteredInterface<DialectInferLayoutInterface>()
+                   ->verifyBroadcastOpEncoding(srcType, dstType)))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
+  }
+
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -669,15 +676,6 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
     return SmallVector<OpOperand *>{};
   }
 
-  if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
-    auto reshapeDstType = reshape.getType();
-    RankedTensorType newDstType =
-        reshapeDstType.cloneWithEncoding(targetEncoding);
-    if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-        triton::gpu::isExpensiveView(reshape.getSrc().getType(), newDstType))
-      return std::nullopt;
-    return SmallVector<OpOperand *>{&reshape.getSrcMutable()};
-  }
   if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp,
           triton::HistogramOp, triton::gpu::LocalAllocOp,
           triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op))
@@ -686,19 +684,19 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
 }
 
 bool canBeRematerialized(Operation *op) {
+  if (hasEffect<MemoryEffects::Write>(op))
+    return false;
   if (isa<LoadOp, StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicOpInterface, DotOpInterface>(op))
     return false;
-  if (auto gather = dyn_cast<GatherOp>(op))
-    return !gather.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return !reshape.getEfficientLayout();
+  if (ttg::hasEfficientLayout(op))
+    return false;
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return !hasEffect<MemoryEffects::Write>(op);
+  return true;
 }
 
 scf::ForOp replaceForOpWithNewSignature(
@@ -1184,7 +1182,7 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout) {
   }
   return ttg::SwizzledSharedEncodingAttr::get(
       ctx, opIdx, kWidth, type.getShape(), order, cgaLayout,
-      type.getElementTypeBitWidth(), false);
+      getIntOrFloatOrPtrBitWidth(type.getElementType()), false);
 }
 
 // If all the transitive uses of the given value have are used by a convert to

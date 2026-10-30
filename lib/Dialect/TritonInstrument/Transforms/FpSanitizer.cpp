@@ -66,7 +66,9 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (getAMDArch(moduleOp))
+  // The decomposition emits NVIDIA MMA layouts.
+  auto target = moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+  if (target && target.getValue().split(':').first != "cuda")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
@@ -163,9 +165,11 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
     sizePerThread[dim] =
         static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
   }
-  return ttg::BlockedEncodingAttr::get(
-      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  // Recompute lane and warp distribution after increasing vector width;
+  // retaining the scalar layout can duplicate a narrow row across many lanes.
+  return ttg::BlockedEncodingAttr::get(rewriter.getContext(), shape,
+                                       sizePerThread, order, numWarps,
+                                       threadsPerWarp, base.getCGALayout());
 }
 
 struct ScratchInfo {
@@ -1948,6 +1952,26 @@ struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   }
 };
 
+struct AbsFOpPattern : public OpRewritePattern<math::AbsFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::AbsFOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto inputI = embedToInt(rewriter, loc, op.getOperand());
+    // Use integer abs to preserve NaN bits.
+    auto absI = math::AbsIOp::create(rewriter, loc, inputI);
+    unsigned width =
+        getElementTypeOrSelf(inputI.getType()).getIntOrFloatBitWidth();
+    auto mask = getIntConstantLike(rewriter, loc, inputI.getType(),
+                                   (uint64_t{1} << (width - 1)) - 1);
+    // Map INT_MIN (negative zero) to zero.
+    auto result = arith::AndIOp::create(rewriter, loc, absI, mask);
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, op.getType()));
+    return success();
+  }
+};
+
 struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::DivFOp op,
@@ -2676,14 +2700,21 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
       // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
-    Value srcReg =
-        ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
-            .getResult();
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                               /*stride0=*/1,
-                               info->tensorType.getShape().front(),
-                               /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Value pred = op.getPred(); pred && !matchPattern(pred, m_One())) {
+        auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      }
+      Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
+                                              op.getSrc(), Value())
+                         .getResult();
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                                 /*stride0=*/1,
+                                 info->tensorType.getShape().front(),
+                                 /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
@@ -3388,7 +3419,7 @@ public:
              BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
              BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
              BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-             ClampFOpPattern, NegFOpPattern, DivFOpPattern,
+             ClampFOpPattern, NegFOpPattern, AbsFOpPattern, DivFOpPattern,
              TritonDivFOpPattern<tt::PreciseDivFOp>,
              TritonDivFOpPattern<tt::ApproxDivFOp>, RemFOpPattern, FmaPattern,
              ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
