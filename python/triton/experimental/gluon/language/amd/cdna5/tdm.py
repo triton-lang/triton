@@ -325,7 +325,8 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
     Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
     already encode their tile offsets, predicates, and bounds; use
     :func:`update_tensor_descriptor` before calling this helper when needed.
-    All members share one cache modifier, cache policy and scope, matching the fused IR operation.
+    All members share one cache modifier, cache policy and scope, matching the
+    fused IR operation.
 
     Args:
         members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be

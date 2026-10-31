@@ -581,9 +581,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// scope selects SCOPE and the gfx12 policy selects TH of the TDM cache policy
-// operand, like they do for buffer ops.
-
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #idx = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #smem = #ttg.shared_memory
