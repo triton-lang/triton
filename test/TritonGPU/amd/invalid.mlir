@@ -1249,3 +1249,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_cache_modifier_and_scope(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{a cache modifier can't be combined with a cache policy or scope}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %buf {cache = 2 : i32, scope = 1 : i32} : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tdm_store_last_use(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{the last_use temporal hint is only valid for loads}}
+    %0 = amdg.async_tdm_copy_local_to_global %desc from %buf {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<32x64xf16, #shared>
+    tt.return
+  }
+
+  tt.func @tdm_gather_last_use_sys_scope(%desc: !tt.tensordesc<8x64xf16, #shared>, %buf: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>, %indices: tensor<8xi32>) {
+    // expected-error @+1 {{the last_use temporal hint can't be combined with the sys scope}}
+    %0 = amdg.async_tdm_gather %desc[%indices] to %buf {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>, scope = 3 : i32} : tensor<8xi32>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    tt.return
+  }
+
+  tt.func @async_copy_local_to_global_cache_modifier_and_scope(%buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %ptrs: tensor<32x32x!tt.ptr<f32>, #blocked>) {
+    // expected-error @+1 {{a cache modifier can't be combined with scope}}
+    %0 = amdg.async_copy_local_to_global %buf, %ptrs cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> {scope = 1 : i32} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

@@ -1397,7 +1397,7 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                      Value multicastMask, Type elementType, Value barrierPtr,
                      const triton::LinearLayout &cgaLayout, Value ctaId,
                      ArrayRef<Value> rowIndices, bool isGather, int numWarps,
-                     RankedTensorType indicesType) {
+                     RankedTensorType indicesType, int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   assert(!rowIndices.empty() && "Gather/scatter requires row indices");
@@ -1546,8 +1546,9 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
 
     const char *intrinsicName = isGather ? "llvm.amdgcn.tensor.load.to.lds"
                                          : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
-                                    {g0, g1, g2, g3, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, intrinsicName, {},
+        {g0, g1, g2, g3, group4Zero, b.i32_val(auxBits)});
   }
   return success();
 }

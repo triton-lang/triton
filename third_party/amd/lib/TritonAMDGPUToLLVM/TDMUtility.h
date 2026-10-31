@@ -161,7 +161,7 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                      Value multicastMask, Type elementType, Value barrierPtr,
                      const triton::LinearLayout &cgaLayout, Value ctaId,
                      ArrayRef<Value> rowIndices, bool isGather, int numWarps,
-                     RankedTensorType indicesType);
+                     RankedTensorType indicesType, int32_t auxBits);
 
 // Emit prefetches for a TDM tile to make it available for an actual load in
 // the future. Data is prefetched cooperatively across all CTAs, warps, and
