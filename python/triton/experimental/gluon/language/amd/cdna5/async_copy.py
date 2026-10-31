@@ -6,16 +6,18 @@ registers, in both directions (:func:`global_to_shared` and :func:`shared_to_glo
 :func:`commit_group` / :func:`wait_group`, or signal an mbarrier with :func:`mbarrier_arrive`.
 """
 
-from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
+from triton.experimental.gluon.language import _core as ttgl
+from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group
+from ._cache_policy import _policy_and_scope
 
 __all__ = ["global_to_shared", "shared_to_global", "commit_group", "wait_group", "mbarrier_arrive"]
 
 
 @builtin
-def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _semantic=None):
+def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", *, cache_policy=None, _semantic=None):
     """
     Asynchronously copy elements from global memory to shared memory.
 
@@ -27,6 +29,8 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None(0).
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Cannot be combined with ``cache_modifier``. Defaults to None.
     """
     _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(pointer.type.layout, DistributedLayout),
@@ -45,14 +49,15 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
         pointer, other = _semantic.broadcast_impl_value(pointer, other)
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
-    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
-    cache_policy = cache_policy._to_ir(_semantic.builder)
+    cache_policy, _ = _policy_and_scope(cache_policy, None, cache_modifier, _semantic)
+    if cache_policy is None:
+        cache_policy = ttgl.CachePolicy(_unwrap_if_constexpr(cache_modifier) or "none")._to_ir(_semantic.builder)
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, other_handle,
                                                         cache_policy, False)
 
 
 @builtin
-def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None):
+def shared_to_global(pointer, smem, mask=None, cache_modifier="", *, scope=None, cache_policy=None, _semantic=None):
     """
     Asynchronously copy elements from shared memory to global memory.
 
@@ -63,6 +68,11 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
         smem (shared_memory_descriptor): Source shared memory descriptor.
         mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at
+            that scope. It is not atomic and orders no other memory operation. Cannot be combined with
+            ``cache_modifier``. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Cannot be combined with ``cache_modifier``. Defaults to None.
     """
     _check(pointer.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(pointer.type.layout, DistributedLayout),
@@ -75,9 +85,10 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
     mask_handle = mask.handle if mask is not None else ir.value()
-    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
-    cache_policy = cache_policy._to_ir(_semantic.builder)
-    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_policy)
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
+    if cache_policy is None:
+        cache_policy = ttgl.CachePolicy(_unwrap_if_constexpr(cache_modifier) or "none")._to_ir(_semantic.builder)
+    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_policy, scope)
 
 
 @builtin

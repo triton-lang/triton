@@ -5407,3 +5407,57 @@ def test_buffer_load_last_use_cdna5():
     compiled = kernel[(1, )](src, dst, num_warps=1)
     torch.testing.assert_close(dst, src, atol=0, rtol=0)
     assert re.search(r"buffer_load_b32 .* th:TH_LOAD_LU scope:SCOPE_DEV$", compiled.asm["amdgcn"], re.MULTILINE)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", ""), ("gpu", " scope:SCOPE_DEV"),
+                                               ("sys", " scope:SCOPE_SYS")])
+@pytest.mark.parametrize("temporal", [None, "none", "high"])
+def test_async_copy_tdm_scope_cache_policy_cdna5(scope, scope_bits, temporal):
+
+    @gluon.jit
+    def kernel(src, dst, scope: ttgl.constexpr, temporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [32, 32], [1, 0])
+        if temporal is None:
+            policy: ttgl.constexpr = None
+        else:
+            policy: ttgl.constexpr = ttgl.amd.cdna5.CachePolicy(temporal=temporal)
+        offs_m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+        offs_n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        offsets = offs_m[:, None] * 32 + offs_n[None, :]
+
+        smem = ttgl.allocate_shared_memory(ttgl.float32, [32, 32], shared)
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem, src + offsets, cache_policy=policy)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.wait_group(0)
+        ttgl.amd.cdna5.async_copy.shared_to_global(dst + offsets, smem, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.wait_group(0)
+
+        src_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(src, [32, 32], [32, 1], [32, 32], shared)
+        dst_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(dst + 32 * 32, [32, 32], [32, 1], [32, 32], shared)
+        tdm_smem = ttgl.allocate_shared_memory(ttgl.float32, [32, 32], shared)
+        ttgl.amd.cdna5.tdm.async_load(src_desc, [0, 0], tdm_smem, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna5.tdm.async_wait(0)
+        ttgl.amd.cdna5.tdm.async_store(dst_desc, [0, 0], tdm_smem, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna5.tdm.async_wait(0)
+
+    src = torch.randn(32 * 32, device="cuda")
+    dst = torch.empty(2 * 32 * 32, device="cuda")
+    compiled = kernel[(1, )](src, dst, scope, temporal, num_warps=4)
+    torch.testing.assert_close(dst, src.repeat(2), atol=0, rtol=0)
+
+    def bits(instruction):
+        lines = re.findall(rf"^\s*{instruction}\s.*$", compiled.asm["amdgcn"], re.MULTILINE)
+        assert lines, instruction
+        return {frozenset(token for token in line.split() if token.startswith(("th:", "scope:"))) for line in lines}
+
+    th = {None: set(), "none": {"th:TH_{}_NT"}, "high": {"th:TH_{}_HT"}}[temporal]
+    load_bits = {t.format("LOAD") for t in th}
+    store_bits = {t.format("STORE") for t in th}
+    # Copies from global to shared memory take no scope.
+    assert bits("global_load_async_to_lds_b32") == {frozenset(load_bits)}
+    assert bits("global_store_async_from_lds_b32") == {frozenset(set(scope_bits.split()) | store_bits)}
+    assert bits("tensor_load_to_lds") == {frozenset(set(scope_bits.split()) | load_bits)}
+    assert bits("tensor_store_from_lds") == {frozenset(set(scope_bits.split()) | store_bits)}
