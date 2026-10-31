@@ -1,6 +1,7 @@
 """Cache policy hints for CDNA5 memory accesses."""
 
 from __future__ import annotations
+import warnings
 from dataclasses import dataclass
 
 from triton.language.core import constexpr_type
@@ -45,6 +46,16 @@ class CachePolicy:
 
     def _to_ir(self, builder):
         return builder.get_amd_cache_policy_gfx12(self.temporal)
+
+
+def _warn_cache_modifier_deprecated(cache_modifier, api):
+    if _unwrap_if_constexpr(cache_modifier):
+        warnings.warn(
+            f"cache_modifier of cdna5.{api} is deprecated, and will be removed in a future release."
+            " Please use scope and cache_policy instead.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
 
 
 def _policy_and_scope(cache_policy, scope, cache_modifier, semantic):
