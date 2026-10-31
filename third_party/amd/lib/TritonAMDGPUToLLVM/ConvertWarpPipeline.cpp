@@ -107,11 +107,12 @@ buildBlockInfoFromBlock(Block *block, Allocation *allocation,
         auto slice = AllocationSlice(v, interval, bufId);
         // Retain the access's physical footprint and subview restrictions;
         // recover only its slot expression through descriptor and stage views.
-        if (bufferIndex)
+        if (bufferIndex) {
           if (auto indexed = resolveMemDescIndex(v))
             slice.bufferIndexExpr =
                 bufferIndex->makeSlice(indexed.getResult(), interval, bufId)
                     .bufferIndexExpr;
+        }
         if (isa<MemoryEffects::Write>(eff.getEffect()))
           info.syncWriteSlices[slice].insert(op);
         else if (isa<MemoryEffects::Read>(eff.getEffect()))

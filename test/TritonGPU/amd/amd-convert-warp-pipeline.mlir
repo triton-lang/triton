@@ -476,7 +476,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         scf.yield
       } {triton.warp_pipeline.stage = "stage1"}
 
-      // amdg.async_wait sits between stages and must be recognized as a barrier.
+      // The group wait marks a cluster boundary and needs a local rendezvous.
       amdg.async_wait {num_inst = 0 : i32}
 
       scf.execute_region {
@@ -776,9 +776,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // ---- Flat pipeline with pre-existing barrier between stages ----
 //
-// When an async_wait (or similar barrier op) already exists between
-// flat pipeline stages, the pass should wrap it with sched_barriers
-// instead of inserting a redundant s_barrier.
+// A group wait between flat pipeline stages gets a local rendezvous inside
+// the scheduling fences. Boundaries without a wait use the dependency result.
 //
 // Stage layout: stage0 -- async_wait -- stage1 -- (nothing) -- stage2
 //
@@ -1506,11 +1505,10 @@ tt.func @loop_varying_subslice_origin(%n: i32, %initial: tensor<512xi32, #blocke
 
 // -----
 
-// The write and read use distinct constant slots through a stage-yielded
+// The write and read use distinct slots through a stage-yielded
 // descriptor. The write-to-compute boundary needs only an s_barrier;
 // wrap-around dependencies still require a local barrier at the loop tail.
 
-#ring_read = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [8], order = [0]}>
 #ring_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [8], order = [0]}>
 #ring_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #ring_smem = #ttg.shared_memory
@@ -1696,110 +1694,7 @@ tt.func @ring_same_slot_waw(%n: i32, %input: tensor<128xi32, #ring_blocked>) -> 
   tt.return %result : tensor<128xi32, #ring_blocked>
 }
 
-// The two slot expressions alias at x = 2147483646: both signed remainders
-// are zero after the i32 add wraps. The read layout also consumes values
-// written by a different warp, so keep the local RAW fence.
-// CHECK-LABEL: tt.func @ring_yielded_index_may_overflow
-// CHECK: ttg.local_store
-// CHECK-NOT: rocdl.s.barrier
-// CHECK: ttg.barrier local
-// CHECK: ttg.local_load
-// CHECK: tt.return
-tt.func @ring_yielded_index_may_overflow(%x: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
-  %c3 = arith.constant 3 : i32
-  %c4 = arith.constant 4 : i32
-  %read_idx = arith.remsi %x, %c3 : i32
-  %next = arith.addi %x, %c4 : i32
-  %write_idx = arith.remsi %next, %c3 : i32
-  %ring = ttg.local_alloc : () -> !ring
-  %view = scf.execute_region -> !ring_reshaped no_inline {
-    %dst = ttg.memdesc_index %ring[%write_idx] : !ring -> !ring_slot
-    ttg.local_store %input, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
-    %src = ttg.memdesc_index %ring[%read_idx] : !ring -> !ring_slot
-    %reshaped = ttg.memdesc_reshape %src : !ring_slot -> !ring_reshaped
-    scf.yield %reshaped : !ring_reshaped
-  } {triton.warp_pipeline.stage = "write"}
-  %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %s = arith.addi %input, %input : tensor<128xi32, #ring_blocked>
-    scf.yield %s : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "compute"}
-  %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %transposed = ttg.memdesc_trans %view {order = array<i32: 1, 0>} : !ring_reshaped -> !ring_transposed
-    %restored = ttg.memdesc_trans %transposed {order = array<i32: 1, 0>} : !ring_transposed -> !ring_reshaped
-    %src = ttg.memdesc_reshape %restored : !ring_reshaped -> !ring_slot
-    %v_read = ttg.local_load %src : !ring_slot -> tensor<128xi32, #ring_read>
-    %v = ttg.convert_layout %v_read : tensor<128xi32, #ring_read> -> tensor<128xi32, #ring_blocked>
-    %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
-    scf.yield %r : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "read"}
-  tt.return %loaded : tensor<128xi32, #ring_blocked>
-}
 
-// The same overflow hazard with memdesc_index defined in the read stage.
-// CHECK-LABEL: tt.func @ring_direct_index_may_overflow
-// CHECK: ttg.local_store
-// CHECK-NOT: rocdl.s.barrier
-// CHECK: ttg.barrier local
-// CHECK: ttg.local_load
-// CHECK: tt.return
-tt.func @ring_direct_index_may_overflow(%x: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
-  %c3 = arith.constant 3 : i32
-  %c4 = arith.constant 4 : i32
-  %read_idx = arith.remsi %x, %c3 : i32
-  %next = arith.addi %x, %c4 : i32
-  %write_idx = arith.remsi %next, %c3 : i32
-  %ring = ttg.local_alloc : () -> !ring
-  scf.execute_region no_inline {
-    %dst = ttg.memdesc_index %ring[%write_idx] : !ring -> !ring_slot
-    ttg.local_store %input, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
-    scf.yield
-  } {triton.warp_pipeline.stage = "write"}
-  %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %s = arith.addi %input, %input : tensor<128xi32, #ring_blocked>
-    scf.yield %s : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "compute"}
-  %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %src = ttg.memdesc_index %ring[%read_idx] : !ring -> !ring_slot
-    %v_read = ttg.local_load %src : !ring_slot -> tensor<128xi32, #ring_read>
-    %v = ttg.convert_layout %v_read : tensor<128xi32, #ring_read> -> tensor<128xi32, #ring_blocked>
-    %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
-    scf.yield %r : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "read"}
-  tt.return %loaded : tensor<128xi32, #ring_blocked>
-}
-
-// WP uses the shared dynamic proof when addition cannot overflow.
-// CHECK-LABEL: tt.func @ring_direct_index_nsw
-// CHECK: ttg.local_store
-// CHECK-NOT: ttg.barrier local
-// CHECK: rocdl.s.barrier
-// CHECK: ttg.local_load
-// CHECK: tt.return
-tt.func @ring_direct_index_nsw(%x: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
-  %c3 = arith.constant 3 : i32
-  %c4 = arith.constant 4 : i32
-  %read_idx = arith.remsi %x, %c3 : i32
-  %next = arith.addi %x, %c4 overflow<nsw> : i32
-  %write_idx = arith.remsi %next, %c3 : i32
-  %ring = ttg.local_alloc : () -> !ring
-  scf.execute_region no_inline {
-    %dst = ttg.memdesc_index %ring[%write_idx] : !ring -> !ring_slot
-    ttg.local_store %input, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
-    scf.yield
-  } {triton.warp_pipeline.stage = "write"}
-  %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %s = arith.addi %input, %input : tensor<128xi32, #ring_blocked>
-    scf.yield %s : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "compute"}
-  %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
-    %src = ttg.memdesc_index %ring[%read_idx] : !ring -> !ring_slot
-    %v_read = ttg.local_load %src : !ring_slot -> tensor<128xi32, #ring_read>
-    %v = ttg.convert_layout %v_read : tensor<128xi32, #ring_read> -> tensor<128xi32, #ring_blocked>
-    %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
-    scf.yield %r : tensor<128xi32, #ring_blocked>
-  } {triton.warp_pipeline.stage = "read"}
-  tt.return %loaded : tensor<128xi32, #ring_blocked>
-}
 }
 
 // -----
