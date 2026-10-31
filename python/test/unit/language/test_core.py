@@ -1218,6 +1218,118 @@ def test_math_fma_op(dtype, device):
     np.testing.assert_equal(fma_ref(x, y, w), to_numpy(z_tri))
 
 
+def _fma_directed_ref(x, y, w, dtype, rounding_mode):
+    # Rational arithmetic keeps the product exact, so each result is rounded
+    # once, in the requested direction, as an fma requires.
+    np_dtype = getattr(np, dtype)
+    finfo = np.finfo(np_dtype)
+    out = []
+    for a, b, c in zip(x, y, w):
+        exact = Fraction(float(a)) * Fraction(float(b)) + Fraction(float(c))
+        if exact == 0 or not np.isfinite(float(exact)):
+            out.append(np_dtype(float(exact)))
+            continue
+        cand = np_dtype(float(exact))
+        if np.isinf(cand):
+            cand = np_dtype(finfo.max if exact > 0 else -finfo.max)
+        while Fraction(float(cand)) > exact:
+            cand = np.nextafter(cand, np_dtype(-np.inf))
+        while Fraction(float(np.nextafter(cand, np_dtype(np.inf)))) <= exact:
+            cand = np.nextafter(cand, np_dtype(np.inf))
+        floor_val = cand
+        ceil_val = floor_val if Fraction(float(floor_val)) == exact else np.nextafter(floor_val, np_dtype(np.inf))
+        if rounding_mode == "rd":
+            out.append(floor_val)
+        elif rounding_mode == "ru":
+            out.append(ceil_val)
+        elif rounding_mode == "rz":
+            out.append(floor_val if exact >= 0 else ceil_val)
+        else:
+            assert rounding_mode == "rn"
+            if Fraction(float(ceil_val)) - exact < exact - Fraction(float(floor_val)):
+                out.append(ceil_val)
+            elif Fraction(float(ceil_val)) - exact > exact - Fraction(float(floor_val)):
+                out.append(floor_val)
+            else:
+                bits = np.array([floor_val], dtype=dtype).view(f"int{finfo.bits}")[0]
+                out.append(floor_val if bits & 1 == 0 else ceil_val)
+    return np.array(out, dtype=dtype)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("rounding_mode", ["rn", "rz", "rd", "ru"])
+def test_math_fma_rounding_mode(dtype, rounding_mode, device):
+    check_type_supported(dtype, device)
+    SIZE = 128
+
+    @triton.jit
+    def kernel(Z, X, Y, W, SIZE: tl.constexpr, ROUNDING: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        w = tl.load(W + off)
+        z = tl.math.fma(x, y, w, rounding_mode=ROUNDING)
+        tl.store(Z + off, z)
+
+    rs = RandomState(17)
+    x = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    y = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    w = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    # Exact halfway cases distinguish all four rounding directions.
+    half_ulp = 2**-24 if dtype == "float32" else 2**-53
+    x[-4:] = [1.0, 1.0, -1.0, -1.0]
+    y[-4:] = [1.0, 1.0, 1.0, 1.0]
+    w[-4:] = [half_ulp, -half_ulp, -half_ulp, half_ulp]
+
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    y_tri = to_triton(y, device=device, dst_type=dtype)
+    w_tri = to_triton(w, device=device, dst_type=dtype)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype)
+    compiled = kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=SIZE, ROUNDING=rounding_mode, num_warps=4)
+
+    np.testing.assert_equal(_fma_directed_ref(x, y, w, dtype, rounding_mode), to_numpy(z_tri))
+    if not is_interpreter() and rounding_mode != "rn":
+        ptx_mode = {"rz": "rz", "rd": "rm", "ru": "rp"}[rounding_mode]
+        if is_cuda():
+            suffix = "f32" if dtype == "float32" else "f64"
+            assert f"fma.{ptx_mode}.{suffix}" in compiled.asm["ptx"]
+        if is_hip():
+            assert "constrained.fma" in compiled.asm["llir"]
+
+
+@pytest.mark.interpreter
+def test_math_fma_invalid_rounding_mode(device):
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = tl.math.fma(x, x, x, rounding_mode="invalid")
+        tl.store(Z + off, z)
+
+    x = to_triton(np.zeros(128, dtype="float32"), device=device, dst_type="float32")
+    z = to_triton(np.zeros(128, dtype="float32"), device=device, dst_type="float32")
+    with pytest.raises((triton.CompilationError, InterpreterError), match="Invalid rounding mode"):
+        kernel[(1, )](z, x, SIZE=128)
+
+
+@pytest.mark.interpreter
+def test_math_fma_directed_rounding_half(device):
+
+    @triton.jit
+    def kernel(Z, X, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        z = tl.math.fma(x, x, x, rounding_mode="rz")
+        tl.store(Z + off, z)
+
+    x = to_triton(np.zeros(128, dtype="float16"), device=device, dst_type="float16")
+    z = to_triton(np.zeros(128, dtype="float16"), device=device, dst_type="float16")
+    with pytest.raises((triton.CompilationError, InterpreterError), match="only supported for fp32 and fp64"):
+        kernel[(1, )](z, x, SIZE=128)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_math_fma_op_edge_cases(dtype, device):

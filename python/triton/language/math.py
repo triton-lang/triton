@@ -252,10 +252,40 @@ def ceil(x, _semantic=None):
 
 
 @core.builtin
-@_add_math_3arg_docstr("fused multiply-add")
-def fma(x, y, z, _semantic=None):
+def fma(x, y, z, rounding_mode="rn", _semantic=None):
+    """
+    Computes the element-wise fused multiply-add of :code:`x`, :code:`y`, and
+    :code:`z`: ``x * y + z`` with a single rounding.
+
+    :param x: the first multiplicand
+    :param y: the second multiplicand
+    :param z: the addend
+    :param rounding_mode: the rounding mode for the final result. Must be a
+        compile-time constant: ``"rn"`` (round to nearest, ties to even; the
+        default), ``"rz"`` (round toward zero), ``"rd"`` (round
+        toward negative infinity), or ``"ru"`` (round toward positive
+        infinity). The directed modes (``"rz"``, ``"rd"``, ``"ru"``) are only
+        supported for ``fp32`` and ``fp64`` operands: NVIDIA PTX provides
+        ``fma.rn``/``fma.rz``/``fma.rm``/``fma.rp`` for ``f32``/``f64`` on all
+        targets since ``sm_20``/``sm_13`` (including Hopper ``sm_90``,
+        Blackwell ``sm_100`` and later), while the half-precision
+        ``fma.{f16,bf16}`` forms are ``.rn``-only; AMD CDNA3 (``gfx942``),
+        CDNA4 (``gfx950``) and CDNA5 (``gfx1250``) expose all four modes for
+        single and double precision through the ``MODE.FP_ROUND`` fields
+        (0=nearest-even, 1=+inf, 2=-inf, 3=toward-zero), lowered here via the
+        LLVM constrained-FMA intrinsic, as in the OCML
+        ``__ocml_fma_rt*`` device functions.
+    """
+    rounding_mode = core._unwrap_if_constexpr(rounding_mode)
+    if rounding_mode not in ("rn", "rz", "rd", "ru"):
+        raise ValueError(f"Invalid rounding mode: {rounding_mode}. "
+                         "Supported rounding modes are 'rn', 'rz', 'rd' and 'ru'.")
     x = core._unwrap_if_constexpr(x)
     y = core._unwrap_if_constexpr(y)
     z = core._unwrap_if_constexpr(z)
     x, y, z = _semantic.ternary_op_type_checking_impl(x, y, z)
-    return core.tensor(_semantic.builder.create_fma(x.handle, y.handle, z.handle), x.type)
+    if rounding_mode != "rn" and x.type.scalar.name not in ("fp32", "fp64"):
+        raise ValueError(f"rounding_mode='{rounding_mode}' is only supported for fp32 and fp64 operands, "
+                         f"but got {x.type.scalar.name}. Half-precision FMA is round-to-nearest-even only "
+                         "on NVIDIA and has no directed libdevice equivalent to preserve.")
+    return core.tensor(_semantic.builder.create_fma(x.handle, y.handle, z.handle, rounding_mode), x.type)

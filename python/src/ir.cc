@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 #include <optional>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -1409,10 +1410,32 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::SubIOp>(lhs, rhs));
            })
-      .def("create_fma",
-           [](TritonOpBuilder &self, Value &a, Value &b, Value &c) -> Value {
-             return Value(self.create<math::FmaOp>(a, b, c));
-           })
+      .def(
+          "create_fma",
+          [](TritonOpBuilder &self, Value &a, Value &b, Value &c,
+             std::string roundingMode) -> Value {
+            if (roundingMode == "rn")
+              return Value(self.create<math::FmaOp>(a, b, c));
+            arith::RoundingMode mode;
+            if (roundingMode == "rz")
+              mode = arith::RoundingMode::toward_zero;
+            else if (roundingMode == "rd")
+              mode = arith::RoundingMode::downward;
+            else if (roundingMode == "ru")
+              mode = arith::RoundingMode::upward;
+            else
+              throw std::invalid_argument("Invalid fma rounding mode: " +
+                                          roundingMode);
+            auto roundingAttr = arith::RoundingModeAttr::get(
+                self.getBuilder().getContext(), mode);
+            auto fastMathAttr = arith::FastMathFlagsAttr::get(
+                self.getBuilder().getContext(), arith::FastMathFlags::none);
+            return Value(math::FmaOp::create(self.getBuilder(),
+                                             self.getLastLoc(), a.getType(), a,
+                                             b, c, fastMathAttr, roundingAttr));
+          },
+          py::arg("a"), py::arg("b"), py::arg("c"),
+          py::arg("roundingMode") = "rn")
       .def("create_shl",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::ShLIOp>(lhs, rhs));

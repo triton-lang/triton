@@ -1,5 +1,8 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -10,6 +13,46 @@
 using namespace mlir::triton::gpu;
 
 namespace {
+
+struct FmaOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
+  using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+    if (!rounding.has_value() ||
+        rounding.value() == arith::RoundingMode::to_nearest_even) {
+      return {LLVM::FMAOp::create(rewriter, loc, elemTy, operands[0][0],
+                                  operands[0][1], operands[0][2])};
+    }
+    LLVM::RoundingMode llvmRounding;
+    switch (rounding.value()) {
+    case arith::RoundingMode::toward_zero:
+      llvmRounding = LLVM::RoundingMode::TowardZero;
+      break;
+    case arith::RoundingMode::downward:
+      llvmRounding = LLVM::RoundingMode::TowardNegative;
+      break;
+    case arith::RoundingMode::upward:
+      llvmRounding = LLVM::RoundingMode::TowardPositive;
+      break;
+    default:
+      return {};
+    }
+    MLIRContext *ctx = rewriter.getContext();
+    auto roundingAttr = LLVM::RoundingModeAttr::get(ctx, llvmRounding);
+    auto fpexceptAttr = LLVM::FPExceptionBehaviorAttr::get(
+        ctx, LLVM::FPExceptionBehavior::Ignore);
+    return {LLVM::ConstrainedFMAIntr::create(
+        rewriter, loc, elemTy, operands[0][0], operands[0][1], operands[0][2],
+        roundingAttr, fpexceptAttr)};
+  }
+};
 
 struct AnnotateOpConversion : public ConvertOpToLLVMPattern<AnnotateOp> {
   using ConvertOpToLLVMPattern<AnnotateOp>::ConvertOpToLLVMPattern;
@@ -761,8 +804,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
 #undef POPULATE_BINARY_OP
 
-  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FmaOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);

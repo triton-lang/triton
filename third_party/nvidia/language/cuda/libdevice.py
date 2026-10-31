@@ -135,33 +135,6 @@ def saturatef(arg0, _semantic=None):
 
 
 @core.extern
-def fma_rz(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf_rz", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__nv_fma_rz", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
-def fma_rd(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf_rd", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__nv_fma_rd", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
-def fma_ru(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__nv_fmaf_ru", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__nv_fma_ru", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
 def fast_dividef(arg0, arg1, _semantic=None):
     return core.extern_elementwise("", "", [arg0, arg1], {
         (core.dtype("fp32"), core.dtype("fp32")): ("__nv_fast_fdividef", core.dtype("fp32")),
