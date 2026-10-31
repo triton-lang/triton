@@ -25,6 +25,7 @@
 #define TRITON_AMDGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 
@@ -51,6 +52,36 @@ def TritonAMDGPU_CachePolicyGfx9Attr : TritonAMDGPU_Attr<"CachePolicyGfx9"> {
   }];
   let parameters = (ins
     DefaultValuedParameter<"bool", "false">:$nontemporal
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+def TritonAMDGPU_TemporalHintGfx12 : I32EnumAttr<"TemporalHintGfx12", "", [
+  I32EnumAttrCase<"Regular", 0, "regular">,
+  I32EnumAttrCase<"NonTemporal", 1, "none">,
+  I32EnumAttrCase<"HighTemporal", 2, "high">,
+  I32EnumAttrCase<"LastUse", 3, "last_use">,
+]> {
+  let cppNamespace = "::mlir::triton::amdgpu";
+  let genSpecializedAttr = 0;
+}
+
+def TritonAMDGPU_CachePolicyGfx12Attr : TritonAMDGPU_Attr<"CachePolicyGfx12"> {
+  let mnemonic = "cache_policy_gfx12";
+  let description = [{
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  }];
+  let parameters = (ins
+    EnumParameter<TritonAMDGPU_TemporalHintGfx12>:$temporal
   );
   let assemblyFormat = "`<` struct(params) `>`";
 }
