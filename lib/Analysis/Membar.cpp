@@ -32,7 +32,8 @@ AllocationSlice::AllocationSlice(Value value,
   }
 }
 
-bool AllocationSlice::intersects(const AllocationSlice &other) const {
+bool AllocationSlice::intersects(const AllocationSlice &other,
+                                 bool trustLoopCarriedSlots) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
@@ -45,7 +46,8 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Compare indices of the same source descriptor to prove disjoint slots,
   // including arguments without allocator IDs.
   if (bufferId == other.bufferId &&
-      areBufferIndicesProvablyDifferent(*this, other))
+      areBufferIndicesProvablyDifferent(*this, other) &&
+      (trustLoopCarriedSlots || !usesLoopCarriedSlot(*this, other)))
     return false;
 
   // Compare logical offsets only for subslices of the same source descriptor.
@@ -370,8 +372,16 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                              allocation, beforeSlice, afterSlice));
   };
   if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter)) {
+    if (membarInfo->fencePending.isIntersected(
+            effects, canSkip, &allocation, sliceFilter,
+            /*trustLoopCarriedSlots=*/false)) {
+      builder->setInsertionPoint(op);
+      insertSchedulingFence(op, builder);
+      membarInfo->fencePending.sync();
+    }
     return nullptr;
+  }
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
   builder->setInsertionPoint(op);
@@ -470,6 +480,7 @@ void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
                                      MembarInfo *membarInfo) {
   if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor)) {
     membarInfo->pending.invalidateIterationInfo();
+    membarInfo->fencePending.invalidateIterationInfo();
     membarInfo->entryBlockInfo.invalidateIterationInfo();
   }
 }
@@ -478,6 +489,7 @@ void MembarAnalysis::updateExitState(MembarInfo *membarInfo) {
   // Function summaries are reused at every call site, so per-function SSA
   // index identity is no longer meaningful.
   membarInfo->pending.invalidateIterationInfo();
+  membarInfo->fencePending.invalidateIterationInfo();
   membarInfo->entryBlockInfo.invalidateIterationInfo();
 }
 
@@ -524,6 +536,10 @@ void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
+  if (isSchedulingFence(op)) {
+    membarInfo->fencePending.sync();
+    return;
+  }
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
       barrier && barrier.isWarp()) {
     membarInfo->syncWarps();

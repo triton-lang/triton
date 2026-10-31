@@ -30,12 +30,21 @@ struct BufferIndexExpr;
 ///
 /// Recognized index shapes:
 ///   1. integer constants,
-///   2. `arith.addi` with one constant operand,
+///   2. `arith.addi` with one constant operand, only if it cannot overflow:
+///      the op is `nsw`, or the other operand's range proves it (constants,
+///      `remsi` by N, the wrap below, and loop arguments bounded by those),
 ///   3. `arith.remsi` with a positive constant modulus,
 ///   4. the pipeliner's select/cmpi one-step wrap:
 ///        select(cmpi sge(base + 1, N), 0, base + 1)
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
 ///      only when -1 <= base < N is proven.
+///
+/// A view carried around a cf-form loop as a header block argument (the
+/// pipeliner rotates the slot views of the stages in flight this way) gets
+/// the slot of the view passed on the backedge, shifted back by one
+/// iteration of a header counter that every backedge advances by one slot
+/// modulo N. The derivation is inductive: every entry edge must pass the
+/// constant slot it predicts for the first iteration, otherwise it fails.
 ///
 /// This is a per-function analysis. It owns dominance information used to
 /// detect cf-form loop backedges and interns the analyzed expressions whose
@@ -90,6 +99,11 @@ private:
 /// Stateless; accesses only the payload pointers.
 bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
                                        const AllocationSlice &b);
+
+/// Returns true if the slot of `a` or `b` was derived for a view carried
+/// around a loop. Membar keeps a scheduling-only fence where such a proof
+/// removes a barrier (see MembarAnalysis::insertSchedulingFence).
+bool usesLoopCarriedSlot(const AllocationSlice &a, const AllocationSlice &b);
 
 } // namespace mlir
 
