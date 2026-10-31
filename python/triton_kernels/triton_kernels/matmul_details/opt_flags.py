@@ -199,7 +199,7 @@ def make_default_opt_flags_amd(
     all_constraints_satisfied(ret, constraints)
     return ret
 
-def make_default_opt_flags_nvidia(
+def _make_default_opt_flags_nvidia(
     out_dtype,
     lhs_dtype,
     rhs_dtype,
@@ -453,6 +453,8 @@ def make_default_opt_flags_nvidia(
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
+    # Kept for the caller: below 1 means that not even one stage fits in shared memory.
+    raw_num_stages = num_stages
     # A smaller epilogue may fit a stage; clamp only after comparing candidates.
     num_stages = max(1, num_stages)
     if constraints.get("num_stages", None):
@@ -521,7 +523,11 @@ def make_default_opt_flags_nvidia(
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
-    return ret
+    return ret, raw_num_stages
+
+
+def make_default_opt_flags_nvidia(*args, **kwargs):
+    return _make_default_opt_flags_nvidia(*args, **kwargs)[0]
 
 # --------------
 # User Interface
@@ -640,12 +646,38 @@ def make_opt_flags(
     if backend == "hip":
         return make_default_opt_flags_amd(*args)
     if backend == "cuda":
-        return make_default_opt_flags_nvidia(
-            *args,
-            intermediate_out_dtype,
+        nvidia_kwargs = dict(
             x_uses_tma_when_persistent=x_uses_tma_when_persistent,
             w_transpose=w_transpose,
             mx_block_size=mx_block_size,
             epilogue_reduction_n=epilogue_reduction_n,
         )
+        ret, raw_num_stages = _make_default_opt_flags_nvidia(*args, intermediate_out_dtype, **nvidia_kwargs)
+        if raw_num_stages >= 1 or any(k in opt_flags_constraints for k in ("block_m", "block_n", "num_stages")):
+            return ret
+        # Not even one pipeline stage fits in shared memory for the chosen tile, so the clamp to one stage
+        # would only defer the failure to launch time (OutOfResources on devices with a small shared memory
+        # such as sm_120). Try smaller tiles, largest area first, and keep the first one for which a stage fits.
+        # Blackwell scale swizzle requires BLOCK_N to be a multiple of 128 (see compute_block_n).
+        b_scale = precision_config.b_mx_scale
+        min_n = 128 if (isinstance(b_scale, Tensor) and isinstance(
+            b_scale.storage.layout, opt_flags_nvidia.BlackwellMXScaleLayout)) else 32
+        for block_m, block_n in _smaller_tiles(ret.block_m, ret.block_n, min_n=min_n):
+            trial_constraints = dict(opt_flags_constraints, block_m=block_m, block_n=block_n)
+            try:
+                trial, trial_raw_num_stages = _make_default_opt_flags_nvidia(
+                    *args[:-1], trial_constraints, intermediate_out_dtype, **nvidia_kwargs)
+            except (AssertionError, InapplicableConstraint):
+                # The heuristic cannot honor this tile (see `all_constraints_satisfied`); try the next one.
+                continue
+            if trial_raw_num_stages >= 1:
+                return trial
+        return ret
     assert False
+
+
+def _smaller_tiles(block_m, block_n, min_m=16, min_n=32):
+    ms = [block_m >> i for i in range(4) if (block_m >> i) >= min_m]
+    ns = [block_n >> i for i in range(4) if (block_n >> i) >= min_n]
+    tiles = [(m, n) for m in ms for n in ns if (m, n) != (block_m, block_n)]
+    return sorted(tiles, key=lambda t: (-t[0] * t[1], -t[0]))
