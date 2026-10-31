@@ -841,3 +841,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [16, 8]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+
+module attributes {"ttg.num-warps" = 8 : i32, ttg.target = "cuda:120"} {
+
+// On targets where `tt.dot_scaled` reaches this pass as itself (sm_120, where it lowers to mma.sync and the
+// accumulator lives in registers), it must stay in the default partition with the accumulator like `tt.dot`;
+// only the loads move to the load partition.
+// CHECK-LABEL: @dot_scaled_stays_in_default_partition
+tt.func public @dot_scaled_stays_in_default_partition(
+  %A_desc: !tt.tensordesc<128x128xi8, #shared>,
+  %B_desc: !tt.tensordesc<128x128xi8, #shared>,
+  %A_scale: tensor<128x8xi8, #blocked_scale>,
+  %B_scale: tensor<128x8xi8, #blocked_scale>,
+  %n_tiles: i32
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+  %acc = scf.for %i = %c0_i32 to %n_tiles step %c1_i32 iter_args(%iter_acc = %zero) -> (tensor<128x128xf32, #mma>) : i32 {
+    // CHECK-COUNT-2: tt.descriptor_load {{.*}}ttg.partition = array<i32: 1>
+    %A = tt.descriptor_load %A_desc[%i, %c0_i32] : !tt.tensordesc<128x128xi8, #shared> -> tensor<128x128xi8, #blocked>
+    %B = tt.descriptor_load %B_desc[%i, %c0_i32] : !tt.tensordesc<128x128xi8, #shared> -> tensor<128x128xi8, #blocked>
+    %A_op = ttg.convert_layout %A : tensor<128x128xi8, #blocked> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+    %B_op = ttg.convert_layout %B : tensor<128x128xi8, #blocked> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.dot_scaled {{.*}}ttg.partition = array<i32: 0>
+    %acc_next = tt.dot_scaled %A_op scale %A_scale, %B_op scale %B_scale, %iter_acc lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<128x8xi8, #blocked_scale> * tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<128x8xi8, #blocked_scale> -> tensor<128x128xf32, #mma>
+    scf.yield %acc_next : tensor<128x128xf32, #mma>
+  } {tt.warp_specialize}
+  "use"(%acc) : (tensor<128x128xf32, #mma>) -> ()
+  tt.return
+}
+
+}
