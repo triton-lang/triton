@@ -348,8 +348,6 @@ module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.nu
 
 // -----
 
-// scope selects SCOPE and the gfx12 policy selects TH of async copies, like
-// they do for buffer ops.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

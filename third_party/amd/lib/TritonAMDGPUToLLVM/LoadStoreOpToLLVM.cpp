@@ -222,13 +222,11 @@ Value selectLdsAddressForPredicate(TritonLLVMOpBuilder &b, Value pred,
   return b.select(pred, shmemAddr, outOfRangeAddress);
 }
 
-// TDM ops encode their cache bits like buffer ops. A legacy cache modifier
-// implies its own scope, so the verifier keeps it apart from the cache policy
-// and scope.
 FailureOr<int32_t> getTDMCtrlBits(Operation *op, triton::CacheModifier cache,
                                   Attribute cachePolicy,
                                   std::optional<MemSyncScope> scope,
                                   bool isLoad, const TargetInfo &targetInfo) {
+  // The verifier keeps cache modifier apart from the cache policy and scope.
   if (cache != triton::CacheModifier::NONE)
     return LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(cache, isLoad,
                                                           targetInfo);
@@ -1262,13 +1260,11 @@ struct AsyncCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Only supported on CDNA5
     if (targetInfo.getISAFamily() != ISAFamily::CDNA5) {
       return rewriter.notifyMatchFailure(
           op, "async_copy_local_to_global only supported on CDNA5");
     }
 
-    // Global stores from LDS encode their cache bits like buffer stores.
     auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
         op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
         targetInfo);
