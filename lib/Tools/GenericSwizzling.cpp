@@ -678,6 +678,23 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   return smem;
 }
 
+// ldmatrix/stmatrix operate on a fixed contiguous tile. A warp basis with a
+// component along that tile permutes elements within the instruction, which
+// these instructions cannot express. Check this on the swizzled layout.
+static bool warpBasesAvoidVector(const LinearLayout &layout,
+                                 const LinearLayout &smem) {
+  auto *ctx = layout.getInDimNames().begin()->getContext();
+  auto kVec = StringAttr::get(ctx, "vector");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  if (!layout.hasInDim(kWarp))
+    return true;
+  auto cvt = layout.invertAndCompose(smem);
+  for (int i = 0; i < cvt.getInDimSizeLog2(kWarp); ++i)
+    if (cvt.getBasis(kWarp, i, kVec) != 0)
+      return false;
+  return true;
+}
+
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  ArrayRef<LocalMemOpTile> srcTiles,
@@ -778,8 +795,19 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       auto smem =
           optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
                            blockBases, src.getOutDims(), leaveReps);
+      // Index 0 is a plain shared memory access, which can represent any
+      // layout. Only matrix instructions are restricted to a fixed tile.
+      if ((instrs.first != 0 && !warpBasesAvoidVector(src, smem)) ||
+          (instrs.second != 0 && !warpBasesAvoidVector(dst, smem)))
+        continue;
       auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
+    }
+    if (smems.empty()) {
+      // Every candidate used a matrix instruction that cannot represent these
+      // layouts. Fall back to plain shared memory accesses.
+      auto smem = optimalSwizzlingLdSt(src, dst, bitwidth);
+      return {smem, {0, 0}};
     }
     // Current heuristic: Minimise total bank conflicts
     // We break ties looking at the number of rounds we do to move the data

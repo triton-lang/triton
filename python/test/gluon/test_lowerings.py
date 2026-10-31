@@ -396,6 +396,25 @@ def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+def test_convert_layout_warp_xor_linear(device):
+    # Warp basis 17 = 16 ^ 1 overlaps the contiguous tile of the ldmatrix
+    # lowering. This used to select ldmatrix and fail to lower it.
+    @gluon.jit
+    def kernel(x_ptr, y_ptr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        warp_xor: ttgl.constexpr = ttgl.DistributedLinearLayout([], [[2], [1], [8], [32], [64]], [[17], [4]], [], [128])
+        off = ttgl.arange(0, 128, layout=blocked)
+        x = ttgl.load(x_ptr + off)
+        x = ttgl.convert_layout(ttgl.convert_layout(x, warp_xor), blocked)
+        ttgl.store(y_ptr + off, x)
+
+    x = torch.arange(128, dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, num_warps=4)
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
 def _swizzled_warp_layouts_1d():
     """1D DistributedLinearLayout test layouts (non-injective, lowered as GenericLinearEncoding)."""
 
