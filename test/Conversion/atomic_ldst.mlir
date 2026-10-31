@@ -808,3 +808,26 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#sharded = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // THREAD-REGIONS-LABEL: tt.func private @thread_regions_multi_cta_device_func_atomic(
+  // THREAD-REGIONS-NOT: ttng.cluster_barrier
+  // THREAD-REGIONS: tt.atomic_rmw add, acq_rel, gpu
+  // THREAD-REGIONS-NOT: ttng.cluster_barrier
+  // THREAD-REGIONS: tt.return
+  tt.func private @thread_regions_multi_cta_device_func_atomic(%ptr: !tt.ptr<i32>) -> i32 attributes {noinline = true} {
+    %one = arith.constant 1 : i32
+    %old = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+    tt.return %old : i32
+  }
+
+  tt.func public @thread_regions_multi_cta_caller(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>) {
+    %value = tt.call @thread_regions_multi_cta_device_func_atomic(%ptr) : (!tt.ptr<i32>) -> i32
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+}
