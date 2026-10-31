@@ -16,7 +16,7 @@ import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
-from ._cache_policy import _policy_and_scope
+from ._cache_policy import _policy_and_scope, _warn_cache_modifier_deprecated
 
 if TYPE_CHECKING:
     from triton._C import ir
@@ -284,7 +284,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             4..7), ``0b01010101`` (warps 0,2,4,6).  Omit / ``None`` = all
             warps participate; explicit ``0`` and other invalid hints are
             rejected by the verifier.
-        cache_modifier (str, optional): Cache behavior.
+        cache_modifier (str, optional): Cache behavior. Deprecated, use ``scope`` and ``cache_policy`` instead.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that scope.
             It is not atomic and orders no other memory operation. Cannot be combined with
             ``cache_modifier``. Defaults to None.
@@ -300,6 +300,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    _warn_cache_modifier_deprecated(cache_modifier, "tdm.async_load")
     cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
@@ -331,7 +332,8 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
     Args:
         members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be
             legal, pairwise-disjoint bitmasks.
-        cache_modifier (str, optional): Cache behavior shared by all members.
+        cache_modifier (str, optional): Cache behavior shared by all members. Deprecated, use ``scope``
+            and ``cache_policy`` instead.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that scope.
             It is not atomic and orders no other memory operation. Cannot be combined with
             ``cache_modifier``. Defaults to None.
@@ -366,6 +368,7 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
         dest_handles.append(dest.handle)
         warp_used_hints.append(int(warp_used_hint))
 
+    _warn_cache_modifier_deprecated(cache_modifier, "tdm.async_load_fused")
     cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints,
@@ -388,7 +391,7 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
             pointer used to position the descriptor before the store.
         src (shared_memory_descriptor): the shared memory source to load the data.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
-        cache_modifier (str, optional): Cache behavior.
+        cache_modifier (str, optional): Cache behavior. Deprecated, use ``scope`` and ``cache_policy`` instead.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at that scope.
             It is not atomic and orders no other memory operation. Cannot be combined with
             ``cache_modifier``. Defaults to None.
@@ -401,6 +404,7 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
 
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    _warn_cache_modifier_deprecated(cache_modifier, "tdm.async_store")
     cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
     _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier,

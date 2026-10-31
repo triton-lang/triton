@@ -11,7 +11,7 @@ from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group
-from ._cache_policy import _policy_and_scope
+from ._cache_policy import _policy_and_scope, _warn_cache_modifier_deprecated
 
 __all__ = ["global_to_shared", "shared_to_global", "commit_group", "wait_group", "mbarrier_arrive"]
 
@@ -67,7 +67,8 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", *, scope=None,
         pointer (tensor): Destination pointer tensor.
         smem (shared_memory_descriptor): Source shared memory descriptor.
         mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache_modifier (str): Cache modifier specifier. Defaults to "". Deprecated, use ``scope`` and
+            ``cache_policy`` instead.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at
             that scope. It is not atomic and orders no other memory operation. Cannot be combined with
             ``cache_modifier``. Defaults to None.
@@ -85,6 +86,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", *, scope=None,
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
     mask_handle = mask.handle if mask is not None else ir.value()
+    _warn_cache_modifier_deprecated(cache_modifier, "async_copy.shared_to_global")
     cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     if cache_policy is None:
         cache_policy = ttgl.CachePolicy(_unwrap_if_constexpr(cache_modifier) or "none")._to_ir(_semantic.builder)
