@@ -106,6 +106,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
             z = tl.sort(x, descending=descending)
         else:
             z = tl.topk(x, k, descending=descending)
+        tl.static_assert(z.dtype == x.dtype)
         offs_z = offs_m[:, None] * stride_zm + offs_z_n[None, :]
         tl.store(Z + offs_z, z)
 

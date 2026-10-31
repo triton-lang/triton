@@ -479,6 +479,16 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 
 
 @jit
+def _sort_reduce(x, axis: core.constexpr, descending: core.constexpr, keep_dims: core.constexpr = False):
+    # Not max/min: they promote types narrower than 32 bits, which would change
+    # the dtype that sort and topk return.
+    if descending:
+        return core.reduce(x, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
+    else:
+        return core.reduce(x, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+
+
+@jit
 def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
     Sorts a tensor along a specified dimension.
@@ -507,7 +517,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     if log_k == 0:
         # k == 1 (or a length-1 dim): the general path below would reduce the
         # hypercube to a 0-d scalar, so emit a plain reduce instead.
-        x = max(x, axis=_dim, keep_dims=True) if descending else min(x, axis=_dim, keep_dims=True)
+        x = _sort_reduce(x, _dim, descending, keep_dims=True)
     else:
         n_dims: core.constexpr = _log2(x.numel)
 
@@ -521,7 +531,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
         # select top k elements using bitonic top-k
         # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
         for i in core.static_range(log_k + 1, log_n + 1):
-            h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
+            h = _sort_reduce(h, _log2(h.numel) - 1 - log_k, descending)
             h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
 
         # reshape back:
