@@ -94,6 +94,32 @@ def test_fp8_upcast_special_codes(src_dtype, codes, expected):
         assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
+@pytest.mark.parametrize("src_dtype, src_type", [
+    ("float8_e5m2", tl.float8e5),
+    ("float8_e4m3fn", tl.float8e4nv),
+    ("float8_e4m3fnuz", tl.float8e4b8),
+    ("float8_e5m2fnuz", tl.float8e5b16),
+])
+@pytest.mark.parametrize("dst_dtype, dst_type, uint_dtype, int_dtype, quiet_nan", [
+    ("float16", tl.float16, np.uint16, "int16", 0x7E00),
+    ("float32", tl.float32, np.uint32, "int32", 0x7FC00000),
+])
+@pytest.mark.parametrize("rounding_mode", [ir.ROUNDING_MODE.RTNE, ir.ROUNDING_MODE.RTZ])
+def test_fp8_upcast_all_encodings(src_dtype, src_type, dst_dtype, dst_type, uint_dtype, int_dtype, quiet_nan,
+                                  rounding_mode):
+    import torch
+
+    bits = np.arange(256, dtype=np.uint8)
+    expected = torch.from_numpy(bits).view(getattr(torch, src_dtype)).to(getattr(torch, dst_dtype))
+    expected_bits = expected.view(getattr(torch, int_dtype)).numpy().view(uint_dtype).copy()
+    nan = torch.isnan(expected).numpy()
+    # The interpreter preserves the source sign and uses a canonical quiet NaN,
+    # rather than PyTorch's payload-preserving conversion.
+    expected_bits[nan] = quiet_nan | (bits[nan].astype(uint_dtype) >> 7) << (dst_type.primitive_bitwidth - 1)
+    actual = interpreter._convert_float(bits, src_type, dst_type, rounding_mode)
+    np.testing.assert_array_equal(actual, expected_bits)
+
+
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
     builder = interpreter.InterpreterBuilder()
     data = np.array([0, 0, 1], dtype=np.int32)
