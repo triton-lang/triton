@@ -479,16 +479,6 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 
 
 @jit
-def _sort_reduce(x, axis: core.constexpr, descending: core.constexpr, keep_dims: core.constexpr = False):
-    # Not max/min: they promote types narrower than 32 bits, which would change
-    # the dtype that sort and topk return.
-    if descending:
-        return core.reduce(x, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
-    else:
-        return core.reduce(x, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
-
-
-@jit
 def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
     """
     Sorts a tensor along a specified dimension.
@@ -505,6 +495,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
+    in_dtype = x.dtype
 
     if k is not None:
         core.static_assert(k > 0, "topk: k must be greater than 0")
@@ -517,7 +508,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     if log_k == 0:
         # k == 1 (or a length-1 dim): the general path below would reduce the
         # hypercube to a 0-d scalar, so emit a plain reduce instead.
-        x = _sort_reduce(x, _dim, descending, keep_dims=True)
+        x = max(x, axis=_dim, keep_dims=True) if descending else min(x, axis=_dim, keep_dims=True)
     else:
         n_dims: core.constexpr = _log2(x.numel)
 
@@ -531,12 +522,13 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
         # select top k elements using bitonic top-k
         # https://www.doc.ic.ac.uk/~hlgr/pdfs/MassivelyParallelTopK.pdf
         for i in core.static_range(log_k + 1, log_n + 1):
-            h = _sort_reduce(h, _log2(h.numel) - 1 - log_k, descending)
+            h = max(h, axis=(_log2(h.numel) - 1 - log_k)) if descending else min(h, axis=(_log2(h.numel) - 1 - log_k))
             h = _bitonic_merge_hypercube(h, log_k, 2 if i < log_n else descending)
 
         # reshape back:
         x = core.reshape(h, x.shape[:-1] + [2**log_k])
-    return x
+    # max/min promote types narrower than 32 bits, so cast back to the input dtype.
+    return x.to(in_dtype)
 
 
 @jit
