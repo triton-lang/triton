@@ -17,6 +17,7 @@
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #smem = #ttg.shared_memory
+#gather_idx4 = #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>}>
 
 module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 8 : i32} {
 
@@ -95,6 +96,27 @@ tt.func @local_load_store(%arg0: i32) {
     ttg.local_store %0, %arg2 : tensor<16x128xbf16, #blocked2d_4> -> !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>
     ttg.warp_return
   } : (i32, !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @local_load_tma_gather
+tt.func @local_load_tma_gather(%arg0: i32, %desc: !tt.tensordesc<1x128xbf16, #shared_bf16>) {
+  %idx = ttg.local_alloc : () -> !ttg.memdesc<32xi32, #shared_1d, #smem, mutable>
+  %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar_layout, #smem, mutable>
+  %res = ttg.local_alloc : () -> !ttg.memdesc<32x128xbf16, #shared_bf16, #smem, mutable>
+  ttg.warp_specialize(%arg0, %desc, %idx, %bar, %res)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(2)
+  partition0(%y: i32, %d: !tt.tensordesc<1x128xbf16, #shared_bf16>, %i: !ttg.memdesc<32xi32, #shared_1d, #smem, mutable>, %b: !ttg.memdesc<1xi64, #bar_layout, #smem, mutable>, %r: !ttg.memdesc<32x128xbf16, #shared_bf16, #smem, mutable>) num_warps(4) {
+    %true = arith.constant true
+    // CHECK: [[X:%.*]] = ttg.local_load {{.*}} -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #{{.*}}}>>
+    // CHECK: ttng.async_tma_gather {{.*}}{{\[}}[[X]],
+    %x = ttg.local_load %i : !ttg.memdesc<32xi32, #shared_1d, #smem, mutable> -> tensor<32xi32, #gather_idx4>
+    ttng.async_tma_gather %d[%x, %y] %r, %b, %true : !tt.tensordesc<1x128xbf16, #shared_bf16>, tensor<32xi32, #gather_idx4>, i32, !ttg.memdesc<1xi64, #bar_layout, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared_bf16, #smem, mutable>, i1
+    ttg.warp_return
+  } : (i32, !tt.tensordesc<1x128xbf16, #shared_bf16>, !ttg.memdesc<32xi32, #shared_1d, #smem, mutable>, !ttg.memdesc<1xi64, #bar_layout, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared_bf16, #smem, mutable>) -> ()
   tt.return
 }
 
