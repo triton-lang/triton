@@ -66,8 +66,6 @@ def naive_softmax(x):
 # X once and does all the necessary computations on-chip.
 # Doing so would require reading and writing back only :math:`MN` bytes, so we could
 # expect a theoretical speed-up of ~4x (i.e., :math:`(8MN + 4M) / 2MN`).
-# The `torch.jit.script` flags aims to perform this kind of "kernel fusion" automatically
-# but, as we will see later, it is still far from ideal.
 
 # %%
 # Compute Kernel
@@ -228,6 +226,7 @@ benchmark.run(show_plots=True, print_data=True)
 
 # %%
 # In the above plot, we can see that:
-#  - Triton is 4x faster than the Torch JIT. This confirms our suspicions that the Torch JIT does not do any fusion here.
+#  - Triton is much faster than :code:`naive_softmax`, as the estimate above predicts:
+#    the naive version reads and writes DRAM several times instead of once.
 #  - Triton is noticeably faster than :code:`torch.softmax` -- in addition to being **easier to read, understand and maintain**.
 #    Note however that the PyTorch `softmax` operation is more general and will work on tensors of any shape.
