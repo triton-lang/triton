@@ -3037,6 +3037,26 @@ def _insertion_guard(builder):
 def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
+    The combine_fn should be associative and commutative. The elements are not combined one at a time from
+    left to right: on GPUs, each thread first combines the values it holds, then the threads of a warp combine
+    their results, and then the warps combine theirs. How the elements are grouped depends on the layout of
+    :code:`input` (for example on its shape and :code:`num_warps`), so a combine_fn that lacks either property,
+    such as subtraction, can give results that change with the layout.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def add_fn(a, b):
+            return a + b
+
+        @triton.jit
+        def sub_fn(a, b):
+            return a - b
+
+        total = tl.reduce(x, 0, add_fn)  # the sum of x along axis 0
+        diff = tl.reduce(x, 0, sub_fn)  # not necessarily x[0] - x[1] - ... - x[n - 1]
+
     :param input: the input tensor, or tuple of tensors
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
