@@ -104,6 +104,8 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
+  if (gpu::NVMMASharedEncodingAttr::getFp6Type(encoding))
+    return TMA_B6X16_P32;
   if (fp4Padded)
     return TMA_B4X16_P64;
 
@@ -134,6 +136,21 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   return emitError(loc)
          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
          << elemSize;
+}
+
+bool isNarrowFP6Map(TensorDescType type) {
+  return ttg::NVMMASharedEncodingAttr::getFp6Type(type.getSharedLayout()) &&
+         getTMABlockShape(type, false, ttg::TMAMode::Tiled).back() == 64;
+}
+
+Value updateTMADesc(OpBuilder &builder, Location loc, Value src, Value base) {
+  auto type = cast<TensorDescType>(src.getType());
+  auto scratch = ttg::GlobalScratchAllocOp::create(
+      builder, loc, getPointerType(builder.getI8Type()), TMA_SIZE_BYTES,
+      TMA_ALIGN, UnitAttr());
+  TensormapUpdateOp::create(builder, loc, scratch, src, base);
+  TensormapFenceproxyAcquireOp::create(builder, loc, scratch);
+  return ReinterpretTensorDescOp::create(builder, loc, type, scratch);
 }
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,

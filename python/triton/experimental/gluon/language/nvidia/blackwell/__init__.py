@@ -626,8 +626,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_scale (tensor): Scale factor for operand A.
         b_scale (tensor): Scale factor for operand B.
-        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
-        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -650,7 +650,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}
     assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
     assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
     a_type = _semantic._str_to_fp_type(a_type.value)

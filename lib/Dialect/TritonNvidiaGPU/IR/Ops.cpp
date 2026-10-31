@@ -690,6 +690,30 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
                            "but got descriptor layout ")
            << descEnc << " and shared memory layout " << nvmma;
   }
+  auto fp6 = descEnc.getFp6Type();
+  bool store = isa<AsyncTMACopyLocalToGlobalOp>(op);
+  if (nvmma.getFp6Type() != (store ? Type() : fp6))
+    return op->emitOpError("FP6 loads require a matching opaque tile and "
+                           "stores require byte lanes");
+  if (fp6) {
+    if (nvmma.getSwizzlingByteWidth() == 32)
+      return op->emitOpError("FP6 TMA does not support 32-byte swizzling");
+    if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
+        (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
+      return op->emitOpError(
+          "FP6 only supports tiled TMA loads and stores with byte storage");
+    auto box = getTMABlockShape(desc, false, gpu::TMAMode::Tiled).back();
+    if (box != 128 && !(box == 64 && store))
+      return op->emitOpError(
+          "FP6 requires a 128-value load or a 64/128-value store");
+    auto module = op->getParentOfType<ModuleOp>();
+    if (auto target = module->getAttrOfType<StringAttr>(gpu::AttrTargetName)) {
+      if (target.getValue() != "cuda:103" &&
+          (target.getValue() != "cuda:100" || box == 64))
+        return op->emitOpError(
+            "FP6 requires SM100 or SM103, and 64-value stores require SM103");
+    }
+  }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
   auto splits = getCTASplitNum(nvmma);
@@ -1142,8 +1166,12 @@ LogicalResult TCGen5MMAOp::verify() {
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
-  Type atype = getA().getType().getElementType();
-  Type btype = getB().getType().getElementType();
+  auto operandType = [](MemDescType mem) {
+    auto fp6 = NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding());
+    return fp6 ? fp6 : mem.getElementType();
+  };
+  Type atype = operandType(getA().getType());
+  Type btype = operandType(getB().getType());
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
@@ -1347,7 +1375,8 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 static Type getScaledMMAOperandType(Type elementType,
                                     ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (isa<FloatType>(elementType))
+  if (scaleType != ScaleDotElemType::E2M3 &&
+      scaleType != ScaleDotElemType::E3M2 && isa<FloatType>(elementType))
     return elementType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:
@@ -1458,6 +1487,12 @@ LogicalResult TCGen5MMAScaledOp::verify() {
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
       getScaledMMAOperandType(getB().getType().getElementType(), getBType());
+  for (auto [mem, type] : {std::pair{getA().getType(), atype},
+                           std::pair{getB().getType(), btype}}) {
+    auto fp6 = NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding());
+    if ((isa<Float6E2M3FNType, Float6E3M2FNType>(type) || fp6) && fp6 != type)
+      return emitOpError("FP6 MMA format must match the shared tile");
+  }
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();

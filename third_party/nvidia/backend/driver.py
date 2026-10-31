@@ -221,6 +221,10 @@ def make_tensordesc_arg(arg, metadata, _):
     else:
         expanded_shape = shape
 
+    if elem_type == 15 and block_size[-1] == 64:
+        # CUDA's host FP6 encoder only accepts a 128-value box. Encode the
+        # geometry as uint8; the SM103 kernel sets the FP6 element format.
+        elem_type = 0
     if arg.round_f32_to_tf32:
         elem_type = TMA_TF32
 

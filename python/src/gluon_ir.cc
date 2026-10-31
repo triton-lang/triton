@@ -242,7 +242,11 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     return getLayoutClass("NVMMASharedLayout")(
         nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
         cgaLayout.getRank(), nvmma.getTransposed(), nvmma.getFp4Padded(),
-        cgaBases);
+        cgaBases,
+        nvmma.getFp6Type()
+            ? py::cast(isa<Float6E2M3FNType>(nvmma.getFp6Type()) ? "e2m3"
+                                                                 : "e3m2")
+            : py::none());
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(swizzled.getCGALayout());
@@ -602,13 +606,20 @@ void init_gluon_ir(py::module_ &m) {
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
-              std::vector<std::vector<int32_t>> &cgaBases,
-              unsigned rank) -> Attribute {
+              std::vector<std::vector<int32_t>> &cgaBases, unsigned rank,
+              const std::string &fp6Format) -> Attribute {
              auto ctx = self.getContext();
+             Type fp6;
+             if (fp6Format == "e2m3")
+               fp6 = Float6E2M3FNType::get(ctx);
+             else if (fp6Format == "e3m2")
+               fp6 = Float6E3M2FNType::get(ctx);
+             else if (!fp6Format.empty())
+               throw std::invalid_argument("unknown FP6 format");
              auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
-                 cgaLayout);
+                 cgaLayout, fp6);
            })
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
@@ -710,6 +721,11 @@ void init_gluon_ir(py::module_ &m) {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
              check(ty.getEncoding(), "expected a memdesc with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
+           })
+      .def("create_tensormap_with_base",
+           [](GluonOpBuilder &self, Value desc, Value base) {
+             return ttng::updateTMADesc(self.getBuilder(), self.getLastLoc(),
+                                        desc, base);
            })
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,

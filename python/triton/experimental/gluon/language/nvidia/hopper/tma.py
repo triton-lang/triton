@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+from triton._utils import validate_fp6_box
 from triton.language.core import base_type, base_value, _CachePolicy
 from ..ampere import CachePolicy
 import triton.experimental.gluon.language._core as ttgl
@@ -49,11 +50,12 @@ class _tensor_descriptor_type_base(base_type):
 
     @property
     def nbytes_per_cta(self) -> int:
+        nbytes = self.block_type.nbytes
+        if self.layout.fp6_format is not None:
+            nbytes = nbytes // 4 * 3
         cga_layout = self.layout.cga_layout
-        if len(cga_layout) == 0:
-            return self.block_type.nbytes
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
-        return self.block_type.nbytes // num_cta_splits
+        return nbytes // num_cta_splits
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         raise NotImplementedError
@@ -156,6 +158,14 @@ class tensor_descriptor(_tensor_descriptor_value_base):
                  layout: NVMMASharedLayout):
         super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_type)
 
+    @builtin
+    def with_base(self, base, _semantic=None):
+        """Return a copy of this tiled descriptor at a new, equally aligned base address."""
+        if not base.dtype.is_ptr() or base.dtype.element_ty != self.dtype:
+            raise ValueError("replacement base must point to the descriptor element type")
+        handle = _semantic.builder.create_tensormap_with_base(self.handle, base.handle)
+        return tensor_descriptor(handle, self.shape, self.strides, self.block_type, self.layout)
+
 
 class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 
@@ -169,6 +179,9 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     align_bytes = 16
     if desc.layout.fp4_padded:
         align_bytes = 64
+    if desc.layout.fp6_format is not None:
+        # FP6 tensor coordinates count logical values.
+        align_bytes = 64 if fn_name == "async_store" and desc.block_shape[-1] == 64 else 128
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8
@@ -454,6 +467,12 @@ def make_tensor_descriptor(
 ) -> tensor_descriptor:
     padding_option = _unwrap_if_constexpr(padding_option)
     block_shape = _unwrap_if_constexpr(block_shape)
+    layout = _unwrap_if_constexpr(layout)
+    if layout.fp6_format is not None:
+        if base.dtype.element_ty != ttgl.uint8:
+            raise ValueError("FP6 tensor maps require uint8 storage")
+        validate_fp6_box(block_shape[-1], _unwrap_if_constexpr(shape[-1]), map(_unwrap_if_constexpr, strides[:-1]),
+                         padding_option)
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):

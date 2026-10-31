@@ -3,6 +3,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -198,6 +199,30 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
+    // Host arguments are grid-constant. Finish each 64-wide FP6 template
+    // once per CTA; an explicit address update can set both fields at once.
+    for (auto func : m.getOps<triton::FuncOp>()) {
+      if (!triton::isKernel(func) || func.isExternal())
+        continue;
+      OpBuilder b = OpBuilder::atBlockBegin(&func.getBody().front());
+      for (auto arg : func.getArguments()) {
+        auto type = dyn_cast<TensorDescType>(arg.getType());
+        if (!type || !isNarrowFP6Map(type))
+          continue;
+        if (auto target = m->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+            target && target.getValue() != "cuda:103") {
+          func.emitError("64-value FP6 TMA stores require SM103");
+          return signalPassFailure();
+        }
+        auto needsUpdate = [](OpOperand &use) {
+          return !isa<TensormapUpdateOp>(use.getOwner());
+        };
+        if (llvm::any_of(arg.getUses(), needsUpdate)) {
+          Value updated = updateTMADesc(b, arg.getLoc(), arg);
+          arg.replaceUsesWithIf(updated, needsUpdate);
+        }
+      }
+    }
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
                  TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(

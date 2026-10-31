@@ -1259,6 +1259,14 @@ def TTNG_TensormapCreateOp: TTNG_Op<
   let hasVerifier = 1;
 }
 
+def TTNG_TensormapUpdateOp : TTNG_Op<"tensormap_update",
+    [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "Copy a tiled tensor map and replace selected fields";
+  let arguments = (ins TT_PtrType:$dst, TT_TensorDescType:$src,
+                       Optional<TT_PtrType>:$base);
+  let assemblyFormat = [{$dst `,` $src (`,` $base^)? attr-dict `:` qualified(type($dst)) `,` qualified(type($src)) (`,` qualified(type($base))^)?}];
+}
+
 def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   "tensormap_fenceproxy_acquire",
   [MemoryEffects<[MemWrite<GlobalMemory>]>]
