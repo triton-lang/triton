@@ -92,6 +92,19 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     if (!isF32(dotOp.getA()) || !isF32(dotOp.getB()) || !N)
       return failure();
 
+    // The splits keep the dot's K, but a 16-bit dot needs K >= 256 / 16 = 16
+    // for the MMA path while the frontend admits fp32 dots down to K = 8.
+    // Splitting such a dot produces bf16 dots whose K is below the native mma
+    // size; the MMAv2 lowering then reads the K elements twice and doubles
+    // the result (#12252). Compute it exactly in fp32 instead.
+    if (cast<RankedTensorType>(dotOp.getA().getType()).getShape().back() <
+        256 / 16) {
+      rewriter.replaceOp(dotOp, dot(dotOp.getA(), dotOp.getB(), dotOp.getC(),
+                                    rewriter, InputPrecision::IEEE,
+                                    dotOp.getMaxNumImpreciseAcc()));
+      return success();
+    }
+
     // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator
     const auto lhs_parts = splitF32(dotOp.getA(), N, rewriter);
     const auto rhs_parts = splitF32(dotOp.getB(), N, rewriter);

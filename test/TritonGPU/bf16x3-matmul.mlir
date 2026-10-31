@@ -61,4 +61,16 @@ module {
     %4 = tt.dot %arg0, %arg1, %arg2, inputPrecision = bf16x6 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
     tt.return %4 : tensor<16x16xf32>
   }
+
+  // The frontend admits fp32 dots down to K = 8, but the bf16 splits would
+  // keep K below the 16-bit MMA minimum and come out doubled (#12252).
+  // Such a dot is computed exactly in fp32 instead.
+  tt.func @dot_test_BF16x3_small_K(%arg0: tensor<16x8xf32>, %arg1: tensor<8x16xf32>, %arg2: tensor<16x16xf32>) -> tensor<16x16xf32> {
+    // CHECK-LABEL: dot_test_BF16x3_small_K
+    // CHECK-NOT: arith.truncf
+    // CHECK: %[[val:.*]] = tt.dot %arg0, %arg1, %arg2 : tensor<16x8xf32> * tensor<8x16xf32> -> tensor<16x16xf32>
+    // CHECK-NEXT: tt.return %[[val]]
+    %4 = tt.dot %arg0, %arg1, %arg2, inputPrecision = bf16x3 : tensor<16x8xf32> * tensor<8x16xf32> -> tensor<16x16xf32>
+    tt.return %4 : tensor<16x16xf32>
+  }
 }
