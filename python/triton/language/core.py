@@ -3040,8 +3040,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     The combine_fn should be associative and commutative. The elements are not combined one at a time from
     left to right: on GPUs, each thread first combines the values it holds, then the threads of a warp combine
     their results, and then the warps combine theirs. How the elements are grouped depends on the layout of
-    :code:`input` (for example on its shape and :code:`num_warps`), so a combine_fn that lacks either property,
-    such as subtraction, can give results that change with the layout.
+    :code:`input` (for example on its shape and :code:`num_warps`). A combine_fn that lacks either property
+    can therefore give a result that differs from a left-to-right loop, and that may change with the layout.
 
     .. highlight:: python
     .. code-block:: python
