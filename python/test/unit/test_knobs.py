@@ -415,7 +415,7 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
     # One call, not two: translate_to_mir dumps the MIR and, from that same
     # MachineFunction, the scheduling DAG appended after the marker. The knob
     # gates that single call.
-    monkeypatch.setattr(compiler.llvm, "translate_to_mir", lambda *args: events.append("mir"))
+    monkeypatch.setattr(compiler, "translate_to_mir", lambda *args: events.append("mir"))
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -440,7 +440,7 @@ def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
         replacement_calls.append((path, args))
         return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
 
-    monkeypatch.setattr(compiler.llvm, "translate_mir_to_asm", replace_mir)
+    monkeypatch.setattr(compiler, "translate_mir_to_asm", replace_mir)
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: pytest.fail("MIR replacement bypassed"))
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -573,7 +573,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert not fresh_knobs.language.force_disable_fp_fusion
+    assert not fresh_knobs.language.allow_fp_fusion
     # str defaulting to None
     assert fresh_knobs.compilation.use_ir_loc is None
     # str defaulting to not None
@@ -584,7 +584,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     assert len(fresh_knobs.build.backend_dirs) == 0
 
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", falsey)
-    monkeypatch.setenv("TRITON_FORCE_DISABLE_FP_FUSION", truthy)
+    monkeypatch.setenv("TRITON_ALLOW_FP_FUSION", truthy)
     monkeypatch.setenv("TRITON_DEBUG", truthy)
     monkeypatch.setenv("USE_IR_LOC", "ttir")
     monkeypatch.setenv("TRITON_CACHE_DIR", "/tmp/triton_cache")
@@ -596,7 +596,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert fresh_knobs.language.force_disable_fp_fusion
+    assert fresh_knobs.language.allow_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
     assert fresh_knobs.cache.home_dir == "/tmp/triton_home"
     assert fresh_knobs.cache.dir == "/tmp/triton_cache"

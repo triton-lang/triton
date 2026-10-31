@@ -282,7 +282,9 @@ def tma_skip_msg(byval_only=False):
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+# Evaluate hardware requirements when pytest runs the test, so importing the
+# process helpers does not initialize CUDA before a worker's startup code.
+requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
@@ -305,9 +307,9 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     if env is not None:
         os.environ.update(env)
 
-    # By defaul AMD runtime calls abort on device assert.
-    # Following forces hip rutime to skip abort call.
-    if is_hip():
+    # Avoid initializing the GPU driver before the callback's startup code.
+    # The HIP build of PyTorch needs abort-on-device-assert disabled.
+    if not is_interpreter() and torch.version.hip is not None:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
 
@@ -322,7 +324,8 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
         try:
             client_fn(*args, **kwargs)
             # Raise any CUDA errors
-            torch.cuda.synchronize()
+            if not is_interpreter():
+                torch.cuda.synchronize()
         except Exception as e:
             exc = e
         finally:
@@ -526,3 +529,37 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
         knobs.propagate_env = prev_propagate_env
 
     return fresh_function, reset_function
+
+
+def assert_no_collectives_in_ptx_loop(ptx):
+    # Block order does not imply a loop: LLVM may place the exit before the
+    # header. Follow branches and fallthroughs to identify actual cycles.
+    lines = [line.partition("//")[0].strip() for line in ptx.splitlines()]
+    labels = {line[:-1]: i for i, line in enumerate(lines) if re.fullmatch(r"\$\w+:", line)}
+    successors = [{i + 1} if i + 1 < len(lines) else set() for i in range(len(lines))]
+    branches = []
+    for i, line in enumerate(lines):
+        branch = re.fullmatch(r"(@!?%\w+\s+)?bra(?:\.uni)?\s+(\$\w+);", line)
+        if branch:
+            successors[i] = {labels[branch[2]]} | (successors[i] if branch[1] else set())
+            branches.append(i)
+        elif re.fullmatch(r"(?:ret|exit)(?:\.uni)?;", line):
+            successors[i] = set()
+
+    def on_cycle(start):
+        pending = list(successors[start])
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node == start:
+                return True
+            if node not in visited:
+                visited.add(node)
+                pending.extend(successors[node])
+        return False
+
+    assert any(on_cycle(branch) for branch in branches), "Expected a polling loop"
+    for i, line in enumerate(lines):
+        if any(op in line for op in ("bar.sync", "barrier.sync", "barrier.cluster", "bar.warp.sync", "bar.red",
+                                     "barrier.red", "shfl.sync", "vote.sync")):
+            assert not on_cycle(i), "Collective instruction inside a polling loop"

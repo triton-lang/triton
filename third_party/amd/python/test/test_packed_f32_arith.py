@@ -104,12 +104,14 @@ def test_cdna5_packed_f32_arith(op, packed_inst):
 
 def test_cdna5_packed_mul_sub_contracts_to_v_pk_fma_f32():
     """Packed fmul+fsub should be contracted into v_pk_fma_f32 when fp fusion is enabled."""
-    kernel = compile_gluon(
-        gluon_mul_sub_kernel,
-        {"x_ptr": "*fp32", "y_ptr": "*fp32", "z_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK": "constexpr"},
-        {"BLOCK": BLOCK},
-        options={"enable_fp_fusion": True},
-    )
+    with triton.knobs.language.scope():
+        triton.knobs.language.allow_fp_fusion = True
+        kernel = compile_gluon(
+            gluon_mul_sub_kernel,
+            {"x_ptr": "*fp32", "y_ptr": "*fp32", "z_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+            {"BLOCK": BLOCK},
+            options={"enable_fp_fusion": True},
+        )
     llir = get_func_body_llir(kernel.asm["llir"])
     assert re.search(r"\bfmul (?:\w+ )*<2 x float>", llir), llir
     assert re.search(r"\bfsub (?:\w+ )*<2 x float>", llir), llir

@@ -313,6 +313,7 @@ int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
 bool TargetFeatures::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
          getISAFamily() == ISAFamily::RDNA4m ||
+         getISAFamily() == ISAFamily::RDNA4 ||
          getISAFamily() == ISAFamily::CDNA5;
 }
 
@@ -337,11 +338,7 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isCDNA5(); }
 
 bool TargetFeatures::supportsCvtPkScalePk8Upcast() const {
-  // TODO: gfx1250-strict implements the v_cvt_scale_pk8_* upcasts in Block32
-  // mode, but LLVM gates them behind block16-cvt-scale-insts, which it does
-  // not enable for gfx1250-strict. Drop the strict check once LLVM ticket is
-  // merged. May require LLVM bump
-  return supportsCvtPkScalePk8() && !isGFX1250Strict();
+  return supportsCvtPkScalePk8();
 }
 
 bool TargetFeatures::supportsCvtPkScalePk8Block16() const {

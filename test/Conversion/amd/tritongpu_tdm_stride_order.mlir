@@ -125,3 +125,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Getting the order from a layout with unit dimension might place unit dimensions at the back
+// Check the we do not error out for such cases since they do not affect the physical layout anways
+#shared = #ttg.padded_shared<[64:+8] {order = [3, 1, 2, 0], shape = [1, 16, 1, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_unit_block_dims
+  tt.func public @tdm_unit_block_dims(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape, %c_shape], [%c_stride, %c_stride, %c_stride, %c_stride1] : <bf16>, <1x16x1x64xbf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [5, 4, 3, 2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_rank_too_large(%ptr: !tt.ptr<f16>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM supports 1D to 5D descriptors}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape, %shape, %shape, %shape, %shape], [%stride, %stride, %stride, %stride, %stride, %one] : <f16>, <2x2x2x2x2x2xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_boolean_element_type(%ptr: !tt.ptr<i1>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM requires 8-, 16-, 32-, or 64-bit elements}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape], [%stride, %one] : <i1>, <32x64xi1, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[1024:+8] {order = [1, 0], shape = [32, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_padding_interval_too_large(%ptr: !tt.ptr<f16>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM padding must use a dword-aligned interval}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape], [%stride, %one] : <f16>, <32x64xf16, #shared>
+    tt.return
+  }
+}

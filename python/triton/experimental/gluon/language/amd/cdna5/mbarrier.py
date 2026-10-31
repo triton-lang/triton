@@ -1,3 +1,11 @@
+"""
+Shared-memory barriers (mbarriers) for CDNA5.
+
+An mbarrier lives in shared memory allocated with :class:`MBarrierLayout` and tracks a pending arrival count and a
+phase. Set it up with :func:`init`, signal it with :func:`arrive` and block on phase completion with :func:`wait`.
+Asynchronous copies and TDM operations can also arrive on an mbarrier when they complete.
+"""
+
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr

@@ -193,10 +193,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
                                           num_warps=4)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
-    else:
-        assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -254,10 +251,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
                                                     num_warps=4)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
-    else:
-        assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
+    assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -309,10 +303,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
 
-    if pgm.metadata.arch == "gfx1250-strict":
-        assert ("v_pk_mul_f32" if out_dtype == "bf16" else "v_cvt_pk_f16_f32") in pgm.asm["amdgcn"]
-    else:
-        assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch_out)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -475,6 +466,28 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
         pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
+    k_width = 2 if a_dtype == "float32" else 8
+    run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+
+
+# kWidth spanning several wmma instructions: 4 for f32 16x16x4 with kWidth 8,
+# and 2 for f16/bf16 16x16x32 with kWidth 32.
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("a_dtype,k_dim,k_width", [
+    ("float32", 4, 8),
+    ("float16", 32, 32),
+    ("bfloat16", 32, 32),
+])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64), (64, 64, 128)])
+@pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
+def test_runtime_gemm_wide_k_width(a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
+    if get_current_target().arch == "gfx1250-strict" and a_dtype != "float32":
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
+
+    run_gemm(a_dtype, a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+
+
+def run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     torch.manual_seed(42)
 
     def create_operand(shape, dtype):
@@ -505,7 +518,7 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        INSTR_SHAPE_K=k_dim, K_WIDTH=2 if a_dtype == torch.float32 else 8)
+        INSTR_SHAPE_K=k_dim, K_WIDTH=k_width)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
@@ -4041,7 +4054,7 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
 
     # Scatter the data to non-contiguous rows starting at DST_COL_OFFSET
     out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
@@ -4498,7 +4511,7 @@ def tdm_gather_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_inp, strid
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
     inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
-    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem.slice(0, NUM_INDICES))
     ttgl.amd.cdna5.tdm.async_wait(0)
 
     # Store gathered data to output using TDM
@@ -5261,3 +5274,136 @@ def test_runtime_gemm_3d_multi_cta(num_ctas):
                                     wmma_layout=wmma_layout, num_warps=num_warps, num_ctas=num_ctas)
 
     torch.testing.assert_close(c_device.cpu(), torch.bmm(a.float(), b.float()), rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("vec", [1, 4])
+@pytest.mark.parametrize("soffset, num_elements", [(0, 40), (10, 40), (30, 60), (10, 5), (5, 0), (0, 41)])
+def test_buffer_descriptor_soffset_bounds_cdna5(vec, soffset, num_elements):
+
+    @gluon.jit
+    def kernel(src, dst, soffset, num_elements, VEC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [32], [1], [0])
+        offsets = ttgl.arange(0, 32 * VEC, layout=layout)
+        # Without a stride, num_records counts bytes and bounds soffset + offsets.
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, soffset=soffset)
+        ttgl.store(dst + offsets, x)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst + 32 * VEC, num_elements * 4)
+        ttgl.amd.cdna5.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
+
+    n = 32 * vec
+    src = torch.arange(1000, 1000 + 2 * n, dtype=torch.int32, device="cuda")
+    dst = torch.full((3 * n, ), -1, dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, soffset, num_elements, vec, num_warps=1)
+
+    index = torch.arange(n, device="cuda")
+    num_records = num_elements * 4
+    end = (soffset + index + 1) * 4
+    access_end = (soffset + (index // vec + 1) * vec) * 4
+    # An access partly out of bounds keeps only its 4-byte pieces that end at
+    # least 4 bytes before num_records.
+    in_bounds = (access_end <= num_records) | (end + 4 <= num_records)
+    torch.testing.assert_close(dst[:n], torch.where(in_bounds, src[soffset + index], 0).int(), atol=0, rtol=0)
+    stored = torch.full((2 * n, ), -1, dtype=torch.int32, device="cuda")
+    loaded = dst[:n]
+    stored[(soffset + index)[in_bounds]] = loaded[in_bounds] + 1
+    torch.testing.assert_close(dst[n:], stored, atol=0, rtol=0)
+    # soffset stays in a scalar register.
+    load = "buffer_load_b32" if vec == 1 else "buffer_load_b128"
+    assert re.search(rf"{load} v(\d+|\[\d+:\d+\]), v\d+, s\[\d+:\d+\], s\d+ offen", compiled.asm["amdgcn"])
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+@pytest.mark.parametrize("lane_bytes", ["element", 16])
+@pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
+@pytest.mark.parametrize("soffset", [0, 5])
+def test_buffer_descriptor_full_range_mask_cdna5(dtype, lane_bytes, num_records, soffset):
+    elem_bytes = dtype.itemsize
+    vec = 1 if lane_bytes == "element" else 16 // elem_bytes
+    gl_dtype = getattr(ttgl, str(dtype).removeprefix("torch."))
+
+    @gluon.jit
+    def kernel(src, dst, out, num_records, soffset, VEC: ttgl.constexpr, DTYPE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [32], [1], [0])
+        offsets = ttgl.arange(0, 32 * VEC, layout=layout)
+        # Every other lane is masked off as a whole, keeping its access vectorized.
+        mask = (offsets // VEC) % 2 == 0
+        # With a bound at or above 2**31, masked-off lanes must still be dropped.
+        bound = num_records.to(ttgl.uint32)
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, bound)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
+        ttgl.store(out + offsets, x)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst, bound)
+        ttgl.amd.cdna5.buffer.store(offsets.to(DTYPE) + 1, dst_desc, offsets, mask=mask, soffset=soffset)
+
+    n = 32 * vec
+    src = (torch.arange(soffset + n, device="cuda") % 100 + 1).to(dtype)
+    dst = torch.full((soffset + n, ), -1, dtype=dtype, device="cuda")
+    out = torch.empty(n, dtype=dtype, device="cuda")
+    compiled = kernel[(1, )](src, dst, out, num_records, soffset, vec, gl_dtype, num_warps=1)
+
+    index = torch.arange(n, device="cuda")
+    active = (index // vec) % 2 == 0
+    torch.testing.assert_close(out, torch.where(active, src[soffset:], -5).to(dtype), atol=0, rtol=0)
+    expected_dst = torch.full((soffset + n, ), -1, dtype=dtype, device="cuda")
+    expected_dst[soffset:] = torch.where(active, index + 1, -1).to(dtype)
+    torch.testing.assert_close(dst, expected_dst, atol=0, rtol=0)
+    if lane_bytes == 16:
+        amdgcn = compiled.asm["amdgcn"]
+        assert "buffer_load_b128" in amdgcn and "buffer_store_b128" in amdgcn
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", ""), ("gpu", " scope:SCOPE_DEV"),
+                                               ("sys", " scope:SCOPE_SYS")])
+@pytest.mark.parametrize("temporal", [None, "none", "high"])
+def test_buffer_load_store_scope_cache_policy_cdna5(scope, scope_bits, temporal):
+
+    @gluon.jit
+    def kernel(src, dst, scope: ttgl.constexpr, temporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
+        offsets = ttgl.arange(0, 32, layout=layout)
+        if temporal is None:
+            policy: ttgl.constexpr = None
+        else:
+            policy: ttgl.constexpr = ttgl.amd.cdna5.CachePolicy(temporal=temporal)
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst, 32 * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna5.buffer.store(x, dst_desc, offsets, scope=scope, cache_policy=policy)
+
+    src = torch.arange(32, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, scope, temporal, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+    def bits(instruction):
+        match = re.search(rf"^\s*{instruction} v\d+, v\d+, s\[\d+:\d+\], null offen(.*)$", compiled.asm["amdgcn"],
+                          re.MULTILINE)
+        assert match, instruction
+        return set(match.group(1).split())
+
+    th = {None: set(), "none": {"th:TH_{}_NT"}, "high": {"th:TH_{}_HT"}}[temporal]
+    assert bits("buffer_load_b32") == set(scope_bits.split()) | {t.format("LOAD") for t in th}
+    assert bits("buffer_store_b32") == set(scope_bits.split()) | {t.format("STORE") for t in th}
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+def test_buffer_load_last_use_cdna5():
+
+    @gluon.jit
+    def kernel(src, dst):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
+        offsets = ttgl.arange(0, 32, layout=layout)
+        policy: ttgl.constexpr = ttgl.amd.cdna5.CachePolicy(temporal="last_use")
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope="gpu", cache_policy=policy)
+        ttgl.store(dst + offsets, x)
+
+    src = torch.arange(32, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+    assert re.search(r"buffer_load_b32 .* th:TH_LOAD_LU scope:SCOPE_DEV$", compiled.asm["amdgcn"], re.MULTILINE)

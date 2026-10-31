@@ -224,6 +224,36 @@ tt.func @clone_multi_partition_repeated_users(%arg0: i32, %arg1: !tt.tensordesc<
   tt.return
 }
 
+// tt.scan is a region op like tt.reduce: its combine region must be scheduled
+// together with the scan, and each scan result gets a partition output.
+// Combine ops used to be left without partitions, which crashed
+// cloneMultiPartitionDataOps.
+// CHECK-LABEL: @scan_in_partition
+tt.func @scan_in_partition(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shared_f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %md = tt.descriptor_load %arg1[%c0_i32, %c0_i32] {ttg.partition = array<i32: 1>} : !tt.tensordesc<128x128xf32, #shared_f32> -> tensor<128x128xf32, #load_blocked>
+    %smem = ttg.local_alloc %md {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> !ttg.memdesc<128x128xf32, #shared_f32, #smem>
+    %tmp = ttg.local_load %smem {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x128xf32, #shared_f32, #smem> -> tensor<128x128xf32, #load_blocked>
+    "use_memdesc"(%tmp) {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> ()
+    %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
+    // CHECK: "tt.scan"
+    %s:2 = "tt.scan"(%x, %x) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
+      // CHECK: arith.addf {{.*}}ttg.partition = array<i32: 0>
+      %0 = arith.addf %a0, %b0 : f32
+      // CHECK: arith.maxnumf {{.*}}ttg.partition = array<i32: 0>
+      %1 = arith.maxnumf %a1, %b1 : f32
+      // CHECK: tt.scan.return {{.*}}ttg.partition = array<i32: 0>
+      tt.scan.return %0, %1 : f32, f32
+    // CHECK-NEXT: }) {ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>]}
+    }) : (tensor<128xf32>, tensor<128xf32>) -> (tensor<128xf32>, tensor<128xf32>)
+    "use"(%s#0, %s#1) {ttg.partition = array<i32: 0>, data} : (tensor<128xf32>, tensor<128xf32>) -> ()
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
 // CHECK-LABEL: @no_partitions
 tt.func @no_partitions(%arg0: i32) {
   %c0_i32 = arith.constant 0 : i32

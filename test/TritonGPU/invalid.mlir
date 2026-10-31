@@ -1,5 +1,25 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = -1 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = -1 : i32} {}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 
@@ -894,6 +914,20 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+tt.func @async_copy_dtype_mismatch(%input: tensor<64x64x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>) {
+  // expected-error @+1 {{failed to verify that source pointee type must match the result element type}}
+  %token = ttg.async_copy_global_to_local %input, %view : tensor<64x64x!tt.ptr<f32>, #blocked> -> <64x64xf16, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
 // expected-error @below {{parent layout must have at least rank >= 2}}
 #slice = #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>}>
 
@@ -1049,6 +1083,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @broadcast_requires_register_permutation(%arg: tensor<4x1xi32, #src>) {
     // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
     %result = tt.broadcast %arg : tensor<4x1xi32, #src> -> tensor<4x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_partial_warp(%value: i32) {
+    // expected-error @+1 {{lane handoff requires every destination warp lane}}
+    %result = ttg.thread_handoff %value <31, 3> -> <15, 3> : i32
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_predicate_out_of_range_cta() {
+    // expected-error @+1 {{thread domain exceeds the enclosing execution domain}}
+    %predicate = ttg.thread_predicate <31, 3, 2>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_partial_cta(%value: i32) {
+    // expected-error @+1 {{cross-CTA handoff requires CTA zero as its source}}
+    %result = ttg.thread_handoff %value <31, 3, 1> -> <0, 0> : i32
     tt.return
   }
 }

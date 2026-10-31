@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace triton;
@@ -93,6 +94,10 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
+  // Automatic warp specialization does not yet synchronize two-CTA TMEM reuse.
+  if (triton::nvidia_gpu::getModuleTwoCTAs(getOperation()))
+    return;
+
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));

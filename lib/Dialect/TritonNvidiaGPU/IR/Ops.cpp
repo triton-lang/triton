@@ -655,9 +655,9 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
   if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
-                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+    auto twoCTACGALayout = CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "
@@ -692,6 +692,15 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
+  auto splits = getCTASplitNum(nvmma);
+  // Gather/scatter get row positions from the x-offsets layout.
+  unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
+  for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)
+    if (memDesc.getDimSize(dim) < splits[dim])
+      return op->emitOpError(
+                 "TMA shared-memory shape must cover every CTA split")
+             << ": dimension " << dim << " has size " << memDesc.getDimSize(dim)
+             << " but " << splits[dim] << " CTA splits";
   return success();
 }
 

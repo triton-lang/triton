@@ -1,3 +1,11 @@
+"""
+Asynchronous copies between global and shared memory for CDNA5.
+
+These move data between global memory, addressed by a tensor of pointers, and shared memory without going through
+registers, in both directions (:func:`global_to_shared` and :func:`shared_to_global`). Wait for completion with
+:func:`commit_group` / :func:`wait_group`, or signal an mbarrier with :func:`mbarrier_arrive`.
+"""
+
 from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout

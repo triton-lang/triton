@@ -18,6 +18,7 @@ add_triton_library(TritonAMDGPUToLLVM
     LoadStoreOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     Membar.cpp
+    ScheduleMembar.cpp
     TritonGPUToLLVM.cpp
     BuiltinFuncToLLVM.cpp
     Utility.cpp

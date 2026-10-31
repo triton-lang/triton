@@ -66,20 +66,62 @@ LogicalResult InlineAsmOp::verify() {
   return verifyInlineAsmOperands(*this, getPure());
 }
 
-namespace {
+static LogicalResult verifyThreadDomain(Operation *op,
+                                        ThreadDomainAttr domain) {
+  auto module = op->getParentOfType<ModuleOp>();
+  uint32_t laneMask = TritonGPUDialect::getThreadsPerWarp(module) - 1;
+  uint32_t warpMask = lookupNumWarps(op) - 1;
+  uint32_t blockMask = lookupNumCTAs(op) - 1;
+  if (!domain.hasMasksWithin(laneMask, warpMask, blockMask))
+    return op->emitOpError(
+        "thread domain exceeds the enclosing execution domain");
+  return success();
+}
 
-template <typename T> bool hasEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && isa<T>(encoding);
+LogicalResult ThreadPredicateOp::verify() {
+  return verifyThreadDomain(*this, getDomain());
+}
+
+void ThreadScopeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent())
+    successors.emplace_back(&getBody());
+  else
+    successors.emplace_back(getOperation());
+}
+
+ValueRange ThreadScopeOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? ValueRange(getResults())
+                                 : ValueRange(getBody().getArguments());
+}
+
+LogicalResult ThreadHandoffOp::verify() {
+  auto source = getSource();
+  auto destination = getDestination();
+  if (failed(verifyThreadDomain(*this, source)) ||
+      failed(verifyThreadDomain(*this, destination)))
+    return failure();
+  if (!destination.hasMasksWithin(source.getLane(), source.getWarp(),
+                                  source.getBlock()))
+    return emitOpError("destination must widen the source thread domain");
+  if (source != destination && source.hasSameWarpAndBlock(destination) &&
+      destination.getLane())
+    return emitOpError("lane handoff requires every destination warp lane");
+  if (source.getWarp() != destination.getWarp() &&
+      (destination.getLane() || destination.getWarp()))
+    return emitOpError(
+        "cross-warp handoff requires the full destination domain");
+  if (source.getBlock() != destination.getBlock()) {
+    if (!destination.isFull())
+      return emitOpError(
+          "cross-CTA handoff requires the full destination domain");
+    if (source.getBlock() != lookupNumCTAs(*this) - 1)
+      return emitOpError("cross-CTA handoff requires CTA zero as its source");
   }
-  return false;
+  return success();
 }
 
-bool hasDotOperandEncoding(Value value) {
-  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
-}
+namespace {
 
 bool isConvertTrivial(ConvertLayoutOp op) {
   auto srcType = op.getSrc().getType();
@@ -146,20 +188,11 @@ struct CanonicalizeConvertFromReshape
     // If the layouts are structurally the same, the convert is trivial
     if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-          op.getEfficientLayout());
+          op, op.getType(), convert.getSrc(), op.getEfficientLayout());
       return success();
     }
 
-    if (isExpensiveView(convert.getSrc().getType(), op.getType()))
-      return failure();
-    if (!op.getAllowReorder())
-      return failure();
-
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-        op.getEfficientLayout());
-    return mlir::success();
+    return failure();
   }
 };
 
@@ -330,28 +363,6 @@ struct CanonicalizeConvertFromConvert
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
       return failure();
-
-    // cvt(reshape) -> reshape
-    if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-          isExpensiveView(reshape.getSrc().getType(), op.getType()))
-        return failure();
-
-      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
-      // operations, which requires the element type to match between unpacking
-      // and packing. However, part of values with dot operand encoding will be
-      // packed/unpacked as i32 elements instead of the underlying element type.
-      // To avoid errors, skip this folding when either the operand or result
-      // of view has a dot operand encoding.
-      if (hasDotOperandEncoding(op->getOperand(0)) ||
-          hasDotOperandEncoding(op->getResult(0)))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<ReshapeOp>(op, op->getResult(0).getType(),
-                                             reshape.getResult(),
-                                             reshape.getAllowReorder());
-      return success();
-    }
 
     // cvt(histogram) -> histogram
     if (auto histogram = dyn_cast<HistogramOp>(arg)) {

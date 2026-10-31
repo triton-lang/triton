@@ -501,9 +501,11 @@ struct SelectOpConversion
     } else {
       llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
     }
+    auto attrs = splitBuilderAttributes<LLVM::SelectOp>(
+        rewriter, loc, adaptor.getAttributes().getValue());
     return {LLVM::SelectOp::create(rewriter, loc, llvmOperands[1].getType(),
-                                   llvmOperands,
-                                   adaptor.getAttributes().getValue())};
+                                   llvmOperands, attrs.properties,
+                                   attrs.discardableAttrs)};
   }
 };
 template <typename OpTy>

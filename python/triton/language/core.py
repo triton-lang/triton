@@ -2130,7 +2130,7 @@ def split(a, _semantic=None, _generator=None) -> tuple[tensor, tensor]:
 def view(input, *shape, _semantic=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.
-    The order of the elements may not be preserved.
+    The order of the elements is preserved.
 
     :param input: The input tensor.
     :type input: Block
@@ -2142,9 +2142,9 @@ def view(input, *shape, _semantic=None):
         view(x, (32, 32))
         view(x, 32, 32)
     """
-    warn("view is deprecated, please use reshape with can_reorder being true.")
+    warn("view is deprecated, please use reshape.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    return _semantic.reshape(input, shape, can_reorder=True)
+    return _semantic.reshape(input, shape)
 
 
 @_tensor_member_fn
@@ -2166,6 +2166,7 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
     :param input: The input tensor.
     :type input: Block
     :param shape: The new shape.
+    :param can_reorder: Ignored. Retained for backward compatibility.
 
     :code:`shape` can be passed as a tuple or as individual parameters: ::
 
@@ -2174,10 +2175,9 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    can_reorder = _unwrap_if_constexpr(can_reorder)
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
-    return _semantic.reshape(input, shape, can_reorder)
+    return _semantic.reshape(input, shape)
 
 
 def _wrap_axis(axis, ndim):
@@ -2311,15 +2311,15 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
         batch_size = 1
         for i in builtins.range(rank - 2):
             batch_size *= c_shape[i]
-        input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
-        other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
+        input = _semantic.reshape(input, [batch_size] + a_shape[-2:])
+        other = _semantic.reshape(other, [batch_size] + b_shape[-2:])
         if acc is not None:
-            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
+            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:])
 
     res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
 
     if rank >= 4:
-        res = _semantic.reshape(res, c_shape, can_reorder=False)
+        res = _semantic.reshape(res, c_shape)
 
     assert list(res.shape) == c_shape, "output shape is unexpected"
     return res

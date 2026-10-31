@@ -515,6 +515,46 @@ def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_
                                                a_use_tma=a_use_tma, b_use_tma=b_use_tma)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_warp_specialize_scaled_matmul_tmem_reuse(fresh_compilation_knobs, with_allocator):
+    triton.knobs.compilation.instrumentation_mode = "consan"
+
+    @triton.jit
+    def kernel(A, B, C, num_tiles, K, NUM_PROGRAMS: tl.constexpr):
+        pid = tl.program_id(0)
+        for tile in tl.range(pid, num_tiles, NUM_PROGRAMS, warp_specialize=True, flatten=False, num_stages=3):
+            outer_iter = (tile - pid) // NUM_PROGRAMS
+            a_scale = tl.full((128, 4), 127 + outer_iter, tl.uint8)
+            b_scale = tl.full((128, 4), 126 + outer_iter, tl.uint8)
+            acc = tl.zeros((128, 128), tl.float32)
+            for k in range(0, K, 128):
+                a = A.load([tile * 128, k])
+                b = B.load([k, 0])
+                acc = tl.dot_scaled(a, a_scale, "e4m3", b, b_scale, "e4m3", acc=acc)
+            C.store([tile * 128, 0], acc)
+
+    a = torch.ones((256, 256), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+    b = torch.ones((256, 128), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+    c = torch.empty((256, 128), device="cuda", dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, [128, 128])
+    b_desc = TensorDescriptor.from_tensor(b, [128, 128])
+    c_desc = TensorDescriptor.from_tensor(c, [128, 128])
+    kernel[(1, )](a_desc, b_desc, c_desc, 2, 256, 1, num_warps=4, num_stages=3, num_ctas=1)
+    warmup = is_compile_warmup()
+    if not warmup:
+        # E8M0 scale products are 0.5 and 2 for the two outer iterations.
+        expected = torch.empty_like(c)
+        expected[:128].fill_(128.0)
+        expected[128:].fill_(512.0)
+        torch.testing.assert_close(c, expected, rtol=0, atol=0)
+
+    # An empty outer loop must finish without touching the output.
+    c.zero_()
+    kernel[(1, )](a_desc, b_desc, c_desc, 0, 256, 1, num_warps=4, num_stages=3, num_ctas=1)
+    if not warmup:
+        torch.testing.assert_close(c, torch.zeros_like(c), rtol=0, atol=0)
+
+
 @triton.jit
 def attention_inner_loop_kernel(  #
         desc_q, desc_k, desc_v,  #
