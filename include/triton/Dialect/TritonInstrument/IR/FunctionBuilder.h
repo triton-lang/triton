@@ -291,6 +291,21 @@ public:
   void createCommitAccessesCall(ImplicitLocOpBuilder &b, int thread, Value pred,
                                 CommitKind::Kind commitKind,
                                 Operation *insertPoint);
+  // recordAsyncCopyIssue: mark the thread's most recent async copy in the
+  // direction of commitKind as uncommitted in asyncCopyIssueAges.
+  void createRecordAsyncCopyIssueCall(ImplicitLocOpBuilder &b, int thread,
+                                      Value pred, CommitKind::Kind commitKind,
+                                      Operation *insertPoint);
+  // advanceAsyncCopyIssueAges: commitAccesses for asyncCopyIssueAges.
+  void createAdvanceAsyncCopyIssueAgesCall(ImplicitLocOpBuilder &b, int thread,
+                                           Operation *insertPoint);
+  // recentAsyncCopyIssue: return whether the thread's most recent commitKind
+  // async copy is uncommitted or in the groupCount youngest groups. Returns
+  // null when issue ages are not tracked.
+  Value createRecentAsyncCopyIssueCall(ImplicitLocOpBuilder &b, int thread,
+                                       int groupCount,
+                                       CommitKind::Kind commitKind,
+                                       Operation *insertPoint);
   // clearOutstandingCommitsTransferWrites: clear entries farther than
   // outstandingNum from the thread and set write visibility for threads in
   // transferThreadMask. If includeStaged is true, also clear staged entries,
@@ -336,6 +351,10 @@ private:
   void createClearBarrierStorageTrackingCall(ImplicitLocOpBuilder &b,
                                              Value selectedBarriers, Value pred,
                                              Operation *insertPoint);
+
+  void createAdvanceCommitAgesCall(ImplicitLocOpBuilder &b,
+                                   StringRef functionName, int thread,
+                                   Value pred, ValueType ages);
 
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,

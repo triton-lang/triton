@@ -1,6 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -16,8 +17,8 @@ using tti::WaitOpInfo;
 
 namespace mlir {
 
-// Async loads and stores share commit groups, so a wait retires the same groups
-// of both.
+// Async loads and stores share commit groups, so both records use the same
+// pending count.
 static SmallVector<WaitOpInfo> getAsyncCopyWaitInfo(int pendingCount,
                                                     bool includeStaged) {
   return {WaitOpInfo{tti::CommitKind::AsyncCp, pendingCount,
@@ -101,6 +102,33 @@ public:
       return {};
     }
     return {};
+  }
+
+  // Async loads and stores may complete out of order with each other and
+  // share the same wait counter. A wait that leaves instructions outstanding
+  // does not identify which copies have completed. ConSan keeps this record's
+  // accesses pending if the current thread's most recent copy in the other
+  // direction is uncommitted or in the pendingCount youngest groups.
+  Value createWaitCompletionPredicate(ImplicitLocOpBuilder &b,
+                                      tti::FunctionBuilder &funcBuilder,
+                                      Operation *op, const WaitOpInfo &info,
+                                      int thread) const override {
+    auto asyncWaitOp = dyn_cast<ttag::AsyncWaitOp>(op);
+    if (!asyncWaitOp || asyncWaitOp.getNumInst() == 0)
+      return {};
+    assert((info.commitKind == tti::CommitKind::AsyncCp ||
+            info.commitKind == tti::CommitKind::AsyncCpRead) &&
+           "amdg.async_wait completes only async copies");
+    tti::CommitKind::Kind otherKind =
+        info.commitKind == tti::CommitKind::AsyncCp
+            ? tti::CommitKind::AsyncCpRead
+            : tti::CommitKind::AsyncCp;
+    Value otherRecentIssue = funcBuilder.createRecentAsyncCopyIssueCall(
+        b, thread, info.pendingCount, otherKind, op);
+    if (!otherRecentIssue)
+      return {};
+    return arith::XOrIOp::create(b, otherRecentIssue,
+                                 arith::ConstantIntOp::create(b, 1, 1));
   }
 
   Value getIssuerCTAPred(ImplicitLocOpBuilder & /*b*/,
@@ -190,6 +218,17 @@ public:
     if (needsAsyncCpRead)
       kinds.push_back(tti::CommitKind::AsyncCpRead);
     return kinds;
+  }
+
+  bool needsAsyncCopyIssueAges(ModuleOp module) const override {
+    bool hasAsyncLoads = false;
+    bool hasAsyncStores = false;
+    module.walk([&](Operation *op) {
+      hasAsyncLoads |=
+          isa<ttg::AsyncCopyGlobalToLocalOp, ttag::BufferLoadToLocalOp>(op);
+      hasAsyncStores |= isa<ttag::AsyncCopyLocalToGlobalOp>(op);
+    });
+    return hasAsyncLoads && hasAsyncStores;
   }
 };
 

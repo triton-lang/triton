@@ -106,7 +106,8 @@ public:
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, *hooks),
-        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
+        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod),
+        hasSharedBuffers && hooks->needsAsyncCopyIssueAges(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);

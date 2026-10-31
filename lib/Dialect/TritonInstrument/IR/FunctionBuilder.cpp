@@ -94,6 +94,12 @@ static int getMaxCommitAge(RankedTensorType commitsType) {
   return llvm::maxIntN(commitsType.getElementTypeBitWidth());
 }
 
+static Value createClampedWaitCount(ImplicitLocOpBuilder &b, int outstandingNum,
+                                    RankedTensorType agesType) {
+  outstandingNum = std::clamp(outstandingNum, 0, getMaxCommitAge(agesType));
+  return arith::ConstantIntOp::create(b, outstandingNum, 32);
+}
+
 static uint64_t expandActiveMask(uint64_t activeMask, unsigned numBaseThreads) {
   uint64_t expanded = 0;
   for (unsigned i = 0; i < numBaseThreads; ++i) {
@@ -4128,14 +4134,135 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
   if (auxData.commits[commitKind].empty()) {
     return;
   }
+  createAdvanceCommitAgesCall(b, "commit_accesses", thread, pred,
+                              auxData.commits[commitKind].at(insertPoint));
+}
+
+// Row of AuxDataMap::asyncCopyIssueAges for an async-copy commit kind.
+static std::optional<int> getAsyncCopyDirection(CommitKind::Kind commitKind) {
+  if (commitKind == CommitKind::AsyncCp)
+    return 0;
+  if (commitKind == CommitKind::AsyncCpRead)
+    return 1;
+  return std::nullopt;
+}
+
+void FunctionBuilder::createRecordAsyncCopyIssueCall(
+    ImplicitLocOpBuilder &b, int thread, Value pred,
+    CommitKind::Kind commitKind, Operation *insertPoint) {
+  std::optional<int> direction = getAsyncCopyDirection(commitKind);
+  if (auxData.asyncCopyIssueAges.empty() || !direction)
+    return;
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
-  auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
+  ValueType issueAges = auxData.asyncCopyIssueAges.at(insertPoint);
+  auto issueAgesType = cast<RankedTensorType>(issueAges.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
+  Value directionVal = arith::ConstantIntOp::create(b, *direction, 32);
+  SmallVector<Value> args = {threadVal, directionVal, pred, issueAges.value};
   createCallToCachedFunction(
-      b, "commit_accesses", args,
+      b, "record_async_copy_issue", args,
+      /*assertInfo=*/std::nullopt, {issueAgesType},
+      [issueAgesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value threadVal = entryBlock->getArgument(0);
+        Value directionVal = entryBlock->getArgument(1);
+        Value pred = entryBlock->getArgument(2);
+        Value issueAgesPtr = entryBlock->getArgument(3);
+
+        auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
+
+        Value issueAges = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), issueAgesPtr, issueAgesType);
+        Value ctaMask = createCTASetMask(fb, issueAgesType, /*dim=*/0,
+                                         createCurrentCTAMask(fb));
+        Value entryMask = arith::AndIOp::create(
+            fb, createDimMask(fb, directionVal, issueAgesType, /*dim=*/1),
+            createDimMask(fb, threadVal, issueAgesType, /*dim=*/2));
+        entryMask = arith::AndIOp::create(fb, entryMask, ctaMask);
+        Value minusOne =
+            tti::createConstIntTensor(fb, fb.getLoc(), -1, issueAgesType, true);
+        Value updated =
+            arith::SelectOp::create(fb, entryMask, minusOne, issueAges);
+        createMaskedStoreScratchMemory(fb, fb.getLoc(), issueAgesPtr, updated,
+                                       issueAgesType, ctaMask);
+
+        fb.setInsertionPointToEnd(thenBlock);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createAdvanceAsyncCopyIssueAgesCall(
+    ImplicitLocOpBuilder &b, int thread, Operation *insertPoint) {
+  if (auxData.asyncCopyIssueAges.empty())
+    return;
+  createAdvanceCommitAgesCall(b, "advance_async_copy_issue_ages", thread,
+                              /*pred=*/nullptr,
+                              auxData.asyncCopyIssueAges.at(insertPoint));
+}
+
+Value FunctionBuilder::createRecentAsyncCopyIssueCall(
+    ImplicitLocOpBuilder &b, int thread, int groupCount,
+    CommitKind::Kind commitKind, Operation *insertPoint) {
+  std::optional<int> direction = getAsyncCopyDirection(commitKind);
+  assert(direction && "issue ages are tracked only for async copies");
+  if (auxData.asyncCopyIssueAges.empty())
+    return {};
+  ValueType issueAges = auxData.asyncCopyIssueAges.at(insertPoint);
+  auto issueAgesType = cast<RankedTensorType>(issueAges.type);
+  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  Value directionVal = arith::ConstantIntOp::create(b, *direction, 32);
+  Value groupCountVal = createClampedWaitCount(b, groupCount, issueAgesType);
+  SmallVector<Value> args = {threadVal, directionVal, groupCountVal,
+                             issueAges.value};
+  AssertInfo resultInfo{"", b.getI1Type()};
+  return createCallToCachedFunction(
+      b, "recent_async_copy_issue", args, resultInfo, {issueAgesType},
+      [issueAgesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value threadVal = entryBlock->getArgument(0);
+        Value directionVal = entryBlock->getArgument(1);
+        Value groupCountVal = entryBlock->getArgument(2);
+        Value issueAgesPtr = entryBlock->getArgument(3);
+
+        Value issueAges = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), issueAgesPtr, issueAgesType);
+        auto elemIntType = cast<IntegerType>(issueAgesType.getElementType());
+        Value groupCountElem =
+            adjustIntegerWidth(fb, groupCountVal, elemIntType);
+        Value entryMask =
+            createDimMask(fb, directionVal, issueAgesType, /*dim=*/1);
+        entryMask = arith::AndIOp::create(
+            fb, entryMask,
+            createDimMask(fb, threadVal, issueAgesType, /*dim=*/2));
+        entryMask =
+            arith::AndIOp::create(fb, entryMask,
+                                  createCTASetMask(fb, issueAgesType, /*dim=*/0,
+                                                   createCurrentCTAMask(fb)));
+        // Uncommitted (-1) or in the groupCount youngest groups.
+        Value zero = arith::ConstantOp::create(
+            fb, elemIntType, fb.getIntegerAttr(elemIntType, 0));
+        Value issued = createCmpIntTensorScalar(fb, issueAges, zero,
+                                                arith::CmpIPredicate::ne);
+        Value young = createCmpIntTensorScalar(fb, issueAges, groupCountElem,
+                                               arith::CmpIPredicate::sle);
+        Value recentIssue = arith::AndIOp::create(fb, issued, young);
+        recentIssue = arith::AndIOp::create(fb, recentIssue, entryMask);
+        triton::ReturnOp::create(fb, reduceAll<arith::OrIOp>(fb, recentIssue));
+      },
+      /*emitAssert=*/false);
+}
+
+void FunctionBuilder::createAdvanceCommitAgesCall(ImplicitLocOpBuilder &b,
+                                                  StringRef functionName,
+                                                  int thread, Value pred,
+                                                  ValueType ages) {
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+  auto commitsType = cast<RankedTensorType>(ages.type);
+  Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  SmallVector<Value> args = {threadVal, pred, ages.value};
+  createCallToCachedFunction(
+      b, functionName.str(), args,
       /*assertInfo=*/std::nullopt, {commitsType},
       [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
@@ -4238,10 +4365,9 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   Value transferMaskVal =
       arith::ConstantIntOp::create(b, transferThreadMask, 64);
-  // Clamp negative wait counts to zero to avoid selecting empty entries.
   // Uncommitted accesses are included separately when includeStaged is true.
-  outstandingNum = std::clamp(outstandingNum, 0, getMaxCommitAge(commitsType));
-  Value outstandingNumVal = arith::ConstantIntOp::create(b, outstandingNum, 32);
+  Value outstandingNumVal =
+      createClampedWaitCount(b, outstandingNum, commitsType);
   SmallVector<Value> args = {threadVal, transferMaskVal, outstandingNumVal,
                              pred, outstandingCommits.value};
   ManglingArgs specializationArgs{commitsType, uint64_t(retainCopies),
