@@ -16,6 +16,7 @@ import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
+from ._cache_policy import _policy_and_scope
 
 if TYPE_CHECKING:
     from triton._C import ir
@@ -257,7 +258,7 @@ def update_tensor_descriptor(desc: tensor_descriptor, add_offsets: List[ttgl.con
 @builtin
 def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
                dest: shared_memory_descriptor = None, pred=None, mbarrier: shared_memory_descriptor = None,
-               warp_used_hint=None, cache_modifier="", _semantic=None) -> None:
+               warp_used_hint=None, cache_modifier="", *, scope=None, cache_policy=None, _semantic=None) -> None:
     """Load a block of tensor specified in tensor descriptor from global memory to shared memory asynchronously.
 
     This operation expects a prior :func:`update_tensor_descriptor` to position the
@@ -284,6 +285,11 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
             warps participate; explicit ``0`` and other invalid hints are
             rejected by the verifier.
         cache_modifier (str, optional): Cache behavior.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that scope.
+            It is not atomic and orders no other memory operation. Cannot be combined with
+            ``cache_modifier``. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Cannot be combined with ``cache_modifier``. Defaults to None.
     """
     assert dest is not None, "async_load requires a dest shared_memory_descriptor"
     if offsets:
@@ -294,6 +300,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
 
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
     warp_used_hint = _unwrap_if_constexpr(warp_used_hint)
@@ -301,12 +308,12 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
         warp_used_hint = int(warp_used_hint)
 
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, dest.handle, mbarrier_handle, cache_modifier,
-                                                            warp_used_hint)
+                                                            warp_used_hint, cache_policy, scope)
 
 
 @builtin
 def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descriptor, ttgl.constexpr | int]],
-                     cache_modifier="", _semantic=None) -> None:
+                     cache_modifier="", *, scope=None, cache_policy=None, _semantic=None) -> None:
     """Emit one explicit fused TDM load for 2-4 descriptor/destination pairs.
 
     This can perform better than several consecutive separate TDM loads,
@@ -318,12 +325,17 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
     Each member is ``(desc, dest, warp_used_hint)``. The descriptors must
     already encode their tile offsets, predicates, and bounds; use
     :func:`update_tensor_descriptor` before calling this helper when needed.
-    All members share one cache modifier, matching the fused IR operation.
+    All members share one cache modifier, cache policy and scope, matching the fused IR operation.
 
     Args:
         members: 2-4 ``(desc, dest, warp_used_hint)`` tuples. Hints must be
             legal, pairwise-disjoint bitmasks.
         cache_modifier (str, optional): Cache behavior shared by all members.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that scope.
+            It is not atomic and orders no other memory operation. Cannot be combined with
+            ``cache_modifier``. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Cannot be combined with ``cache_modifier``. Defaults to None.
     """
     members = _unwrap_if_constexpr(members)
     if not 2 <= len(members) <= 4:
@@ -353,15 +365,16 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
         dest_handles.append(dest.handle)
         warp_used_hints.append(int(warp_used_hint))
 
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     _semantic.builder.create_async_tdm_fused_copy_global_to_local(desc_handles, dest_handles, warp_used_hints,
-                                                                  cache_modifier)
+                                                                  cache_modifier, cache_policy, scope)
 
 
 @builtin
 def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor] = None,
-                src: shared_memory_descriptor = None, mbarrier: shared_memory_descriptor = None, cache_modifier="",
-                _semantic=None) -> None:
+                src: shared_memory_descriptor = None, mbarrier: shared_memory_descriptor = None, cache_modifier="", *,
+                scope=None, cache_policy=None, _semantic=None) -> None:
     """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
 
     See :func:`async_load` for how the descriptor is positioned (a prior
@@ -374,6 +387,12 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
             pointer used to position the descriptor before the store.
         src (shared_memory_descriptor): the shared memory source to load the data.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        cache_modifier (str, optional): Cache behavior.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at that scope.
+            It is not atomic and orders no other memory operation. Cannot be combined with
+            ``cache_modifier``. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Cannot be combined with ``cache_modifier``. Defaults to None.
     """
     assert src is not None, "async_store requires a src shared_memory_descriptor"
     if offsets:
@@ -381,8 +400,10 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
 
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, cache_modifier, _semantic)
     cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
-    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier,
+                                                            cache_policy, scope)
 
 
 @builtin
@@ -398,7 +419,7 @@ def async_wait(num_outstanding=0, _semantic=None) -> None:
 
 @builtin
 def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: shared_memory_descriptor,
-                  mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                  mbarrier: shared_memory_descriptor = None, *, scope=None, cache_policy=None, _semantic=None) -> None:
     """Scatter data from shared memory to non-contiguous rows in global memory asynchronously.
 
     This operation uses TDM scatter mode to write data to non-contiguous rows in global memory.
@@ -421,6 +442,10 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
         dst_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the destination tensor.
         src (shared_memory_descriptor): the shared memory source containing data to scatter. Must be 2D.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at that scope.
+            It is not atomic and orders no other memory operation. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Defaults to None.
     """
     ndim = len(desc.block_shape)
     assert ndim == 2, f"TDM scatter only supports 2D tensors, got {ndim}D"
@@ -431,12 +456,14 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
-    _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, src.handle, mbarrier_handle)
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, None, _semantic)
+    _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, src.handle, mbarrier_handle,
+                                               cache_policy, scope)
 
 
 @builtin
 def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: shared_memory_descriptor,
-                 mbarrier: shared_memory_descriptor = None, _semantic=None) -> None:
+                 mbarrier: shared_memory_descriptor = None, *, scope=None, cache_policy=None, _semantic=None) -> None:
     """Gather data from non-contiguous rows in global memory to shared memory asynchronously.
 
     This operation uses TDM gather mode to read data from non-contiguous rows in global memory.
@@ -460,6 +487,10 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
         src_row_indices (tensor): 1D tensor of row indices (int16 or int32) in the source tensor.
         dst (shared_memory_descriptor): the shared memory destination to store gathered data. Must be 2D.
         mbarrier (shared_memory_descriptor, optional): The barrier object to signal "arrive" on.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that scope.
+            It is not atomic and orders no other memory operation. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Defaults to None.
     """
     ndim = len(desc.block_shape)
     assert ndim == 2, f"TDM gather only supports 2D tensors, got {ndim}D"
@@ -470,7 +501,9 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
-    _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, dst.handle, mbarrier_handle)
+    cache_policy, scope = _policy_and_scope(cache_policy, scope, None, _semantic)
+    _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, dst.handle, mbarrier_handle,
+                                              cache_policy, scope)
 
 
 @builtin

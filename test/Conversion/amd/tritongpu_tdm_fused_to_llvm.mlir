@@ -69,3 +69,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // TTG-LABEL: tdm_fused_scope_cache_policy
+  // LLVM-LABEL: tdm_fused_scope_cache_policy
+  tt.func public @tdm_fused_scope_cache_policy(
+    %desc0: !tt.tensordesc<64x64xf16, #shared>,
+    %desc1: !tt.tensordesc<64x64xf16, #shared>,
+    %dst0: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>,
+    %dst1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  ) {
+    // TTG: amdg.async_tdm_fused_copy_global_to_local
+    // TTG-SAME: cachePolicy = #amdg.cache_policy_gfx12<temporal = none>, scope = 3 : i32
+    // LLVM-DAG: %[[AUX:.*]] = llvm.mlir.constant(25 : i32) : i32
+    // LLVM: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[AUX]])
+    %0 = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %dst0, %dst1 {warp_used_hints = array<i32: 3, 12>, cachePolicy = #amdg.cache_policy_gfx12<temporal = none>, scope = 3 : i32} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
