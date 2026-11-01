@@ -1,4 +1,4 @@
-"""Cache policy hints for CDNA5 memory accesses."""
+"""Cache policy hints for gfx12 (RDNA4 and CDNA5) memory accesses."""
 
 from __future__ import annotations
 from dataclasses import dataclass
@@ -14,7 +14,7 @@ _TEMPORAL_HINTS = ("regular", "none", "high", "last_use")
 @dataclass(frozen=True)
 class CachePolicy:
     """
-    Cache hints for CDNA5 memory accesses, taken by the ``buffer`` ops.
+    Cache hints for gfx12 (RDNA4 and CDNA5) memory accesses, taken by the ``buffer`` ops.
 
     The hints are performance-only and never affect coherence. The coherence
     scope of an access comes from the op's ``scope=`` argument instead.

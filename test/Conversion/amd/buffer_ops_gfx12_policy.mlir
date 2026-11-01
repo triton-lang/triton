@@ -1,4 +1,6 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --check-prefixes=CHECK,CU
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1201 cu-mode=true" | FileCheck %s --check-prefixes=CHECK,CU
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1201 | FileCheck %s --check-prefixes=CHECK,WGP
 
 // A buffer descriptor packs its base and num_records into the resource;
 // soffset feeds the instruction's scalar offset, scaled from elements to bytes.
@@ -23,7 +25,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// scope selects SCOPE and the gfx12 policy selects TH, independently.
+// scope selects SCOPE and the gfx12 policy selects TH, independently. The cta
+// scope is SCOPE_CU, except in RDNA4's WGP mode, where it is SCOPE_SE.
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -31,7 +34,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @buffer_scope_policy(%arg0: !tt.ptr<f32>, %offsets: tensor<32xi32, #blocked>) {
     // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %{{.*}}, 1 : f32
     %0 = amdg.buffer_load %arg0[%offsets] {cachePolicy = #amdg.cache_policy_gfx12<temporal = none>} : !tt.ptr<f32> -> tensor<32xf32, #blocked>
-    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %{{.*}}, 0 : f32
+    // CU: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %{{.*}}, 0 : f32
+    // WGP: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %{{.*}}, 8 : f32
     %1 = amdg.buffer_load %arg0[%offsets] {scope = 2 : i32} : !tt.ptr<f32> -> tensor<32xf32, #blocked>
     // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %{{.*}}, 19 : f32
     %2 = amdg.buffer_load %arg0[%offsets] {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : !tt.ptr<f32> -> tensor<32xf32, #blocked>
