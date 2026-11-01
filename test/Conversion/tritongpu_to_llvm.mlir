@@ -4440,6 +4440,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // Warp basis 17 = 16 ^ 1 overlaps the contiguous part of the 32-bit ldmatrix
 // tile, so the conversion must not use ldmatrix.
 #warp_overlap = #ttg.generic_linear<{register = [], lane = [[2], [1], [8], [32], [64]], warp = [[17], [4]], block = []}>
+// The same holds for a lane basis outside the tile (9 = 8 ^ 1).
+#lane_overlap = #ttg.generic_linear<{register = [], lane = [[2], [1], [9], [32], [64]], warp = [[16], [4]], block = []}>
 // A swizzled warp basis (48 = 16 ^ 32) that lies outside the contiguous tile
 // can still use ldmatrix.
 #warp_aligned = #ttg.generic_linear<{register = [], lane = [[2], [1], [8], [32], [64]], warp = [[48], [4]], block = []}>
@@ -4459,6 +4461,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
     // CHECK-NOT: nvvm.ldmatrix
     tt.store %addrs, %value : tensor<128x!tt.ptr<i32>, #warp_overlap>
+    tt.return
+  }
+
+  // CHECK-LABEL: convert_layout_lane_tile_overlap
+  tt.func public @convert_layout_lane_tile_overlap(%arg0: !tt.ptr<i32>) {
+    %offs = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_warp>
+    %cvt = ttg.convert_layout %offs : tensor<128xi32, #blocked_warp> -> tensor<128xi32, #lane_overlap>
+    %ptrs = tt.splat %arg0 : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #lane_overlap>
+    %addrs = tt.addptr %ptrs, %cvt : tensor<128x!tt.ptr<i32>, #lane_overlap>, tensor<128xi32, #lane_overlap>
+    %value = arith.constant dense<1> : tensor<128xi32, #lane_overlap>
+    // CHECK-NOT: nvvm.ldmatrix
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+    // CHECK-NOT: nvvm.ldmatrix
+    tt.store %addrs, %value : tensor<128x!tt.ptr<i32>, #lane_overlap>
     tt.return
   }
 
