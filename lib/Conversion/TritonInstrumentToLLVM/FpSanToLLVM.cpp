@@ -54,9 +54,9 @@ PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
   unsigned shift = llvm::countr_zero(oneBits);
   assert(shift != 0 && "expected even 1.0 bit pattern");
 
-  // we firstly multiply by an arbitrary odd constant to mix from low
-  // bits to high whilst remaining invertible:
-  uint64_t mulA = 922291u & magMask;
+  // This odd multiplier reduces trailing zeros for common model constants
+  // while mixing low bits into high bits invertibly:
+  uint64_t mulA = 14940041u & magMask;
   uint64_t oneMixed = (oneBits * mulA) & magMask;
   oneMixed ^= oneMixed >> shift;
   assert((oneMixed & 1) == 1 && "expected odd mixed 1.0");
@@ -178,13 +178,14 @@ struct ExperimentalFPSanEmbedOpConversion
     Type intTy = rewriter.getIntegerType(floatTy.getWidth());
 
     SmallVector<Value> resultVals;
-    for (Value elem : unpackLLElements(loc, adaptor.getVal(), rewriter)) {
+    for (Value elem :
+         unpackUniqueTensorElements(loc, adaptor.getVal(), rewriter)) {
       Value raw = bitcastIfNeeded(rewriter, loc, elem, intTy);
       resultVals.push_back(mixFloatToInt(rewriter, loc, raw, floatTy));
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), resultVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -202,13 +203,14 @@ struct ExperimentalFPSanUnembedOpConversion
     Type resultElemTy = getTypeConverter()->convertType(floatTy);
 
     SmallVector<Value> resultVals;
-    for (Value elem : unpackLLElements(loc, adaptor.getVal(), rewriter)) {
+    for (Value elem :
+         unpackUniqueTensorElements(loc, adaptor.getVal(), rewriter)) {
       Value raw = unmixIntToFloat(rewriter, loc, elem, floatTy);
       resultVals.push_back(bitcastIfNeeded(rewriter, loc, raw, resultElemTy));
     }
 
-    Value result = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), resultVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }

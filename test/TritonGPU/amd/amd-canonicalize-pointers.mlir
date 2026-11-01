@@ -587,6 +587,58 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reshape_offset(%arg0: !tt.ptr<f16>, %arg1: i32) -> tensor<4x4xf16> {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %1 = tt.splat %arg1 : i32 -> tensor<16xi32>
+    %2 = arith.addi %1, %0 : tensor<16xi32>
+    %3 = tt.reshape %2 : tensor<16xi32> -> tensor<4x4xi32>
+    %4 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+    %5 = tt.addptr %4, %3 : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+    %6 = tt.load %5 : tensor<4x4x!tt.ptr<f16>>
+    tt.return %6 : tensor<4x4xf16>
+  }
+}
+
+// CHECK-LABEL:   tt.func @reshape_offset(
+// CHECK-SAME:                            %[[VAL_0:.*]]: !tt.ptr<f16>,
+// CHECK-SAME:                            %[[VAL_1:.*]]: i32) -> tensor<4x4xf16> {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.reshape %[[VAL_2]] : tensor<16xi32> -> tensor<4x4xi32>
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_1]] : !tt.ptr<f16>, i32
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_4]] : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_3]] : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<4x4x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<4x4xf16>
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reshape_pointer(%arg0: !tt.ptr<f16>) -> tensor<4x4xf16> {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+    %2 = tt.addptr %1, %0 : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+    %3 = tt.reshape %2 : tensor<16x!tt.ptr<f16>> -> tensor<4x4x!tt.ptr<f16>>
+    %4 = tt.load %3 : tensor<4x4x!tt.ptr<f16>>
+    tt.return %4 : tensor<4x4xf16>
+  }
+}
+
+// CHECK-LABEL:   tt.func @reshape_pointer(
+// CHECK-SAME:                             %[[VAL_0:.*]]: !tt.ptr<f16>) -> tensor<4x4xf16> {
+// CHECK:           %[[VAL_1:.*]] = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+// CHECK:           %[[VAL_2:.*]] = arith.extsi %[[VAL_1]] : tensor<16xi32> to tensor<16xi64>
+// CHECK:           %[[VAL_3:.*]] = tt.reshape %[[VAL_2]] : tensor<16xi64> -> tensor<4x4xi64>
+// CHECK:           %[[VAL_4:.*]] = arith.trunci %[[VAL_3]] : tensor<4x4xi64> to tensor<4x4xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f16> -> tensor<4x4x!tt.ptr<f16>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_4]] : tensor<4x4x!tt.ptr<f16>>, tensor<4x4xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<4x4x!tt.ptr<f16>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<4x4xf16>
+// CHECK:         }
+
+// -----
+
 
 // The following is a more complex case where also a multiplication is involved. It's useful to walk through the case.
 // We have that the offset to the pointer is the following:
@@ -1146,6 +1198,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f16>, i32
 // CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<f16>
 // CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]], %[[VAL_2]] : (!tt.ptr<f16>, f16, i1) -> f16
+// CHECK:           tt.return
+// CHECK:         }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_atomic_poll(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %expected: i32) {
+    %0 = tt.get_program_id x : i32
+    %1 = tt.addptr %arg0, %0 : !tt.ptr<i32>, i32
+    %matched = tt.atomic_poll acquire, gpu, %1, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func public @test_atomic_poll(
+// CHECK-SAME:      %[[ARG:.*]]: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[EXPECTED:.*]]: i32) {
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[ARG]], %[[PID]] : !tt.ptr<i32>, i32
+// CHECK:           %[[MATCHED:.*]] = tt.atomic_poll acquire, gpu, %[[PTR]], %[[EXPECTED]] : !tt.ptr<i32>, i32 -> i1
 // CHECK:           tt.return
 // CHECK:         }
 

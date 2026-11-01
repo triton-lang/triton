@@ -133,3 +133,21 @@ Each registration field is optional, so a backend can register only the Proton
 extension points it supports. Backend implementations should follow the existing
 `CuptiProfiler` and `RoctracerProfiler` patterns for callback correlation,
 runtime events, and metric insertion.
+
+### Registering at runtime
+
+A backend shipped separately from Triton, for example in its own package, can
+register when its library is loaded instead. It passes the same
+`BackendRegistration` to `proton::registerBackend` before profiling starts, with
+`proton::DeviceType::EXTERNAL` as the device type. For now there is a single
+`DeviceType::EXTERNAL`, so a process can have only one device type registered
+this way.
+
+```c++
+__attribute__((constructor)) static void registerMyBackend() {
+  proton::registerBackend(makeMyBackendRegistration());
+}
+```
+
+The library resolves `registerBackend` from `libproton`, so Triton has to be
+built with `TRITON_EXT_ENABLED`, as the official wheels are.

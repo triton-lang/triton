@@ -181,7 +181,7 @@ PyShadowCell toPyShadowCell(const gsan::ShadowCell &cell) {
   for (size_t i = 0; i < gsan::ShadowCell::kReadClockSize; ++i)
     out.readClocks[i] = toPyScalarClock(cell.readClocks[i]);
   out.writeClock = toPyScalarClock(cell.writeClock);
-  out.numReads = cell.numReads;
+  out.numReads = cell.readCountAndLock & gsan::ShadowCell::kReadCountMask;
   return out;
 }
 
@@ -366,9 +366,22 @@ void init_gsan_testing(py::module_ &m) {
   m.def(
       "shadow_cell_address", gsan::getShadowAddress, py::arg("real_address"),
       "Return the address of the ShadowCell corresponding to a real address.");
+  m.def("shadow_granularity", gsan::getShadowGranularity,
+        py::arg("real_address"), "Return the pointer's shadow granularity.");
+
+  m.def("is_write_once_address", gsan::isWriteOnceAddress);
+  m.def("shadow_cell_size",
+        [](uintptr_t addr) { return gsan::getShadowCellSize(addr); });
+  m.def("decode_write_once_clock", [](py::bytes data) {
+    if (data.size() < sizeof(gsan::WriteOnceShadowCell))
+      throw py::value_error(
+          "decode_write_once_clock expected at least 4 bytes");
+    gsan::WriteOnceShadowCell cell;
+    std::memcpy(&cell, data.c_str(), sizeof(cell));
+    return toPyScalarClock(cell.writeClock);
+  });
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);
-  m.attr("SHADOW_GRANULARITY_BYTES") = gsan::kShadowMemGranularityBytes;
   m.attr("GLOBAL_STATE_SIZE_BYTES") = sizeof(gsan::GlobalState);
   m.attr("THREAD_STATE_HEADER_SIZE_BYTES") = kThreadStateHeaderSize;
   m.attr("PER_DEVICE_STATE_STRIDE_BYTES") = gsan::kPerDeviceStateStride;

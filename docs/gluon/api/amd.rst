@@ -14,6 +14,7 @@ Common APIs
 
     AMDMFMALayout
     AMDWMMALayout
+    slice
     warp_pipeline_stage
 
 GPU Generations
@@ -24,5 +25,6 @@ GPU Generations
 
    CDNA 3 <amd.cdna3>
    CDNA 4 <amd.cdna4>
+   CDNA 5 <amd.cdna5>
    RDNA 3 <amd.rdna3>
    RDNA 4 <amd.rdna4>

@@ -36,7 +36,7 @@ struct CondBarrierOpConversion
     Location loc = op->getLoc();
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterCondBarBlock =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterCondBarBlock);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, adaptor.getPred(), trueBlock,

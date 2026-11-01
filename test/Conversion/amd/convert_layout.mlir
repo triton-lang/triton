@@ -111,7 +111,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_4in_4out
   tt.func @v_perm_small_convert_layout_with_broadcasting_4in_4out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
-    // CHECK: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
     tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
@@ -175,7 +174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_fully_broadcasted_out_reg
   tt.func @v_perm_fully_broadcasted_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
-    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-COUNT-8: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
     tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
@@ -205,7 +204,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_partial_broadcasting_out_reg
   tt.func @v_perm_partial_broadcasting_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
-    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-COUNT-8: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
     tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
@@ -223,5 +222,92 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   tt.func @convert_layout_pointer_element_no_crash(%arg0: tensor<32x32x!tt.ptr<i8>, #blocked4x4>) {
     %0 = ttg.convert_layout %arg0 : tensor<32x32x!tt.ptr<i8>, #blocked4x4> -> tensor<32x32x!tt.ptr<i8>, #linear4x4>
     tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_warp_sync
+  tt.func @convert_layout_warp_sync(%arg0: tensor<64x32xf32, #blocked0>) {
+    // CHECK: llvm.store
+    // CHECK: llvm.fence syncscope("wavefront") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK-NEXT: rocdl.wave.barrier
+    // CHECK-NEXT: llvm.fence syncscope("wavefront") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK: llvm.load
+    // CHECK-NOT: rocdl.s.barrier
+    %0 = ttg.convert_layout %arg0 : tensor<64x32xf32, #blocked0> -> tensor<64x32xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#dst = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16], [32]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx942"} {
+  // CHECK-LABEL: @shuffle_i1_preserves_extension
+  tt.func private @shuffle_i1_preserves_extension(%arg: tensor<64xi1, #src>) -> tensor<64xi1, #dst> {
+    // CHECK: llvm.sext %{{.*}} : i1 to i32
+    // CHECK: rocdl.ds_bpermute
+    // CHECK: llvm.trunc %{{.*}} overflow<nsw> : i32 to i1
+    %0 = ttg.convert_layout %arg : tensor<64xi1, #src> -> tensor<64xi1, #dst>
+    tt.return %0 : tensor<64xi1, #dst>
+  }
+  // CHECK-LABEL: @shuffle_i16_preserves_extension
+  tt.func private @shuffle_i16_preserves_extension(%arg: tensor<64xi16, #src>) -> tensor<64xi16, #dst> {
+    // CHECK: llvm.sext %{{.*}} : i16 to i32
+    // CHECK: rocdl.ds_bpermute
+    // CHECK: llvm.trunc %{{.*}} overflow<nsw> : i32 to i16
+    %0 = ttg.convert_layout %arg : tensor<64xi16, #src> -> tensor<64xi16, #dst>
+    tt.return %0 : tensor<64xi16, #dst>
+  }
+  // CHECK-LABEL: @shuffle_f16_preserves_extension
+  tt.func private @shuffle_f16_preserves_extension(%arg: tensor<64xf16, #src>) -> tensor<64xf16, #dst> {
+    // CHECK: llvm.sext %{{.*}} : i16 to i32
+    // CHECK: rocdl.ds_bpermute
+    // CHECK: llvm.trunc %{{.*}} overflow<nsw> : i32 to i16
+    %0 = ttg.convert_layout %arg : tensor<64xf16, #src> -> tensor<64xf16, #dst>
+    tt.return %0 : tensor<64xf16, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [2], order = [0]}>
+#dst = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16], [64]], warp = [[32]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx942"} {
+  // CHECK-LABEL: @shared_i1_preserves_extension
+  tt.func private @shared_i1_preserves_extension(%arg: tensor<128xi1, #src>) -> tensor<128xi1, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i1 to i8
+    // CHECK: llvm.store
+    // CHECK: llvm.load
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i8 to i1
+    %0 = ttg.convert_layout %arg : tensor<128xi1, #src> -> tensor<128xi1, #dst>
+    tt.return %0 : tensor<128xi1, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#dst = #ttg.linear<{register = [[4], [2]], lane = [[1], [8], [16], [32], [64], [128]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx942"} {
+  // CHECK-LABEL: @packed_shuffle_i1_preserves_extension
+  tt.func private @packed_shuffle_i1_preserves_extension(%arg: tensor<256xi1, #src>) -> tensor<256xi1, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i1 to i{{16|32}}
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i16 to i1
+    %0 = ttg.convert_layout %arg : tensor<256xi1, #src> -> tensor<256xi1, #dst>
+    tt.return %0 : tensor<256xi1, #dst>
+  }
+  // CHECK-LABEL: @packed_shuffle_i8_preserves_extension
+  tt.func private @packed_shuffle_i8_preserves_extension(%arg: tensor<256xi8, #src>) -> tensor<256xi8, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i8 to i{{16|32}}
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i16 to i8
+    %0 = ttg.convert_layout %arg : tensor<256xi8, #src> -> tensor<256xi8, #dst>
+    tt.return %0 : tensor<256xi8, #dst>
   }
 }

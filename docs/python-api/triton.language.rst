@@ -31,6 +31,7 @@ Creation Ops
     zeros
     zeros_like
     cast
+    to_tensor
 
 
 Shape Manipulation Ops
@@ -49,7 +50,9 @@ Shape Manipulation Ops
     ravel
     reshape
     split
+    squeeze
     trans
+    unsqueeze
     view
 
 
@@ -76,8 +79,6 @@ Memory/Pointer Ops
     make_tensor_descriptor
     load_tensor_descriptor
     store_tensor_descriptor
-    make_block_ptr
-    advance
 
 
 Indexing Ops
@@ -100,6 +101,7 @@ Math Ops
     :nosignatures:
 
     abs
+    add
     cdiv
     ceil
     clamp
@@ -115,12 +117,14 @@ Math Ops
     log2
     maximum
     minimum
+    mul
     rsqrt
     sigmoid
     sin
     softmax
     sqrt
     sqrt_rn
+    sub
     umulhi
 
 
@@ -131,11 +135,14 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     argmax
     argmin
     max
     min
     reduce
+    reduce_or
     sum
     xor_sum
 
@@ -164,9 +171,12 @@ Atomic Ops
     atomic_add
     atomic_and
     atomic_cas
+    atomic_load
     atomic_max
     atomic_min
     atomic_or
+    atomic_poll
+    atomic_store
     atomic_xchg
     atomic_xor
 
@@ -180,7 +190,9 @@ Random Number Generation
     randint4x
     randint
     rand
+    rand4x
     randn
+    randn4x
 
 
 Iterators

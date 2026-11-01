@@ -68,6 +68,7 @@ struct CycleEntry : public EntryBase {
 
   uint64_t cycle = 0;
   bool isStart = true;
+  bool isAsync = false;
   int32_t scopeId = 0;
 };
 

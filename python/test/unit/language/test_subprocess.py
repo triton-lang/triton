@@ -1,17 +1,33 @@
 import itertools
-import os
-import subprocess
-import sys
+import re
 from collections import Counter
+
+import numpy as np
+import print_helper
 
 import triton
 from triton._internal_testing import is_interpreter
 
 import pytest
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-print_path = os.path.join(dir_path, "print_helper.py")
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
+FP32_HEX_CANONICAL = (
+    "0x1p+0",
+    "0x1.8p+0",
+    "0x1.99999ap-4",
+    "-0x1.8p+0",
+    "-0x0p+0",
+    "inf",
+    "-inf",
+    "0x1.8p+2",
+)
+HEX_FLOAT_RE = re.compile(r"-?0x[0-9a-f]+(?:\.[0-9a-f]*)?p[+-]?\d+|-?inf|-?nan", re.IGNORECASE)
+
+
+def _hex_float_values(output: bytes) -> Counter:
+    # Device printf delegates formatting to the host C library, so normalize
+    # equivalent %a spellings (for example, optional trailing zeroes).
+    return Counter(float.fromhex(value).hex() for value in HEX_FLOAT_RE.findall(output.decode("UTF-8")))
 
 
 @pytest.mark.interpreter
@@ -28,28 +44,43 @@ torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", 
                                                       ("device_print_hex", "int16"),
                                                       ("device_print_hex", "int32"),
                                                       ("device_print_hex", "int64"),
+                                                      ("device_print_hex", "float16"),
+                                                      ("device_print_hex", "float32"),
+                                                      ("device_print_hex", "float64"),
+                                                      ("device_print_hex_fp32_canonical", "float32"),
                                                       ("device_print_pointer", "int32"),
                                                       ("device_print_negative", "int32"),
                                                       ("device_print_uint", "uint32"),
                                                       ("device_print_uint_cast", "uint8"),
                                                       ("device_print_2d_tensor", "int32"),
                                                   ])
-def test_print(func_type: str, data_type: str, device: str):
-    proc = subprocess.run(
-        [sys.executable, print_path, "test_print", func_type, data_type, device],
-        capture_output=True,
-    )
-    assert proc.returncode == 0
+def test_print(func_type: str, data_type: str, device: str, capfd):
+    print_helper.test_print(func_type, data_type, device)
+    output = capfd.readouterr()
+    stdout = output.out.encode("utf-8")
 
-    if is_interpreter() and func_type != "static_assert":
-        # Interpreter uses a different format for device_print
-        # Only check if there's no error
-        assert proc.stderr == b''
-        return
-
-    outs = [line for line in proc.stdout.decode("UTF-8").splitlines() if line]
     # The total number of elements in the 1-D tensor to print.
     N = 128
+
+    if is_interpreter():
+        assert output.err == ""
+
+    if func_type == "device_print_hex" and data_type.startswith("float"):
+        float_type = getattr(np, data_type)
+        expected = Counter(float(float_type(i)).hex() for i in range(N))
+        assert _hex_float_values(stdout) == expected
+        return
+    if func_type == "device_print_hex_fp32_canonical":
+        expected = Counter(float.fromhex(value).hex() for value in FP32_HEX_CANONICAL)
+        expected = Counter({value: count * (N // len(FP32_HEX_CANONICAL)) for value, count in expected.items()})
+        assert _hex_float_values(stdout) == expected
+        return
+
+    if is_interpreter():
+        # Interpreter uses a different format for device_print.
+        return
+
+    outs = [line for line in output.out.splitlines() if line]
 
     # Constant for testing the printing of scalar values
     SCALAR_VAL = 42

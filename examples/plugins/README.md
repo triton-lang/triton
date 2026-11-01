@@ -103,6 +103,8 @@ Finally, if we both load the plugin at runtime and insert the pass pipeline hook
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 
 import triton
 import triton.language as tl
@@ -236,6 +238,8 @@ inserted pass.
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 import sys
 
 import triton
@@ -263,8 +267,8 @@ def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
 def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
     source_code = "# This is generated from Triton compiler.py"
     source_code = (
         source_code
@@ -277,10 +281,10 @@ def dump_stages_hook(self=None, stages=None, options=None, language=None, capabi
 
     with open("compiler_override.py", "w") as file:
         file.write(source_code)
-  return get_key(), get_hash()
+    return get_key(), get_hash()
 def override_stages(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"

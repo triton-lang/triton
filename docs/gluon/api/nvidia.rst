@@ -9,3 +9,4 @@ Target-specific Gluon APIs for NVIDIA GPU generations.
    Ampere <nvidia.ampere>
    Hopper <nvidia.hopper>
    Blackwell <nvidia.blackwell>
+   Rubin <nvidia.rubin>

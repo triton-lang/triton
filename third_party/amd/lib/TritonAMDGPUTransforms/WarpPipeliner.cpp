@@ -75,7 +75,8 @@ static void addDummyOpIfEmptyCluster(OpBuilder &b, Location loc,
   if (!cluster.empty())
     return;
   b.setInsertionPoint(insertBefore);
-  auto dummyOp = ROCDL::SchedBarrier::create(b, loc, 0);
+  auto dummyOp =
+      ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   dummyOp->setAttr("triton.warp_pipeline.empty_cluster", b.getUnitAttr());
   cluster.push_back(dummyOp);
 }
@@ -101,7 +102,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
   for (Operation *op : ops) {
     for (OpResult r : op->getResults()) {
       bool hasExternalUse = llvm::any_of(r.getUsers(), [&](Operation *u) {
-        return !opsLookup.count(u) && u->getParentOp() != nullptr;
+        return !opsLookup.contains(u) && u->getParentOp() != nullptr;
       });
       if (hasExternalUse) {
         yieldedTypes.push_back(r.getType());

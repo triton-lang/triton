@@ -3,16 +3,16 @@
 
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 class Operation;
 class OpOperand;
 class OpResult;
-class Region;
+class LoopLikeOpInterface;
 namespace scf {
 class ForOp;
+class WhileOp;
 } // namespace scf
 } // namespace mlir
 
@@ -41,23 +41,25 @@ public:
   // from a different partition or a previous iteration of the current
   // partition. E.g. partition B(i) may have inputs from A(i) or B(i-1). Note
   // that the same value may be visited more than once.
-  void iterateInputs(scf::ForOp loop,
+  void iterateInputs(LoopLikeOpInterface loop,
                      function_ref<void(OpOperand &)> callback) const;
   // Iterate the outputs of the partition. Output values are those that are
   // consumed by a different partition or a future iteration of the current
   // partition. E.g. partition A(i) may have outputs to B(i) or A(i+1). Note
   // that the same value may be visited more than once.
   void
-  iterateOutputs(scf::ForOp loop,
+  iterateOutputs(LoopLikeOpInterface loop,
                  function_ref<void(Operation *, OpOperand &)> callback) const;
   // Iterate the defining ops of the inputs to the partition in the current and
   // previous iterations, including the distance in the past.
   void iterateDefs(scf::ForOp loop,
                    function_ref<void(OpResult, unsigned)> callback) const;
+  void iterateDefs(scf::WhileOp loop,
+                   function_ref<void(OpResult, unsigned)> callback) const;
   // Iterate the uses of all outputs of the partition in the current iteration
   // and in future iterations, including the distance in the future.
   void iterateUses(
-      scf::ForOp loop,
+      LoopLikeOpInterface loop,
       function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
 
 private:
@@ -93,9 +95,9 @@ public:
   // Get the number of partitions.
   unsigned getNumPartitions() const { return partitions.size(); }
 
-  // Deserialize a partition set from an `scf.for` op using the attributes
-  // tagged on operations in its body.
-  static FailureOr<PartitionSet> fromLoop(scf::ForOp loop);
+  // Deserialize a partition set from an `scf.for` or `scf.while` using the
+  // attributes tagged on operations in its regions.
+  static FailureOr<PartitionSet> fromLoop(LoopLikeOpInterface loop);
 
   // Debug dump the partition set.
   LLVM_DUMP_METHOD void dump() const;

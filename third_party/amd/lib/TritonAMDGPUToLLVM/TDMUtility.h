@@ -1,15 +1,10 @@
-#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
-#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
 
-#include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
-
-using mlir::triton::AMD::TargetInfo;
-using PartitionedSharedEncodingAttr =
-    mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
 namespace mlir::LLVM::AMD {
 
@@ -103,6 +98,35 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       std::optional<uint32_t> warpUsedHint = std::nullopt,
                       bool isPureForm = false);
 
+// A struct representing information needed for one member of a fused TDM load.
+struct TDMFusedLoadMemberInfo {
+  unsigned padInterval = 0;
+  unsigned padAmount = 0;
+  Type elementType;
+  triton::LinearLayout sharedLayout;
+  Attribute sharedEncoding;
+  SmallVector<int64_t> shapePerCTA;
+  Value multicastMask;
+  SmallVector<Value> desc;        // unpacked descriptor groups
+  SmallVector<Value> copyOffsets; // per-member copy offsets
+  SmallVector<Value> dstPtrs;     // shared-memory base pointers
+  Value pred;                     // optional per-copy predicate
+};
+
+// Emit one fused TDM load intrinsic, `select`ing each wave's descriptor on an
+// SGPR-uniform per-wave selector. `memberHints` must be verifier-legal and
+// pairwise disjoint; no mbarrier is encoded for fused loads.
+void emitTDMLoadFused(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<TDMFusedLoadMemberInfo> members, int numWarps,
+                      Value ctaId, int32_t auxBits,
+                      ArrayRef<uint32_t> memberHints);
+
+// Effective warp count that drives hinted TDM descriptor layout.  A
+// `warp_used_hint` maps the active tile distribution to K = popcount(hint)
+// warps.
+int getTDMEffectiveWarps(int numWarps, std::optional<uint32_t> warpUsedHint);
+
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp
 // distribution.  For all other encodings, falls back to the default TDM warp
@@ -114,7 +138,7 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
 // Calculate the number of TDM gather/scatter instructions needed using the
 // same LinearLayout analysis as emitTDMGatherScatter: broadcasts are removed
 // and contiguity is considered when batching indices per instruction.
-size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
+size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType);
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS
@@ -154,4 +178,4 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
 } // namespace mlir::LLVM::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_

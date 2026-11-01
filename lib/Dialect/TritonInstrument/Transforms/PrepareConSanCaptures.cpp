@@ -25,6 +25,10 @@ namespace tti = mlir::triton::instrument;
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
+  // Warp specialization itself uses compiler-owned shared scratch. ConSan's
+  // lock capture adds another scratch user, so reserve the shared-memory state
+  // captures whenever a warp-specialized region is present.
+  mod.walk([&](ttg::WarpSpecializeOp) { result = true; });
   return result;
 }
 
@@ -59,11 +63,11 @@ bool hasCpAsync(ModuleOp mod) {
   return result;
 }
 
-int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks *hooks) {
+int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks &hooks) {
   std::array<bool, tti::CommitKind::NumCommitKinds> commitKinds{};
   if (hasCpAsync(mod))
     commitKinds[tti::CommitKind::AsyncCp] = true;
-  for (auto kind : hooks->getRequiredCommitKinds(mod)) {
+  for (auto kind : hooks.getRequiredCommitKinds(mod)) {
     if (kind >= 0 && kind < tti::CommitKind::NumCommitKinds)
       commitKinds[kind] = true;
   }
@@ -94,13 +98,15 @@ public:
       return signalPassFailure();
     }
 
-    int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
-                            (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
+    int numActiveMemTypes =
+        (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    // NVIDIA inserts a terminal cluster barrier after this pass.
+    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
     int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod),
-        getNumCommitKinds(mod, hooks.get()),
-        hasSharedMemoryBuffers(mod) &&
-            hooks->needsAsyncProxyFenceTracking(mod));
+        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+        getNumCommitKinds(mod, *hooks),
+        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);
