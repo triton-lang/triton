@@ -604,6 +604,23 @@ def test_unsigned_name_mangling(device):
     assert (expect[1] == to_numpy(actual[1])).all()
 
 
+def test_helper_name_mangling():
+    # Regression test for #12428: a @triton.jit helper is compiled once per
+    # mangled argument-type name, so the name must distinguish pointer
+    # constness and namedtuple field names, or calls that differ only there
+    # wrongly share one compiled function.
+    from triton.language.core import dtype, pointer_type, tuple_type
+
+    fp32 = dtype("fp32")
+    assert pointer_type(fp32, const=True).mangle() != pointer_type(fp32).mangle()
+    ab = tuple_type([fp32, fp32], fields=["a", "b"])
+    ba = tuple_type([fp32, fp32], fields=["b", "a"])
+    assert ab.mangle() != ba.mangle()
+    # Unnamed tuples and plain pointers keep their old names.
+    assert pointer_type(fp32).mangle() == "Pfp32"
+    assert tuple_type([fp32, fp32]).mangle() == "Tfp32_fp32T"
+
+
 # test bitwise ops
 # ---------------
 @pytest.mark.interpreter
