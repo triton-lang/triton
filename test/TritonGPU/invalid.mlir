@@ -1122,7 +1122,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #generic = #ttg.generic_linear<{register = [], lane = [[2], [1], [8], [32], [64]], warp = [[17], [4]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @generic_linear_on_nvidia() {
-    // expected-error @+1 {{is not supported on NVIDIA targets}}
+    // expected-error @+1 {{Distributed layouts on non AMD targets should be permutation matrices with zero columns}}
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #generic>
     tt.return
   }
@@ -1134,7 +1134,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #slice = #ttg.slice<{dim = 0, parent = #generic}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @generic_linear_slice_on_nvidia() {
-    // expected-error @+1 {{is not supported on NVIDIA targets}}
+    // expected-error @+1 {{Distributed layouts on non AMD targets should be permutation matrices with zero columns}}
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #slice>
     tt.return
   }

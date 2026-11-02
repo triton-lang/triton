@@ -2475,10 +2475,10 @@ def generic_linear_layout_kernel():
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_generic_linear_layout(target, capfd):
-    if target.backend == "cuda":
+    if target.backend != "hip":
         with pytest.raises(RuntimeError, match="error encountered during parsing"):
             run_parser(generic_linear_layout_kernel, target=target)
-        assert "is not supported on NVIDIA targets" in "".join(capfd.readouterr())
+        assert "should be permutation matrices with zero columns" in "".join(capfd.readouterr())
     else:
         mod = run_parser(generic_linear_layout_kernel, target=target)
         assert "#ttg.generic_linear" in mod.str_nodebug()
