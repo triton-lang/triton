@@ -1466,8 +1466,8 @@ class CodeGenerator(ast.NodeVisitor):
             prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
-                                      function_owners=self.function_owners,
-                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                                      function_owners=self.function_owners, noinline=fn.noinline,
+                                      file_name=fn.file_name, begin_line=fn.def_file_line_number,
                                       begin_col=fn.def_file_col_number, options=self.builder.options,
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
