@@ -4,6 +4,7 @@
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
 #include "amd/lib/Target/MFMASchedule/MFMASchedule.h"
+#include "amd/lib/Target/MFMASchedule/MFMAVALUSchedule.h"
 #include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
@@ -578,6 +579,9 @@ void init_triton_amd(py::module_ &m) {
         [](llvm::Function *fn, const std::string &arch) -> bool {
           return mlir::triton::AMD::runMFMASchedulePass(*fn, arch);
         });
+  m.def("add_mfma_valu_schedule_pass", [](llvm::Function *fn) -> bool {
+    return mlir::triton::AMD::runMFMAVALUSchedulePass(*fn);
+  });
 
   auto hipBlas = m.def_submodule("hipblas");
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")

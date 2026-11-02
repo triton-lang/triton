@@ -28,6 +28,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MFMASchedule.h"
+#include "MFMAScheduleUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -52,13 +53,7 @@
 namespace {
 
 using namespace llvm;
-
-// How an instruction takes part in the schedule: an MFMA, a global-memory
-// access (GR), an LDS read (LR), an LDS write (LW), or nothing the pass moves.
-enum class SchedKind { MFMA, GR, LR, LW, Other };
-
-constexpr unsigned kLDSAddressSpace = 3;
-constexpr unsigned kGlobalAddressSpace = 1;
+using namespace mlir::triton::AMD::MFMAScheduleUtils;
 
 // A memory op the span's MFMAs are spaced around.
 struct AnchorInst {
@@ -95,33 +90,6 @@ struct SpanContents {
   // The span's MFMAs in program order.
   SmallVector<Instruction *, 32> MFMAInsts;
 };
-
-bool isMFMAorWMMA(const Instruction &I) {
-  const auto *CI = dyn_cast<CallInst>(&I);
-  if (!CI || CI->isInlineAsm())
-    return false;
-  const Function *Callee = CI->getCalledFunction();
-  if (!Callee || !Callee->isIntrinsic())
-    return false;
-  StringRef Name = Callee->getName();
-  return Name.contains("mfma") || Name.contains("wmma");
-}
-
-bool isSchedBarrier(const Instruction &I) {
-  if (const auto *CI = dyn_cast<CallInst>(&I))
-    if (const Function *F = CI->getCalledFunction())
-      return F->getIntrinsicID() == Intrinsic::amdgcn_sched_barrier;
-  return false;
-}
-
-bool hasSchedBarrier(const Function &F) {
-  for (const BasicBlock &BB : F)
-    for (const Instruction &I : BB)
-      if (isSchedBarrier(I))
-        return true;
-  return false;
-}
-
 bool isHoistTransparentInst(const Instruction &I) {
   return isa<ShuffleVectorInst>(I) || isa<InsertElementInst>(I);
 }
@@ -168,98 +136,10 @@ Instruction *getDPin(Instruction *MFMA) {
     return nullptr;
   return Pin;
 }
-
-SchedKind classifySchedInst(const Instruction &I) {
-  if (isMFMAorWMMA(I))
-    return SchedKind::MFMA;
-
-  if (const auto *CI = dyn_cast<CallInst>(&I)) {
-    if (const Function *F = CI->getCalledFunction()) {
-      if (F->isIntrinsic()) {
-        StringRef Name = F->getName();
-        // Buffer loads (to registers or to LDS), buffer stores, and the
-        // global.load.lds family.
-        if (Name.contains("buffer.load") ||
-            Name.contains("raw.ptr.buffer.store") ||
-            Name.contains("global.load") || Name.contains("global.store"))
-          return SchedKind::GR;
-        if (Name.contains("ds.read") || Name.contains("ds.load"))
-          return SchedKind::LR;
-      }
-    }
-  }
-
-  // Plain loads and stores: LDS by address space 3, global by address space 1
-  // (what a kernel gets when buffer ops do not apply to its pointers).
-  if (const auto *LI = dyn_cast<LoadInst>(&I)) {
-    if (LI->getPointerAddressSpace() == kLDSAddressSpace)
-      return SchedKind::LR;
-    if (LI->getPointerAddressSpace() == kGlobalAddressSpace)
-      return SchedKind::GR;
-  }
-  if (const auto *SI = dyn_cast<StoreInst>(&I)) {
-    if (SI->getPointerAddressSpace() == kLDSAddressSpace)
-      return SchedKind::LW;
-    if (SI->getPointerAddressSpace() == kGlobalAddressSpace)
-      return SchedKind::GR;
-  }
-  return SchedKind::Other;
-}
-
-bool isMemoryAnchor(SchedKind K) {
-  return K == SchedKind::GR || K == SchedKind::LR || K == SchedKind::LW;
-}
-
 iterator_range<BasicBlock::iterator> instructionsInSpan(const Span &R) {
   auto ItBegin = R.Begin ? R.Begin->getIterator() : R.BB->begin();
   auto ItEnd = R.End ? R.End->getIterator() : R.BB->end();
   return make_range(ItBegin, ItEnd);
-}
-
-// Issue-to-issue cost of an MFMA: its pass count times 4 cycles
-// (SISchedule.td: 16x16xK shapes are 4 passes, 32x32xK shapes 8, whatever the
-// element type). Returns 0 for a shape the table does not know; the span is
-// then left to LLVM's schedulers.
-unsigned getMFMACycles(const Instruction &I) {
-  if (!isMFMAorWMMA(I))
-    return 0;
-  const auto *CI = cast<CallInst>(&I);
-  const Function *Callee = CI->getCalledFunction();
-  if (!Callee)
-    return 0;
-  StringRef Name = Callee->getName();
-
-  // Scaled f8f6f4 MFMAs: the cost depends on the operand formats encoded in
-  // cbsz (arg 3) and blgp (arg 4); a value above 1 is a 4- or 6-bit format,
-  // which the unit runs at the 4-bit rate.
-  auto scaledCycles = [&](unsigned Narrow, unsigned Wide) {
-    if (auto *Cbsz = dyn_cast<ConstantInt>(CI->getArgOperand(3)))
-      if (auto *Blgp = dyn_cast<ConstantInt>(CI->getArgOperand(4)))
-        return (Cbsz->getZExtValue() > 1 && Blgp->getZExtValue() > 1) ? Narrow
-                                                                      : Wide;
-    return Wide;
-  };
-  if (Name.contains("mfma.scale.f32.16x16x128.f8f6f4"))
-    return scaledCycles(16, 32);
-  if (Name.contains("mfma.scale.f32.32x32x64.f8f6f4"))
-    return scaledCycles(32, 64);
-
-  static constexpr struct {
-    StringRef Name;
-    unsigned Cycles;
-  } kFixedCycles[] = {
-      {"mfma.f32.16x16x32.f16", 16},  {"mfma.f32.16x16x32.bf16", 16},
-      {"mfma.i32.16x16x64.i8", 16},   {"mfma.f32.32x32x16.f16", 32},
-      {"mfma.f32.32x32x16.bf16", 32}, {"mfma.i32.32x32x32.i8", 32},
-      {"mfma.f32.16x16x32.fp8", 16},  {"mfma.f32.16x16x32.bf8", 16},
-      {"mfma.f32.32x32x16.fp8", 32},  {"mfma.f32.32x32x16.bf8", 32},
-      {"mfma.f32.16x16x16f16", 16},   {"mfma.f32.16x16x16bf16.1k", 16},
-      {"mfma.f32.32x32x8f16", 32},    {"mfma.f32.32x32x8bf16.1k", 32},
-  };
-  for (const auto &Entry : kFixedCycles)
-    if (Name.contains(Entry.Name))
-      return Entry.Cycles;
-  return 0;
 }
 
 // Width in bits of the value moved by an LDS access.

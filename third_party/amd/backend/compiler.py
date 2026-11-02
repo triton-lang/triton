@@ -853,6 +853,11 @@ class HIPBackend(BaseBackend):
         # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
         if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
             amd.add_mfma_schedule_pass(kernel_fn, options.arch)
+        # The MFMA <-> VALU co-execution declaration for the warp-pipeline stages that carry
+        # schedule_hint="mfma-valu" (gfx950 only). ConvertWarpPipeline marked those stages; the pass
+        # returns without touching anything when there are none.
+        if options.arch == "gfx950":
+            amd.add_mfma_valu_schedule_pass(kernel_fn)
 
         # Get some metadata
         metadata["num_warps"] = total_warps_num
