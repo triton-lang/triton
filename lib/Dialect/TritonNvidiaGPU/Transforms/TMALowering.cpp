@@ -209,11 +209,6 @@ public:
         auto type = dyn_cast<TensorDescType>(arg.getType());
         if (!type || !isNarrowFP6Map(type))
           continue;
-        if (auto target = m->getAttrOfType<StringAttr>(gpu::AttrTargetName);
-            target && target.getValue() != "cuda:103") {
-          func.emitError("64-value FP6 TMA stores require SM103");
-          return signalPassFailure();
-        }
         auto needsUpdate = [](OpOperand &use) {
           return !isa<TensormapUpdateOp>(use.getOwner());
         };

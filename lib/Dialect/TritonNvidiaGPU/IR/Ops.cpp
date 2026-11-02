@@ -708,13 +708,6 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     if (box != 128 && !(box == 64 && store))
       return op->emitOpError(
           "FP6 requires a 128-value load or a 64/128-value store");
-    auto module = op->getParentOfType<ModuleOp>();
-    if (auto target = module->getAttrOfType<StringAttr>(gpu::AttrTargetName)) {
-      if (target.getValue() != "cuda:103" &&
-          (target.getValue() != "cuda:100" || box == 64))
-        return op->emitOpError(
-            "FP6 requires SM100 or SM103, and 64-value stores require SM103");
-    }
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
