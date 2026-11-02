@@ -1482,17 +1482,23 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ROCDL::SchedBarrier>(*schedMask);
            })
       .def("create_warp_pipeline_border",
-           [](GluonOpBuilder &self, const std::string &marker, int priority) {
+           [](GluonOpBuilder &self, const std::string &marker, int priority,
+              const std::string &scheduleHint, int delay) {
              auto border =
                  self.create<ROCDL::SchedBarrier>(ROCDL::SchedGroupMask::none);
              auto ctx = self.getContext();
+             auto i32Ty = IntegerType::get(ctx, 32);
              border->setAttr("triton.warp_pipeline.border",
                              StringAttr::get(ctx, marker));
-             if (priority > -1) {
-               auto i32Ty = IntegerType::get(ctx, 32);
+             if (priority > -1)
                border->setAttr("triton.warp_pipeline.priority",
                                IntegerAttr::get(i32Ty, priority));
-             }
+             if (!scheduleHint.empty())
+               border->setAttr("triton.warp_pipeline.schedule_hint",
+                               StringAttr::get(ctx, scheduleHint));
+             if (delay > 0)
+               border->setAttr("triton.warp_pipeline.delay",
+                               IntegerAttr::get(i32Ty, delay));
            });
 
   m.def("compute_tmem_reg_layout",

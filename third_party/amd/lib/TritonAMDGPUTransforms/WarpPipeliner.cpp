@@ -54,16 +54,31 @@ static bool isLoopOp(Operation *op) {
 //                  built; an error has been emitted at the offending op.
 enum class PipelineResult { NotApplicable, Created, Malformed };
 
-// Read (cluster-name, priority) from a border marker op.  Priority defaults
-// to -1 when the marker doesn't carry the optional priority attribute.
-static std::pair<StringAttr, int> readBorderMarker(Operation *op) {
-  StringAttr clusterStr =
-      op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
+// What a border marker says about the stage it closes.
+struct BorderMarker {
+  StringAttr name;
+  // Warp priority of the stage; -1 when the marker carries none.
   int priority = -1;
+  // Scheduling request for the stage (warp_pipeline_stage's schedule_hint),
+  // null when there is none; ConvertWarpPipeline validates and lowers it.
+  StringAttr scheduleHint;
+  // Idle cycles to insert at the head of the stage (warp_pipeline_stage's
+  // delay); 0 when there are none.
+  int delay = 0;
+};
+
+static BorderMarker readBorderMarker(Operation *op) {
+  BorderMarker marker;
+  marker.name = op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
   if (auto intAttr =
           op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority"))
-    priority = intAttr.getInt();
-  return {clusterStr, priority};
+    marker.priority = intAttr.getInt();
+  marker.scheduleHint =
+      op->getAttrOfType<StringAttr>("triton.warp_pipeline.schedule_hint");
+  if (auto intAttr =
+          op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.delay"))
+    marker.delay = intAttr.getInt();
+  return marker;
 }
 
 // If `cluster` is empty, materialize a dummy SchedBarrier so the cluster is
@@ -84,7 +99,7 @@ static void addDummyOpIfEmptyCluster(OpBuilder &b, Location loc,
 // Create a scf.execute_region op representing a pipeline cluster.
 static void createClusterOp(OpBuilder &b, Location loc,
                             SmallVector<Operation *> &ops,
-                            std::pair<StringAttr, int> marker) {
+                            const BorderMarker &marker) {
   assert(!ops.empty() && "empty stage");
 
   // Insert the execute_region before the first op in the cluster.
@@ -153,11 +168,16 @@ static void createClusterOp(OpBuilder &b, Location loc,
 
   // Keep the region structured for later conversion.
   exec.setNoInline(true);
-  exec->setAttr("triton.warp_pipeline.stage", marker.first);
-  if (marker.second > -1) {
+  exec->setAttr("triton.warp_pipeline.stage", marker.name);
+  if (marker.priority > -1) {
     exec->setAttr("triton.warp_pipeline.priority",
-                  b.getI32IntegerAttr(marker.second));
+                  b.getI32IntegerAttr(marker.priority));
   }
+  if (marker.scheduleHint)
+    exec->setAttr("triton.warp_pipeline.schedule_hint", marker.scheduleHint);
+  if (marker.delay > 0)
+    exec->setAttr("triton.warp_pipeline.delay",
+                  b.getI32IntegerAttr(marker.delay));
 
   LLVM_DEBUG(llvm::dbgs() << "[warp-pipeline] created stage with " << ops.size()
                           << " ops and " << yieldedTypes.size() << " yields\n");
@@ -219,7 +239,7 @@ static PipelineResult createPipeline(OpBuilder &b, Location loc,
     return PipelineResult::NotApplicable;
 
   SmallVector<Operation *> cluster;
-  SmallVector<std::pair<StringAttr, int>> clusterMarkers;
+  SmallVector<BorderMarker> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
   auto ctx = forOp.getContext();
 
@@ -263,7 +283,7 @@ static PipelineResult createPipeline(OpBuilder &b, Location loc,
   if (!cluster.empty()) { // Create the last cluster if needed.
     clusters.push_back(std::move(cluster));
     auto clusterStr = StringAttr::get(ctx, "last_cluster");
-    clusterMarkers.push_back({clusterStr, -1});
+    clusterMarkers.push_back({clusterStr});
   }
 
   // We only reach here when at least one border existed; a single cluster
@@ -339,7 +359,7 @@ static PipelineResult createFlatPipeline(OpBuilder &b, Block &block) {
   //    border.  Mirrors createPipeline's main loop, but bounded by lastBorder
   //    instead of scf.yield.
   SmallVector<Operation *> cluster;
-  SmallVector<std::pair<StringAttr, int>> clusterMarkers;
+  SmallVector<BorderMarker> clusterMarkers;
   SmallVector<SmallVector<Operation *>> clusters;
 
   for (auto it = Block::iterator(regionStart); it != block.end();) {
