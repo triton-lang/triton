@@ -265,15 +265,14 @@ class MXScaleTensor:
         """
         Convert float32 numbers to E8M0 format.
         * Values <= 0, NaNs, and Infs are converted to the NaN encoding (255).
-        * Positive values are converted by computing the floor of log2(value) to get the exponent.
+        * Positive values use floor(log2(value)) as the exponent, clamped to [-127, 127].
 
         Parameters:
         - values: A torch tensor of float32 numbers to convert to E8M0 format.
         """
         is_invalid = torch.isnan(values) | torch.isinf(values) | (values <= 0)
         valid_values = torch.where(is_invalid, torch.ones_like(values), values)
-        e = torch.floor(torch.log2(valid_values))
-        e_biased = e + 127
-        e_biased_int = e_biased.type(torch.int32)
-        e_biased_clamped = torch.clamp(e_biased_int, 0, 254)
+        # frexp gives floor(log2(value)) + 1 without rounding across power-of-two boundaries.
+        _, exponent = torch.frexp(valid_values)
+        e_biased_clamped = torch.clamp(exponent + 126, 0, 254)
         return torch.where(is_invalid, 255, e_biased_clamped.type(torch.uint8))
