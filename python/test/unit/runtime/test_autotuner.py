@@ -727,3 +727,50 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+def test_default_key_arguments_do_not_collide():
+    from triton.runtime.interpreter import InterpretedFunction
+
+    def prune(configs, named_args, **kwargs):
+        values = {**named_args, **kwargs}
+        mode = 0 if values.get("M", 16) == 32 else 1
+        return [config for config in configs if config.kwargs["MODE"] == mode]
+
+    def kernel(out, M: tl.constexpr = 16, N: tl.constexpr = 64, MODE: tl.constexpr = 0):
+        if MODE == 0:
+            tl.static_assert(M == 32)
+        else:
+            tl.static_assert(M == 16)
+        tl.store(out, M + N)
+
+    tuned = triton.autotune(configs=[triton.Config({"MODE": 0}), triton.Config({"MODE": 1})], key=["M", "N"],
+                            prune_configs_by={"early_config_prune": prune})(InterpretedFunction(kernel))
+    output = torch.zeros((), dtype=torch.int32)
+    tuned[(1, )](output, M=32)
+    assert output.item() == 96
+    tuned[(1, )](output, N=32)
+    assert output.item() == 48
+    assert len(tuned.cache) == 2
+
+
+@pytest.mark.parametrize("positional", [False, True])
+def test_explicit_and_omitted_defaults_share_autotune_key(positional):
+    from triton.runtime.interpreter import InterpretedFunction
+
+    def kernel(out, M: tl.constexpr = 16, N: tl.constexpr = 64, BLOCK: tl.constexpr = 1):
+        tl.store(out, M + N)
+
+    tuned = triton.autotune(configs=[triton.Config({"BLOCK": 1}),
+                                     triton.Config({"BLOCK": 2})], key=["M", "N"],
+                            prune_configs_by={"early_config_prune": lambda configs, named_args, **kwargs: configs[:1]
+                                              })(InterpretedFunction(kernel))
+    output = torch.zeros((), dtype=torch.int32)
+    tuned[(1, )](output)
+    assert output.item() == 80
+    if positional:
+        tuned[(1, )](output, 16, 64)
+    else:
+        tuned[(1, )](output, M=16, N=64)
+    assert output.item() == 80
+    assert len(tuned.cache) == 1
