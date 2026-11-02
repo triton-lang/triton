@@ -2,6 +2,7 @@ import re
 
 import triton
 import triton.language as tl
+from triton import knobs
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
@@ -13,8 +14,11 @@ BLOCK = 128
 
 def _compile_gluon(fn, signature, constexprs, arch="gfx950"):
     """Compile a Gluon kernel for gfx950 and return the compiled object."""
-    return triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs),
-                          target=GPUTarget("hip", arch, 64), options={"num_warps": NUM_WARPS})
+    # TRITON_OVERRIDE_ARCH would replace gfx950 for any arch
+    with knobs.runtime.scope():
+        knobs.runtime.override_arch = None
+        return triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs),
+                              target=GPUTarget("hip", arch, 64), options={"num_warps": NUM_WARPS})
 
 
 @gluon.jit

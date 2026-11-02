@@ -5,6 +5,25 @@ tt.func @empty_function() {
   tt.return
 }
 
+// CHECK-LABEL: @duplicate_epilogue_outputs
+tt.func @duplicate_epilogue_outputs(%lb: i32, %ub: i32, %step: i32) {
+  %r:2 = scf.for %i = %lb to %ub step %step
+      iter_args(%a = %lb, %b = %ub) -> (i32, i32) : i32 {
+    scf.for %j = %lb to %ub step %step : i32 {
+      "body"() : () -> ()
+    }
+    // CHECK: [[RESULTS:%.*]]:2 = scf.if {{.*}} -> (i32, i32) {
+    // CHECK-NEXT: [[NEXT:%.*]] = "epilogue"([[A:%.*]], [[B:%.*]]) :
+    // CHECK-NEXT: scf.yield [[NEXT]], [[NEXT]] : i32, i32
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT: scf.yield [[A]], [[B]] : i32, i32
+    %next = "epilogue"(%a, %b) : (i32, i32) -> i32
+    // CHECK: scf.yield {{.*}}[[RESULTS]]#0, [[RESULTS]]#1
+    scf.yield %next, %next : i32, i32
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
 // CHECK-LABEL: @no_fusion
 tt.func @no_fusion(%lb: index, %ub: index, %step: index) -> index {
   %c0 = arith.constant 0 : index
@@ -471,18 +490,33 @@ tt.func @preserve_stage_count(%lb: i32, %ub: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @preserve_explicit_stage_one
+tt.func @preserve_explicit_stage_one(%lb: i32, %ub: i32) {
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK-COUNT-1: scf.for
+  scf.for %i = %lb to %ub step %c1_i32 : i32 {
+    scf.for %j = %lb to %ub step %c1_i32 : i32 {
+      "body"(%j) : (i32) -> ()
+      scf.yield
+    }
+  } {"ttg.always-fuse", tt.num_stages = 1 : i32}
+  // CHECK: tt.num_stages = 1 : i32
+  // CHECK-NOT: scf.for
+  tt.return
+}
+
 // CHECK-LABEL: @fuse_attr_speculate
 // CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32
 tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[LEN:%.*]] = arith.subi [[UB]], [[LB]]
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
-  // CHECK-NXET: } {tt.flatten}
+  // CHECK-NEXT: } {tt.flatten}
 
   // CHECK: else
   // CHECK-COUNT-1: scf.for
@@ -509,9 +543,10 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
 tt.func @speculate_hoist(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: [[INNER_UB:%.*]] = arith.addi [[LB]], [[UB]]
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[INNER_UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   scf.for %i = %lb to %ub step %c1_i32 : i32 {
     "prologue"(%i) : (i32) -> ()
     %ubj = arith.addi %lb, %ub : i32
@@ -519,6 +554,31 @@ tt.func @speculate_hoist(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
+  } {tt.flatten}
+  tt.return
+}
+
+// The empty-loop check must use the inner loop's comparison signedness.
+// CHECK-LABEL: @speculate_unsigned_inner_bounds
+// CHECK-SAME: [[M:%.*]]: i32, [[LB:%.*]]: i32, [[UB:%.*]]: i32
+tt.func @speculate_unsigned_inner_bounds(%m: i32, %lb: i32, %ub: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: [[EMPTY:%.*]] = arith.cmpi uge, [[LB]], [[UB]]
+  // CHECK-NEXT: scf.if [[EMPTY]] {
+  // CHECK-NEXT: scf.for
+  // CHECK-NEXT: "prologue"
+  // CHECK-NEXT: "epilogue"
+  // CHECK-NEXT: }
+  // CHECK-NEXT: } else {
+  // CHECK: scf.for
+  // CHECK: "body"
+  scf.for %i = %c0 to %m step %c1 : i32 {
+    "prologue"(%i) : (i32) -> ()
+    scf.for unsigned %j = %lb to %ub step %c1 : i32 {
+      "body"(%j) : (i32) -> ()
+    }
+    "epilogue"(%i) : (i32) -> ()
   } {tt.flatten}
   tt.return
 }
@@ -578,5 +638,66 @@ tt.func @prologue_output(%ub: i32) {
     scf.yield %next : i32
   } {"ttg.always-fuse"}
 
+  tt.return
+}
+
+// CHECK-LABEL: @hoisted_inner_loop
+tt.func @hoisted_inner_loop() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  // CHECK: [[SUM:%.*]] = scf.for
+  scf.for %i = %c0 to %c2 step %c1 : i32 {
+    %sum = scf.for %j = %c0 to %c2 step %c1
+        iter_args(%acc = %c0) -> i32 : i32 {
+      // CHECK: arith.addi
+      %next = arith.addi %acc, %j : i32
+      // CHECK-NEXT: scf.yield
+      scf.yield %next : i32
+    }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "epilogue"([[SUM]])
+    "epilogue"(%sum) : (i32) -> ()
+  } {tt.flatten}
+
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @assume_not_dominating_loop
+// An llvm.assume(ub > lb) that does not dominate the inner loop (it sits on
+// another branch of an scf.if) must not license dropping the zero-trip version
+// split of the fused loop: the nest is not reachable from the assume, so the
+// fast path must be declined and the runtime zero-trip guard kept.
+// CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32, [[FLAG:%.*]]: i1
+tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  // The inner loop is empty when %ub <= 0. Keep its runtime guard because
+  // the assume on the other branch does not dominate the loop.
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sle, [[UB]], %c0_i32
+  // CHECK-NEXT: scf.if [[IS_EMPTY]]
+  // CHECK-NEXT: scf.for %{{.*}} = %c0_i32 to [[UB]] step %c1_i32
+  // CHECK-NEXT:   "prologue"
+  // CHECK-NOT: arith.constant true
+  scf.if %flag {
+    // The assume is in force only where %flag holds; the loop nest below is
+    // only reachable where %flag does not hold.
+    %cmp = arith.cmpi sgt, %ub, %lb : i32
+    llvm.intr.assume %cmp : i1
+    scf.yield
+  } else {
+    scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+      "prologue"(%i) : (i32) -> ()
+      scf.for %j = %c0_i32 to %ub step %c1_i32 : i32 {
+        "body"(%i, %j) : (i32, i32) -> ()
+        scf.yield
+      }
+    } {tt.flatten}
+    scf.yield
+  }
   tt.return
 }

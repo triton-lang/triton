@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace triton;
@@ -30,7 +31,7 @@ struct VerifyWarpSpecializationPartitions
       VerifyWarpSpecializationPartitions)
 
   void runOnOperation() override {
-    WalkResult result = getOperation().walk([&](scf::ForOp loop) {
+    WalkResult result = getOperation().walk([&](LoopLikeOpInterface loop) {
       if (!loop->hasAttr(kPartitionStagesAttrName))
         return WalkResult::advance();
       if (failed(verifyPartitionedLoop(loop))) {
@@ -53,12 +54,12 @@ struct AutomaticWarpSpecialization
 };
 
 void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
-  SetVector<scf::ForOp> descUpdateLoops;
-  mod.walk([&](scf::ForOp loop) {
+  SetVector<LoopLikeOpInterface> descUpdateLoops;
+  mod.walk([&](LoopLikeOpInterface loop) {
     if (loop->hasAttr(kWarpSpecializeAttrName)) {
       loop.walk([&](triton::MakeTensorDescOp op) {
-        if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-          descUpdateLoops.insert(forOp);
+        if (auto loopOp = op->getParentOfType<LoopLikeOpInterface>()) {
+          descUpdateLoops.insert(loopOp);
         }
       });
     }
@@ -93,12 +94,17 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
+  // Automatic warp specialization does not yet synchronize two-CTA TMEM reuse.
+  if (triton::nvidia_gpu::getModuleTwoCTAs(getOperation()))
+    return;
+
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));
     pm.addPass(createVerifyWarpSpecializationPartitionsPass());
   };
 
+  pm.addPass(createTritonGPUNormalizeWSWhileLoops());
   addPassWithPartitionVerifier(createTritonGPUPartitionScheduling());
   addPassWithPartitionVerifier(createNVWSHoistTmemStore());
   addPassWithPartitionVerifier(createNVWSInsertAref());

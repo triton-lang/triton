@@ -167,3 +167,17 @@ tt.func @hoist_cond_no_hoist_load_from_scf_while(%ptr: tensor<1024x!tt.ptr<f32>>
   tt.store %ptr, %1 : tensor<1024x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+tt.func @do_not_hoist_from_for_with_licm_disabled(%lb: i32, %ub: i32, %step: i32, %a: i32, %b: i32) -> i32 {
+  // CHECK-LABEL: do_not_hoist_from_for_with_licm_disabled
+  // CHECK-NOT: arith.addi
+  // CHECK: scf.for
+  // CHECK: arith.addi
+  %result = scf.for %i = %lb to %ub step %step iter_args(%value = %a) -> i32 : i32 {
+    %sum = arith.addi %a, %b : i32
+    scf.yield %sum : i32
+  } {llvm.loop_annotation = #llvm.loop_annotation<licm = <disable = true>>}
+  tt.return %result : i32
+}

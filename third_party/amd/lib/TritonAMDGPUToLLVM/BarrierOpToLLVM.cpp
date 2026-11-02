@@ -69,7 +69,7 @@ struct ArriveBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
     auto count = adaptor.getCount();
-    // NOTE: The LLVM intrisic expects an i64_ty for count (update value)
+    // NOTE: The LLVM intrinsic expects an i64_ty for count (update value)
     // But count cannot be more than 32bits according to ISA docs.
     Value priorState = ROCDL::DsAtomicBarrierArriveRtnOp::create(
         rewriter, loc, i64_ty, smemObj.getBase(), b.i64_val(count), {}, {}, {});
@@ -131,8 +131,7 @@ struct ClusterBarrierArriveOpConversion
     Value isFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterBlock =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *signalBlock = rewriter.createBlock(afterBlock);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, isFirstWarp, signalBlock, afterBlock);

@@ -1,26 +1,23 @@
-#ifndef TRITONAMD_ANALYSIS_AMDGPU_ALLOCATION_H
-#define TRITONAMD_ANALYSIS_AMDGPU_ALLOCATION_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AMDGPUALLOCATION_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AMDGPUALLOCATION_H_
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
+namespace mlir::triton::gpu {
+class ConvertLayoutOp;
+}
+
 namespace mlir::triton::AMD {
 
-unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy,
+unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
                                         TargetInfoBase &targetInfo);
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo);
 
-// For a layout conversion between `srcTy` and `dstTy`, return the vector length
-// that can be used for the stores to and loads from shared memory,
-// respectively.
-std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
-getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
-
 } // namespace mlir::triton::AMD
 
-#endif // TRITONAMD_ANALYSIS_AMDGPU_ALLOCATION_H
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AMDGPUALLOCATION_H_

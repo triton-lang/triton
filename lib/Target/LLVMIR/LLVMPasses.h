@@ -4,13 +4,32 @@
 
 namespace llvm {
 
+class TargetIRAnalysis;
+
+// Use generic optimization defaults with selectively validated NVIDIA hooks.
+TargetIRAnalysis createTritonNVPTXTargetIRAnalysis();
+
 // Pass to pre-process LLVM IR before optimization and break up phi of struct.
 // Breaking up those phis into elementary types allows better optimizations
 // downstream.
-struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
+struct BreakStructPhiNodesPass
+    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 
   static StringRef name() { return "BreakStructPhiNodesPass"; }
+};
+
+// Form profitable packed arithmetic supported by the selected NVIDIA GPU.
+struct NVPTXVectorizerPass : OptionalPassInfoMixin<NVPTXVectorizerPass> {
+  explicit NVPTXVectorizerPass(unsigned computeCapability)
+      : computeCapability(computeCapability) {}
+
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+  static StringRef name() { return "NVPTXVectorizerPass"; }
+
+private:
+  unsigned computeCapability;
 };
 
 } // namespace llvm

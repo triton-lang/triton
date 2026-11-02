@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250-strict --convert-builtin-func-to-llvm | FileCheck %s --check-prefix=STRICT
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
@@ -18,8 +19,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // intrinsic call gets the right operand types.
     // CHECK: llvm.insertelement{{.*}} : vector<4xi32>
     // CHECK: llvm.insertelement{{.*}} : vector<8xi32>
+    // The copy advances global_addr in place via a <2xi64> view of group0 (one
+    // i64 add; no ptrtoint/GEP round-trip, no trunc/lshr split).
+    // CHECK: llvm.bitcast{{.*}}vector<4xi32> to vector<2xi64>
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     // CHECK: rocdl.s.wait.tensorcnt 0
     %3 = amdg.async_tdm_intrinsic_wait  {count = 0 : i32}
     %4 = ttg.local_load %1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
@@ -49,7 +53,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.insertelement{{.*}} : vector<4xi32>
     // CHECK: llvm.insertelement{{.*}} : vector<8xi32>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
-    amdg.async_tdm_copy_local_to_global %0[%c_offset, %c_offset] from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
+    amdg.async_tdm_copy_local_to_global %0 from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
     // CHECK: rocdl.s.wait.tensorcnt 0
     %3 = amdg.async_tdm_intrinsic_wait  {count = 0 : i32}
     tt.return
@@ -84,7 +88,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
 
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -115,7 +119,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
-    amdg.async_tdm_copy_local_to_global %0[%c_offset, %c_offset] from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
+    amdg.async_tdm_copy_local_to_global %0 from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
     tt.return
   }
 }
@@ -126,6 +130,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tdm_load_multicast
+  // STRICT-LABEL: tdm_load_multicast
+  // STRICT-NOT: llvm.mlir.constant(4369 : i32)
+  // STRICT: "llvm.amdgcn.tensor.load.to.lds"
   tt.func public @tdm_load_multicast(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
@@ -139,17 +146,45 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, "ttg.th
     // CHECK-DAG: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
-    // Combine with other values
+    // The multicast OR result is stamped directly into the vector<8xi32> group.
     // CHECK: %[[TMP:.*]] = llvm.or %{{.*}}, %[[CTA_MASK]]
-    // CHECK: %[[TMP2:.*]] = llvm.and %[[TMP]]
-    // CHECK-NOT: llvm.insertelement{{.*}} : vector<8xi32>
-    // CHECK: llvm.insertelement %[[TMP2]]
+    // CHECK: llvm.insertelement %[[TMP]]
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
 
 
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0], [0, 0], [0, 0], [0, 0]]}>
+#slice1 = #ttg.slice<{dim = 1, parent = #blocked1}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1], [0, 2], [0, 0], [0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_multicast
+  tt.func public @tdm_gather_multicast(
+    %tensorDesc: !tt.tensordesc<8x64xf16, #shared1>,
+    %memDesc: !ttg.memdesc<8x64xf16, #shared1, #smem, mutable>,
+    %row_indices: tensor<8xi32, #slice1>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // CHECK-DAG: %[[GROUP_MASK:.*]] = llvm.mlir.constant(4369 : i32) : i32
+    // CHECK-DAG: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-13 : i32) : i32
+    // CHECK-DAG: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
+    // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[NON_FREE_BITS]]
+    // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
+    // CHECK: %[[G1_0_WITH_MASK:.*]] = llvm.or %{{.*}}, %[[CTA_MASK]]
+    // CHECK: %[[G1_0_MASKED:.*]] = llvm.and %[[G1_0_WITH_MASK]]
+    // CHECK: llvm.insertelement %[[G1_0_MASKED]]
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<8xi32, #slice1>, !ttg.memdesc<8x64xf16, #shared1, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared1>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
 }
@@ -168,10 +203,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_pred = arith.constant true
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
 
-    // CHECK: rocdl.global.prefetch %{{.*}} scope 8
+    // CHECK: rocdl.global.prefetch %{{.*}}, 9 : !llvm.ptr<1>
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = false : !tt.tensordesc<64x64xf16, #shared>
 
-    // CHECK: rocdl.global.prefetch %{{.*}} scope 9
+    // CHECK: rocdl.global.prefetch %{{.*}}, 8 : !llvm.ptr<1>
     amdg.tdm_prefetch %0[%c_offset, %c_offset], %c_pred, speculative = true : !tt.tensordesc<64x64xf16, #shared>
     tt.return
   }
@@ -199,8 +234,72 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<128x64xf16>
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<128x64xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[0, 1]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scatter_multi_cta
+  tt.func public @tdm_scatter_multi_cta(
+    %tensorDesc: !tt.tensordesc<256x128xf16>,
+    %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<256xi32, #idx>
+  ) {
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<256xi32, #idx>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<256x128xf16>
+    // CHECK-COUNT-4: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[0, 0]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.padded_shared<[64:+16] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0]], block = [[0, 64]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scatter_multi_cta_n
+  tt.func public @tdm_scatter_multi_cta_n(
+    %tensorDesc: !tt.tensordesc<256x128xf16>,
+    %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<256xi32, #idx>
+  ) {
+    // CHECK: rocdl.cluster.workgroup.id.x
+    // CHECK: llvm.getelementptr
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<256xi32, #idx>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<256x128xf16>
+    // CHECK-COUNT-8: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+    tt.return
+  }
+}
+
+// -----
+
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[0, 1], [0, 0]]}>
+#idx = #ttg.slice<{dim = 0, parent = #idx_parent}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scatter_multi_cta_mn
+  tt.func public @tdm_scatter_multi_cta_mn(
+    %tensorDesc: !tt.tensordesc<256x128xf16>,
+    %memDesc: !ttg.memdesc<256x128xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<256xi32, #idx>
+  ) {
+    // CHECK: rocdl.cluster.workgroup.id.x
+    // CHECK: llvm.getelementptr
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<256xi32, #idx>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<256x128xf16>
+    // CHECK-COUNT-4: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
     tt.return
   }
 }
@@ -216,7 +315,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable> -> !tt.tensordesc<8x8x8x16x16xf16>
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<8x8x8x16x16xf16, #shared_5d, #smem_5d, mutable> -> !tt.tensordesc<8x8x8x16x16xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
@@ -236,8 +335,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %memDesc: !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable>,
     %row_indices: tensor<8xi32, #idx_layout>
   ) {
-    %c0_i32 = arith.constant 0 : i32
-    amdg.async_tdm_scatter %tensorDesc[%row_indices, %c0_i32] from %memDesc : tensor<8xi32, #idx_layout>, !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable> -> !tt.tensordesc<8x64xf16>
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<8xi32, #idx_layout>, !ttg.memdesc<8x64xf16, #shared_scatter_pad, #smem_scatter_pad, mutable> -> !tt.tensordesc<8x64xf16>
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
     tt.return
   }
@@ -270,7 +368,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[LAYOUT_PRED:.*]] = llvm.select %[[IS_ACTIVE]], %{{.*}}, %{{.*}} : i1, i32
     // CHECK: llvm.and %{{.*}}, %[[LAYOUT_PRED]] : i32
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred {warp_used_hint = 15 : i32} : !tt.tensordesc<256x64xf16, #shared> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 {warp_used_hint = 15 : i32} : !tt.tensordesc<256x64xf16, #shared> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -299,7 +397,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
     // CHECK: llvm.icmp "eq" %[[MASKED]], %[[ZERO]] : i32
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred {warp_used_hint = 3 : i32} : !tt.tensordesc<128x16xf16, #partitioned> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 {warp_used_hint = 3 : i32} : !tt.tensordesc<128x16xf16, #partitioned> -> !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>
     tt.return
   }
 }
@@ -323,7 +421,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.insertelement %{{.*}}, %{{.*}} : vector<8xi32>
     %0 = tt.make_tensor_descriptor %arg0, [%shape0, %shape1], [%stride0, %c_stride1] : <f16>, <64x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -346,7 +444,167 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-DAG: llvm.lshr %[[S1]], %{{.*}} : i64
     %0 = tt.make_tensor_descriptor %arg0, [%shape0, %shape1, %shape2], [%stride0, %stride1, %c_stride2] : <f16>, <4x16x64xf16, #shared>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
-    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset, %c_offset] into %1, pred = %c_pred : !tt.tensordesc<4x16x64xf16, #shared> -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<4x16x64xf16, #shared> -> !ttg.memdesc<4x16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Rank-reducing padded load: 2D [1, 64] descriptor into a 1D [64] allocation.
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_rank_reducing_padded
+  tt.func public @tdm_load_rank_reducing_padded(%arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32}) {
+    %c_shape0 = arith.constant 1 : i32
+    %c_shape1 = arith.constant 64 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %c_offset = arith.constant 0 : i32
+    %c_pred = arith.constant 1 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape0, %c_shape1], [%c_stride0, %c_stride1] : <i16>, <1x64xi16, #desc>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64xi16, #alloc, #smem, mutable>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<1x64xi16, #desc> -> !ttg.memdesc<64xi16, #alloc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Multi-chunk gather: 16 row indices lower to two TDM instructions.  Chunk 1's
+// LDS address is chunk 0 + a compile-time-constant byte delta (8 rows * 64 cols
+// * 2 bytes = 1024), and chunk 1 updates the group0 descriptor produced for
+// chunk 0.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_multichunk
+  // CHECK-DAG: %[[DELTA:.*]] = llvm.mlir.constant(1024 : i32) : i32
+  // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
+  // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
+  // CHECK: %[[G0_SEQ:.*]] = llvm.inline_asm has_side_effects {{.*}} "", "=s,0" %[[G0_C0]] : (vector<4xi32>) -> vector<4xi32>
+  // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_SEQ]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
+  tt.func public @tdm_gather_multichunk(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
+    %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// Padded multi-chunk gather: the chunk delta (8 rows) is a whole number of pad
+// intervals, so the byte delta carries the padding too --
+// (8*64 + (8*64/64)*4) * 2 bytes = 1088 -- and chunk 1 updates the group0
+// descriptor produced for chunk 0.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#shared = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [16, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_multichunk_padded
+  // CHECK-DAG: %[[DELTA:.*]] = llvm.mlir.constant(1088 : i32) : i32
+  // CHECK: %[[C0:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
+  // CHECK: %[[G0_C0:.*]] = llvm.insertelement %[[C0]], %{{.*}}[%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C0]],
+  // CHECK: %[[G0_SEQ:.*]] = llvm.inline_asm has_side_effects {{.*}} "", "=s,0" %[[G0_C0]] : (vector<4xi32>) -> vector<4xi32>
+  // CHECK: %[[C1:.*]] = llvm.add %[[C0]], %[[DELTA]] : i32
+  // CHECK: %[[G0_C1:.*]] = llvm.insertelement %[[C1]], %[[G0_SEQ]][%{{.*}} : i32] : vector<4xi32>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%[[G0_C1]],
+  tt.func public @tdm_gather_multichunk_padded(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
+    %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM block has just 4 elements. Warps 4..7 have no work and must be
+// predicated off rather than handed an empty tile.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_1d_block_smaller_than_num_warps
+  tt.func public @tdm_store_1d_block_smaller_than_num_warps(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape], [%c_stride0] : <f32>, <4xf32, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<4xf32, #shared, #smem, mutable>
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+    // CHECK: llvm.select %[[IS_ACTIVE]]
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<4xf32, #shared, #smem, mutable> -> !tt.tensordesc<4xf32, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM block has just 16 (4*4) elements. Warps 16..31 have no work and must be
+// predicated off rather than handed an empty tile.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_2d_block_smaller_than_num_warps
+  tt.func public @tdm_store_2d_block_smaller_than_num_warps(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <4x4xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+    // CHECK: llvm.select %[[IS_ACTIVE]]
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<4x4xf16, #shared, #smem, mutable> -> !tt.tensordesc<4x4xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#idx = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scope_cache_policy
+  tt.func public @tdm_scope_cache_policy(
+    %desc: !tt.tensordesc<64x64xf16, #shared>,
+    %smem: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>,
+    %rows_desc: !tt.tensordesc<8x64xf16, #shared>,
+    %rows: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %idx: tensor<8xi32, #idx>
+  ) {
+    // CHECK-DAG: %[[LOAD_AUX:.*]] = llvm.mlir.constant(17 : i32) : i32
+    // CHECK-DAG: %[[STORE_AUX:.*]] = llvm.mlir.constant(26 : i32) : i32
+    // CHECK-DAG: %[[GATHER_AUX:.*]] = llvm.mlir.constant(19 : i32) : i32
+    // CHECK-DAG: %[[SCATTER_AUX:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[LOAD_AUX]])
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %smem {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = none>} : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[STORE_AUX]])
+    %1 = amdg.async_tdm_copy_local_to_global %desc from %smem {scope = 3 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = high>} : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[GATHER_AUX]])
+    %2 = amdg.async_tdm_gather %rows_desc[%idx] to %rows {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SCATTER_AUX]])
+    %3 = amdg.async_tdm_scatter %rows_desc[%idx] from %rows {scope = 3 : i32} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
     tt.return
   }
 }

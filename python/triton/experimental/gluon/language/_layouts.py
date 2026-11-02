@@ -445,7 +445,7 @@ class NVMMASharedLayout(SharedLayout):
 
     def mangle(self) -> str:
         cga_layout = "_".join("~".join(map(str, vec)) for vec in self.cga_layout) if self.cga_layout else ""
-        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_{cga_layout}_NVMMA"
+        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.rank}_{self.transposed}_{self.fp4_padded}_{cga_layout}_NVMMA"
 
     def __hash__(self):
         return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
@@ -659,11 +659,11 @@ class SharedLinearLayout(SharedLayout):
     @property
     def shape(self):
         rank = len(self.offset_bases[0])
-        max_stride = [1] * rank
+        max_stride = [0] * rank
         for b in itertools.chain(self.offset_bases, self.block_bases):
             for i, bi in enumerate(b):
                 max_stride[i] = max(max_stride[i], bi)
-        return [2 * s for s in max_stride]
+        return [1 << s.bit_length() for s in max_stride]
 
     def __hash__(self):
         return hash((

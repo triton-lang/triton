@@ -1,3 +1,4 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
@@ -48,6 +49,10 @@ public:
     return isa<NVVM::BarrierOp>(op);
   }
 
+  bool isBarrierHandleOp(Operation *op) const override {
+    return isa<mlir::triton::nvgpu::WarpGroupBarrierIdOp>(op);
+  }
+
   Type getBarrierHandleType(MLIRContext *ctx) const override {
     return IntegerType::get(ctx, 32);
   }
@@ -76,7 +81,10 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads));
+      // Only this warp partition participates, so the barrier is not
+      // CTA-aligned.
+      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads),
+                              /*aligned=*/false);
     }
   }
 
@@ -207,8 +215,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   WarpSpecializeCallbacks callbacks;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
     assert(barIdx < kNumBarriers && "not enough barriers");
-    LLVM::createLLVMIntrinsicCallOp(
-        b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
+    NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx), Value{},
+                            /*aligned=*/false);
   };
 
   callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,

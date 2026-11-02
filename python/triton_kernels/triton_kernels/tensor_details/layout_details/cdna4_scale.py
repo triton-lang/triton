@@ -37,8 +37,8 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         B = math.prod(leading_shape)
         ALIGN_K_SCALE = 8
         ALIGN_N = 32
-        K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
-        N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
+        K_SCALE_pad = (K_SCALE + (ALIGN_K_SCALE - 1)) // ALIGN_K_SCALE * ALIGN_K_SCALE
+        N_pad = (N + (ALIGN_N - 1)) // ALIGN_N * ALIGN_N
         object.__setattr__(self, "leading_shape", leading_shape)
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "ALIGN_K_SCALE", ALIGN_K_SCALE)
@@ -57,8 +57,7 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         # re-pack as column-major
         data = repack(data, -1, -2, self.is_fp4)
         data = data.mT.contiguous().mT
-        if data.numel():
-            data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
+        data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
         data = data.view(self.B, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()

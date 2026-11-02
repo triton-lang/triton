@@ -8,11 +8,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
-#undef DEBUG_TYPE
-#define DEBUG_TYPE "tritonamdgpu-coalesce-async-copy"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
-
 namespace ttg = triton::gpu;
 using mlir::triton::amdgpu::ISAFamily;
 
@@ -81,8 +76,15 @@ struct CoalesceAsyncCopyWrites
       sharedLayout = triton::gpu::toLinearLayout(dstTy);
     }
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-    loadContig = std::min<unsigned>(loadContig,
-                                    regToSharedLayout.getNumConsecutiveInOut());
+    unsigned layoutContig = regToSharedLayout.getNumConsecutiveInOut();
+
+    // The src encoding supports more contiguous elements per thread than the
+    // reg->shared layout can write coalesced (e.g. the blocked and shared
+    // encodings have a different order). In this case the current src encoding
+    // results in strided writes into LDS which the lowering cannot handle, so
+    // we always have to rewrite the src layout.
+    bool layoutRestrictsContig = layoutContig < loadContig;
+    loadContig = std::min<unsigned>(loadContig, layoutContig);
 
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
@@ -102,8 +104,11 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
-                                      dstTy.getAllocShape(), loadContig)) {
+    // Do not move canLoadDirectToLDS into the if because it has ref parameters
+    bool alreadyCoalesced =
+        LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstTy.getEncoding(),
+                                      dstTy.getAllocShape(), loadContig);
+    if (alreadyCoalesced && !layoutRestrictsContig) {
       return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
     }
     // Check if we support load contig because canLoadDirectToLds can change it
@@ -112,24 +117,37 @@ struct CoalesceAsyncCopyWrites
                                          "unable to find supported vector size "
                                          "based on src and dst encodings");
 
-    if (isa<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
+    if (auto swizzledEnc =
+            dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
       // For swizzled layouts we apply the swizzling during lowering so we only
-      // adjust the sizePerThread of the blocked encoding to avoid strided
-      // writes into LDS
+      // adjust the blocked encoding to avoid strided writes into LDS.
       auto contigPerThread = ttg::getContigPerThread(srcTy);
       auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
       assert(srcElemContig >= loadContig);
       contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
-      newDistEnc = BlockedEncodingAttr::get(
+
+      // The default builder distributes the lanes (and warps) of a blocked
+      // encoding along its own order. When the blocked and shared order
+      // disagree this spreads consecutive lanes along a dimension that is
+      // strided in LDS, resulting in uncoalesced writes. Instead we distribute
+      // the lanes/warps following the shared order so consecutive lanes map to
+      // consecutive LDS offsets, and keep the original blocked order for the
+      // final blocked encoding.
+      auto distEncSharedOrder = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
-          blockedEnc.getOrder(), numWarps, threadsPerWarp,
+          swizzledEnc.getOrder(), numWarps, threadsPerWarp,
+          blockedEnc.getCGALayout());
+      newDistEnc = BlockedEncodingAttr::get(
+          copyOp.getContext(), distEncSharedOrder.getSizePerThread(),
+          distEncSharedOrder.getThreadsPerWarp(),
+          distEncSharedOrder.getWarpsPerCTA(), blockedEnc.getOrder(),
           blockedEnc.getCGALayout());
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
       // scattered writes into LDS which is not supported on GFX9. To ensure
       // coalesced writes we change the src layout to a linear encoding which
-      // effectivly copies/mimicks the linear_component so each warp (reg+lane
+      // effectively copies/mimics the linear_component so each warp (reg+lane
       // bases) map to consecutive LDS offsets resulting in coalesced writes
       // The new linear encoding is build by taking bases from the
       // linear_component and assigning them to reg/lane/warp bases in the
@@ -234,10 +252,9 @@ private:
 
 } // anonymous namespace
 
-class TritonAMDGPUCoalesceAsyncCopyPass
-    : public impl::TritonAMDGPUCoalesceAsyncCopyBase<
+struct TritonAMDGPUCoalesceAsyncCopyPass
+    : impl::TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
-public:
   using Base::Base;
 
   void runOnOperation() override {

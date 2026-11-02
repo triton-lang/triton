@@ -13,7 +13,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -192,147 +194,50 @@ createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
                        std::optional<TMEMLoadReduceModifier> redOp, bool useAbs,
                        bool useNaN, Type elemTy,
                        ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  // If the memory is unpacked we need to pack on the fly when loading.
-  std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats = numRegPerMessage / getElementsPerThread(atom);
-
-  std::string opcode = std::string("tcgen05.ld.") + (redOp ? "red." : "");
-  opcode += "sync.aligned.";
-  opcode += getOpShape(atom);
-  opcode += ".x" + std::to_string(numRepeats);
-
-  if (redOp) {
-    if (unpacked) {
-      llvm_unreachable("Unpacked is unsupported with TMEM reduction");
-    }
-    // Add reduction modifier: .min or .max
-    switch (*redOp) {
-    case TMEMLoadReduceModifier::MIN:
-      opcode += ".min";
-      break;
-    case TMEMLoadReduceModifier::MAX:
-      opcode += ".max";
-      break;
-    default:
-      llvm_unreachable("Unsupported reduction modifier");
-    }
-    if (useAbs)
-      opcode += ".abs";
-    if (useNaN)
-      opcode += ".NaN";
-
-    std::string redStr;
-    if (elemTy.isF32()) {
-      redStr = ".f32";
-    } else {
-      llvm_unreachable("Unsupported type for TMEM reduction");
-    }
-    opcode += redStr;
-  } else {
-    opcode += packedStr + ".b32";
-  }
-
-  opcode += " {";
-
-  SmallVector<PTXInstr::Operand *> operands;
-  for (int i = 0; i < numRegPerMessage; i++) {
-    opcode += "$" + std::to_string(i);
-    auto *resultOp = ptxBuilder.newOperand("=r");
-    operands.push_back(resultOp);
-    if (i < numRegPerMessage - 1)
-      opcode += ", ";
-  }
-  opcode += "}";
-
-  int nextOperandIdx = numRegPerMessage;
-
-  // Add redval output operand if reduction is enabled
-  if (redOp) {
-    opcode += ", {$" + std::to_string(nextOperandIdx) + "}";
-    auto *redvalOp = ptxBuilder.newOperand("=r");
-    operands.push_back(redvalOp);
-    nextOperandIdx++;
-  }
-
-  opcode += ", [$" + std::to_string(nextOperandIdx) + " + " +
-            std::to_string(colOffset) + "]";
-  if (secondHalfOffset)
-    opcode += ", " + std::to_string(*secondHalfOffset);
-  opcode += ";";
-  operands.push_back(ptxBuilder.newOperand(address, "r"));
-  auto &ld = *ptxBuilder.create(opcode);
-  ld(operands, /*onlyAttachMLIRArgs=*/true);
-
-  // Build return type: data registers + optional redval register
-  int totalResults = numRegPerMessage + (redOp ? 1 : 0);
-  Type retTy;
-  if (totalResults == 1) {
-    retTy = i32_ty;
-  } else {
-    SmallVector<Type> elemTypes(totalResults, i32_ty);
-    retTy = struct_ty(elemTypes);
-  }
-  Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-
-  // Extract load result and redval if needed
-  Value loadResult = ret;
-  Value redvalResult = nullptr;
-
-  if (redOp) {
-    // Per PTX spec: .num must be at least .x2 when .red is specified,
-    // so numRegPerMessage >= 2 * getElementsPerThread(atom) >= 2.
-    // ret is a struct with numRegPerMessage + 1 elements: {loadVals..., redval}
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    SmallVector<Type> loadElemTypes(numRegPerMessage, i32_ty);
-    Type loadStructTy = struct_ty(loadElemTypes);
-    Value loadStruct = b.undef(loadStructTy);
-    for (int i = 0; i < numRegPerMessage; i++) {
-      Value elem = b.extract_val(i32_ty, ret, i);
-      loadStruct = b.insert_val(loadStructTy, loadStruct, elem, i);
-    }
-    loadResult = loadStruct;
-    redvalResult = b.extract_val(i32_ty, ret, numRegPerMessage);
-    // Bitcast redval from i32 to the target element type
-    if (redvalResult && elemTy != i32_ty) {
-      redvalResult = b.bitcast(redvalResult, elemTy);
-    }
-  }
-
-  return {loadResult, redvalResult};
-}
-
-static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
-                                        int numCols, Location loc,
-                                        ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> resultVals;
-  int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
-  Type packedType = elemTy;
-  if (numElementsPer32B > 1)
-    packedType = vec_ty(elemTy, numElementsPer32B);
-
-  auto unpackElement = [&](Value result) {
-    result = b.bitcast(result, packedType);
-    if (numElementsPer32B > 1) {
-      for (int j = 0; j < numElementsPer32B; j++) {
-        Value elem = b.extract_element(elemTy, result, b.i32_val(j));
-        resultVals.push_back(elem);
-      }
-    } else {
-      resultVals.push_back(result);
+  auto shape = [&] {
+    switch (atom) {
+    case TMemAccessAtom::I32x32b:
+      return NVVM::Tcgen05LdStShape::SHAPE_32X32B;
+    case TMemAccessAtom::I16x64b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X64B;
+    case TMemAccessAtom::I16x128b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X128B;
+    case TMemAccessAtom::I16x256b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X256B;
+    case TMemAccessAtom::I16x32bx2:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X32BX2;
     }
-  };
+    llvm_unreachable("Unknown TMemAccessAtom");
+  }();
+  auto shapeAttr = NVVM::Tcgen05LdStShapeAttr::get(ctx, shape);
 
-  if (isa<LLVM::LLVMStructType>(packedValues.getType())) {
-    for (int i = 0; i < numCols; i++) {
-      Value result = b.extract_val(i32_ty, packedValues, i);
-      unpackElement(result);
-    }
-  } else {
-    unpackElement(packedValues);
+  auto tmemPtrTy = ptr_ty(ctx, 6);
+  Value tmemPtr = b.inttoptr(tmemPtrTy, address);
+  tmemPtr = b.gep(tmemPtrTy, i8_ty, tmemPtr, LLVM::GEPArg(colOffset));
+  Value offset = secondHalfOffset ? b.i64_val(*secondHalfOffset) : Value();
+
+  if (!redOp) {
+    // Pack adjacent 16-bit columns when the memory uses an unpacked layout.
+    Type resultTy = vec_ty(i32_ty, numRegPerMessage);
+    Value result = NVVM::Tcgen05LdOp::create(
+        rewriter, loc, resultTy, unpacked ? rewriter.getUnitAttr() : UnitAttr(),
+        shapeAttr, tmemPtr, offset);
+    return {result, Value()};
   }
-  return resultVals;
+
+  assert(!unpacked && "Unpacked is unsupported with TMEM reduction");
+  assert(elemTy.isF32() && "Unsupported type for TMEM reduction");
+  Type dataTy = vec_ty(elemTy, numRegPerMessage);
+  auto reduction = *redOp == TMEMLoadReduceModifier::MIN
+                       ? NVVM::ReductionKind::MIN
+                       : NVVM::ReductionKind::MAX;
+  auto result = NVVM::Tcgen05LdRedOp::create(
+      rewriter, loc, dataTy, elemTy, shapeAttr,
+      NVVM::ReductionKindAttr::get(ctx, reduction),
+      useAbs ? rewriter.getUnitAttr() : UnitAttr(),
+      useNaN ? rewriter.getUnitAttr() : UnitAttr(), tmemPtr, offset);
+  return {result.getData(), result.getRedVal()};
 }
 
 // Returns {resultVals, redvalVals} where redvalVals is empty if no reduction.
@@ -398,8 +303,8 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
                                  /*unpacked=*/unpacked,
                                  /*numRegPerMessage=*/valsPerMessage, atom,
                                  redOp, useAbs, useNaN, llvmElemTy, rewriter);
-      resultVals.append(
-          unpackResults(outVals, llvmElemTy, valsPerMessage, loc, rewriter));
+      auto loadedValues = unpackLLVector(loc, outVals, rewriter);
+      resultVals.append(unpack(loadedValues, llvmElemTy, loc, rewriter));
       if (redval)
         redvalVals.push_back(redval);
     }
@@ -416,22 +321,6 @@ lowerTMemLdStFromInfo(Location loc, ConversionPatternRewriter &rewriter,
                       std::optional<TMEMLoadReduceModifier> redOp, bool useAbs,
                       bool useNaN) {
   bool isStore = !vals.empty();
-  if (info.broadcast) {
-    auto removeBroadcast = std::move(info.broadcast.value());
-    info.broadcast = std::nullopt;
-
-    auto inVals = to_vector(vals);
-    if (isStore) {
-      inVals = removeBroadcast.apply(inVals);
-    }
-    auto [outVals, redvalVals] =
-        lowerTMemLdStFromInfo(loc, rewriter, info, pred, llvmElemTy, inVals,
-                              tmemBase, redOp, useAbs, useNaN);
-    if (!isStore) {
-      outVals = broadcastAs(outVals, info.reps);
-    }
-    return {outVals, redvalVals};
-  }
   if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
     unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     bool padding = false;
@@ -517,6 +406,21 @@ static void combinePartialReductions(Location loc,
   }
 }
 
+struct TensorMemoryWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMWaitOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TMEMWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto kind = op.getKind() == TMEMWaitKind::LOAD
+                    ? NVVM::Tcgen05WaitKind::LOAD
+                    : NVVM::Tcgen05WaitKind::STORE;
+    rewriter.replaceOpWithNewOp<NVVM::Tcgen05WaitOp>(op, kind);
+    return success();
+  }
+};
+
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -547,13 +451,10 @@ struct TensorMemoryLoadOpConversion
         loc, rewriter, regTy, memTy, tmemBase, maxnreg, b.i1_val(true),
         llvmElemTy, {}, redOp, useAbs, useNaN);
 
-    Type structTy = getTypeConverter()->convertType(op.getType());
-    Value resultStruct =
-        packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
-    // Wait insertion could be moved to the TTGIR level if needed.
-    NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::LOAD);
+    Value resultStruct = packUniqueTensorElements(
+        loc, getTypeConverter(), resultVals, rewriter, op.getType());
 
-    // tcgen05.ld.red is async, redval registers aren't valid until the wait
+    // tcgen05.ld.red honors true register dependencies without a wait.
     if (redOp)
       combinePartialReductions(loc, rewriter, redvalVals, *redOp, useNaN);
 
@@ -561,9 +462,8 @@ struct TensorMemoryLoadOpConversion
     SmallVector<Value> results = {resultStruct};
     if (redOp) {
       // Pack redval values into the red tensor result
-      Type redStructTy = getTypeConverter()->convertType(op.getRed().getType());
-      Value redStruct = packLLElements(loc, getTypeConverter(), redvalVals,
-                                       rewriter, redStructTy);
+      Value redStruct = packUniqueTensorElements(
+          loc, getTypeConverter(), redvalVals, rewriter, op.getRed().getType());
       results.push_back(redStruct);
     }
 
@@ -589,12 +489,10 @@ struct TensorMemoryStoreOpConversion
     auto regTy = cast<RankedTensorType>(op.getSrc().getType());
 
     SmallVector<Value> srcValues =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     auto maxnreg = getContextualMaxNReg(op);
     lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, tmemBase, maxnreg, pred,
                            llvmElemTy, srcValues);
-    NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
-
     rewriter.eraseOp(op);
     return success();
   }
@@ -628,11 +526,10 @@ struct TensorMemoryAllocOpConversion
       auto llvmElemTy = getTypeConverter()->convertType(regTy.getElementType());
       auto maxnreg = getContextualMaxNReg(op);
       SmallVector<Value> srcValues =
-          unpackLLElements(loc, adaptor.getSrc(), rewriter);
+          unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
       Value ptr = b.inttoptr(base.getType(), allocAddress);
       lowerTMemLdStFromTypes(loc, rewriter, regTy, memTy, ptr, maxnreg,
                              b.i1_val(true), llvmElemTy, srcValues);
-      NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
     }
     // Cast to address space 3 as the shared memory object uses 3.
     // TODO: clean this up and use either a int or ptr address space 6
@@ -685,8 +582,24 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // This subtlely handles subviews
   auto cvt = tmemLl.invertAndCompose(shmemLl);
 
-  auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
-  auto atom = getTMemCopyAtom(cvt, bitwidth);
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
+  uint64_t holeMask = 0;
+  // Zero col bases are physical holes. Compact them for the SMEM descriptor,
+  // then skip the corresponding physical TMEM ranges when issuing copies.
+  if (isa<TensorMemoryEncodingAttr>(dstTy.getEncoding())) {
+    unsigned colBits = tmemLl.getInDimSizeLog2(kCol);
+    auto outDims = llvm::to_vector(tmemLl.getOutDimNames());
+    holeMask = ~getInputBasisMask(tmemLl, kCol, outDims) &
+               llvm::maskTrailingOnes<uint64_t>(colBits);
+  }
+  auto compact = holeMask ? cvt.removeZeroBasesAlongDim(kCol) : cvt;
+  unsigned contiguousCols = holeMask
+                                ? uint64_t{1} << llvm::countr_zero(holeMask)
+                                : compact.getInDimSize(kCol);
+  auto atom = getTMemCopyAtom(
+      compact.resizeInDim(
+          kCol, std::min<unsigned>(contiguousCols, compact.getInDimSize(kCol))),
+      bitwidth);
   // Get shmem ptr
   Type elemTy = typeConverter->convertType(srcTy.getElementType());
   auto smemObj =
@@ -697,10 +610,11 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // once we have access to the lbo/sbo
   const SmallVector<unsigned> instrShape = {32, atom.bCol / bitwidth};
   auto kWarp = str_attr("warp");
-  auto cvtWarp = cvt.reshapeIns({{kRow, 32},
-                                 {kWarp, 4},
-                                 {kCol, cvt.getInDimSize(kCol)},
-                                 {kBlock, cvt.getInDimSize(kBlock)}})
+  auto cvtWarp = compact
+                     .reshapeIns({{kRow, 32},
+                                  {kWarp, 4},
+                                  {kCol, compact.getInDimSize(kCol)},
+                                  {kBlock, compact.getInDimSize(kBlock)}})
                      .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
 
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
@@ -725,11 +639,15 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
            strideRow * (64 / 8));
   }
 
+  int logicalCol = 0;
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
-    auto desc = loader->smemLoad(0, col, rewriter, loc);
+    if (col & holeMask)
+      continue;
+    auto desc = loader->smemLoad(0, logicalCol, rewriter, loc);
     auto tmemAddr =
         b.add(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32));
     createTcgen05Cp(rewriter, loc, tmemAddr, desc, pred, atom, twoCTAs);
+    logicalCol += instrShape[1];
   }
   return success();
 }
@@ -750,6 +668,9 @@ struct TensorMemoryCopyOpConversion
       Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
       pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, cluster0);
     }
+
+    if (adaptor.getPred())
+      pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, adaptor.getPred());
 
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))
@@ -823,8 +744,8 @@ struct TMEMSubSliceOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto dstTy = cast<MemDescType>(op.getResult().getType());
-    uint32_t offset = getTMemSubSliceOffset(dstTy, op.getN());
+    auto srcTy = cast<MemDescType>(op.getSrc().getType());
+    uint32_t offset = getTMemSubSliceOffset(srcTy, op.getOffset(), op.getDim());
 
     Value tmemBase = adaptor.getSrc();
     Value offsetVal = b.i32_val(offset);
@@ -841,8 +762,8 @@ void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
-               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion>(
-      typeConverter, benefit);
+               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion,
+               TensorMemoryWaitOpConversion>(typeConverter, benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(

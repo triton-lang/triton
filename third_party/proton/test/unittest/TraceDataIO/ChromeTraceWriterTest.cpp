@@ -1,12 +1,16 @@
 #include "TraceDataIO/EntryDecoder.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "nlohmann/json.hpp"
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <system_error>
+#include <unistd.h>
 #include <vector>
 
 using json = nlohmann::json;
@@ -14,15 +18,26 @@ using namespace proton;
 
 class ChromeTraceWriterTest : public ::testing::Test {
 public:
-  void SetUp() override {}
+  void SetUp() override {
+    // CTest can run individual cases alongside the whole test executable.
+    std::string pattern =
+        (std::filesystem::temp_directory_path() / "proton-chrome-trace-XXXXXX")
+            .string();
+    char *created = ::mkdtemp(pattern.data());
+    ASSERT_NE(created, nullptr) << std::strerror(errno);
+
+    chromeTraceDir = created;
+    chromeTracePath = (chromeTraceDir / "chrome_trace.json").string();
+  }
 
   void TearDown() override {
-    try {
-      std::filesystem::remove_all(chromeTracePath);
-    } catch (const std::filesystem::filesystem_error &e) {
-      std::cerr << "Error cleaning up test trace files: " << e.what()
-                << std::endl;
-    }
+    if (chromeTraceDir.empty())
+      return;
+
+    std::error_code error;
+    std::filesystem::remove_all(chromeTraceDir, error);
+    EXPECT_FALSE(error) << "Error cleaning up " << chromeTraceDir << ": "
+                        << error.message();
   }
 
   void printJsonTrace(json data) { std::cout << data.dump(4) << std::endl; }
@@ -66,7 +81,8 @@ public:
   }
 
 protected:
-  std::string chromeTracePath = "chrome_trace.json";
+  std::filesystem::path chromeTraceDir;
+  std::string chromeTracePath;
 };
 
 TEST_F(ChromeTraceWriterTest, SingleBlock) {
@@ -208,4 +224,134 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
   EXPECT_EQ(data["traceEvents"][2]["cat"], "kernel2");
   EXPECT_DOUBLE_EQ(data["traceEvents"][2]["ts"], 10000.0);
   EXPECT_DOUBLE_EQ(data["traceEvents"][2]["dur"], 400.0);
+}
+TEST_F(ChromeTraceWriterTest, AsyncLinksAcrossWarps) {
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel";
+  metadata->scopeName = {{1, "scope"}, {7, "async_copy"}};
+
+  auto result = std::make_shared<CircularLayoutParserResult>();
+  auto &block = result->blockTraces.emplace_back();
+  block.blockId = 0;
+  block.procId = 1;
+  block.initTime = 1000;
+  block.traces.resize(2);
+  block.traces[0].uid = 2;
+  block.traces[1].uid = 5;
+
+  auto addScope = [&](auto &trace, uint64_t startCycle, uint64_t endCycle) {
+    auto start = std::make_shared<CycleEntry>();
+    start->cycle = startCycle;
+    start->scopeId = 1;
+    auto end = std::make_shared<CycleEntry>();
+    end->cycle = endCycle;
+    end->isStart = false;
+    end->scopeId = 1;
+    trace.profileEvents.emplace_back(start, end);
+  };
+  addScope(block.traces[0], 100, 125);
+  addScope(block.traces[1], 150, 175);
+
+  auto addLink = [&](uint64_t startCycle, uint64_t endCycle) {
+    auto start = std::make_shared<CycleEntry>();
+    start->cycle = startCycle;
+    start->scopeId = 7;
+    start->isAsync = true;
+    auto end = std::make_shared<CycleEntry>();
+    end->cycle = endCycle;
+    end->isStart = false;
+    end->scopeId = 7;
+    end->isAsync = true;
+    block.traces[0].asyncEvents.push_back(start);
+    block.traces[1].asyncEvents.push_back(end);
+    block.asyncLinks.push_back({{2, start}, {5, end}});
+  };
+  addLink(100, 150);
+  addLink(200, 250);
+
+  std::vector<KernelTrace> kernelTrace = {{result, metadata}};
+  StreamChromeTraceWriter(kernelTrace, chromeTracePath).dump();
+  auto data = readJsonTrace(chromeTracePath);
+
+  ASSERT_EQ(data["traceEvents"].size(), 6);
+  EXPECT_EQ(data["traceEvents"][0]["tid"], "warp 2 (line 0)");
+  EXPECT_EQ(data["traceEvents"][1]["tid"], "warp 5 (line 0)");
+
+  json flows = json::array();
+  for (const auto &event : data["traceEvents"])
+    if (event["cat"] == "flow")
+      flows.push_back(event);
+  ASSERT_EQ(flows.size(), 4);
+  EXPECT_EQ(flows[0]["name"], "async_copy");
+  EXPECT_EQ(flows[0]["ph"], "X");
+  EXPECT_EQ(flows[1]["ph"], "X");
+  EXPECT_TRUE(flows[0]["flow_out"]);
+  EXPECT_TRUE(flows[1]["flow_in"]);
+  EXPECT_EQ(flows[0]["bind_id"], flows[1]["bind_id"]);
+  EXPECT_NE(flows[0]["bind_id"], flows[2]["bind_id"]);
+  EXPECT_EQ(flows[0]["tid"], "warp 2 (line 0)");
+  EXPECT_EQ(flows[1]["tid"], "warp 5 (line 0)");
+  EXPECT_DOUBLE_EQ(flows[0]["ts"], 0.0);
+  EXPECT_DOUBLE_EQ(flows[1]["ts"], 0.05);
+  EXPECT_DOUBLE_EQ(flows[2]["ts"], 0.1);
+  EXPECT_DOUBLE_EQ(flows[3]["ts"], 0.15);
+  for (auto &event : flows)
+    EXPECT_EQ(event["dur"], 0);
+}
+
+TEST_F(ChromeTraceWriterTest, AsyncEventsOnSameWarpUseDurationSlices) {
+  auto metadata = std::make_shared<KernelMetadata>();
+  metadata->kernelName = "kernel";
+  metadata->scopeName = {
+      {7, "async_copy[0]"},
+      {8, "async_copy[1]"},
+  };
+
+  auto result = std::make_shared<CircularLayoutParserResult>();
+  auto &block = result->blockTraces.emplace_back();
+  block.blockId = 0;
+  block.procId = 1;
+  block.initTime = 1000;
+  block.traces.resize(1);
+  block.traces[0].uid = 2;
+
+  auto addLink = [&](int scopeId, uint64_t startCycle, uint64_t endCycle) {
+    auto start = std::make_shared<CycleEntry>();
+    start->cycle = startCycle;
+    start->scopeId = scopeId;
+    start->isAsync = true;
+    auto end = std::make_shared<CycleEntry>();
+    end->cycle = endCycle;
+    end->isStart = false;
+    end->scopeId = scopeId;
+    end->isAsync = true;
+    block.traces[0].asyncEvents.push_back(start);
+    block.traces[0].asyncEvents.push_back(end);
+    block.asyncLinks.push_back({{2, start}, {2, end}});
+  };
+  addLink(7, 100, 200);
+  addLink(8, 150, 250);
+  addLink(7, 200, 300);
+
+  std::vector<KernelTrace> kernelTrace = {{result, metadata}};
+  StreamChromeTraceWriter(kernelTrace, chromeTracePath).dump();
+  auto data = readJsonTrace(chromeTracePath);
+
+  ASSERT_EQ(data["traceEvents"].size(), 3);
+  EXPECT_EQ(data["traceEvents"][0]["ph"], "X");
+  EXPECT_EQ(data["traceEvents"][0]["cat"], "async");
+  EXPECT_EQ(data["traceEvents"][0]["tid"], "warp 2 (line 0)");
+  EXPECT_DOUBLE_EQ(data["traceEvents"][0]["ts"], 0.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][0]["dur"], 0.1);
+  EXPECT_EQ(data["traceEvents"][1]["tid"], "warp 2 (line 1)");
+  EXPECT_DOUBLE_EQ(data["traceEvents"][1]["ts"], 0.05);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][1]["dur"], 0.1);
+  EXPECT_EQ(data["traceEvents"][2]["tid"], "warp 2 (line 0)");
+  EXPECT_DOUBLE_EQ(data["traceEvents"][2]["ts"], 0.1);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][2]["dur"], 0.1);
+  for (auto &event : data["traceEvents"]) {
+    EXPECT_FALSE(event.contains("bind_id"));
+    EXPECT_FALSE(event.contains("flow_in"));
+    EXPECT_FALSE(event.contains("flow_out"));
+  }
 }

@@ -7,11 +7,21 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
-BlockedEncodingAttr
-buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                       int numWarps, int threadsPerWarp,
-                       triton::gpu::CGAEncodingAttr cgaLayout,
-                       SmallVector<int64_t> shapePerCTA);
+// Compute dependency information once per function, before changing its IR.
+class CoalescedEncodingAnalysis {
+public:
+  explicit CoalescedEncodingAnalysis(ModuleAxisInfoAnalysis &axisInfoAnalysis)
+      : axisInfoAnalysis(axisInfoAnalysis) {}
+
+  BlockedEncodingAttr getEncoding(Operation *op, int numWarps,
+                                  int threadsPerWarp, CGAEncodingAttr cgaLayout,
+                                  ArrayRef<int64_t> shapePerCTA);
+
+private:
+  void computeSliceInfo(FunctionOpInterface func);
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
+  DenseMap<Operation *, unsigned> elementsPerThread;
+};
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_COALESCINGUTILS_H_

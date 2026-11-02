@@ -1,5 +1,45 @@
 // RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
 
+// CHECK-LABEL: @false_store_predicates
+// CHECK-NEXT: tt.store %arg0, %arg1, %arg2 :
+// CHECK-NEXT: tt.atomic_store release, gpu, %arg0, %arg1, %arg2 :
+// CHECK-NEXT: tt.return
+tt.func @false_store_predicates(%ptr: !tt.ptr<i32>, %value: i32, %pred: i1, %ptrs: tensor<4x!tt.ptr<i32>>, %values: tensor<4xi32>) {
+  %false = arith.constant false
+  // m_Zero matches both scalar false and dense<false> tensor masks.
+  %mask = arith.constant dense<false> : tensor<4xi1>
+  tt.store %ptr, %value, %false : !tt.ptr<i32>
+  tt.atomic_store release, gpu, %ptr, %value, %false : !tt.ptr<i32>
+  tt.store %ptrs, %values, %mask : tensor<4x!tt.ptr<i32>>
+  tt.atomic_store release, gpu, %ptrs, %values, %mask : tensor<4x!tt.ptr<i32>>
+  tt.store %ptr, %value, %pred : !tt.ptr<i32>
+  tt.atomic_store release, gpu, %ptr, %value, %pred : !tt.ptr<i32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @load_false_mask_with_other
+// CHECK-NEXT: tt.return %arg1 : i32
+tt.func @load_false_mask_with_other(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
+  %false = arith.constant false
+  %value = tt.load %ptr, %false, %other : !tt.ptr<i32>
+  tt.return %value : i32
+}
+
+// -----
+
+// CHECK-LABEL: @load_true_mask
+// CHECK-NEXT: %[[VALUE:.*]] = tt.load %arg0 : !tt.ptr<i32>
+// CHECK-NEXT: tt.return %[[VALUE]] : i32
+tt.func @load_true_mask(%ptr: !tt.ptr<i32>) -> i32 {
+  %true = arith.constant true
+  %value = tt.load %ptr, %true : !tt.ptr<i32>
+  tt.return %value : i32
+}
+
+// -----
+
 // CHECK-LABEL: dead_load
 tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
   %mask = arith.constant dense<true> : tensor<32x128xi1>
@@ -8,6 +48,16 @@ tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
   //     CHECK: tt.load {{.*}}isVolatile = true
   %a = tt.load %ptr, %mask, %other : tensor<32x128x!tt.ptr<f16>>
   %b = tt.load %ptr, %mask, %other {isVolatile = true} : tensor<32x128x!tt.ptr<f16>>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: dead_atomic_load
+tt.func @dead_atomic_load(%ptr: !tt.ptr<i32>) {
+  // Atomic loads remain observable synchronization operations when unused.
+  // CHECK: tt.atomic_load acquire, gpu
+  %unused = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
   tt.return
 }
 
@@ -259,4 +309,45 @@ tt.func @no_canonicalize_indivisible_offset(%base: tensor<128x!tt.ptr<f32>>) -> 
   %offset_ptr_int = arith.addi %ptr_as_int, %byte_offset : tensor<128xi64>
   %result = tt.int_to_ptr %offset_ptr_int : tensor<128xi64> -> tensor<128x!tt.ptr<f32>>
   tt.return %result : tensor<128x!tt.ptr<f32>>
+}
+
+// -----
+
+// CHECK-LABEL: split_join
+tt.func @split_join(%a: tensor<8x4xf32>, %b: tensor<8x4xf32>) -> (tensor<8x4xf32>, tensor<8x4xf32>) {
+  // split(join(a, b)) -> (a, b)
+  // CHECK-NOT: tt.join
+  // CHECK-NOT: tt.split
+  // CHECK: tt.return %arg0, %arg1
+  %j = tt.join %a, %b : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  %o:2 = tt.split %j : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  tt.return %o#0, %o#1 : tensor<8x4xf32>, tensor<8x4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: join_split
+tt.func @join_split(%x: tensor<8x4x2xf32>) -> tensor<8x4x2xf32> {
+  // join(split(x)[0], split(x)[1]) -> x
+  // CHECK-NOT: tt.split
+  // CHECK-NOT: tt.join
+  // CHECK: tt.return %arg0
+  %s:2 = tt.split %x : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  %j = tt.join %s#0, %s#1 : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  tt.return %j : tensor<8x4x2xf32>
+}
+
+// -----
+
+// CHECK-LABEL: split_join_folds_through_discardable_attr
+tt.func @split_join_folds_through_discardable_attr(%a: tensor<8x4xf32>, %b: tensor<8x4xf32>) -> (tensor<8x4xf32>, tensor<8x4xf32>) {
+  // The fold is a pure algebraic identity and is intentionally agnostic to
+  // discardable attributes (e.g. a warp-specialization async_task_id): the
+  // round-trip is removed and the original operands flow through.
+  // CHECK-NOT: tt.join
+  // CHECK-NOT: tt.split
+  // CHECK: tt.return %arg0, %arg1
+  %j = tt.join %a, %b : tensor<8x4xf32> -> tensor<8x4x2xf32>
+  %o:2 = tt.split %j {async_task_id = array<i32: 0>} : tensor<8x4x2xf32> -> tensor<8x4xf32>
+  tt.return %o#0, %o#1 : tensor<8x4xf32>, tensor<8x4xf32>
 }

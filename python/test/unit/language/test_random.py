@@ -247,14 +247,15 @@ def test_randn(size, seed, dtype, device, const_seed):
     assert abs(x.std() - 1) < 1e-2
 
 
-# tl.rand() should never produce >=1.0
+# tl.rand() should never produce >=1.0. With debug=True, this also guards the
+# int32 fold against the INT_MIN overflow that tripped the sanitizer (#10597).
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize('dtype', ['int32', 'int64'])
 def test_rand_limits(dtype, device):
 
-    @triton.jit
+    @triton.jit(debug=True)
     def kernel(input, output, n: tl.constexpr):
         idx = tl.arange(0, n)
         x = tl.load(input + idx)

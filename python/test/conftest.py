@@ -1,58 +1,21 @@
 import pytest
-import tempfile
 
 
 def pytest_configure(config):
+    config.addinivalue_line("markers", "gsan_fine_granularity(reason): requires sub-16-byte GSan tracking")
     # If pytest-sugar is not active, enable instafail
     if not config.pluginmanager.hasplugin("sugar"):
         config.option.instafail = True
 
 
-def pytest_addoption(parser):
-    parser.addoption("--device", action="store", default="cuda")
-
-
-@pytest.fixture
-def device(request):
-    return request.config.getoption("--device")
-
-
-@pytest.fixture
-def fresh_triton_cache():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        from triton import knobs
-
-        with knobs.cache.scope(), knobs.runtime.scope():
-            knobs.cache.dir = tmpdir
-            yield tmpdir
-
-
-@pytest.fixture
-def fresh_knobs():
-    """
-    Resets all knobs except ``build``, ``nvidia``, and ``amd`` (preserves
-    library paths needed to compile kernels).
-    """
-    from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl(skipped_attr={"build", "nvidia", "amd"})
-    try:
-        yield fresh_function()
-    finally:
-        reset_function()
-
-
-@pytest.fixture
-def fresh_knobs_including_libraries():
-    """
-    Resets ALL knobs including ``build``, ``nvidia``, and ``amd``.
-    Use for tests that verify initial values of these knobs.
-    """
-    from triton._internal_testing import _fresh_knobs_impl
-    fresh_function, reset_function = _fresh_knobs_impl()
-    try:
-        yield fresh_function()
-    finally:
-        reset_function()
+# Exercise synchronization/ordering at the default granularity. Tests whose
+# behavior depends on cell size explicitly parametrize this fixture indirectly.
+@pytest.fixture(params=[4], ids=lambda granularity: f"granularity-{granularity}")
+def shadow_granularity(request):
+    marker = request.node.get_closest_marker("gsan_fine_granularity")
+    if request.param == 16 and marker is not None:
+        pytest.skip(marker.args[0])
+    return request.param
 
 
 @pytest.fixture
