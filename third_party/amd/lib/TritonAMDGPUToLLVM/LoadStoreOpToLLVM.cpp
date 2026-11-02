@@ -222,6 +222,18 @@ Value selectLdsAddressForPredicate(TritonLLVMOpBuilder &b, Value pred,
   return b.select(pred, shmemAddr, outOfRangeAddress);
 }
 
+FailureOr<int32_t> getTDMCtrlBits(Operation *op, triton::CacheModifier cache,
+                                  Attribute cachePolicy,
+                                  std::optional<MemSyncScope> scope,
+                                  bool isLoad, const TargetInfo &targetInfo) {
+  // The verifier keeps cache modifier apart from the cache policy and scope.
+  if (cache != triton::CacheModifier::NONE)
+    return LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(cache, isLoad,
+                                                          targetInfo);
+  return LLVM::AMD::getBufferLoadStoreCtrlBits(op, cachePolicy, scope, isLoad,
+                                               targetInfo);
+}
+
 // Contains some helper functions for both Load and Store conversions.
 // The resource descriptor of a buffer op: the converted descriptor operand,
 // or a default one built from a pointer base.
@@ -1248,17 +1260,16 @@ struct AsyncCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
-      return failure();
-    }
-
-    // Only supported on CDNA5
     if (targetInfo.getISAFamily() != ISAFamily::CDNA5) {
       return rewriter.notifyMatchFailure(
           op, "async_copy_local_to_global only supported on CDNA5");
     }
+
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(aux))
+      return failure();
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1298,7 +1309,7 @@ struct AsyncCopyLocalToGlobalOpConversion
         freeVarMasks, rewriter, loc, targetInfo);
 
     auto emitGlobalStoreLds =
-        [this, &op, &b, threadPred, dstPtrTy, cacheModifier = *cacheModifier](
+        [this, &op, &b, threadPred, dstPtrTy, aux = *aux](
             RewriterBase &rewriter, Location loc, ArrayRef<Value> storeValues,
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value /*multicastMask*/) -> SmallVector<Value> {
@@ -1312,7 +1323,7 @@ struct AsyncCopyLocalToGlobalOpConversion
       auto [storeBlock, afterStoreBlock] = emitBranch(rewriter, loc, cond);
 
       emitAsyncStore(rewriter, loc, targetInfo, vecBits, dstElem, shmemAddr,
-                     cacheModifier);
+                     aux);
 
       rewriter.setInsertionPointToStart(afterStoreBlock);
 
@@ -1336,18 +1347,15 @@ struct AsyncCopyLocalToGlobalOpConversion
 
   void emitAsyncStore(RewriterBase &rewriter, Location loc,
                       AMD::TargetInfo targetInfo, int vecBits, Value dstPtr,
-                      Value shmemAddr, triton::CacheModifier cacheMod) const {
+                      Value shmemAddr, int32_t aux) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    int32_t cacheModifiers =
-        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            cacheMod, /*isLoad=*/false, targetInfo);
 
     auto emitStore = [&](int bits, Value dst, Value shmem) {
       std::string intrinsic =
           "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(bits);
       LLVM::createLLVMIntrinsicCallOp(
           rewriter, loc, intrinsic, {},
-          {dst, shmem, b.i32_val(0), b.i32_val(cacheModifiers)});
+          {dst, shmem, b.i32_val(0), b.i32_val(aux)});
     };
 
     // If vecBits is not supported but vecBits/2 is, split into two
@@ -1385,6 +1393,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/true, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1448,17 +1460,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     if (auto hintAttr = op.getWarpUsedHintAttr())
       warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
 
-    auto cacheMod = op.getCache();
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        cacheMod, /*isLoad*/ true, targetInfo);
-
     // Placeholder: the copy inherits pred from the descriptor.
     Value pred = b.i32_val(1);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, pred, multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        auxBits, warpUsedHint, /*isPureForm=*/true);
+        *auxBits, warpUsedHint, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
     return success();
@@ -1479,6 +1487,10 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/true, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t numMembers = op.getDescs().size();
@@ -1518,10 +1530,8 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
       memberHints.push_back(static_cast<uint32_t>(op.getWarpUsedHints()[i]));
     }
 
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        op.getCache(), /*isLoad*/ true, targetInfo);
     mlir::LLVM::AMD::emitTDMLoadFused(rewriter, loc, getTypeConverter(),
-                                      members, numWarps, ctaId, auxBits,
+                                      members, numWarps, ctaId, *auxBits,
                                       memberHints);
 
     rewriter.eraseOp(op);
@@ -1543,6 +1553,10 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/false, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1595,17 +1609,13 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
 
-    auto cacheMod = op.getCache();
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        cacheMod, /*isLoad*/ false, targetInfo);
-
     // Placeholder: the copy inherits pred from the descriptor.
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, encoding, ctaId, auxBits,
+        /*isLoad=*/false, sharedLayout, encoding, ctaId, *auxBits,
         /*warpUsedHint=*/std::nullopt, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
@@ -1626,6 +1636,11 @@ struct AsyncTDMScatterOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1695,7 +1710,7 @@ struct AsyncTDMScatterOpConversion
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
             padAmount, srcPtr, /*multicastMask=*/{}, elementType, barrierPtr,
             cgaLayout, ctaId, dstRowIndices,
-            /*isGather=*/false, numWarps, dstRowIndicesType)))
+            /*isGather=*/false, numWarps, dstRowIndicesType, *auxBits)))
       return failure();
 
     rewriter.eraseOp(op);
@@ -1716,6 +1731,11 @@ struct AsyncTDMGatherOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1785,7 +1805,7 @@ struct AsyncTDMGatherOpConversion
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
             padAmount, dstPtr, multicastMask, elementType, barrierPtr,
             cgaLayout, ctaId, srcRowIndices,
-            /*isGather=*/true, numWarps, srcRowIndicesType)))
+            /*isGather=*/true, numWarps, srcRowIndicesType, *auxBits)))
       return failure();
 
     rewriter.eraseOp(op);

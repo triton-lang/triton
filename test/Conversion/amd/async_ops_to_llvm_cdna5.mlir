@@ -347,3 +347,19 @@ module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.nu
 }
 
 // -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: async_copy_scope_cache_policy
+  tt.func public @async_copy_scope_cache_policy(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
+                                                %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
+    // CHECK-COUNT-2: rocdl.global.load.async.to.lds.b128 {{.*}}, {{.*}}, 0, 2
+    %0 = ttg.async_copy_global_to_local %arg0, %arg1 {cachePolicy = #amdg.cache_policy_gfx12<temporal = high>} : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    // CHECK: %[[AUX:.*]] = llvm.mlir.constant(17 : i32) : i32
+    // CHECK-NEXT: "llvm.amdgcn.global.store.async.from.lds.b128"(%{{.*}}, %{{.*}}, %{{.*}}, %[[AUX]])
+    %1 = amdg.async_copy_local_to_global %arg1, %arg0 cachePolicy = #amdg.cache_policy_gfx12<temporal = none> {scope = 1 : i32} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

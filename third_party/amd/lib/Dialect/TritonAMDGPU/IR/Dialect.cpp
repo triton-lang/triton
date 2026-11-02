@@ -1354,6 +1354,19 @@ verifyBufferAccessPolicy(Operation *op, Attribute cachePolicy,
   return success();
 }
 
+// TDM ops take a gfx12 cache policy and scope like buffer ops, or a legacy
+// cache modifier, which implies its own scope.
+static LogicalResult
+verifyTDMAccessPolicy(Operation *op, triton::CacheModifier cache,
+                      Attribute cachePolicy,
+                      std::optional<triton::MemSyncScope> scope,
+                      triton::CachePolicyOperation operation) {
+  if (cache != triton::CacheModifier::NONE && (cachePolicy || scope))
+    return op->emitOpError(
+        "a cache modifier can't be combined with a cache policy or scope");
+  return verifyBufferAccessPolicy(op, cachePolicy, scope, operation);
+}
+
 LogicalResult MakeBufferDescOp::verify() {
   if (triton::getAddressSpace(getBase().getType()) !=
       triton::PtrAddrSpace::Global)
@@ -1702,6 +1715,11 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
     return failure();
 
+  if (failed(verifyTDMAccessPolicy(getOperation(), getCache(),
+                                   getCachePolicyAttr(), getScope(),
+                                   triton::CachePolicyOperation::Load)))
+    return failure();
+
   if (auto warpUsedHintAttr = getWarpUsedHintAttr()) {
     int numWarps = gpu::lookupNumWarps(*this);
     uint32_t hint = static_cast<uint32_t>(warpUsedHintAttr.getInt());
@@ -1723,8 +1741,9 @@ LogicalResult AsyncCopyLocalToGlobalOp::verify() {
   if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("source must be in shared memory");
 
-  return triton::verifyCachePolicy(getOperation(), getCachePolicyAttr(),
-                                   triton::CachePolicyOperation::Store);
+  return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                  getScope(),
+                                  triton::CachePolicyOperation::Store);
 }
 
 LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
@@ -1737,6 +1756,11 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
         "requires the same number of descriptors and destinations");
   if (getWarpUsedHints().size() != numMembers)
     return emitOpError("requires one warp_used_hint per member");
+
+  if (failed(verifyTDMAccessPolicy(getOperation(), getCache(),
+                                   getCachePolicyAttr(), getScope(),
+                                   triton::CachePolicyOperation::Load)))
+    return failure();
 
   auto firstDescTy = cast<triton::TensorDescType>(getDescs().front().getType());
   unsigned rank = firstDescTy.getShape().size();
@@ -1783,6 +1807,11 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   if (tensorDescTy.getShape().size() != smemTy.getRank())
     return emitOpError("TDM store buffer rank must match the descriptor rank");
 
+  if (failed(verifyTDMAccessPolicy(getOperation(), getCache(),
+                                   getCachePolicyAttr(), getScope(),
+                                   triton::CachePolicyOperation::Store)))
+    return failure();
+
   if (failed(verifyTDMBuffer(getOperation(), tensorDescTy, smemTy)))
     return failure();
 
@@ -1823,6 +1852,11 @@ LogicalResult AsyncTDMScatterOp::verify() {
   if (blockShape.size() != 2)
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
+
+  if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                      getScope(),
+                                      triton::CachePolicyOperation::Store)))
+    return failure();
 
   auto enc = smemTy.getEncoding();
   if (!llvm::isa<gpu::PaddedSharedEncodingAttr>(enc) &&
@@ -1884,6 +1918,11 @@ LogicalResult AsyncTDMGatherOp::verify() {
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
+
+  if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                      getScope(),
+                                      triton::CachePolicyOperation::Load)))
+    return failure();
 
   auto enc = smemTy.getEncoding();
   if (!llvm::isa<gpu::PaddedSharedEncodingAttr>(enc) &&
