@@ -403,6 +403,17 @@ tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #share
 
 // -----
 
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, fp6Type = f6E2M3FN}>
+#bytes = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func @memdesc_reinterpret_partial_fp6_atom(%arg: !ttg.memdesc<1x8xi8, #fp6, #smem, 1x16>) {
+    // expected-error @+1 {{cannot reinterpret an FP6 subview that splits a 16-value packing atom}}
+    %0 = ttg.memdesc_reinterpret %arg : !ttg.memdesc<1x8xi8, #fp6, #smem, 1x16> -> !ttg.memdesc<1x8xi8, #bytes, #smem>
+    tt.return
+}
+
+// -----
+
 #shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 #smem = #ttg.shared_memory

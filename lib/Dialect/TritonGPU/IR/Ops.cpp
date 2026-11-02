@@ -697,9 +697,6 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
-  if (NVMMASharedEncodingAttr::getFp6Type(srcTy.getEncoding()) !=
-      NVMMASharedEncodingAttr::getFp6Type(dstTy.getEncoding()))
-    return emitOpError("cannot reinterpret an FP6 MMA tile as another format");
 
   // Padded layout creates some "holes". The hole patterns of the source and
   // the destination layouts must be equal.
@@ -816,6 +813,12 @@ LogicalResult MemDescReinterpretOp::verify() {
   // dimension, owns every byte in its allocation regardless of zero bases.
   if (!srcIsLayoutSubview)
     return success();
+
+  // The byte footprint below is exact only for complete FP6 packing atoms.
+  if (NVMMASharedEncodingAttr::getFp6Type(srcEnc) &&
+      srcTy.getDimSize(getOrder(srcTy).front()) % 16 != 0)
+    return emitOpError("cannot reinterpret an FP6 subview that splits a "
+                       "16-value packing atom");
 
   // Remember that we disallow dstTy that's a subview.
   // A destination without a subview owns its entire physical allocation, even
