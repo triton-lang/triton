@@ -37,6 +37,7 @@
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -258,12 +259,36 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
   }
 }
 
-static void emitClusterBarrier(OpBuilder &r, Location loc, bool needLocal) {
+// warp_pipeline_stage(delay=N): N idle cycles at the head of the stage, as
+// s_nops between the cluster barrier and the sched_barrier that closes it, so
+// the machine scheduler cannot pull any of the stage's instructions above
+// them. s_nop N idles N + 1 cycles; the two-wave pipelines this is tuned on
+// use runs of s_nop 7.
+static int64_t getStageDelay(Operation *clusterOp) {
+  if (!clusterOp)
+    return 0;
+  if (auto attr =
+          clusterOp->getAttrOfType<IntegerAttr>("triton.warp_pipeline.delay"))
+    return attr.getInt();
+  return 0;
+}
+
+static void emitStageDelay(OpBuilder &b, Location loc, int64_t delay) {
+  for (int64_t left = delay; left > 0;) {
+    int64_t n = std::min<int64_t>(left, 8);
+    ROCDL::SNopOp::create(b, loc, b.getI16IntegerAttr(n - 1));
+    left -= n;
+  }
+}
+
+static void emitClusterBarrier(OpBuilder &r, Location loc, bool needLocal,
+                               int64_t delay = 0) {
   ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
   if (needLocal)
     mlir::triton::gpu::BarrierOp::create(r, loc, triton::gpu::AddrSpace::Local);
   else
     ROCDL::SBarrierOp::create(r, loc);
+  emitStageDelay(r, loc, delay);
   ROCDL::SchedBarrier::create(r, loc, ROCDL::SchedGroupMask::none);
 }
 
@@ -291,6 +316,7 @@ static void wrapExistingBarrier(OpBuilder &b, Location loc,
     emitClusterPriority(b, loc, clusterOp, anyHasPriority);
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingBarrier);
+  emitStageDelay(b, loc, getStageDelay(clusterOp));
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
 }
 
@@ -503,7 +529,8 @@ private:
       } else {
         if (emitPriorityAtBoundary)
           emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-        emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
+        emitClusterBarrier(b, loc, /*needLocal=*/bars[i],
+                           getStageDelay(clusterOps[i]));
       }
     }
 
@@ -519,11 +546,108 @@ private:
   triton::amdgpu::ISAFamily isaFamily;
 };
 
+// ---------------------------------------------------------------------------
+// warp_pipeline_stage(schedule_hint="mfma-valu"): the stage check and the
+// marker for the MFMA <-> VALU co-execution pass (MFMAVALUSchedule.cpp).
+// ---------------------------------------------------------------------------
+
+// What an op of a hinted stage lowers to, as far as the co-execution
+// declaration is concerned.
+enum class StageOpKind {
+  Dot,     // an MFMA sequence
+  Free,    // no instruction: constants, shape ops, register-only converts
+  Compute, // VALU / transcendental work
+};
+
+static StageOpKind classifyStageOp(Operation *op) {
+  if (isa<triton::DotOp, triton::DotScaledOp>(op))
+    return StageOpKind::Dot;
+  if (isa<arith::ConstantOp, triton::SplatOp, triton::ExpandDimsOp,
+          triton::BroadcastOp, triton::ReshapeOp, triton::JoinOp,
+          triton::SplitOp, triton::TransOp>(op))
+    return StageOpKind::Free;
+  if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op))
+    if (cvtReordersRegisters(cvt.getSrc().getType(), cvt.getType()))
+      return StageOpKind::Free;
+  // Scalar work (SALU) neither takes a VALU slot nor can depend on a dot.
+  if (llvm::none_of(op->getResultTypes(),
+                    [](Type t) { return isa<RankedTensorType>(t); }))
+    return StageOpKind::Free;
+  return StageOpKind::Compute;
+}
+
+// Whether `block`, the body of a stage, qualifies for the mfma-valu
+// declaration: register-only, straight-line, with at least one dot and some
+// VALU work, and no VALU work on either side of a dependency with the
+// stage's own dots. The pass behind the hint prices every instruction of the
+// stage and asks the machine scheduler to interleave them with the MFMAs; an
+// instruction that waits for an MFMA of the same stage, or that an MFMA waits
+// for, cannot take the slot it is given. On failure a warning names the
+// stage and the offending op, and the caller drops the hint.
+static LogicalResult checkMFMAVALUStage(Block *block, Allocation *allocation,
+                                        Location loc, StringRef stageName) {
+  auto fail = [&](Operation *op, const Twine &why) {
+    emitWarning(op ? op->getLoc() : loc)
+        << "warp_pipeline_stage '" << stageName
+        << "': schedule_hint=\"mfma-valu\" dropped: " << why;
+    return failure();
+  };
+  bool hasDot = false, hasCompute = false;
+  for (Operation &op : block->without_terminator()) {
+    if (readsOrWritesMemory(&op))
+      return fail(&op, "the stage accesses memory");
+    if (op.getNumRegions() && !isa<triton::ReduceOp, triton::ScanOp>(op))
+      return fail(&op, "the stage contains control flow");
+    if (allocation &&
+        allocation->getBufferId(&op) != Allocation::InvalidBufferId)
+      return fail(&op, "this op needs shared-memory scratch");
+    StageOpKind kind = classifyStageOp(&op);
+    hasDot |= kind == StageOpKind::Dot;
+    hasCompute |= kind == StageOpKind::Compute;
+  }
+  if (!hasDot)
+    return fail(nullptr, "the stage has no tt.dot");
+  if (!hasCompute)
+    return fail(nullptr, "the stage has no VALU work to interleave");
+
+  // Forward: values derived from a dot of this stage through free ops.
+  DenseSet<Value> fromDot;
+  for (Operation &op : block->without_terminator()) {
+    StageOpKind kind = classifyStageOp(&op);
+    bool usesDot = llvm::any_of(op.getOperands(),
+                                [&](Value v) { return fromDot.contains(v); });
+    if (kind == StageOpKind::Dot || (kind == StageOpKind::Free && usesDot))
+      fromDot.insert(op.result_begin(), op.result_end());
+    else if (kind == StageOpKind::Compute && usesDot)
+      return fail(&op, "this op consumes the stage's tt.dot result; move it "
+                       "to a later stage");
+  }
+  // Backward: ops whose result reaches a dot of this stage.
+  DenseSet<Operation *> reachesDot;
+  for (Operation &op : llvm::reverse(block->without_terminator())) {
+    StageOpKind kind = classifyStageOp(&op);
+    bool feedsDot = llvm::any_of(op.getUsers(), [&](Operation *user) {
+      return reachesDot.contains(user);
+    });
+    if (kind == StageOpKind::Dot || feedsDot)
+      reachesDot.insert(&op);
+    if (kind == StageOpKind::Compute && feedsDot)
+      return fail(&op, "the stage's tt.dot consumes this op; compute it in "
+                       "an earlier stage");
+  }
+  return success();
+}
+
 class InlineWarpPipelineExecuteRegionPattern
     : public OpRewritePattern<scf::ExecuteRegionOp> {
 public:
-  InlineWarpPipelineExecuteRegionPattern(MLIRContext *ctx)
-      : OpRewritePattern<scf::ExecuteRegionOp>(ctx, /*benefit=*/1) {}
+  InlineWarpPipelineExecuteRegionPattern(MLIRContext *ctx,
+                                         ModuleAllocation &moduleAlloc,
+                                         StringRef gfxArch,
+                                         bool supportsMFMAVALU)
+      : OpRewritePattern<scf::ExecuteRegionOp>(ctx, /*benefit=*/1),
+        moduleAllocation(moduleAlloc), gfxArch(gfxArch),
+        supportsMFMAVALU(supportsMFMAVALU) {}
 
   LogicalResult matchAndRewrite(scf::ExecuteRegionOp exec,
                                 PatternRewriter &rewriter) const override {
@@ -547,6 +671,38 @@ public:
 
     // Inline region.
     Block *block = &reg.front();
+    Location loc = exec.getLoc();
+
+    // schedule_hint="mfma-valu": check the stage and mark it for the
+    // MFMA <-> VALU co-execution pass with an llvm.amdgcn.sched.group.barrier
+    // of mask 0 and size 0 at its head; the pass takes the stage up to the
+    // next llvm.amdgcn.sched.barrier (the cluster barrier) and erases the
+    // marker.
+    if (auto hint = exec->getAttrOfType<StringAttr>(
+            "triton.warp_pipeline.schedule_hint")) {
+      StringAttr stageName =
+          exec->getAttrOfType<StringAttr>("triton.warp_pipeline.stage");
+      StringRef name = stageName ? stageName.getValue() : "";
+      if (hint.getValue() != "mfma-valu") {
+        emitWarning(loc) << "warp_pipeline_stage '" << name
+                         << "': unknown schedule_hint \"" << hint.getValue()
+                         << "\" ignored";
+      } else if (!supportsMFMAVALU) {
+        emitWarning(loc) << "warp_pipeline_stage '" << name
+                         << "': schedule_hint=\"mfma-valu\" is not supported "
+                            "on "
+                         << gfxArch << " and is ignored";
+      } else {
+        auto func = exec->getParentOfType<mlir::triton::FuncOp>();
+        Allocation *allocation =
+            func ? moduleAllocation.getFuncData(func) : nullptr;
+        if (succeeded(checkMFMAVALUStage(block, allocation, loc, name))) {
+          rewriter.setInsertionPointToStart(block);
+          ROCDL::SchedGroupBarrier::create(
+              rewriter, loc, ROCDL::SchedGroupMask::none, 0, nextSyncId++);
+        }
+      }
+    }
 
     // Emit a scheduling barrier after every memory op in the stage so the
     // backend scheduler keeps them in program order.
@@ -566,6 +722,13 @@ public:
 
     return success();
   }
+
+private:
+  ModuleAllocation &moduleAllocation;
+  StringRef gfxArch;
+  bool supportsMFMAVALU;
+  // IGroupLP sync id of the next marked stage; unique per module.
+  mutable int nextSyncId = 1;
 };
 
 // Process a flat (non-loop) sequence of warp-pipeline execute_regions.
@@ -623,6 +786,7 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
   //    barrier op (e.g., async_wait) already exists between the clusters —
   //    in that case, wrap it with sched_barriers instead of adding a new one.
   emitClusterPriority(b, loc, clusterOps[0], anyHasPriority);
+  emitStageDelay(b, loc, getStageDelay(clusterOps[0]));
 
   for (int i = 1; i < numClusters; i++) {
     Operation *existingBarrier = nullptr;
@@ -643,7 +807,8 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     } else {
       b.setInsertionPoint(clusterOps[i]);
       emitClusterPriority(b, loc, clusterOps[i], anyHasPriority);
-      emitClusterBarrier(b, loc, /*needLocal=*/bars[i]);
+      emitClusterBarrier(b, loc, /*needLocal=*/bars[i],
+                         getStageDelay(clusterOps[i]));
     }
   }
 
@@ -1065,7 +1230,10 @@ public:
     RewritePatternSet patternInline(&getContext());
     patternFor.add<ConvertPipelinedForPattern>(
         &getContext(), moduleAllocation, threadsPerPipelineGroup, isaFamily);
-    patternInline.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
+    // The mfma-valu co-execution model is validated on gfx950 only.
+    patternInline.add<InlineWarpPipelineExecuteRegionPattern>(
+        &getContext(), moduleAllocation, gfxArch.getValue(),
+        /*supportsMFMAVALU=*/isaFamily == triton::amdgpu::ISAFamily::CDNA4);
 
     if (failed(applyPatternsGreedily(m, std::move(patternFor))))
       return signalPassFailure();
