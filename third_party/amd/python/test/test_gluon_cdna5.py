@@ -471,7 +471,7 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_
         pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
     k_width = 2 if a_dtype == "float32" else 8
-    run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+    run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
 
 
 # kWidth spanning several wmma instructions: 4 for f32 16x16x4 with kWidth 8,
@@ -488,10 +488,10 @@ def test_runtime_gemm_wide_k_width(a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BL
     if get_current_target().arch == "gfx1250-strict" and a_dtype != "float32":
         pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
-    run_gemm(a_dtype, a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+    run_gemm(a_dtype, a_dtype, k_dim, "float32", k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
 
 
-def run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
+def run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     torch.manual_seed(42)
 
     def create_operand(shape, dtype):
