@@ -4066,6 +4066,16 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << "(e.g., swizzled warp bases or non-injective layout) "
                        << "is not supported on " << op->getName() << ".";
     }
+    // These encodings were added for AMD and are not supported throughout the
+    // NVIDIA backend.
+    if (isGenericLinearEncoding(layout)) {
+      auto target = op->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
+          AttrTargetName);
+      if (target && target.getValue().starts_with("cuda:"))
+        return makeErr() << "Encoding not compatible with LinearEncodingAttr "
+                         << "(e.g., swizzled warp bases or non-injective "
+                         << "layout) is not supported on NVIDIA targets.";
+    }
     if (llvm::any_of(rankedTy.getShape(),
                      [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
       return makeErr() << "Layout has shape " << rankedTy.getShape()

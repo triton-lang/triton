@@ -678,35 +678,6 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   return smem;
 }
 
-// ldmatrix/stmatrix operate on a fixed contiguous tile built from register
-// bases and the lanes in laneContig. Any other basis with a component along
-// that tile, or a tile basis with a component outside it, permutes elements
-// within the instruction, which these instructions cannot express. Check this
-// on the swizzled layout.
-static bool tileMatchesVector(const LinearLayout &layout,
-                              const LinearLayout &smem,
-                              const LocalMemOpTile &instr) {
-  auto *ctx = layout.getInDimNames().begin()->getContext();
-  auto kVec = StringAttr::get(ctx, "vector");
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto cvt = layout.invertAndCompose(smem);
-  for (auto inDim : cvt.getInDimNames()) {
-    for (int i = 0; i < cvt.getInDimSizeLog2(inDim); ++i) {
-      if (cvt.getBasis(inDim, i, kVec) == 0)
-        continue;
-      bool inTile = inDim == kReg ||
-                    (inDim == kLane && llvm::is_contained(instr.laneContig, i));
-      if (!inTile)
-        return false;
-      for (auto outDim : cvt.getOutDimNames())
-        if (outDim != kVec && cvt.getBasis(inDim, i, outDim) != 0)
-          return false;
-    }
-  }
-  return true;
-}
-
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
 optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  ArrayRef<LocalMemOpTile> srcTiles,
@@ -807,21 +778,8 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
       auto smem =
           optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
                            blockBases, src.getOutDims(), leaveReps);
-      // Index 0 is a plain shared memory access, which can represent any
-      // layout. Only matrix instructions are restricted to a fixed tile.
-      if ((instrs.first != 0 &&
-           !tileMatchesVector(src, smem, srcTiles[instrs.first])) ||
-          (instrs.second != 0 &&
-           !tileMatchesVector(dst, smem, dstTiles[instrs.second])))
-        continue;
       auto [read, write] = bankConflicts(tileSrc, tileDst, smem);
       smems.push_back({read + write, smem, {instrs.first, instrs.second}});
-    }
-    if (smems.empty()) {
-      // Every candidate used a matrix instruction that cannot represent these
-      // layouts. Fall back to plain shared memory accesses.
-      auto smem = optimalSwizzlingLdSt(src, dst, bitwidth);
-      return {smem, {0, 0}};
     }
     // Current heuristic: Minimise total bank conflicts
     // We break ties looking at the number of rounds we do to move the data

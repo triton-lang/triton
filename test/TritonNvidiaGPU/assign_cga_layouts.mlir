@@ -478,39 +478,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#generic_parent = #ttg.generic_linear<{register = [[0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 16, 0], [0, 32, 0], [0, 64, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 1, 0], [0, 2, 0]], warp = [[0, 4, 0], [0, 8, 0]], block = [[0, 0, 64]]}>
-#generic_slice = #ttg.slice<{dim = 0, parent = #generic_parent}>
-#generic_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
-#generic_dot_a = #ttg.dot_op<{opIdx = 0, parent = #generic_default}>
-#generic_dot_b = #ttg.dot_op<{opIdx = 1, parent = #generic_default}>
-
-// Generic encodings remain excluded even when they factor and are wrapped.
-// CHECK-DAG: #[[$GENERIC_PARENT:.*]] = #ttg.generic_linear<
-// CHECK-DAG: #[[$GENERIC_DOT:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
-// E2E-DAG: #[[$E2E_GENERIC_PARENT:.*]] = #ttg.generic_linear<
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_factorable_generic_slice
-  // CHECK: %[[LOAD:.*]] = tt.load %arg0 : tensor<128x128x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #[[$GENERIC_PARENT]]}>>
-  // CHECK-NOT: tt.load
-  // CHECK: ttg.convert_layout %[[LOAD]]
-  // CHECK: tt.dot {{.*}} -> tensor<128x64xf32, #[[$GENERIC_DOT]]>
-  // E2E-LABEL: tt.func @dot_does_not_rematerialize_factorable_generic_slice
-  // E2E: %[[LOAD:.*]] = tt.load %arg0 : tensor<128x128x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #[[$E2E_GENERIC_PARENT]]}>>
-  // E2E-NOT: tt.load
-  // E2E: ttg.convert_layout %[[LOAD]]
-  // E2E: tt.dot
-  tt.func @dot_does_not_rematerialize_factorable_generic_slice(%ptrs: tensor<128x128x!tt.ptr<f16>, #generic_slice>) -> tensor<128x64xf32, #generic_default> {
-    %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f16>, #generic_slice>
-    %a = ttg.convert_layout %loaded : tensor<128x128xf16, #generic_slice> -> tensor<128x128xf16, #generic_dot_a>
-    %b = arith.constant dense<1.000000e+00> : tensor<128x64xf16, #generic_dot_b>
-    %c = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #generic_default>
-    %dot = tt.dot %a, %b, %c : tensor<128x128xf16, #generic_dot_a> * tensor<128x64xf16, #generic_dot_b> -> tensor<128x64xf32, #generic_default>
-    tt.return %dot : tensor<128x64xf32, #generic_default>
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1]]}>
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>

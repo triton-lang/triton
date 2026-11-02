@@ -374,7 +374,8 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+@pytest.mark.skipif(not is_hip() or THREADS_PER_WARP != 32,
+                    reason="Generic linear layouts are only supported on AMD; uses 32-thread layouts")
 @pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
 def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
 
@@ -393,29 +394,6 @@ def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
     x = torch.arange(256, dtype=torch.int32, device=device)
     y = torch.empty_like(x)
     kernel[(1, )](x, y, src_warp, dst_warp, num_warps=4)
-    torch.testing.assert_close(y, x, rtol=0, atol=0)
-
-
-@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
-@pytest.mark.parametrize("lane_bases, warp_bases", [
-    ([[2], [1], [8], [32], [64]], [[17], [4]]),
-    ([[2], [1], [9], [32], [64]], [[16], [4]]),
-])
-def test_convert_layout_xor_linear_tile_overlap(lane_bases, warp_bases, device):
-    # Warp basis 17 = 16 ^ 1 and lane basis 9 = 8 ^ 1 overlap the contiguous
-    # tile of ldmatrix, so the conversion must not use it.
-    @gluon.jit
-    def kernel(x_ptr, y_ptr, layout: ttgl.constexpr):
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
-        off = ttgl.arange(0, 128, layout=blocked)
-        x = ttgl.load(x_ptr + off)
-        x = ttgl.convert_layout(ttgl.convert_layout(x, layout), blocked)
-        ttgl.store(y_ptr + off, x)
-
-    layout = ttgl.DistributedLinearLayout([], lane_bases, warp_bases, [], [128])
-    x = torch.arange(128, dtype=torch.int32, device=device)
-    y = torch.empty_like(x)
-    kernel[(1, )](x, y, layout, num_warps=4)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
@@ -510,7 +488,10 @@ def _swizzled_warp_layouts():
 
 # ===--- Tests with swizzled/non-injective DistributedLinearLayout ---===
 
+requires_generic_linear = pytest.mark.skipif(not is_hip(), reason="Generic linear layouts are only supported on AMD")
 
+
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_elementwise_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -547,6 +528,7 @@ def test_elementwise_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x * x + x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_expand_dims_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -567,6 +549,7 @@ def test_expand_dims_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_reshape_generic_linear(src_layout, device):
     shape = src_layout.shape
@@ -610,6 +593,7 @@ def test_reshape_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_permute_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -631,6 +615,7 @@ def test_permute_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 def test_split_join_generic_linear(src_layout, device):
     if any(all(v == 0 for v in b) for b in src_layout.reg_bases):
@@ -681,6 +666,7 @@ def test_split_join_generic_linear(src_layout, device):
     torch.testing.assert_close(y, x + x * 2)
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts_2d()))
 def test_broadcast_generic_linear(src_layout, device):
     M, N = src_layout.shape
@@ -731,6 +717,7 @@ def _make_shared_layout(kind, shape):
     raise ValueError(f"Unknown shared layout kind: {kind}")
 
 
+@requires_generic_linear
 @pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
 @pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
 def test_local_load_store_generic_linear(src_layout, shared_kind, device):
