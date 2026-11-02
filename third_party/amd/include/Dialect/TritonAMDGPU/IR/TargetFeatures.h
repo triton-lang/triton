@@ -72,6 +72,9 @@ public:
 
   bool requiresAliasInfoForAsyncOps() const;
   bool useAsyncMarks() const;
+  // Whether this target uses staged asyncmarks (per-stage mark sequences)
+  // instead of a single global async count. Currently CDNA5 (gfx1250).
+  bool useStagedAsyncMarks() const;
 
   bool supportsTDM() const;
   bool supportsMultiCTALaunch() const;

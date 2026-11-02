@@ -2636,6 +2636,90 @@ struct AtomicRMWOpConversion
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Staged asyncmark classification (gfx1250)
+//
+// Mirrors SIInstrInfo::getAsyncStage: each async producer belongs to exactly
+// one stage. A commit group marks the union of its producers' stages, and a
+// wait names the union of the stages of the groups its tokens came from. Any
+// producer or token whose stage cannot be proven maps to every stage, so a
+// commit or wait can only over-wait, never omit a stage. Internally the full
+// stage set is kept as a bitmask; it is emitted as `all` (mask 0).
+//===----------------------------------------------------------------------===//
+constexpr uint32_t kAllAsyncStageBits = (1u << 0) | (1u << 1) | (1u << 2) |
+                                        (1u << 3) | (1u << 5);
+
+uint32_t classifyAsyncProducer(Operation *op,
+                               const AMD::TargetInfo &targetInfo) {
+  if (isa<AsyncCopyGlobalToLocalOp>(op)) {
+    uint32_t mask = static_cast<uint32_t>(
+        ROCDL::AsyncStages::global_load_async_to_lds);
+    // The plain-vs-cluster (multicast) choice is made by the load lowering
+    // itself; include the multicast stage whenever cluster loads are possible
+    // so a cluster load can never be omitted from its commit.
+    if (targetInfo.supportsMulticast())
+      mask |= static_cast<uint32_t>(
+          ROCDL::AsyncStages::global_load_async_to_lds_mcast);
+    return mask;
+  }
+  if (isa<amdgpu::BufferLoadToLocalOp>(op))
+    return static_cast<uint32_t>(ROCDL::AsyncStages::buffer_global_load);
+  if (isa<amdgpu::AsyncCopyLocalToGlobalOp>(op))
+    return static_cast<uint32_t>(
+        ROCDL::AsyncStages::global_store_async_from_lds);
+  if (isa<amdgpu::AsyncTDMCopyGlobalToLocalOp,
+          amdgpu::AsyncTDMFusedCopyGlobalToLocalOp,
+          amdgpu::AsyncTDMCopyLocalToGlobalOp, amdgpu::AsyncTDMScatterOp,
+          amdgpu::AsyncTDMGatherOp>(op))
+    return static_cast<uint32_t>(ROCDL::AsyncStages::tensor);
+  return kAllAsyncStageBits;
+}
+
+uint32_t stageMaskForToken(Value token, const AMD::TargetInfo &targetInfo,
+                           DenseSet<Value> &visited) {
+  if (!visited.insert(token).second)
+    return kAllAsyncStageBits;
+  Operation *def = token.getDefiningOp();
+  if (!def)
+    return kAllAsyncStageBits; // Block argument: cannot prove, wait on all.
+  if (auto commit = dyn_cast<AsyncCommitGroupOp>(def)) {
+    uint32_t mask = 0;
+    for (Value input : commit.getInputTokens())
+      mask |= stageMaskForToken(input, targetInfo, visited);
+    return mask ? mask : kAllAsyncStageBits;
+  }
+  if (auto wait = dyn_cast<AsyncWaitOp>(def)) {
+    uint32_t mask = 0;
+    for (Value input : wait.getAsyncToken())
+      mask |= stageMaskForToken(input, targetInfo, visited);
+    return mask ? mask : kAllAsyncStageBits;
+  }
+  return classifyAsyncProducer(def, targetInfo);
+}
+
+uint32_t stageMaskForCommitGroup(AsyncCommitGroupOp op,
+                                 const AMD::TargetInfo &targetInfo) {
+  DenseSet<Value> visited;
+  uint32_t mask = 0;
+  for (Value input : op.getInputTokens())
+    mask |= stageMaskForToken(input, targetInfo, visited);
+  return mask ? mask : kAllAsyncStageBits;
+}
+
+uint32_t stageMaskForWait(AsyncWaitOp op, const AMD::TargetInfo &targetInfo) {
+  DenseSet<Value> visited;
+  uint32_t mask = 0;
+  for (Value token : op.getAsyncToken())
+    mask |= stageMaskForToken(token, targetInfo, visited);
+  return mask ? mask : kAllAsyncStageBits;
+}
+
+ROCDL::AsyncStages asyncStagesValue(uint32_t mask) {
+  if (mask == kAllAsyncStageBits)
+    return ROCDL::AsyncStages::all;
+  return static_cast<ROCDL::AsyncStages>(mask);
+}
+
 // Lower ttg.async_wait directly to wait_asyncmark for architectures that use
 // asyncmark-based synchronization (CDNA3/CDNA4). The commit group count from
 // ttg.async_wait is passed through without clamping since LLVM will compute
@@ -2649,7 +2733,7 @@ struct TTGAsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!targetInfo.useAsyncMarks())
+    if (!targetInfo.useAsyncMarks() && !targetInfo.useStagedAsyncMarks())
       return rewriter.notifyMatchFailure(
           op, "ttg.async_wait should have been lowered to amdg.async_wait by "
               "UpdateAsyncWaitCount for non-asyncmark targets");
@@ -2658,8 +2742,14 @@ struct TTGAsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Pass through the commit group count. LLVM will compute the correct
-    // vmcnt based on asyncmark/wait_asyncmark markers.
-    ROCDL::WaitAsyncmarkOp::create(rewriter, loc, op.getNum());
+    // vmcnt based on asyncmark/wait_asyncmark markers. On staged targets the
+    // wait names only the stages of the groups its tokens came from.
+    if (targetInfo.useStagedAsyncMarks())
+      ROCDL::WaitAsyncmarkOp::create(
+          rewriter, loc, static_cast<uint16_t>(op.getNum()),
+          asyncStagesValue(stageMaskForWait(op, targetInfo)));
+    else
+      ROCDL::WaitAsyncmarkOp::create(rewriter, loc, op.getNum());
 
     // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
@@ -2731,8 +2821,13 @@ struct AsyncCommitGroupOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Emit asyncmark for architectures that use async tracking
-    if (targetInfo.useAsyncMarks())
+    // Emit asyncmark for architectures that use async tracking. On staged
+    // targets the mark names the union of this group's producer stages.
+    if (targetInfo.useStagedAsyncMarks())
+      ROCDL::AsyncmarkOp::create(
+          rewriter, loc,
+          asyncStagesValue(stageMaskForCommitGroup(op, targetInfo)));
+    else if (targetInfo.useAsyncMarks())
       ROCDL::AsyncmarkOp::create(rewriter, loc);
 
     // Drop the result AsyncToken

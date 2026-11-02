@@ -207,7 +207,8 @@ struct TritonAMDGPUPipelinePass
       // without this call the pipeliner-authored num=0 would serialize the
       // SWP. Every other family keeps the prior combineRedundantWaitOps-only
       // path: their num is re-derived downstream by UpdateAsyncWaitCount.
-      if (targetFeatures.isCDNA3() || targetFeatures.isCDNA4()) {
+      if (targetFeatures.isCDNA3() || targetFeatures.isCDNA4() ||
+          targetFeatures.useStagedAsyncMarks()) {
         mlir::triton::updateWaits(moduleOp);
       }
     }

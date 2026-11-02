@@ -158,6 +158,9 @@ public:
   // Whether this target uses asyncmark/wait_asyncmark intrinsics for
   // async memory ops synchronization instead of waitcnt-based intrinsics waits.
   bool useAsyncMarks() const { return targetFeatures.useAsyncMarks(); }
+  bool useStagedAsyncMarks() const {
+    return targetFeatures.useStagedAsyncMarks();
+  }
 
   bool supportsMultiCTALaunch() const {
     return targetFeatures.supportsMultiCTALaunch();
