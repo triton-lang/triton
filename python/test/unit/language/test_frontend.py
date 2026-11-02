@@ -1189,6 +1189,45 @@ def test_call_in_while():
             trivial_return()
 
 
+def make_scale(value):
+    SCALE = tl.constexpr(value)
+
+    @triton.jit
+    def scale(x):
+        return x * SCALE
+
+    return scale
+
+
+scale_by_2 = make_scale(2.0)
+scale_by_3 = make_scale(3.0)
+
+
+@triton.jit
+def apply_fn(x, fn: tl.constexpr):
+    return fn(x)
+
+
+@pytest.mark.parametrize("via_constexpr", [False, True])
+def test_call_closures_with_same_qualname(via_constexpr):
+
+    @triton.jit
+    def kernel(X, Y, Z, VIA_CONSTEXPR: tl.constexpr):
+        x = tl.load(X)
+        if VIA_CONSTEXPR:
+            tl.store(Y, apply_fn(x, scale_by_2))
+            tl.store(Z, apply_fn(x, scale_by_3))
+        else:
+            tl.store(Y, scale_by_2(x))
+            tl.store(Z, scale_by_3(x))
+
+    module = run_parser(kernel, args=(MockTensor(tl.float32), ) * 3 + (via_constexpr, ))
+    text = module.str_nodebug()
+    # The two closures share a qualified name, but each needs its own function.
+    assert "arith.constant 2.000000e+00" in text
+    assert "arith.constant 3.000000e+00" in text
+
+
 @filecheck_test
 @triton.jit
 def test_while_integer_condition():
