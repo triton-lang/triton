@@ -4580,6 +4580,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA5])
+def test_amd_wmma_scaled_batched(target):
+
+    @gluon.jit
+    def kernel():
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [], [], [16, 16, 128], rank=3)
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [], [], [16, 16, 64], rank=3)
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, wmma_layout_packed, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, wmma_layout_packed, 16)
+
+        a = ttgl.full([4, 16, 64], 0x11, ttgl.uint8, a_layout)
+        b = ttgl.full([4, 64, 16], 0x22, ttgl.uint8, b_layout)
+        acc = ttgl.full([4, 16, 16], 0, ttgl.float32, wmma_layout)
+        ttgl.amd.cdna5.wmma_scaled(a, 0x02, 'e2m1', b, 0x01, 'e2m1', acc)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    ir = anonymize_ir(module.str_nodebug())
+    # The scale K dim must not be broadcast with zero register bases.
+    assert ("#linear = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [2, 0, 0]], "
+            "lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [1, 0, 0]], warp = [], block = []}>") in ir
+    assert re.search(r"tt\.dot_scaled .* tensor<4x16x4xi8, #linear> \* .* tensor<4x16x4xi8, #linear> -> ", ir)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA5])
 def test_amd_wmma_scale_layout_for_multicta(target):
 
     @gluon.jit
