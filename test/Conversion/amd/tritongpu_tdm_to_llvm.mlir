@@ -578,3 +578,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#idx = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scope_cache_policy
+  tt.func public @tdm_scope_cache_policy(
+    %desc: !tt.tensordesc<64x64xf16, #shared>,
+    %smem: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>,
+    %rows_desc: !tt.tensordesc<8x64xf16, #shared>,
+    %rows: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %idx: tensor<8xi32, #idx>
+  ) {
+    // CHECK-DAG: %[[LOAD_AUX:.*]] = llvm.mlir.constant(17 : i32) : i32
+    // CHECK-DAG: %[[STORE_AUX:.*]] = llvm.mlir.constant(26 : i32) : i32
+    // CHECK-DAG: %[[GATHER_AUX:.*]] = llvm.mlir.constant(19 : i32) : i32
+    // CHECK-DAG: %[[SCATTER_AUX:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[LOAD_AUX]])
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %smem {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = none>} : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[STORE_AUX]])
+    %1 = amdg.async_tdm_copy_local_to_global %desc from %smem {scope = 3 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = high>} : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[GATHER_AUX]])
+    %2 = amdg.async_tdm_gather %rows_desc[%idx] to %rows {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SCATTER_AUX]])
+    %3 = amdg.async_tdm_scatter %rows_desc[%idx] from %rows {scope = 3 : i32} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    tt.return
+  }
+}
