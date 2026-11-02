@@ -1281,6 +1281,40 @@ def test_async_compile(device, fresh_triton_cache):
         assert a[0, 0] == 2
 
 
+@pytest.mark.parametrize("ignore_first", [False, True])
+def test_async_compile_repeated_error(ignore_first):
+    cleanups = []
+
+    def compile_kernel():
+        raise ValueError("compilation failed")
+
+    with ThreadPoolExecutor(1) as pool, triton.AsyncCompileMode(pool) as mode:
+        handle = mode.submit("failure", compile_kernel, lambda kernel: None, cleanups.append)
+        if ignore_first:
+            assert handle.result(ignore_errors=True) is None
+        else:
+            with pytest.raises(ValueError, match="compilation failed"):
+                handle.result()
+        for _ in range(2):
+            with pytest.raises(ValueError, match="compilation failed"):
+                handle.result()
+        assert handle.result(ignore_errors=True) is None
+        assert handle.future is None
+    assert cleanups == [handle]
+
+
+def test_async_compile_repeated_success():
+    finalized, cleaned = [], []
+    kernel = object()
+    with ThreadPoolExecutor(1) as pool, triton.AsyncCompileMode(pool) as mode:
+        handle = mode.submit("success", lambda: kernel, finalized.append, cleaned.append)
+        assert handle.result() is kernel
+        assert handle.result() is kernel
+        assert handle.future is None
+    assert finalized == [kernel]
+    assert cleaned == []
+
+
 def test_async_compile_error(fresh_triton_cache):
 
     @triton.jit
