@@ -333,6 +333,44 @@ def test_unknown_key_name_is_rejected():
             )
 
 
+@pytest.mark.parametrize("failure_stage", ["prune", "benchmark", "launch", "config_hook"])
+def test_failed_run_releases_arguments(failure_stage):
+    import gc
+    import weakref
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, x, **kwargs):
+            if failure_stage == "launch":
+                raise RuntimeError("failed launch")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("failed " + failure_stage)
+
+    configs = [triton.Config({"BLOCK": 1})]
+    if failure_stage in ("prune", "benchmark"):
+        configs.append(triton.Config({"BLOCK": 2}))
+    if failure_stage == "config_hook":
+        configs[0].pre_hook = fail
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(), ["x"], configs, [], None, None, do_bench=fail if failure_stage == "benchmark" else None,
+        prune_configs_by={"early_config_prune": fail} if failure_stage == "prune" else None)
+    x = torch.empty(1)
+    reference = weakref.ref(x)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        tuner.run(x)
+
+    del x
+    gc.collect()
+    assert reference() is None
+    assert tuner.nargs is None
+
+
 def test_restore_value_with_user_pre_hook():
     # A user-supplied pre_hook replaces the default one that populates restore_copies,
     # but the default post_hook that reads it stays installed, so running the autotuner

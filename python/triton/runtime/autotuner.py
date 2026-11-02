@@ -231,6 +231,13 @@ class Autotuner(KernelInterface):
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
+        try:
+            return self._run(*args, **kwargs)
+        finally:
+            # Failed tuning or launches must not retain tensors in the kernel.
+            self.nargs = None
+
+    def _run(self, *args, **kwargs):
         used_cached_result = True
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
@@ -293,7 +300,6 @@ class Autotuner(KernelInterface):
             **kwargs,
             **config.all_kwargs(),
         )
-        self.nargs = None
         return ret
 
     def prune_configs(self, kwargs: Dict) -> List[Config]:
