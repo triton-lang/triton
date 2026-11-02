@@ -127,7 +127,8 @@ def _fp6_desc_store(src, dst, desc, DTYPE: tl.constexpr, WIDTH: tl.constexpr, HO
     desc.store([1, ROW - WIDTH], x[None, :])
 
 
-def test_fp6_tma_host_store_64_rejects_sm100(capfd):
+@pytest.mark.parametrize("host", [True, False], ids=["host", "device"])
+def test_fp6_tma_store_64_rejects_sm100(host, capfd):
     from triton.backends.compiler import GPUTarget
     from triton.compiler import ASTSource
 
@@ -135,7 +136,11 @@ def test_fp6_tma_host_store_64_rejects_sm100(capfd):
         "src": "*fp32", "dst": "*u8", "desc": "tensordesc<fp6e2m3[1,64]>", "DTYPE": "constexpr", "WIDTH": "constexpr",
         "HOST": "constexpr", "ROW": "constexpr"
     }
-    source = ASTSource(_fp6_desc_store, sig, {"DTYPE": tl.float6e2m3, "WIDTH": 64, "HOST": True, "ROW": 64})
+    constants = {"DTYPE": tl.float6e2m3, "WIDTH": 64, "HOST": host, "ROW": 64}
+    if not host:
+        sig["desc"] = "constexpr"
+        constants["desc"] = None
+    source = ASTSource(_fp6_desc_store, sig, constants)
     with pytest.raises(RuntimeError):
         triton.compile(source, target=GPUTarget("cuda", 100, 32))
     assert "64-value FP6 TMA stores require SM103" in capfd.readouterr().err
