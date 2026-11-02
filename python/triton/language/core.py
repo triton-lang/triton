@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from warnings import warn
 from contextlib import contextmanager
@@ -1656,6 +1657,36 @@ else:
 _AGGREGATE_MISSING = object()
 
 
+def _is_host_aggregate_field_value(ann, value):
+    # raw values an aggregate constructed on the host may hold in a runtime field
+    if ann is tensor:
+        return isinstance(value, (int, float, bool)) or hasattr(value, "data_ptr")
+    if ann is tensor_descriptor or ann is tensor_descriptor_base:
+        return hasattr(value, "base") and hasattr(value, "block_shape")  # TensorDescriptor
+    if ann is tuple:
+        return isinstance(value, builtins.tuple)
+    return False
+
+
+class _aggregate_cache_key:
+    """`cache_key` of an aggregate class, computed on first use: hashes its name,
+    fields and methods. Kernels taking an instance of the class as an argument are
+    keyed by it."""
+
+    def __get__(self, instance, cls):
+        key = cls.__dict__.get("_cache_key")
+        if key is None:
+            parts = [f"{cls.__module__}.{cls.__qualname__}", str(cls.__annotations__)]
+            for member in cls.hash_attrs:
+                if isinstance(member, JITCallable):
+                    parts.append(member.cache_key)
+                elif not getattr(member, "__triton_builtin__", False):
+                    parts.append(inspect.getsource(member))
+            key = hashlib.sha256("".join(parts).encode("utf-8")).hexdigest()
+            setattr(cls, "_cache_key", key)
+        return key
+
+
 def _resolve_aggregate_fields(cls):
     all_annotations = {}
     all_defaults = {}
@@ -1686,10 +1717,10 @@ def _resolve_aggregate_fields(cls):
 def _aggregate(cls):
     all_annotations, all_defaults = _resolve_aggregate_fields(cls)
 
+    field_names = builtins.tuple(all_annotations.keys())
     init = cls.__dict__.get("__init__", None)
 
     if init is None:
-        field_names = builtins.tuple(all_annotations.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1717,11 +1748,21 @@ def _aggregate(cls):
 
         init.__triton_builtin__ = True
 
+    # Probe the constructor once: aggregates are also constructed on the host, per launch.
+    if isinstance(init, JITCallable):
+        # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+        init_takes_semantic = init_takes_generator = False
+    else:
+        init_params = inspect.signature(init).parameters
+        init_takes_semantic = "_semantic" in init_params
+        init_takes_generator = "_generator" in init_params
+
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
         __annotations__ = all_annotations
+        cache_key = _aggregate_cache_key()
 
         @classmethod
         def _get_instance(this_cls):
@@ -1733,21 +1774,23 @@ def _aggregate(cls):
             # Track init phase so __setattr__ accepts writes during __init__
             # but rejects post-construction mutation.
             object.__setattr__(instance, "_aggregate_init_complete", False)
-            extra_kwargs = {}
-            if isinstance(init, JITCallable):
-                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
-                pass
-            else:
-                if "_semantic" in inspect.signature(init).parameters:
-                    extra_kwargs["_semantic"] = _semantic
-                if "_generator" in inspect.signature(init).parameters:
-                    extra_kwargs["_generator"] = _generator
-            init(instance, *args, **extra_kwargs, **kwargs)
+            if init_takes_semantic:
+                kwargs["_semantic"] = _semantic
+            if init_takes_generator:
+                kwargs["_generator"] = _generator
+            init(instance, *args, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
             for name in all_annotations.keys():
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
+
+            # Inside a kernel every runtime field must be a Triton value.
+            if _semantic is not None:
+                for name, ann in all_annotations.items():
+                    value = getattr(instance, name)
+                    if ann is not constexpr and not isinstance(value, base_value):
+                        setattr(instance, name, _wrap_init_args(value))
 
             # Lock further attribute assignment after __init__.
             object.__setattr__(instance, "_aggregate_init_complete", True)
@@ -1758,12 +1801,20 @@ def _aggregate(cls):
         def __setattr__(self, name, value):
             if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, all_annotations[name]):
+            if not isinstance(value, all_annotations[name]) and not _is_host_aggregate_field_value(
+                    all_annotations[name], value):
                 raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
             if getattr(self, "_aggregate_init_complete", False):
                 raise AttributeError(f"cannot assign to field '{name}' on immutable aggregate {cls.__name__}; "
                                      f"use aggregate_replace() to construct a modified copy")
             super().__setattr__(name, value)
+
+        # A host-constructed instance is passed to a kernel as the tuple (class, *fields):
+        # the class is a constexpr and each field specializes like a tuple element.
+        def __iter__(self):
+            yield type(self)
+            for name in field_names:
+                yield getattr(self, name)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
             for key_name in all_annotations.keys():

@@ -64,6 +64,7 @@ static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
 static PyObject *do_not_specialize_attr = nullptr;
+static PyObject *triton_aggregate_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
@@ -136,6 +137,7 @@ void init_interned_strings() {
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
   do_not_specialize_attr = intern_from_string("__triton_do_not_specialize__");
+  triton_aggregate_attr = intern_from_string("__triton_aggregate__");
   block_shape_attr = intern_from_string("block_shape");
   shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
@@ -538,6 +540,20 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
   return {std::move(tys_tuple), std::move(keys_tuple)};
 }
 
+// @triton.aggregate: the class is a constexpr; an instance iterates as the
+// tuple (class, *fields), so its fields specialize like the elements of a tuple
+std::pair<py::object, py::object> handle_aggregate(PyObject *backend,
+                                                   PyObject *arg, bool is_const,
+                                                   bool specialize_value,
+                                                   bool align) {
+  if (PyType_Check(arg))
+    return {from_borrowed_ref(constexpr_str), from_borrowed_ref(arg)};
+  auto fields = from_new_ref(PySequence_Tuple(arg));
+  if (!fields)
+    return {};
+  return handle_tuple(backend, fields.ptr(), is_const, specialize_value, align);
+}
+
 // initialize type handler which returns specialize impelemntations based on
 // type(arg)
 void init_type_handler_cache() {
@@ -630,6 +646,10 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
   }
 
   // fallback paths checking attributes directly
+  if (PyObject_HasAttr(arg, triton_aggregate_attr)) {
+    return handle_aggregate(backend, arg, is_const, specialize_value, align);
+  }
+
   if (PyObject_HasAttr(arg, data_ptr_attr)) {
     return handle_tensor(backend, arg, is_const, specialize_value, align);
   }

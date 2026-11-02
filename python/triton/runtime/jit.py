@@ -18,7 +18,7 @@ from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple, _tuple_create
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
 
@@ -125,7 +125,10 @@ class DependenciesFinder(ast.NodeVisitor):
         if getattr(val, "__triton_aggregate__", False):
             self.hasher.update(str(val.__annotations__).encode("utf-8"))
             for attr in val.hash_attrs:
-                self.record_reference(attr)
+                if isinstance(attr, JITCallable) or getattr(attr, "__triton_builtin__", False):
+                    self.record_reference(attr)
+                else:  # a plain Python method (e.g. a host-side __init__) is never compiled
+                    self.hasher.update(inspect.getsource(attr).encode("utf-8"))
             return
 
         if getattr(val, "__triton_builtin__", False):
@@ -616,7 +619,18 @@ def _replace_jit_callables(obj):
         return tuple(_replace_jit_callables(arg) for arg in obj)
     elif isinstance(obj, JITCallable):
         return obj.cache_key
+    elif isinstance(obj, type) and getattr(obj, "__triton_aggregate__", False):
+        return obj.cache_key
     return obj
+
+
+def _flatten_aggregates(value):
+    # a host-built @triton.aggregate iterates as the tuple (class, *fields)
+    if getattr(value, "__triton_aggregate__", False) and not isinstance(value, type):
+        return tuple(_flatten_aggregates(v) for v in value)
+    if isinstance(value, tuple):
+        return _tuple_create(value, [_flatten_aggregates(v) for v in value])
+    return value
 
 
 def compute_cache_key(kernel_key_cache, specialization, options):
@@ -733,7 +747,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 raise KeyError("Keyword argument %s was specified but unrecognised" % k)
         # constexprs
         constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
-        constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
+        args = [_flatten_aggregates(v) for v in bound_args.values()]
+        constexprs = {path: get_iterable_path(args, path) for path in constexprs}
         # attributes
         attrvals = ['' if x[0] == 'constexpr' else x[1] for x in specialization]
         attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
