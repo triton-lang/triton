@@ -788,14 +788,18 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
     case triton::MemSyncScope::SYSTEM:
       return aux | sc0Bit | sc1Bit;
     }
-  } else if (isCDNA5) {
-    // CDNA5 encodes it in SCOPE[4:3]: CU, SE, device or system. A workgroup
-    // runs on one WGP, so the CU scope, the default, already covers it.
+  } else if (isGfx12) {
+    // gfx12 encodes it in SCOPE[4:3]: CU, SE, device or system. As in LLVM's
+    // memory model, the CU scope, the default, covers a workgroup on CDNA5,
+    // where it runs on one WGP, and on RDNA4 in CU mode. In RDNA4's WGP mode,
+    // its waves can run on both CUs of a WGP, each with its own L0 cache, so
+    // it needs the SE scope.
     const int scopeShift = 3;
-    const int scopeDev = 2 << scopeShift, scopeSys = 3 << scopeShift;
+    const int scopeSE = 1 << scopeShift, scopeDev = 2 << scopeShift,
+              scopeSys = 3 << scopeShift;
     switch (*scope) {
     case triton::MemSyncScope::CTA:
-      return aux;
+      return isCDNA5 || targetInfo.isCuMode() ? aux : aux | scopeSE;
     case triton::MemSyncScope::GPU:
       return aux | scopeDev;
     case triton::MemSyncScope::SYSTEM:
@@ -803,7 +807,7 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
     }
   } else {
     return op->emitOpError("scope on buffer loads and stores is only "
-                           "supported on CDNA3, CDNA4 and CDNA5");
+                           "supported on CDNA3, CDNA4, CDNA5 and RDNA4");
   }
   return op->emitOpError("unsupported scope on a buffer load or store");
 }
@@ -939,7 +943,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   };
 
   // For padded encodings restrict vec by the min interval
-  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
+  auto paddedEnc = triton::gpu::getPaddedEncoding(dstEnc);
   if (paddedEnc) {
     unsigned maxAllowedVecSize = paddedEnc.getMinInterval();
     // Without scattering support, padding can only be inserted at warp
@@ -987,7 +991,8 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
   LinearLayout sharedLayout;
   if (paddedEnc) {
-    sharedLayout = paddedEnc.getLinearComponent();
+    sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(dstAllocShape, dstEnc);
   } else {
     sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
 

@@ -392,14 +392,7 @@ void sinkRegionInputs(ModuleOp mod) {
 }
 
 bool canIntroduceClusterBarrier(Operation *op) {
-  auto func = op->getParentOfType<FuncOp>();
-  if (isKernel(func))
-    return true;
-  // A device function has no cluster barrier for its caller's partition.
-  // Synchronizing here requires every warp in the CTA to participate.
-  auto mod = func->getParentOfType<ModuleOp>();
-  auto totalWarps = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
-  return totalWarps && totalWarps.getInt() == lookupNumWarps(func);
+  return isKernel(op->getParentOfType<FuncOp>());
 }
 
 void optimizeBlock(Block *block) {
