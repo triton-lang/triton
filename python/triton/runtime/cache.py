@@ -290,10 +290,11 @@ def triton_key():
     # frontend
     with open(__file__, "rb") as f:
         contents += [hashlib.sha256(f.read()).hexdigest()]
-    # compiler
+    # compiler and Gluon frontend
     path_prefixes = [
         (os.path.join(TRITON_PATH, "compiler"), "triton.compiler."),
         (os.path.join(TRITON_PATH, "backends"), "triton.backends."),
+        (os.path.join(TRITON_PATH, "experimental", "gluon"), "triton.experimental.gluon."),
     ]
     for path, prefix in path_prefixes:
         for lib in pkgutil.walk_packages([path], prefix=prefix):
