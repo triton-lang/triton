@@ -13,6 +13,12 @@ def is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype):
                  or rhs_dtype == FP8_E4M3FN and lhs_dtype in (FP16, BF16)))
 
 
+def is_fp8_nvfp4(precision_config, lhs_dtype, rhs_dtype):
+    return (lhs_dtype.bitwidth == 8 and rhs_dtype == FP4
+            and precision_config.a_mx_scale is None and precision_config.b_mx_scale is not None
+            and precision_config.b_mx_scale.dtype in (FP8_E4M3FN, torch.float8_e4m3fn))
+
+
 def is_x_scale_swizzled(precision_config):
     return (precision_config is not None and precision_config.a_mx_scale is not None
             and isinstance(precision_config.a_mx_scale, Tensor)
@@ -189,6 +195,13 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
+    upcast_nvfp4 = has_native_mxfp and is_fp8_nvfp4(precision_config, lhs_dtype, rhs_dtype)
+    if upcast_nvfp4:
+        # The NVFP4 fallback keeps one decoded BF16 tile beside the packed input ring.
+        smem_capacity -= block_k * block_n * 2
+        if not is_persistent:
+            # Activation widening and output redistribution reuse conversion scratch.
+            smem_capacity -= max(block_m * block_k * 2, block_m * block_n * out_dtype.bitwidth // 8)
     if is_mixed_fp8 and (lhs_dtype if swap_xw else rhs_dtype) == FP8_E4M3FN:
         # A computed RHS needs one widened tile in addition to its input ring.
         # The regular pipeline replaces one raw FP8 slot with that widened tile.
@@ -199,7 +212,7 @@ def compute_num_stages(
         # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
         if precision_config.a_mx_scale is not None and lhs_dtype == FP4 and rhs_dtype != FP4:
             stage_size += block_k * block_n * act_size
-        if precision_config.b_mx_scale is not None and rhs_dtype == FP4 and lhs_dtype != FP4:
+        if precision_config.b_mx_scale is not None and rhs_dtype == FP4 and lhs_dtype != FP4 and not upcast_nvfp4:
             stage_size += block_k * block_n * weight_size
 
     if precision_config.a_mx_scale is not None:
@@ -210,6 +223,10 @@ def compute_num_stages(
         # mx scales
         scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
         stage_size += block_n * (block_k // scale_block_size)
+
+    if upcast_nvfp4 and not is_persistent:
+        # The regular pipeline buffers num_stages - 1 raw input tiles.
+        smem_capacity += int(stage_size)
 
     fp4_reduction = (has_native_mxfp and lhs_dtype == rhs_dtype == out_dtype == FP4 and epilogue_reduction_n == 2
                      and epilogue_effective_itemsize == 8 and not has_y_acc_in)
