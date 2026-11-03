@@ -494,8 +494,9 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   if (registerWords <= maxRegisterWords)
     interWarpScanType = InterWarpScanType::Registers;
   else if (laneWords <= maxLaneWords)
-    interWarpScanType = InterWarpScanType::Warp; // Scan totals across lanes.
+    interWarpScanType = InterWarpScanType::Warp;
   else if (sourceLaneMask == totalsLaneMask)
+    // Stream large tables whose segment prefixes are held in registers.
     interWarpScanType = InterWarpScanType::Grouped;
   else
     interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
