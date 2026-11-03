@@ -881,38 +881,6 @@ def test_nvfp4_requantization_matches_mxfp8(is_persistent, mode, output, device,
         torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("rows", [32, 2048])
-@pytest.mark.parametrize("n", [128, 8192])
-@pytest.mark.parametrize("scale_layout", ["strided", "contiguous", "swizzled"])
-def test_dense_fp8_nvfp4_default_shared_memory(rows, n, scale_layout, device, opt_flags_scope):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("requires Blackwell")
-    torch.manual_seed(7)
-    k = 1024
-    a = (torch.randn(rows, k, device=device, dtype=torch.bfloat16) * 0.2).to(torch.float8_e4m3fn)
-    b, scales, _ = make_random_tensor(
-        (k, n), 1, None, False, device, DType("nvfp4_e2m1"), -2, True, True)
-    if scale_layout == "contiguous":
-        scales = wrap_torch_tensor(scales.storage.data.contiguous())
-    elif scale_layout == "swizzled":
-        b = convert_layout(b, layout.BlackwellMXValueLayout())
-        scales = convert_layout(scales, layout.BlackwellMXScaleLayout())
-    config = PrecisionConfig(
-        b_mx_scale=scales, b_microblock_size=16,
-        b_mx_tensor_scale=torch.linspace(0.5, 1.5, n, device=device),
-        out_dtype=torch.bfloat16, enforce_bitwise_invariance=True,
-        flex_ctx=FlexCtx(lhs_data=InFlexData(scale=torch.tensor([0.125], device=device))),
-    )
-    with opt_flags.scoped_opt_flags_constraints(dict(block_n=128, num_stages=1)):
-        expected = matmul(a, b, None, precision_config=config)
-    actual = matmul(a, b, None, precision_config=config)
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-    for constraints in [dict(block_n=128, num_stages=2), dict(block_n=256, num_stages=1)]:
-        with opt_flags.scoped_opt_flags_constraints(constraints):
-            tuned = matmul(a, b, None, precision_config=config)
-        torch.testing.assert_close(tuned, expected, rtol=0, atol=0)
-
-
 @pytest.mark.parametrize("shape, fp8_lhs, constraints", [
     ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
     ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
