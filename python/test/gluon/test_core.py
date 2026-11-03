@@ -4847,12 +4847,12 @@ def test_split_auto_layout_execution():
 @gluon.jit
 def _fp6_store_tile(src, dst, desc):
     if desc is None:
-        fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, fp6_format="e2m3")
+        fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
         desc = tma.make_tensor_descriptor(dst, [5, 128], [96, 1], [1, 128], fmt)
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
     i = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
     lanes = ttgl.load(src + i).expand_dims(0)
-    stage = ttgl.allocate_shared_memory(ttgl.uint8, [1, 128], ttgl.NVMMASharedLayout(0, 8), lanes)
+    stage = ttgl.allocate_shared_memory(ttgl.uint8, [1, 128], ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16"), lanes)
     fence_async_shared()
     tma.async_store(desc, [2 * ttgl.program_id(0) + 1, 0], stage)
     tma.store_wait(0)
@@ -4867,7 +4867,7 @@ def test_fp6_tma_store_contiguous(host, with_allocator):
     expected = dst.clone()
     expected[1::2] = pack_fp6(src.int() & 63)
     desc = TensorDescriptor.from_tensor(dst, [1, 128], ttgl.NVMMASharedLayout(0, 8,
-                                                                              fp6_format="e2m3")) if host else None
+                                                                              padding="b6p2x16")) if host else None
     kernel = _fp6_store_tile[(2, )](src, dst, desc)
     torch.testing.assert_close(dst, expected)
     assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
@@ -4877,7 +4877,8 @@ def test_fp6_tma_store_contiguous(host, with_allocator):
 
 
 @gluon.jit
-def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
+def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, A_FMT: ttgl.constexpr, B_FMT: ttgl.constexpr, MX: ttgl.constexpr,
+                  TRANSPOSE_B: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(a_desc.dtype, [128, 128], a_desc.layout)
     b = ttgl.allocate_shared_memory(b_desc.dtype, [128, 128], b_desc.layout)
     bar = mbarrier.allocate_mbarrier()
@@ -4898,9 +4899,9 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.con
         offsets = rows[:, None] * 4 + groups[None, :]
         a_scale.store(ttgl.load(sa + offsets))
         b_scale.store(ttgl.load(sb + offsets))
-        tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e4m3", FMT, use_acc=False, mbarriers=[bar])
+        tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, A_FMT, B_FMT, use_acc=False, mbarriers=[bar])
     else:
-        tcgen05_mma(a, b, acc, use_acc=False, mbarriers=[bar])
+        tcgen05_mma(a, b, acc, a_type=A_FMT, b_type=B_FMT, use_acc=False, mbarriers=[bar])
     mbarrier.wait(bar, phase=1)
     mbarrier.invalidate(bar)
     r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, acc.get_reg_layout()))
@@ -4910,22 +4911,28 @@ def _fp6_mma_tile(a_desc, b_desc, sa, sb, out, FMT: ttgl.constexpr, MX: ttgl.con
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
                     reason="Requires SM100 or SM103")
-@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
+@pytest.mark.parametrize("a_fmt,b_fmt", [("e4m3", "e2m3"), ("e4m3", "e3m2"), ("e2m3", "e3m2")])
 @pytest.mark.parametrize("mx", [False, True], ids=["fp6", "mxfp6"])
 @pytest.mark.parametrize("transpose_b", [True, False], ids=["transposed_b", "b"])
-def test_fp6_tma_mma_operand(fmt, mx, transpose_b):
+def test_fp6_tma_mma_operand(a_fmt, b_fmt, mx, transpose_b):
     a = torch.randint(-2, 3, (128, 128), device="cuda").to(torch.float8_e4m3fn)
     codes = torch.randint(0, 64, (128, 128), device="cuda", dtype=torch.int32)
-    a_desc = TensorDescriptor.from_tensor(a, [128, 128], ttgl.NVMMASharedLayout(128, 8))
-    b_desc = TensorDescriptor.from_tensor(pack_fp6(codes), [128, 128], ttgl.NVMMASharedLayout(128, 8, fp6_format=fmt))
+    packed = ttgl.NVMMASharedLayout(128, 8, padding="b6x16_p32")
+    if a_fmt == "e4m3":
+        a_desc = TensorDescriptor.from_tensor(a, [128, 128], ttgl.NVMMASharedLayout(128, 8))
+    else:
+        a_codes = torch.randint(0, 64, (128, 128), device="cuda", dtype=torch.int32)
+        a = fp6_values(a_fmt, a_codes)
+        a_desc = TensorDescriptor.from_tensor(pack_fp6(a_codes), [128, 128], packed)
+    b_desc = TensorDescriptor.from_tensor(pack_fp6(codes), [128, 128], packed)
     sa = torch.randint(126, 129, (128, 4), dtype=torch.uint8, device="cuda")
     sb = torch.randint_like(sa, 126, 129)
     out = torch.empty((128, 128), device="cuda")
-    kernel = _fp6_mma_tile[(1, )](a_desc, b_desc, sa, sb, out, fmt, mx, transpose_b)
+    kernel = _fp6_mma_tile[(1, )](a_desc, b_desc, sa, sb, out, a_fmt, b_fmt, mx, transpose_b)
     kind = "mxf8f6f4.block_scale.block32" if mx else "f8f6f4"
     assert f"tcgen05.mma.cta_group::1.kind::{kind}" in kernel.asm["ptx"]
 
-    b = fp6_values(fmt, codes)
+    b = fp6_values(b_fmt, codes)
     a = a.float()
     b = b.T if transpose_b else b
     if mx:

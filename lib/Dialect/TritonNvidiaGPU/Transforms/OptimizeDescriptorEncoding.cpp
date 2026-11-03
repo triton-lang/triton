@@ -96,8 +96,8 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::buildFallbackSharedEncoding(
     mlir::MLIRContext *ctx, ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
     ttg::CGAEncodingAttr cgaLayout, Type elementType) {
   if (isFP6(elementType))
-    return ttg::NVMMASharedEncodingAttr::get(ctx, 0, false, 8, false, cgaLayout,
-                                             elementType);
+    return ttg::NVMMASharedEncodingAttr::get(
+        ctx, 0, false, 8, ttg::NVMmaPadding::B6P2x16, cgaLayout);
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, cgaLayout,
                                            elementType, /*fp4Padded*/ false);
 }

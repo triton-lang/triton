@@ -24,13 +24,6 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     llvm::report_fatal_error(msg);
   }
   auto sharedEnc = cast<ttg::SharedEncodingTrait>(encoding);
-  if (isFP6(descType.getElementType())) {
-    // A compacting store reads one byte per FP6 code from shared memory.
-    auto mma = cast<ttg::NVMMASharedEncodingAttr>(sharedEnc);
-    sharedEnc = ttg::NVMMASharedEncodingAttr::get(
-        descType.getContext(), mma.getSwizzlingByteWidth(), false, 8, false,
-        mma.getCGALayout());
-  }
   if (descType.getShape() == tensorType.getShape())
     return sharedEnc;
 
@@ -39,7 +32,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
 
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
   auto kBlock = StringAttr::get(memDescType.getContext(), "block");
-  return ttg::toLinearLayout(memDescType)
+  return ttg::toLinearLayoutIgnoringPadding(memDescType)
              .getFreeVariableMasks()
              .lookup(kBlock) != 0;
 }
@@ -111,7 +104,8 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
-  if (gpu::NVMMASharedEncodingAttr::getFp6Type(encoding))
+  auto mma = dyn_cast_if_present<gpu::NVMMASharedEncodingAttr>(encoding);
+  if (mma && mma.isFP6())
     return TMA_B6X16_P32;
   if (fp4Padded)
     return TMA_B4X16_P64;
