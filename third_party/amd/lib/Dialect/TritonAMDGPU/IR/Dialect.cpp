@@ -207,8 +207,8 @@ LogicalResult verifyTDMBuffer(Operation *op, triton::TensorDescType descTy,
     // block bounds and contiguity separately instead of requiring equality.
     while (shape.size() > smemTy.getRank() && shape.front() == 1)
       shape = shape.drop_front();
-    bool isLoad = isa<AsyncTDMCopyGlobalToLocalOp,
-                      AsyncTDMFusedCopyGlobalToLocalOp>(op);
+    bool isLoad =
+        isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp>(op);
     if (shape.size() != smemTy.getRank() ||
         (!isLoad && shape != smemTy.getShape()))
       return op->emitOpError("TDM buffer shape must match the descriptor block "
@@ -292,8 +292,9 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
           allocPad.getLinearComponent().getOutDimSizes());
       bool sameColumns =
           ArrayRef(descShape).drop_front() == ArrayRef(allocShape).drop_front();
-      bool isLoad = isa<AsyncTDMCopyGlobalToLocalOp,
-                        AsyncTDMFusedCopyGlobalToLocalOp>(op);
+      bool isLoad =
+          isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp>(
+              op);
       bool sameCTA = descPad.getCGALayout() == allocPad.getCGALayout();
       if (isLoad && numDropped > 0) {
         auto allocLL = allocPad.getLinearComponent();
