@@ -357,6 +357,8 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
 
 LinearLayout
 NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (getPadding() == NVMmaPadding::B6x16P32)
+    llvm::report_fatal_error("b6x16_p32 has no per-element linear layout");
   // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
   return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
@@ -1314,11 +1316,20 @@ LinearLayout paddedLinearLayout(MemDescType type) {
 
 LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding) {
+  // Physical byte offsets of whole atoms are linear even when individual
+  // six-bit codes within an atom have no byte address.
+  if (NVMMASharedEncodingAttr::isPackedFP6(encoding))
+    return nvmmaSharedToLinearLayout(
+        shape, cast<NVMMASharedEncodingAttr>(encoding), TMAMode::Tiled);
   return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
                                     : toLinearLayout(shape, encoding);
 }
 
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
+  if (NVMMASharedEncodingAttr::isPackedFP6(type.getEncoding()))
+    return toLinearLayoutIgnoringPadding(
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+        type.getEncoding());
   return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
                                               : toLinearLayout(type);
 }

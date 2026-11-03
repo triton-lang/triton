@@ -51,7 +51,7 @@ class _tensor_descriptor_type_base(base_type):
     @property
     def nbytes_per_cta(self) -> int:
         nbytes = self.block_type.nbytes
-        if self.layout.fp6_format is not None:
+        if self.layout.padding in ("b6x16_p32", "b6p2x16"):
             nbytes = nbytes // 4 * 3
         cga_layout = self.layout.cga_layout
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
@@ -171,7 +171,7 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     align_bytes = 16
     if desc.layout.fp4_padded:
         align_bytes = 64
-    if desc.layout.fp6_format is not None:
+    if desc.layout.padding in ("b6x16_p32", "b6p2x16"):
         # FP6 tensor coordinates count logical values.
         align_bytes = 128
     dtype = desc.dtype
@@ -460,7 +460,7 @@ def make_tensor_descriptor(
     padding_option = _unwrap_if_constexpr(padding_option)
     block_shape = _unwrap_if_constexpr(block_shape)
     layout = _unwrap_if_constexpr(layout)
-    if layout.fp6_format is not None:
+    if layout.padding in ("b6x16_p32", "b6p2x16"):
         if base.dtype.element_ty != ttgl.uint8:
             raise ValueError("FP6 tensor maps require uint8 storage")
         validate_fp6_box(block_shape[-1], _unwrap_if_constexpr(shape[-1]), map(_unwrap_if_constexpr, strides[:-1]),

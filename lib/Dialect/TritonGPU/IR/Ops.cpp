@@ -590,9 +590,9 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
-  if (NVMMASharedEncodingAttr::getFp6Type(srcType.getEncoding()) !=
-      NVMMASharedEncodingAttr::getFp6Type(dstType.getEncoding()))
-    return emitOpError("reshape must preserve the FP6 tile format");
+  if (NVMMASharedEncodingAttr::isPackedFP6(srcType.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFP6(dstType.getEncoding()))
+    return emitOpError("cannot reshape an opaque packed FP6 tile");
   if (product(dstType.getShape()) != product(srcType.getShape())) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
@@ -616,6 +616,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  if (NVMMASharedEncodingAttr::isPackedFP6(srcEnc))
+    return failure();
   auto *ctx = srcEnc.getContext();
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
@@ -632,7 +634,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CGALayout, mmaEncoding.getFp6Type());
+            mmaEncoding.getPadding(), CGALayout);
         auto srcLL = toLinearLayout(srcShape, srcEnc);
         auto dstLL = toLinearLayout(dstShape, candidateEncoding);
         if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
@@ -815,7 +817,7 @@ LogicalResult MemDescReinterpretOp::verify() {
     return success();
 
   // The byte footprint below is exact only for complete FP6 packing atoms.
-  if (NVMMASharedEncodingAttr::getFp6Type(srcEnc) &&
+  if (NVMMASharedEncodingAttr::isPackedFP6(srcEnc) &&
       srcTy.getDimSize(getOrder(srcTy).front()) % 16 != 0)
     return emitOpError("cannot reinterpret an FP6 subview that splits a "
                        "16-value packing atom");
@@ -960,7 +962,7 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 }
 
 LogicalResult LocalAllocOp::verify() {
-  if (getSrc() && NVMMASharedEncodingAttr::getFp6Type(getType().getEncoding()))
+  if (getSrc() && NVMMASharedEncodingAttr::isPackedFP6(getType().getEncoding()))
     return emitOpError(
         "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
@@ -973,7 +975,7 @@ LogicalResult LocalAllocOp::verify() {
 
 // LocalStoreOp
 LogicalResult LocalStoreOp::verify() {
-  if (NVMMASharedEncodingAttr::getFp6Type(getDst().getType().getEncoding()))
+  if (NVMMASharedEncodingAttr::isPackedFP6(getDst().getType().getEncoding()))
     return emitOpError(
         "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!getDst().getType().getMutableMemory())
@@ -986,7 +988,7 @@ LogicalResult LocalStoreOp::verify() {
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
-  if (NVMMASharedEncodingAttr::getFp6Type(getSrc().getType().getEncoding()))
+  if (NVMMASharedEncodingAttr::isPackedFP6(getSrc().getType().getEncoding()))
     return emitOpError(
         "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
@@ -997,7 +999,7 @@ LogicalResult LocalLoadOp::verify() {
 
 // LocalGatherOp
 LogicalResult LocalGatherOp::verify() {
-  if (NVMMASharedEncodingAttr::getFp6Type(getSrc().getType().getEncoding()))
+  if (NVMMASharedEncodingAttr::isPackedFP6(getSrc().getType().getEncoding()))
     return emitOpError(
         "FP6 MMA tiles cannot be accessed as register byte lanes");
   auto srcTy = getSrc().getType();
@@ -1284,6 +1286,12 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
   auto layoutRank = dropPipeliningDim(getOffsets(), srcEnc).size();
   auto prefixRank = getOffsets().size() - layoutRank;
+  if (NVMMASharedEncodingAttr::isPackedFP6(srcEnc)) {
+    unsigned inner = getOrder(srcTy).front();
+    if (getOffsets()[inner] % 16 || dstTy.getDimSize(inner) % 16)
+      return emitOpError(
+          "FP6 subviews must preserve complete 16-value packing atoms");
+  }
 
   SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {

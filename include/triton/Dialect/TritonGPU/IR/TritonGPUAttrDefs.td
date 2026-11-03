@@ -473,19 +473,22 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "unsigned":$swizzlingByteWidth,
     "bool":$transposed,
     "unsigned":$elementBitWidth,
-    "bool":$fp4Padded,
-    "CGAEncodingAttr":$CGALayout,
-    OptionalParameter<"::mlir::Type">:$fp6Type
+    "NVMmaPadding":$padding,
+    "CGAEncodingAttr":$CGALayout
   );
 
   let skipDefaultBuilders = 1;
   let builders = [
     AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "NVMmaPadding":$padding,
+                     "CGAEncodingAttr":$CGALayout), [{
+      return $_get(context, swizzlingByteWidth, transposed, elementBitWidth, padding, CGALayout);
+    }]>,
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
                      "unsigned":$elementBitWidth, "bool":$fp4Padded,
-                     "CGAEncodingAttr":$CGALayout,
-                     CArg<"::mlir::Type", "{}">:$fp6Type), [{
-      return $_get(context, swizzlingByteWidth, transposed, elementBitWidth,
-                   fp4Padded, CGALayout, fp6Type);
+                     "CGAEncodingAttr":$CGALayout), [{
+      return get(context, swizzlingByteWidth, transposed, elementBitWidth,
+                 fp4Padded ? NVMmaPadding::FP4 : NVMmaPadding::None, CGALayout);
     }]>,
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -496,7 +499,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout, ::mlir::Type());
+        return get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
@@ -507,9 +510,13 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
         CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
 
-    static Type getFp6Type(Attribute encoding) {
-      auto nvmma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
-      return nvmma ? nvmma.getFp6Type() : Type();
+    bool getFp4Padded() const { return getPadding() == NVMmaPadding::FP4; }
+    bool isFP6() const {
+      return getPadding() == NVMmaPadding::B6x16P32 || getPadding() == NVMmaPadding::B6P2x16;
+    }
+    static bool isPackedFP6(Attribute encoding) {
+      auto mma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
+      return mma && mma.getPadding() == NVMmaPadding::B6x16P32;
     }
 
     int getPerPhase() const;

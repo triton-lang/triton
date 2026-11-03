@@ -32,7 +32,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
 
 bool hasCGABroadcast(ttg::MemDescType memDescType) {
   auto kBlock = StringAttr::get(memDescType.getContext(), "block");
-  return ttg::toLinearLayout(memDescType)
+  return ttg::toLinearLayoutIgnoringPadding(memDescType)
              .getFreeVariableMasks()
              .lookup(kBlock) != 0;
 }
@@ -104,7 +104,8 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
 
-  if (gpu::NVMMASharedEncodingAttr::getFp6Type(encoding))
+  auto mma = dyn_cast_if_present<gpu::NVMMASharedEncodingAttr>(encoding);
+  if (mma && mma.isFP6())
     return TMA_B6X16_P32;
   if (fp4Padded)
     return TMA_B4X16_P64;
