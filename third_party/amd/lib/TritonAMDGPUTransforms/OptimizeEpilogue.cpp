@@ -155,6 +155,15 @@ public:
     if (!isa<triton::gpu::MmaEncodingTrait>(encoding))
       return mlir::failure();
 
+    // gfx1250 WMMA: a lane holds 8 N-contiguous values of one row, so storing
+    // from the accumulator writes 32 B into each of 16 rows per instruction and
+    // every 128 B line goes out in 4 pieces. chooseMfmaLikeStoreLayout has no
+    // WMMA path, so keep the blocked layout: the convert goes through LDS and
+    // each store writes whole lines.
+    if (auto wmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(encoding))
+      if (wmma.getVersion() >= 3)
+        return mlir::failure();
+
     if (!cvtOp.getResult().hasOneUse())
       return mlir::failure();
 
