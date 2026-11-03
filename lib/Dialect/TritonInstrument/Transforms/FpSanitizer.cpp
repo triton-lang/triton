@@ -2702,7 +2702,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     }
     {
       OpBuilder::InsertionGuard guard(rewriter);
-      if (Value pred = op.getPred(); pred && !matchPattern(pred, m_One())) {
+      if (Value pred = op.getPred()) {
         auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
         rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
       }
