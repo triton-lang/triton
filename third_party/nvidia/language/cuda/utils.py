@@ -73,6 +73,19 @@ def f32_to_e2m1x2_satfinite(hi, lo, _semantic=None):
     }, is_pure=True, _semantic=_semantic)
 
 
+@core.builtin
+def to_fp6(x, format: core.constexpr, _semantic=None):
+    """Round FP32, FP16 or BF16 to finite FP6, returning one zero-padded uint8 code per element."""
+    format = core._unwrap_if_constexpr(format)
+    if format not in ("e2m3", "e3m2"):
+        raise ValueError("FP6 format must be 'e2m3' or 'e3m2'")
+    if x.dtype not in (core.float32, core.float16, core.bfloat16):
+        raise ValueError("to_fp6 requires FP32, FP16 or BF16 input")
+    x = _semantic.cast(x, core.float32)
+    return core.inline_asm_elementwise(f"cvt.rn.satfinite.{format}x2.f32 $0, $2, $1;", "=h,f,f", [x], dtype=core.uint8,
+                                       is_pure=True, pack=2, _semantic=_semantic)
+
+
 @core.extern
 def exp2_ftz(x, _semantic=None):
     """Approximate 2**x with flush-to-zero behavior."""

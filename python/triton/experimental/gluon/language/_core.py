@@ -34,8 +34,6 @@ from triton.language.core import (
     uint32,
     uint64,
     float4e2m1x2,
-    float6e2m3,
-    float6e3m2,
     float8e8m0fnu,
     float8e5,
     float8e5b16,
@@ -72,8 +70,6 @@ __all__ = [
     "uint32",
     "uint64",
     "float4e2m1x2",
-    "float6e2m3",
-    "float6e3m2",
     "float8e8m0fnu",
     "float8e5",
     "float8e5b16",
@@ -313,8 +309,7 @@ class shared_memory_descriptor_type(base_type):
         else:
             cga_layout = self.layout.cga_layout
         shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
-        bitwidth = 8 if self.element_ty.is_fp6() else self.element_ty.primitive_bitwidth
-        return math.prod(shape_per_cta) * bitwidth // 8
+        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout

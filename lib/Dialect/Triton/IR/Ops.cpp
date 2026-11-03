@@ -1226,14 +1226,6 @@ LogicalResult FpToFpOp::verify() {
     dstType = dstTensorType.getElementType();
   if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
     srcType = srcTensorType.getElementType();
-  if (srcType != dstType && (isFP6(srcType) || isFP6(dstType))) {
-    Type other = isFP6(srcType) ? dstType : srcType;
-    if (!other.isF16() && !other.isBF16() && !other.isF32())
-      return emitOpError(
-          "FP6 conversion requires an f16, bf16 or f32 operand or result");
-    if (isFP6(dstType) && getRounding() != RoundingMode::RTNE)
-      return emitOpError("FP6 conversion requires round-to-nearest-even");
-  }
   if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
@@ -1899,9 +1891,13 @@ LogicalResult DescriptorScatterOp::verify() {
 // -- DescriptorLoadOp --
 LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
                                           TensorDescInterface desc,
-                                          ShapedType tensor) {
+                                          ShapedType tensor, bool isStore) {
   RankedTensorType block = desc.getSignlessBlockType();
-  if (block.getElementType() != tensor.getElementType()) {
+  if (isFP6(block.getElementType())) {
+    if (!isStore || !tensor.getElementType().isInteger(8))
+      return op->emitOpError(
+          "packed FP6 descriptors require stores of i8 codes");
+  } else if (block.getElementType() != tensor.getElementType()) {
     return op->emitOpError("descriptor block and tensor element types must "
                            "match, but got descriptor element type ")
            << block.getElementType() << " and tensor element type "
@@ -1929,7 +1925,7 @@ LogicalResult DescriptorLoadOp::verify() {
 // -- DescriptorStoreOp --
 LogicalResult DescriptorStoreOp::verify() {
   return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
-                                     getSrc().getType());
+                                     getSrc().getType(), /*isStore=*/true);
 }
 
 // -- DescriptorReduceOp --

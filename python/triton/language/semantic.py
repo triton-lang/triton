@@ -643,7 +643,7 @@ class TritonSemantic(Generic[TensorTy]):
             # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
             # which raises a type error for non-zero values.
             value = 0
-        if dtype.name == "fp8e4b15" or dtype.is_fp6():
+        if dtype.name == "fp8e4b15":
             # Validate target support
             dtype.to_ir(self.builder)
             value = self.make_tensor(self.builder.get_fp32(value), tl.float32)
@@ -871,13 +871,6 @@ class TritonSemantic(Generic[TensorTy]):
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
 
-        if src_sca_ty.is_fp6() and not dst_sca_ty.is_fp16():
-            return self.cast(self.cast(input, tl.float16), dst_sca_ty)
-        if dst_sca_ty.is_fp6():
-            if use_custom_rounding:
-                raise ValueError("FP6 conversion supports round-to-nearest-even")
-            if not src_sca_ty.is_fp32():
-                return self.cast(self.cast(input, tl.float32), dst_sca_ty)
         # Keep FP16 <-> BF16 intact so backends can select a native conversion.
         if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
             return self.make_tensor(
@@ -891,7 +884,7 @@ class TritonSemantic(Generic[TensorTy]):
         # and non-default rounding modes for downcasting
         if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
            (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()) or \
-           src_sca_ty.is_fp6() or dst_sca_ty.is_fp6() or use_custom_rounding:
+           use_custom_rounding:
             return self.make_tensor(
                 self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), fp_downcast_rounding), dst_ty)
 
@@ -1116,6 +1109,8 @@ class TritonSemantic(Generic[TensorTy]):
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
+        if desc.type.fp6_format:
+            raise ValueError("packed FP6 descriptors only support stores")
         x = self.builder.create_descriptor_load(desc.handle, offsets, cache_policy._to_ir(self.builder))
         return self.make_tensor(x, desc.block_type)
 
@@ -1129,6 +1124,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
+        if desc.type.fp6_format and value.dtype != tl.uint8:
+            raise ValueError("FP6 stores require one uint8 code per element")
         # implicitly cast to the descriptor's type
         value = self.cast(value, desc.dtype)
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
@@ -1673,18 +1670,14 @@ class TritonSemantic(Generic[TensorTy]):
         If float_format is subbyte, make sure it's packed as uint8 and return it.
         Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
         """
-        triton_ty = {
-            "e2m3": tl.float6e2m3, "e3m2": tl.float6e3m2, "e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16":
-            tl.bfloat16, "fp16": tl.float16
-        }.get(float_format)
+        triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16":
+                     tl.float16}.get(float_format)
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
             assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
             return val
         if val.dtype == triton_ty:
             return val
-        if triton_ty.is_fp6():
-            raise ValueError(f"{float_format} requires {triton_ty} operands")
         else:
             unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16, "fp16": tl.uint16}[float_format]
             assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
@@ -1723,7 +1716,7 @@ class TritonSemantic(Generic[TensorTy]):
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
-        allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "bf16", "fp16"}
+        allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
         assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
         assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
         rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
@@ -1767,20 +1760,6 @@ class TritonSemantic(Generic[TensorTy]):
                                                 rhs_k_pack)
         self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
                                  None if rhs_scale_is_none else rhs_scale, scale_factor)
-        # The native block32 instruction takes two E8M0 scale operands.
-        # Supply unity for a plain FP6/FP8 operand in an otherwise scaled dot.
-        if lhs.dtype.is_fp6() or rhs.dtype.is_fp6():
-            if not all(t.is_fp6() or t.is_fp8() for t in (lhs.dtype, rhs.dtype)):
-                raise ValueError("FP6 scaled dot requires FP6 or FP8 operands")
-            if scale_factor != 32 or K % 32:
-                raise ValueError("FP6 scaled dot requires groups of 32 values")
-            for scale, absent in ((lhs_scale, lhs_scale_is_none), (rhs_scale, rhs_scale_is_none)):
-                if not absent and scale.dtype not in (tl.uint8, tl.float8e8m0fnu):
-                    raise ValueError("FP6 scaled dot requires E8M0 scales")
-            if lhs_scale_is_none:
-                lhs_scale_handle = self.full([*lhs.type.shape[:-2], M, K // 32], 127, tl.uint8).handle
-            if rhs_scale_is_none:
-                rhs_scale_handle = self.full([*rhs.type.shape[:-2], N, K // 32], 127, tl.uint8).handle
         return self.make_tensor(
             self.builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                            rhs_format_enum, fast_math, lhs_k_pack, rhs_k_pack, acc_handle), ret_ty)
@@ -2037,7 +2016,8 @@ class TritonSemantic(Generic[TensorTy]):
             self.device_assert(self.equal(rem, zero), "Tensor descriptor strides must be 16-byte aligned", None)
 
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
-                               block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
+                               block_shape: List[tl.constexpr], padding_option: str = "zero",
+                               fp6_format=None) -> tl.tensor_descriptor:
         ndim = len(shape)
         if not (1 <= ndim <= 5):
             raise ValueError(f"Expected 1 <= ndim <= 5 but got {ndim} dimensions")
@@ -2046,11 +2026,8 @@ class TritonSemantic(Generic[TensorTy]):
         if len(block_shape) != ndim:
             raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
         assert isinstance(base.dtype, tl.pointer_type), f"base must be a pointer type, got {base.dtype}"
-        elem_size = base.dtype.element_ty.itemsize
+        elem_size = base.dtype.element_ty.primitive_bitwidth // 8
         contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
-        if base.dtype.element_ty.is_fp6():
-            validate_fp6_box(contig_dim_size, tl._unwrap_if_constexpr(shape[-1]),
-                             map(tl._unwrap_if_constexpr, strides[:-1]), padding_option)
         if contig_dim_size * elem_size < 16:
             raise ValueError(
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
@@ -2061,6 +2038,11 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         self._check_tensor_descriptor_alignment_static(strides, elem_size)
+        if fp6_format is not None:
+            if fp6_format not in ("e2m3", "e3m2") or base.dtype.element_ty != tl.uint8:
+                raise ValueError("FP6 descriptors require uint8 storage and format 'e2m3' or 'e3m2'")
+            validate_fp6_box(contig_dim_size, tl._unwrap_if_constexpr(shape[-1]),
+                             [tl._unwrap_if_constexpr(s) for s in strides[:-1]], padding_option)
 
         stride_sources = strides
         shape = [self.make_scalar(x, tl.int32) for x in shape]
@@ -2082,6 +2064,11 @@ class TritonSemantic(Generic[TensorTy]):
         if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
             raise ValueError("Padding option `nan` is not supported for integer blocks")
 
+        if fp6_format:
+            desc_ty = tl.tensor_descriptor_base_type(type, fp6_format)._to_ir(self.builder)
+            handle = self.builder.create_make_tensor_descriptor(desc_ty, base_handle, [s.handle for s in shape],
+                                                                [s.handle for s in strides], padding)
+            return tl.tensor_descriptor(handle, shape, strides, type, fp6_format)
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
                                                             [s.handle for s in strides], block_shape, is_signed_int,
                                                             padding)

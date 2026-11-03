@@ -1380,7 +1380,7 @@ def _implicit_cvt(arg):
         desc = interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
                                                            shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
                                                            block_shape=[tl.constexpr(b) for b in arg.block_shape],
-                                                           padding_option=arg.padding)
+                                                           padding_option=arg.padding, fp6_format=arg.fp6_format)
         desc.handle.round_f32_to_tf32 = arg.round_f32_to_tf32
         return desc
     return arg
@@ -1424,6 +1424,7 @@ class GridExecutor:
                     arg.block_shape,
                     arg.padding,
                     arg.round_f32_to_tf32,
+                    arg.fp6_format,
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg

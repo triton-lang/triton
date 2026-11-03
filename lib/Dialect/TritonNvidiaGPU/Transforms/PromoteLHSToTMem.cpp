@@ -52,9 +52,8 @@ public:
     if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
       return failure();
     }
-    // These shared-memory operands have instruction-specific padding.
-    if (isFp4Padded(lhs.getType().getEncoding()) ||
-        ttg::NVMMASharedEncodingAttr::getFp6Type(lhs.getType().getEncoding())) {
+    // Padded fp4 operand cannot be trivially promoted to TMEM.
+    if (isFp4Padded(lhs.getType().getEncoding())) {
       return failure();
     }
     const unsigned colStride = 1;

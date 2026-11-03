@@ -205,7 +205,9 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
-          getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
+          isFP6(descTy.getElementType())
+              ? 1
+              : getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
@@ -1091,14 +1093,6 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getIntegerType(128);
            })
-      .def("get_fp6e2m3_ty",
-           [](TritonOpBuilder &self) -> Type {
-             return self.getBuilder().getType<Float6E2M3FNType>();
-           })
-      .def("get_fp6e3m2_ty",
-           [](TritonOpBuilder &self) -> Type {
-             return self.getBuilder().getType<Float6E3M2FNType>();
-           })
       .def("get_fp4e2m1x2_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<PackedFloat4E2M1Type>();
@@ -1645,12 +1639,23 @@ void init_triton_ir(py::module_ &m) {
           },
           py::arg("ptrs"), py::arg("val"), py::arg("mask"),
           py::arg("cachePolicy"))
-      .def("create_tensor_descriptor_type",
-           [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-             auto rtt = cast<RankedTensorType>(blockTy);
-             return triton::TensorDescType::get(rtt.getShape(),
-                                                rtt.getElementType(), isSigned);
-           })
+      .def(
+          "create_tensor_descriptor_type",
+          [](TritonOpBuilder &self, Type blockTy, bool isSigned,
+             std::optional<std::string> fp6Format) -> Type {
+            auto rtt = cast<RankedTensorType>(blockTy);
+            Type elemTy = rtt.getElementType();
+            if (fp6Format == "e2m3")
+              elemTy = Float6E2M3FNType::get(self.getContext());
+            else if (fp6Format == "e3m2")
+              elemTy = Float6E3M2FNType::get(self.getContext());
+            else if (fp6Format)
+              throw py::value_error("unknown FP6 descriptor format");
+            return triton::TensorDescType::get(rtt.getShape(), elemTy,
+                                               isSigned);
+          },
+          py::arg("block_type"), py::arg("is_signed"),
+          py::arg("fp6_format") = py::none())
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               Attribute cachePolicy) -> Value {
@@ -1957,6 +1962,13 @@ void init_triton_ir(py::module_ &m) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
            })
       // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Type descTy, Value base,
+              std::vector<Value> &shape, std::vector<Value> &strides,
+              PaddingOption padding) -> Value {
+             return self.create<MakeTensorDescOp>(descTy, base, shape, strides,
+                                                  padding);
+           })
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,

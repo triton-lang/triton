@@ -289,9 +289,7 @@ struct CanonicalizeConvertFromAlloc
   mlir::LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op,
                   PatternRewriter &rewriter) const override {
-    // The FP6 packing atom requires 16 adjacent source values per thread.
-    if (!op.getSrc() ||
-        NVMMASharedEncodingAttr::getFp6Type(op.getType().getEncoding()))
+    if (!op.getSrc())
       return failure();
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
@@ -962,9 +960,7 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 }
 
 LogicalResult LocalAllocOp::verify() {
-  if (getSrc() &&
-      NVMMASharedEncodingAttr::getFp6Type(getType().getEncoding()) &&
-      !isFP6(getType().getElementType()))
+  if (getSrc() && NVMMASharedEncodingAttr::getFp6Type(getType().getEncoding()))
     return emitOpError(
         "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
@@ -990,15 +986,9 @@ LogicalResult LocalStoreOp::verify() {
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
-  auto src = getSrc().getType();
-  if (auto fp6 = NVMMASharedEncodingAttr::getFp6Type(src.getEncoding())) {
-    if (src.getElementType() != fp6)
-      return emitOpError(
-          "FP6 MMA tiles cannot be accessed as register byte lanes");
-    auto order = getOrder(src);
-    if (src.getDimSize(order.front()) < 16)
-      return emitOpError("FP6 register loads require a complete 16-value atom");
-  }
+  if (NVMMASharedEncodingAttr::getFp6Type(getSrc().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
                                     "result")))
     return failure();
