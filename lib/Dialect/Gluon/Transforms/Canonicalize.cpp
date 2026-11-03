@@ -29,6 +29,7 @@ struct Canonicalize : public gluon::impl::GluonCanonicalizeBase<Canonicalize> {
 } // namespace
 
 void Canonicalize::runOnOperation() {
+  runDeadIterArgElimination(getOperation());
   MLIRContext *ctx = &getContext();
   RewritePatternSet patterns(&getContext());
 
@@ -48,16 +49,30 @@ void Canonicalize::runOnOperation() {
   for (mlir::RegisteredOperationName op : ctx->getRegisteredOperationsByDialect(
            cf::ControlFlowDialect::getDialectNamespace()))
     op.getCanonicalizationPatterns(patterns, ctx);
-  populateForOpDeadArgumentElimination(patterns);
+
+  // Include target-specific arithmetic canonicalizations.
+  if (auto *dialect = ctx->getLoadedDialect<ttng::TritonNvidiaGPUDialect>())
+    dialect->getCanonicalizationPatterns(patterns);
 
   // Populate select Triton canonicalization patterns. The important patterns to
   // EXCLUDE are those that modify layouts, especially `ConvertLayoutOp`
   // patterns.
   LoadOp::getCanonicalizationPatterns(patterns, ctx);
   StoreOp::getCanonicalizationPatterns(patterns, ctx);
+  AtomicStoreOp::getCanonicalizationPatterns(patterns, ctx);
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
+  ReshapeOp::getCanonicalizationPatterns(patterns, ctx);
+  IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
+  ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::BarrierExpectOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::ArriveBarrierOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::WaitBarrierOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::AsyncTMACopyGlobalToLocalOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::AsyncTMAGatherOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::TCGen5CommitOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::TMEMStoreOp::getCanonicalizationPatterns(patterns, ctx);
 
   (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

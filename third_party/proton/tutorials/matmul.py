@@ -24,7 +24,7 @@ def metadata_fn(
     grid_x, grid_y, grid_z = unpack_grid(grid)
     num_warps = metadata.num_warps
     num_stages = metadata.num_stages
-    cluster_x, cluster_y, cluster_z = metadata.cluster_dims
+    cluster_x, cluster_y, cluster_z = unpack_grid((metadata.num_ctas, ))
     shared_memory = metadata.shared
     M, K = args["a_ptr"].shape
     K, N = args["b_ptr"].shape

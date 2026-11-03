@@ -1,3 +1,4 @@
+#include "lib/Target/LLVMIR/LLVMDIUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -18,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 namespace mlir {
+using namespace LLVMDIUtils;
 
 #define DEBUG_TYPE "name-preservation"
 
@@ -29,6 +31,12 @@ struct LLVMDILocalVariablePass
 
   void fuseDILocalVariable(Operation *op) {
     if (op->getNumResults() == 0) {
+      return;
+    }
+
+    // Skip ops outside of a function (e.g. module-level globals) where
+    // diSubprogramAttr may not be valid for this op's scope.
+    if (!diSubprogramAttr || !op->getParentOfType<LLVM::LLVMFuncOp>()) {
       return;
     }
 
@@ -82,96 +90,9 @@ struct LLVMDILocalVariablePass
       // a subclass of mlir::Value, which is the value defined by this operation
       OpResult opResult = op->getResult(0);
       // create and insert this call-dbg-value intrinsic after the op
-      Operation *dbgOp = builder.create<LLVM::DbgValueOp>(
-          childLoc, opResult, diLocalVarAttr, diExprAttr);
+      LLVM::DbgValueOp::create(builder, childLoc, opResult, diLocalVarAttr,
+                               diExprAttr);
     }
-  }
-
-  auto calcBitWidth(mlir::Type type) -> std::optional<unsigned> {
-    if (type.isIntOrFloat()) {
-      return type.getIntOrFloatBitWidth();
-    } else if (mlir::isa<mlir::VectorType>(type)) {
-      auto vectorType = dyn_cast<mlir::VectorType>(type);
-      llvm::ArrayRef<int64_t> shape = vectorType.getShape();
-      mlir::Type elementType = vectorType.getElementType();
-      llvm::ArrayRef<bool> scalableDims = vectorType.getScalableDims();
-      unsigned size = 1;
-      for (auto i : shape) {
-        size *= i;
-      }
-
-      if (auto elementTypeSize = calcBitWidth(elementType);
-          elementTypeSize.has_value()) {
-        return size * elementTypeSize.value();
-      }
-    }
-
-    return std::nullopt;
-  }
-
-  // Note: mlir does not provided any built-in conversion from mlir::Type to
-  // mlir::LLVM::DITypeAttr
-  LLVM::DITypeAttr convertType(MLIRContext *context, mlir::Type type) {
-    if (type.isInteger(1)) {
-      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
-                                        mlir::StringAttr::get(context, "bool"),
-                                        type.getIntOrFloatBitWidth(),
-                                        llvm::dwarf::DW_ATE_boolean);
-    }
-    if (type.isInteger()) {
-      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
-                                        mlir::StringAttr::get(context, "int"),
-                                        type.getIntOrFloatBitWidth(),
-                                        llvm::dwarf::DW_ATE_signed);
-    } else if (type.isF16()) {
-      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
-                                        mlir::StringAttr::get(context, "half"),
-                                        type.getIntOrFloatBitWidth(),
-                                        llvm::dwarf::DW_ATE_float);
-    } else if (type.isF32()) {
-      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
-                                        mlir::StringAttr::get(context, "float"),
-                                        type.getIntOrFloatBitWidth(),
-                                        llvm::dwarf::DW_ATE_float);
-    } else if (type.isF64()) {
-      return LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "double"),
-          type.getIntOrFloatBitWidth(), llvm::dwarf::DW_ATE_float);
-    } else if (mlir::isa<mlir::VectorType>(type)) {
-      if (auto vectorTypeSize = calcBitWidth(type);
-          vectorTypeSize.has_value()) {
-        return LLVM::DIBasicTypeAttr::get(
-            context, llvm::dwarf::DW_TAG_base_type,
-            mlir::StringAttr::get(context, "vector"), vectorTypeSize.value(),
-            llvm::dwarf::DW_ATE_float);
-      } else {
-        // TODO: falling back to unknown_type, perhaps theres a better way to
-        // handle when element type size is not determined
-      }
-    }
-
-    return LLVM::DIBasicTypeAttr::get(
-        context, llvm::dwarf::DW_TAG_base_type,
-        mlir::StringAttr::get(context, "unknown_type"), 0,
-        llvm::dwarf::DW_ATE_signed);
-  }
-
-  /// Attempt to extract a filename for the given loc.
-  FileLineColLoc extractFileLoc(Location loc) {
-    if (auto fileLoc = dyn_cast<FileLineColLoc>(loc))
-      return fileLoc;
-    if (auto nameLoc = dyn_cast<NameLoc>(loc))
-      return extractFileLoc(nameLoc.getChildLoc());
-    if (auto opaqueLoc = dyn_cast<OpaqueLoc>(loc))
-      return extractFileLoc(opaqueLoc.getFallbackLocation());
-    if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
-      return extractFileLoc(fusedLoc.getLocations().front());
-    if (auto callerLoc = dyn_cast<CallSiteLoc>(loc))
-      return extractFileLoc(callerLoc.getCaller());
-    StringAttr unknownFile =
-        mlir::StringAttr::get(loc.getContext(), "<unknown>");
-    return mlir::FileLineColLoc::get(unknownFile, 0, 0);
   }
 
   // Follow the same logic as LLVMDIScopePass to construct a subprogram scope
@@ -196,7 +117,7 @@ struct LLVMDILocalVariablePass
 
     // Filename, line and colmun to associate to the function.
     LLVM::DIFileAttr fileAttr;
-    int64_t line = 1, col = 1;
+    int64_t line = 1;
     FileLineColLoc fileLoc = extractFileLoc(loc);
     if (!fileLoc && compileUnitAttr) {
       fileAttr = compileUnitAttr.getFile();
@@ -204,15 +125,11 @@ struct LLVMDILocalVariablePass
       fileAttr = LLVM::DIFileAttr::get(context, "<unknown>", "");
     } else {
       line = fileLoc.getLine();
-      col = fileLoc.getColumn();
       StringRef inputFilePath = fileLoc.getFilename().getValue();
       fileAttr = LLVM::DIFileAttr::get(
           context, llvm::sys::path::filename(inputFilePath),
           llvm::sys::path::parent_path(inputFilePath));
     }
-
-    auto subroutineTypeAttr =
-        LLVM::DISubroutineTypeAttr::get(context, llvm::dwarf::DW_CC_normal, {});
 
     DistinctAttr distinctId;
     auto subprogramFlags = LLVM::DISubprogramFlags::Optimized;
@@ -229,14 +146,61 @@ struct LLVMDILocalVariablePass
       compileUnitAttr = {};
     }
 
+    llvm::SmallVector<mlir::LLVM::DITypeAttr> types;
+    mlir::DataLayout dl(
+        funcOp.getOperation()->getParentOfType<mlir::ModuleOp>());
+    for (auto resTy : funcOp.getResultTypes()) {
+      LLVM::DITypeAttr tyAttr = convertType(context, resTy);
+      types.push_back(tyAttr);
+    }
+    // If no return type then add a null type as a place holder for that.
+    if (types.empty())
+      types.push_back(mlir::LLVM::DINullTypeAttr::get(context));
+
+    // Only pointer type and scalar types are supported for now
+    OpBuilder builder(context);
+    for (auto [idx, inTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
+      if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(inTy)) {
+        auto pointeeTy =
+            funcOp.getArgAttrOfType<TypeAttr>(idx, "tt.pointee_type");
+        // If no valid pointee type for this function argument, skip it.
+        mlir::Type elTy =
+            pointeeTy ? pointeeTy.getValue() : builder.getNoneType();
+        LLVM::DITypeAttr tyAttr = convertPtrType(context, ptrTy, elTy, dl);
+        types.push_back(tyAttr);
+      } else if (auto structTy = dyn_cast<LLVM::LLVMStructType>(inTy)) {
+        LLVM::DITypeAttr tyAttr =
+            convertStructType(context, structTy, fileAttr, dl, line);
+        types.push_back(tyAttr);
+      } else if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(inTy)) {
+        LLVM::DITypeAttr tyAttr =
+            convertArrayType(context, arrayTy, fileAttr, dl, line);
+        types.push_back(tyAttr);
+      } else {
+        // Remaining types are scalar (int/float) or vector types
+        // (e.g., from external function declarations for GPU builtins).
+        assert((inTy.isIntOrFloat() || isa<mlir::VectorType>(inTy)) &&
+               "Expected scalar or vector types");
+        LLVM::DITypeAttr tyAttr = convertType(context, inTy);
+        types.push_back(tyAttr);
+      }
+    }
+
+    auto subroutineTypeAttr = LLVM::DISubroutineTypeAttr::get(
+        context, llvm::dwarf::DW_CC_normal, types);
+
     StringAttr funcNameAttr = funcOp.getNameAttr();
     // Note that scopeline is set differently from LLVM's
     // DIScopeForLLVMFuncOpPass. I don't find reasons why scopeline should be
     // the column offset
+
+    auto recId = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+    auto id = mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
     auto subprogramAttr = LLVM::DISubprogramAttr::get(
-        context, distinctId, compileUnitAttr, fileAttr, funcNameAttr,
-        funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
-        subprogramFlags, subroutineTypeAttr, /*retainNodes=*/{},
+        context, recId, /*isRecSelf=*/true, id, compileUnitAttr, fileAttr,
+        funcNameAttr, funcNameAttr, fileAttr, /*line=*/line, /*scopeline=*/line,
+        subprogramFlags, subroutineTypeAttr,
+        /*retainNodes=*/llvm::ArrayRef<Attribute>{},
         /*annotations=*/{});
 
     return subprogramAttr;
@@ -244,20 +208,180 @@ struct LLVMDILocalVariablePass
 
   // construct a subprogram of an operation by using its parent function's
   // DISubprogramAttr construction
-  LLVM::DISubprogramAttr getDISubprogramAttr(Operation op) {
+  LLVM::DISubprogramAttr getDISubprogramAttr(Operation &op) {
     auto funcOp = op.getParentOfType<LLVM::LLVMFuncOp>();
     return getDISubprogramAttr(funcOp);
   }
 
+  LLVM::DISubprogramAttr
+  fuseFuncArgVariables(LLVM::LLVMFuncOp funcOp,
+                       LLVM::DISubprogramAttr subprogramAttr) {
+
+    MLIRContext *context = &getContext();
+    OpBuilder builder(context);
+    builder.setInsertionPointToStart(&funcOp.getBody().front());
+
+    LLVM::DIFileAttr fileAttr = subprogramAttr.getFile();
+    LLVM::DISubroutineTypeAttr subroutineTypeAttr = subprogramAttr.getType();
+    int64_t line = subprogramAttr.getLine();
+    // The input subprogramAttr has isRecSelf=true. Use it as the scope for
+    // retainedNodes variables (proper recursive self-reference pattern).
+    auto selfRefScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
+    auto diFlag = LLVM::DIFlags::Zero;
+
+    // Collect argument info and create retainedNodes variables scoped to the
+    // isRecSelf=true placeholder (these are nested inside the definition and
+    // resolved during translation).
+    auto argTypeAttrs = subroutineTypeAttr.getTypes();
+    unsigned resNum = funcOp.getNumResults() ? funcOp.getNumResults() : 1;
+
+    struct ArgInfo {
+      unsigned argIdx;
+      BlockArgument arg;
+      Location childLoc;
+      StringAttr nameAttr;
+      LLVM::DITypeAttr typeAttr;
+    };
+    llvm::SmallVector<ArgInfo> argInfos;
+    llvm::SmallVector<Attribute> retainedNodes;
+
+    for (unsigned idx = resNum; idx < argTypeAttrs.size(); idx++) {
+      LLVM::DITypeAttr argTypeAttr = argTypeAttrs[idx];
+      unsigned argIdx = idx - resNum;
+      BlockArgument arg = funcOp.getArgument(argIdx);
+
+      Location argLoc = arg.getLoc();
+      auto nameLoc = dyn_cast<NameLoc>(argLoc);
+      if (!nameLoc)
+        continue;
+
+      // Create variable with isRecSelf=true scope for retainedNodes
+      auto argVarAttr = LLVM::DILocalVariableAttr::get(
+          context, selfRefScopeAttr, nameLoc.getName(), fileAttr, line,
+          argIdx + 1, 0, argTypeAttr, diFlag);
+      retainedNodes.push_back(argVarAttr);
+
+      argInfos.push_back(
+          {argIdx, arg, nameLoc.getChildLoc(), nameLoc.getName(), argTypeAttr});
+    }
+
+    // Create the resolved subprogram (isRecSelf=false) with retainedNodes.
+    mlir::DistinctAttr recId = subprogramAttr.getRecId();
+    mlir::DistinctAttr id =
+        mlir::DistinctAttr::create(mlir::UnitAttr::get(context));
+    LLVM::DICompileUnitAttr compileUnitAttr = subprogramAttr.getCompileUnit();
+    StringAttr funcNameAttr = subprogramAttr.getName();
+    LLVM::DISubprogramFlags subprogramFlags =
+        subprogramAttr.getSubprogramFlags();
+    subprogramAttr = LLVM::DISubprogramAttr::get(
+        context, recId, /*isRecSelf=*/false, id, compileUnitAttr, fileAttr,
+        funcNameAttr, funcNameAttr, fileAttr, line, line, subprogramFlags,
+        subroutineTypeAttr, retainedNodes, /*annotations=*/{});
+
+    // Now create DbgValueOps with variables scoped to the RESOLVED subprogram.
+    // The isRecSelf=true scope must NOT appear in DbgValueOps because the
+    // translator's recursiveNodeMap entry is only valid during translation of
+    // the isRecSelf=false definition and is popped afterwards.
+    auto resolvedScopeAttr = dyn_cast<LLVM::DILocalScopeAttr>(subprogramAttr);
+    for (auto &info : argInfos) {
+      auto argVarAttr = LLVM::DILocalVariableAttr::get(
+          context, resolvedScopeAttr, info.nameAttr, fileAttr, line,
+          info.argIdx + 1, 0, info.typeAttr, diFlag);
+      auto exprAttr = LLVM::DIExpressionAttr::get(context);
+      (void)LLVM::DbgValueOp::create(builder, info.childLoc, info.arg,
+                                     argVarAttr, exprAttr);
+    }
+
+    Location loc = funcOp.getLoc();
+    // Unwrap the old FusedLoc to avoid nesting a stale isRecSelf=true
+    // subprogram in the location chain.
+    if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
+      if (fusedLoc.getMetadata() &&
+          isa<LLVM::DISubprogramAttr>(fusedLoc.getMetadata())) {
+        loc = FusedLoc::get(context, fusedLoc.getLocations(), Attribute());
+      }
+    }
+    funcOp->setLoc(mlir::FusedLoc::get(context, {loc}, subprogramAttr));
+    return subprogramAttr;
+  }
+
+  // After creating the resolved subprogram, fix any DILexicalBlockFileAttr
+  // locations in the function that still reference the old isRecSelf=true
+  // subprogram. These were created by add_di_scope before this pass ran.
+  void fixLexicalBlockScopes(LLVM::LLVMFuncOp funcOp,
+                             LLVM::DISubprogramAttr oldSubprogram,
+                             LLVM::DISubprogramAttr newSubprogram) {
+    MLIRContext *context = &getContext();
+    funcOp.walk([&](Operation *op) {
+      Location loc = op->getLoc();
+      Location newLoc =
+          replaceLexicalBlockScope(context, loc, oldSubprogram, newSubprogram);
+      if (newLoc != loc)
+        op->setLoc(newLoc);
+    });
+  }
+
+  Location replaceLexicalBlockScope(MLIRContext *context, Location loc,
+                                    LLVM::DISubprogramAttr oldSP,
+                                    LLVM::DISubprogramAttr newSP) {
+    if (auto fusedLoc = dyn_cast<FusedLoc>(loc)) {
+      // Recursively fix inner locations
+      SmallVector<Location> newLocs;
+      bool changed = false;
+      for (Location inner : fusedLoc.getLocations()) {
+        Location fixed = replaceLexicalBlockScope(context, inner, oldSP, newSP);
+        newLocs.push_back(fixed);
+        if (fixed != inner)
+          changed = true;
+      }
+
+      auto metadata = fusedLoc.getMetadata();
+      if (auto lexBlock =
+              dyn_cast_or_null<LLVM::DILexicalBlockFileAttr>(metadata)) {
+        if (auto scope =
+                dyn_cast_or_null<LLVM::DISubprogramAttr>(lexBlock.getScope())) {
+          if (scope == oldSP) {
+            auto newBlock = LLVM::DILexicalBlockFileAttr::get(
+                context, newSP, lexBlock.getFile(),
+                lexBlock.getDiscriminator());
+            return FusedLoc::get(context, newLocs, newBlock);
+          }
+        }
+      }
+
+      if (changed)
+        return FusedLoc::get(context, newLocs, metadata);
+    } else if (auto callSiteLoc = dyn_cast<CallSiteLoc>(loc)) {
+      Location newCallee = replaceLexicalBlockScope(
+          context, callSiteLoc.getCallee(), oldSP, newSP);
+      Location newCaller = replaceLexicalBlockScope(
+          context, callSiteLoc.getCaller(), oldSP, newSP);
+      if (newCallee != callSiteLoc.getCallee() ||
+          newCaller != callSiteLoc.getCaller())
+        return CallSiteLoc::get(newCallee, newCaller);
+    }
+    return loc;
+  }
+
   // set it while traversing into a function
-  LLVM::DISubprogramAttr diSubprogramAttr;
+  LLVM::DISubprogramAttr diSubprogramAttr = {};
 
   void runOnOperation() override {
-    Operation *op = getOperation();
-
     getOperation()->walk<WalkOrder::PreOrder>([&](Operation *op) -> void {
       if (isa<LLVM::LLVMFuncOp>(op)) {
-        diSubprogramAttr = getDISubprogramAttr(cast<LLVM::LLVMFuncOp>(op));
+        auto funcOp = cast<LLVM::LLVMFuncOp>(op);
+        auto oldSubprogram = getDISubprogramAttr(funcOp);
+        // External declarations (e.g., runtime builtins like vprintf) have no
+        // body, so we cannot insert debug value intrinsics into them.
+        if (!funcOp.isExternal()) {
+          diSubprogramAttr = fuseFuncArgVariables(funcOp, oldSubprogram);
+          // Fix DILexicalBlockFileAttr locations that still reference the old
+          // isRecSelf=true subprogram from add_di_scope.
+          if (oldSubprogram.getIsRecSelf())
+            fixLexicalBlockScopes(funcOp, oldSubprogram, diSubprogramAttr);
+        } else {
+          diSubprogramAttr = oldSubprogram;
+        }
       } else {
         fuseDILocalVariable(op);
       }

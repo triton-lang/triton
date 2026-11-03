@@ -1,33 +1,119 @@
+import math
+from dataclasses import dataclass
 import torch
 import triton
 import triton.language as tl
-from .base import Layout
+from .base import Layout, LayoutTransformation
+from .scale import ScaleLayoutTransformation
+
+# ------------------- Hopper MX Scale Layout -------------------
 
 
+@dataclass(frozen=True)
 class HopperMXScaleLayout(Layout):
-    name: str = "HOPPER_SCALE"
+    mx_axis: int
+    num_warps: int
 
-    def __init__(self, shape, mx_axis, num_warps=8) -> None:
-        assert num_warps & (num_warps - 1) == 0, "warps_n must be a power of 2"
-        super().__init__(shape)
-        self.mx_axis = mx_axis
-        self.num_warps = num_warps
-        *self.leading_shape, _, _ = shape
+    def __post_init__(self):
+        assert self.num_warps & (self.num_warps - 1) == 0, "warps_n must be a power of 2"
+
+    @property
+    def name(self):
+        return "HOPPER_SCALE"
+
+    def make_transformation(self, shape: list[int], is_fp4) -> LayoutTransformation:
+        return HopperMXScaleLayoutTransformation(shape, is_fp4, self.mx_axis, self.num_warps)
+
+    def swizzle_block_shape(self, block_shape):
+        # wrong ? this seems like a transposition
+        if self.mx_axis == -1:
+            *head, N, K = block_shape
+            assert N % 32 == 0, N
+            return [*head, N // 32, K * 32]
+        else:
+            assert self.mx_axis == -2
+            *head, K, N = block_shape
+            assert N % 32 == 0, N
+            return [*head, K * 32, N // 32]
+
+
+# ------------------- Hopper MX Scale Layout Transformation -------------------
+
+
+@dataclass(frozen=True)
+class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
+    mx_axis: int
+    num_warps: int
+
+    def __post_init__(self):
+        *leading_shape, M, K = self.shape
+        if self.mx_axis < 0:
+            object.__setattr__(self, "mx_axis", self.mx_axis + len(self.shape))
+        object.__setattr__(self, "leading_shape", leading_shape)
+        object.__setattr__(self, "M", M)
+        object.__setattr__(self, "K", K)
+
+    @property
+    def _padded_shape(self) -> list[int]:
+        *leading_shape, M, K = self.shape
+        if self.mx_axis == len(leading_shape):
+            M, K = K, M
+        align_m = 32 * self.num_warps
+        M = (M + (align_m - 1)) // align_m * align_m
+        K = (K + 1) // 2 * 2
+        return [*leading_shape, M, K]
+
+    @property
+    def storage_shape(self) -> list[int]:
+        *leading_shape, M, K = self._padded_shape
+        if self.mx_axis == len(leading_shape):
+            return [*leading_shape, K * 32, M // 32]
+        return [*leading_shape, M // 32, K * 32]
 
     def _maybe_mT(self, data):
         if self.mx_axis == len(self.leading_shape):
             return data.contiguous().mT
         return data
 
+    def _convert(self, data, out, inverse):
+        transpose = self.mx_axis == len(self.leading_shape)
+        if out is None:
+            if inverse:
+                out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
+            else:
+                shape = self.storage_shape
+                if transpose:
+                    shape[-2:] = reversed(shape[-2:])
+                out = torch.empty(shape, dtype=data.dtype, device=data.device)
+                if transpose:
+                    out = out.mT
+        matrix, encoded = (out, data) if inverse else (data, out)
+        if transpose:
+            matrix, encoded = matrix.mT, encoded.mT
+        *_, m_pad, k_pad = self._padded_shape
+        large = math.prod(self.leading_shape) * m_pad * k_pad >= 1024 * 1024
+        block_m = 32 * self.num_warps
+        block_k = min(64 if large else 32, max(2, triton.next_power_of_2(k_pad)))
+        num_warps = 8 if large else 4
+        grid = (math.prod(self.leading_shape) * triton.cdiv(m_pad, block_m) * triton.cdiv(k_pad, block_k), )
+        if grid[0]:
+            with torch.cuda.device(data.device):
+                _convert_scale_kernel[grid](matrix.view(torch.uint8), encoded.view(torch.uint8),
+                                            tuple(self.leading_shape), matrix.stride(), encoded.stride(),
+                                            matrix.shape[-2], matrix.shape[-1], m_pad, k_pad, self.num_warps, inverse,
+                                            block_m, block_k, num_warps=num_warps)
+        return out
+
     def swizzle_data(self, data):
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=False)
+        assert data.shape == (*self.leading_shape, self.M, self.K)
         data = self._maybe_mT(data).contiguous()
-        *batch, M, K = data.shape
-        SWIZZLE_ALIGN_M = 2 * self.num_warps * 2 * 8
-        SWIZZLE_ALIGN_K = 2
-        pad_m = (SWIZZLE_ALIGN_M - (M % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
-        pad_k = (SWIZZLE_ALIGN_K - (K % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        *batch, M_in, K_in = data.shape
+        *_, M, K = self._padded_shape
+        pad_m = M - M_in
+        pad_k = K - K_in
         data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
-        *batch, M, K = data.shape
         assert data.is_contiguous()
         assert M % (
             2 * self.num_warps * 2 *
@@ -42,9 +128,11 @@ class HopperMXScaleLayout(Layout):
         assert data.shape[-2] == M // 32
         assert data.shape[-1] == K * 32
         data = self._maybe_mT(data)
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=True)
         data = self._maybe_mT(data)
         *batch, M, K = data.shape
         b = len(batch)
@@ -54,10 +142,24 @@ class HopperMXScaleLayout(Layout):
         data = data.permute(*perm)
         data = data.reshape(*batch, M * 32, K // 32)
         data = self._maybe_mT(data)
+        data = data[..., :self.M, :self.K]
+        data = data.contiguous()
         return data
 
-    def swizzle_block_shape(self, block_shape):
-        return block_shape
+
+@triton.jit
+def swizzle_mx_scale_hopper_ptr(base, outer, inner, stride_outer, stride_inner, num_warps: tl.constexpr,
+                                INDEX_TYPE: tl.constexpr = tl.int64):
+    """Pointers for broadcastable scale coordinates, without bounds masking.
+
+    ``outer`` indexes the non-MX axis; ``inner`` indexes scales along the MX axis.
+    Strides are in elements, in physical outer/inner order. ``base`` points to
+    the batch origin. Each stride product uses ``INDEX_TYPE`` before being
+    added to the pointer.
+    """
+    outer_block = outer // (32 * num_warps) * num_warps + outer // 16 % num_warps
+    inner_lane = (inner // 2 * 64 + outer // (16 * num_warps) % 2 * 32 + outer % 8 * 4 + inner % 2 * 2 + outer // 8 % 2)
+    return base + tl.cast(outer_block, INDEX_TYPE) * stride_outer + tl.cast(inner_lane, INDEX_TYPE) * stride_inner
 
 
 @triton.jit
@@ -65,6 +167,8 @@ def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constex
     """
     Triton inverse of swizzle_mxfp4_scale_hopper
     """
+    if mx_axis is not None and mx_axis < 0:
+        mx_axis += len(x.shape)
     tl.static_assert(len(x.shape) == 2, "NYI")
     # implementation assumes mxfp data is packed along the last dimension
     x = x.trans() if mx_axis == 0 else x
@@ -78,3 +182,37 @@ def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constex
     # implementation assumed mxfp data is packed along the last dimension
     x = x.trans() if mx_axis == 0 else x
     return x
+
+
+@triton.jit
+def _convert_scale_kernel(Matrix, Encoded, LEADING_SHAPE: tl.constexpr, MATRIX_STRIDES: tl.constexpr,
+                          ENCODED_STRIDES: tl.constexpr, M: tl.constexpr, K: tl.constexpr, M_PAD: tl.constexpr,
+                          K_PAD: tl.constexpr, LAYOUT_WARPS: tl.constexpr, INVERSE: tl.constexpr, BLOCK_M: tl.constexpr,
+                          BLOCK_K: tl.constexpr):
+    tiles_m: tl.constexpr = triton.cdiv(M_PAD, BLOCK_M)
+    tiles_k: tl.constexpr = triton.cdiv(K_PAD, BLOCK_K)
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (tiles_m * tiles_k)
+    tile_m, tile_k = pid // tiles_k % tiles_m, pid % tiles_k
+    for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
+        index = batch % LEADING_SHAPE[dim]
+        batch //= LEADING_SHAPE[dim]
+        Matrix += index * MATRIX_STRIDES[dim]
+        Encoded += index * ENCODED_STRIDES[dim]
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    cols = tile_k * BLOCK_K + tl.arange(0, BLOCK_K)
+    matrix_offsets = rows[:, None] * MATRIX_STRIDES[-2] + cols[None, :] * MATRIX_STRIDES[-1]
+    matrix_mask = (rows[:, None] < M) & (cols[None, :] < K)
+    enc_rows = tile_m * (BLOCK_M // 32) + tl.arange(0, BLOCK_M // 32)
+    enc_cols = tile_k * (BLOCK_K * 32) + tl.arange(0, BLOCK_K * 32)
+    enc_offsets = enc_rows[:, None] * ENCODED_STRIDES[-2] + enc_cols[None, :] * ENCODED_STRIDES[-1]
+    enc_mask = (enc_rows[:, None] < M_PAD // 32) & (enc_cols[None, :] < K_PAD * 32)
+    if INVERSE:
+        x = tl.load(Encoded + enc_offsets, enc_mask, other=0)
+        x = unswizzle_mxfp4_scale_hopper(x, mx_axis=1, num_warps=LAYOUT_WARPS)
+        tl.store(Matrix + matrix_offsets, x, matrix_mask)
+    else:
+        x = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)
+        x = x.reshape(BLOCK_M // (32 * LAYOUT_WARPS), 2, LAYOUT_WARPS, 2, 8, BLOCK_K // 2, 2)
+        x = x.trans(0, 2, 5, 1, 4, 6, 3).reshape(BLOCK_M // 32, BLOCK_K * 32)
+        tl.store(Encoded + enc_offsets, x, enc_mask)

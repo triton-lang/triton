@@ -1,11 +1,11 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-coalesce-async-copy=arch-generation-name=gfx950 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-coalesce-async-copy=gfx-arch=gfx950 | FileCheck %s
 
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // sizePerThread = [1] because we have no information about contiguity of src pointers
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: async_copy_1d
 tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
@@ -18,12 +18,12 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.padded_shared<[256:+4] {order = [0], shape = [1024]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // Padded encoding with an identity mapping does produce coalesced writes so we should not change the blocked encoding
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: async_copy_with_padding
 tt.func @async_copy_with_padding(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
@@ -36,12 +36,12 @@ tt.func @async_copy_with_padding(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // sizePerThread = [1, 1] because we have no information about contiguity of src pointers
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL: async_copy_2d
 tt.func @async_copy_2d(%input: tensor<64x64x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<64x64xf32, #shared, #smem, mutable>) {
@@ -54,12 +54,12 @@ tt.func @async_copy_2d(%input: tensor<64x64x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [8, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [1,2,2], order = [0,1,2]}>
+#blocked = #ttg.blocked<{sizePerThread = [8, 1, 1], threadsPerWarp = [64, 1, 1], warpsPerCTA = [1,2,2], order = [0,1,2]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0,1,2]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // sizePerThread = [1, 1, 1] because we have no information about contiguity of src pointers
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [64, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
 // CHECK-LABEL: async_copy_3d
 tt.func @async_copy_3d(%input: tensor<1024x1024x1024x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<1024x1024x1024xf32, #shared, #smem, mutable>) {
@@ -72,11 +72,11 @@ tt.func @async_copy_3d(%input: tensor<1024x1024x1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL: async_copy_with_mask_and_other
 tt.func @async_copy_with_mask_and_other(%input: tensor<64x64x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<64x64xf32, #shared, #smem, mutable>,
@@ -149,8 +149,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // The order of #blocked and #shared are different so we need to clip to 1 element
-  // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4], order = [1, 0]}>
   // CHECK-LABEL: async_copy_different_order
   tt.func public @async_copy_different_order(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
@@ -171,10 +170,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // The shared layout should not be changed
 // CHECK: #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 // CHECK-NOT: #shared1
@@ -190,9 +189,9 @@ tt.func @async_copy_2d_swizzled(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
-#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [256]}>
+#shared = #ttg.padded_shared<[64:+4] {order = [0], shape = [256]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // Padded encoding with an identity mapping has vec=1 whereas the blocked has vec=4 so we need to rewrite it
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [[64], [128]], lane = [[1], [2], [4], [8], [16], [32]], warp = [], block = []
@@ -210,7 +209,7 @@ tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [64], [128], [16], [32]], block = []}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [], lane = [[1], [2], [4], [8], [64], [128]], warp = [[16], [32]], block = []
@@ -226,9 +225,9 @@ tt.func @async_copy_padded_layout_with_simple_rearanging(%input: tensor<256x!tt.
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
+#shared = #ttg.padded_shared<[256:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [[1], [2]], lane = [[4], [8], [16], [32], [256], [512]], warp = [[64], [128]], block = []
@@ -246,7 +245,7 @@ tt.func @async_copy_padded_layout_with_vectorization_and_rearanging(%input: tens
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [64], [16], [32]], block = []}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
 // Check that we add a broadcast in case not each lane in the WG can read unique data
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [], lane = [[1], [2], [4], [8], [64], [16]], warp = [[32], [0]], block = []
@@ -255,6 +254,40 @@ tt.func @async_copy_padded_layout_requiring_broadcasting(%input: tensor<128x!tt.
     %view: !ttg.memdesc<128xf32, #shared, #smem, mutable>) {
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<128x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
   %token = ttg.async_copy_global_to_local %input, %view: tensor<128x!tt.ptr<f32>, #blocked> -> <128xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.padded_shared<[16:+4] {order = [0], shape = [256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// Padded encoding with a small padding interval cannot write warp coalesced so we should not change the encoding
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+// CHECK-LABEL: async_copy_with_padding_different_vec
+tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<256x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK-LABEL: async_copy_with_mismatching_order_and_unsupported_vec_width
+tt.func @async_copy_with_mismatching_order_and_unsupported_vec_width(%input: tensor<64x2x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<[4, 8]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
+    %view: !ttg.memdesc<64x2xf32, #shared, #smem, mutable>) {
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %[[CVT]], %{{.*}} : tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  %token = ttg.async_copy_global_to_local %input, %view {contiguity = 2 : i32} : tensor<64x2x!tt.ptr<f32>, #blocked> -> <64x2xf32, #shared, #smem, mutable>
   tt.return
 }
 }

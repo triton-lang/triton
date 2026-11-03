@@ -3,47 +3,47 @@
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
 // CHECK: #[[$WMMA_GEN3:.*]] = #ttg.amd_wmma<{{.*}}version = 3{{.*}}>
-#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_layout
   tt.func @wmma_layout(%0: tensor<16x16xf16, #blocked>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 1]}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 1, ctaLayout = {register = [], warp = []}}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #{{.+}}> -> tensor<16x16xf16, #[[$WMMA_GEN1]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_dot_op_layout
   tt.func @wmma_dot_op_layout(%0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 1]}>, kWidth = 16}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 1, ctaLayout = {register = [], warp = []}}>, kWidth = 16}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$WMMA_GEN1]], kWidth = 16}>>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen2_layout
   tt.func @wmma_gen2_layout(%0: tensor<16x16xf16, #blocked>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1]}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #{{.+}}> -> tensor<16x16xf16, #[[$WMMA_GEN2]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen2_dot_op_layout
   tt.func @wmma_gen2_dot_op_layout(%0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1]}>, kWidth = 8}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 2, ctaLayout = {warp = []}}>, kWidth = 8}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$WMMA_GEN2]], kWidth = 8}>>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen3_layout
   tt.func @wmma_gen3_layout(%0: tensor<16x16xf32, #blocked>) {
-    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>>
+    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf32, #{{.+}}> -> tensor<16x16xf32, #[[$WMMA_GEN3]]>
     tt.return
   }
 
   // CHECK-LABEL: wmma_gen3_dot_op_layout
   tt.func @wmma_gen3_dot_op_layout(%0: tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
-    %1 = ttg.convert_layout %0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>, kWidth = 8}>>
+    %1 = ttg.convert_layout %0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = []}, instrShape = [16, 16, 32]}>, kWidth = 8}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #{{.+}}}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #[[$WMMA_GEN3]], kWidth = 8}>>
     tt.return
   }
@@ -83,6 +83,78 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @multibuffer_subview_unaligned_pipeline_offset
+  tt.func @multibuffer_subview_unaligned_pipeline_offset(%arg0: !ttg.memdesc<5x8x32xf16, #shared, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[2, 0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [2, 0, 0] : !ttg.memdesc<5x8x32xf16, #shared, #smem> -> !ttg.memdesc<3x8x32xf16, #shared, #smem, 5x8x32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @memdesc_reinterpret_multibuffer_prefix_subview
+  tt.func @memdesc_reinterpret_multibuffer_prefix_subview(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
+    // CHECK: ttg.memdesc_reinterpret
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<6x8x16xf16, #shared_b, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_cga_01 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#shared_cga_10 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared_cga_00 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [4, 0]], block = [[2, 0]]}, alignment = 16>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @subslice_non_trivial_block_cga_01
+  tt.func @subslice_non_trivial_block_cga_01(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_01, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_01, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_01, #smem, 8x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subslice_non_trivial_block_cga_10
+  tt.func @subslice_non_trivial_block_cga_10(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_10, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_10, #smem> -> !ttg.memdesc<8x8xf32, #shared_cga_10, #smem, 8x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subslice_broadcasted_block_cga_00
+  tt.func @subslice_broadcasted_block_cga_00(%arg0: !ttg.memdesc<8x16xf32, #shared_cga_00, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %0 = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared_cga_00, #smem> -> !ttg.memdesc<4x16xf32, #shared_cga_00, #smem, 8x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @subview_split_on_cta_dim
+  tt.func @subview_split_on_cta_dim(%arg0: !ttg.memdesc<8x4xf32, #shared, #smem>) {
+    // CHECK: ttg.memdesc_subslice %{{.*}}[0, 0]
+    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x4xf32, #shared, #smem> -> !ttg.memdesc<4x4xf32, #shared, #smem, 8x4>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_shared_sharding
+  tt.func @memdesc_reinterpret_shared_sharding(%broadcast: !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable>) {
+    %split = ttg.memdesc_reinterpret %broadcast : !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable> -> !ttg.memdesc<8x16xi16, #shared_cga_10, #smem, mutable>
+    %view = ttg.memdesc_subslice %broadcast [0, 0] : !ttg.memdesc<8x16xf16, #shared_cga_00, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_cga_00, #smem, mutable, 8x16>
+    %split_view = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_cga_00, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xi16, #shared_cga_10, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -99,7 +171,7 @@ module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16,  CTAsPerCGA = [1,1,1,1], CTASplitNum = [1,1,1,1], CTAOrder = [3, 2, 1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, rank = 4}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32}>
 #shared_linear_16 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 4], [4, 8], [8, 0]]}, alignment = 512>
@@ -124,6 +196,154 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   // CHECK: %[[T:.*]] = ttg.memdesc_trans %{{.*}} {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #{{.*}}, #smem> -> !ttg.memdesc<16x16xf32, #{{.*}}, #smem>
   tt.func @memdesc_trans_equiv(%arg0 : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem>) {
     %0 = ttg.memdesc_trans %arg0 {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem> -> !ttg.memdesc<16x16xf32, #shared2, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.generic_linear<{register = [[1, 0], [0, 1]], lane = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]], warp = [[16, 8], [0, 8]], block = []}>
+#dst = #ttg.generic_linear<{register = [[1]], lane = [[2], [4], [8], [0], [0]], warp = [[16], [0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @reshape_generic_linear_to_permutation
+  // CHECK: tt.reshape
+  tt.func @reshape_generic_linear_to_permutation(%arg: tensor<32x1xi32, #src>) {
+    %0 = tt.reshape %arg : tensor<32x1xi32, #src> -> tensor<32xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#shared1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc_reinterpret_layout_rank_increase
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_layout_rank_increase(%arg0 : !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable> -> !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_layout_rank_decrease
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_layout_rank_decrease(%arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi32, #shared1d, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reinterpret_smaller_smem
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_smaller_smem(%arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<32x2xi32, #shared2d, #smem, mutable> -> !ttg.memdesc<32x2xi16, #shared2d, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: memdesc_reinterpret_smaller_tmem
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_reinterpret_smaller_tmem(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) {
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_holey = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_holey_view = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0]], block = []}, alignment = 16>
+#shared_padded = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [16, 128]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @memdesc_subslice_pipeline_stage_chain
+  // CHECK: ttg.memdesc_subslice {{.*}}[3, 0, 0]
+  // CHECK: ttg.memdesc_index
+  // CHECK: ttg.memdesc_reinterpret
+  tt.func @memdesc_subslice_pipeline_stage_chain(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>, %index: i32) {
+    %stages = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    %indexed = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    %reinterpret = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<2x16x16xi16, #shared, #smem, mutable>
+    %last = ttg.memdesc_subslice %stages [1, 0, 0] : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<1x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_pipeline_subview_with_gaps
+  tt.func @memdesc_reinterpret_pipeline_subview_with_gaps(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<8x16xi16, #shared, #smem, mutable>
+    %stages = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<2x4x16xi16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_noncontiguous_shared_subview_prefix
+  tt.func @memdesc_reinterpret_noncontiguous_shared_subview_prefix(%arg0: !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4> -> !ttg.memdesc<1x2xi32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_subview_owns_zero_bases
+  tt.func @memdesc_reinterpret_subview_owns_zero_bases(%arg0: !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2>) {
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<2x2xi32, #shared_holey, #smem, mutable, 4x2> -> !ttg.memdesc<2x4xi32, #shared_holey_view, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_full_allocation_with_zero_bases
+  tt.func @memdesc_reinterpret_full_allocation_with_zero_bases(%arg0: !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>) {
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable> -> !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @memdesc_reinterpret_full_padded
+  tt.func @memdesc_reinterpret_full_padded(%arg0: !ttg.memdesc<16x128xf16, #shared_padded, #smem, mutable>) {
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<16x128xf16, #shared_padded, #smem, mutable> -> !ttg.memdesc<16x128xbf16, #shared_padded, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tmem_reinterpret_noncontiguous_subview_prefix
+  tt.func @tmem_reinterpret_noncontiguous_subview_prefix(%arg0: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %view = ttng.tmem_subslice %arg0 {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable, 256x256> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_reinterpret_packed_subview_owns_column
+  tt.func @tmem_reinterpret_packed_subview_owns_column(%arg0: !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>) {
+    %view = ttng.tmem_subslice %arg0 {offset = 0 : i32} : !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_subslice_pipeline_stage_chain
+  tt.func @tmem_subslice_pipeline_stage_chain(%arg0: !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %index: i32) {
+    %stages = ttng.tmem_subslice %arg0 {offset = 2 : i32, dim = 0 : i32} : !ttg.memdesc<5x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    %indexed = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %result = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %last = ttng.tmem_subslice %stages {offset = 1 : i32, dim = 0 : i32} : !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128> -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable, 5x128x128>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0, 0, 0, 0\]\]}}}>
+#shared_rank_5 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0, 0, 0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @nvmma_rank_inference(%arg0 : !ttg.memdesc<1x1x1x1x32xf16, #shared_rank_5, #smem>) {
     tt.return
   }
 }
@@ -304,5 +524,18 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
     ttg.local_store %arg0, %alloc : tensor<4x4xf32, #blocked> -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
     %loaded = ttg.local_load %alloc : !ttg.memdesc<4x4xf32, #shared, #smem, mutable> -> tensor<4x4xf32, #blocked>
     tt.return %loaded : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+#mma_assert = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [[0, 1], [2, 0]], warp = [[2, 2], [1, 0]]}, instrShape = [16, 16, 32]}>
+
+module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @assert_generic_wmma_slice_layout
+  tt.func @assert_generic_wmma_slice_layout(%cond: tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>) {
+    // CHECK: tt.assert
+    tt.assert %cond, "assert generic wmma slice layout" : tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>
+    tt.return
   }
 }

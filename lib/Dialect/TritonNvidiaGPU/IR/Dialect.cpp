@@ -24,19 +24,28 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+
+#include <cmath>
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.cpp.inc"
 
@@ -48,34 +57,96 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-static constexpr int numTmemRows = 128;
+LogicalResult
+CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                        triton::CacheModifier cacheModifier,
+                        CacheEvictionPriority l1, CacheEvictionPriority primary,
+                        CacheEvictionPriority secondary, FloatAttr fraction,
+                        IntegerAttr prefetchSize) {
+  using Priority = CacheEvictionPriority;
+  if (cacheModifier != triton::CacheModifier::NONE && l1 != Priority::NONE)
+    return emitError()
+           << "cache modifier cannot be combined with an L1 eviction priority";
+
+  if (primary == Priority::NO_ALLOCATE)
+    return emitError() << "invalid L2 primary eviction priority '"
+                       << stringifyCacheEvictionPriority(primary) << "'";
+
+  if (primary != Priority::NONE) {
+    if (secondary == Priority::NONE || !fraction)
+      return emitError() << "L2 policy requires l2_secondary and l2_fraction";
+    if (secondary != Priority::EVICT_FIRST &&
+        secondary != Priority::EVICT_UNCHANGED)
+      return emitError() << "invalid L2 secondary eviction priority '"
+                         << stringifyCacheEvictionPriority(secondary) << "'";
+    double value = fraction.getValueAsDouble();
+    if (!fraction.getType().isF32() || !std::isfinite(value) || value <= 0.0 ||
+        value > 1.0)
+      return emitError() << "L2 fraction must be a finite f32 in (0, 1]";
+  } else if (secondary != Priority::NONE || fraction) {
+    return emitError() << "l2_secondary and l2_fraction require l2_primary";
+  }
+
+  if (prefetchSize) {
+    int64_t size = prefetchSize.getInt();
+    if (!prefetchSize.getType().isInteger(32) ||
+        (size != 64 && size != 128 && size != 256))
+      return emitError() << "L2 prefetch size must be 64, 128, or 256";
+  }
+  return success();
+}
+
+namespace {
+
+FailureOr<gpu::CGAEncodingAttr> parseCGALayoutRankTwo(AsmParser &parser) {
+  Attribute attr;
+  if (parser.parseAttribute(attr).failed())
+    return failure();
+  if (auto cgaAttr = gpu::parseCGAAttr(parser, attr, /*rank=*/2))
+    return *cgaAttr;
+  return failure();
+}
+
+void printCGALayoutRankTwo(AsmPrinter &printer, gpu::CGAEncodingAttr cgaAttr) {
+  gpu::printCGAAttr(printer, cgaAttr);
+}
+
+} // namespace
+
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType) {
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+  auto targetAttr = mod->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  bool isRubin = targetAttr && targetAttr.getValue() == "cuda:107";
+  // Rubin NVFP4 uses different orders for A and B:
+  // A scales must advance along K before the next M tile, while B scales keep
+  // the default order that advances along N before the next K tile.
+  bool isRubinNVFP4xNVFP4 = isRubin && aType == ScaleDotElemType::E2M1 &&
+                            bType == ScaleDotElemType::E2M1 &&
+                            isa<Float8E4M3FNType>(aScaleElemType) &&
+                            isa<Float8E4M3FNType>(bScaleElemType);
+  return (isRubinNVFP4xNVFP4 && isA)
+             ? TensorMemoryScalesBlockRepOrder::K_THEN_MN
+             : TensorMemoryScalesBlockRepOrder::MN_THEN_K;
+}
 
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto *ctx = memDescType.getContext();
   auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kRow = S("row");
   auto kCol = S("col");
-  // Remove multibuffering if present
-  auto shape = memDescType.getShape().take_back(2);
-  auto ll = toLinearLayout(shape, memDescType.getEncoding());
+  // Remove multibuffering if present and preserve any tensor-memory subview.
+  auto ll = toLinearLayout(memDescType);
   auto bitwidth = memDescType.getElementTypeBitWidth();
   int nRow = ll.getInDimSize(kRow);
-  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  int nCol = llvm::divideCeil(ll.getInDimSize(kCol) * bitwidth, 32);
   // If we have just one 16xcol block per warp, we don't allocate 128 rows
   // we use 64 rows instead.
   // We could generalise this to when we have more zeros in the layout, but
   // the allocator does not support this yet
   if (ll.getBasis(kRow, llvm::Log2_32(16)) == ArrayRef{0, 0}) {
     nRow /= 2;
-  }
-
-  // Hack: We should represent this in the LL. Remove the block dimension
-  if (auto tmemEnc =
-          dyn_cast<TensorMemoryEncodingAttr>(memDescType.getEncoding())) {
-    nCol /= tmemEnc.getCTASplitM() * tmemEnc.getCTASplitN();
-  } else if (auto tmemScaleEnc = dyn_cast<TensorMemoryScalesEncodingAttr>(
-                 memDescType.getEncoding())) {
-    nCol /= tmemScaleEnc.getCTASplitM() * tmemScaleEnc.getCTASplitN();
   }
   // If multibuffering is present, we need to allocate more cols
   if (memDescType.getRank() > 2) {
@@ -85,101 +156,293 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-DistributedEncodingTrait getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
-                                                      RankedTensorType oldType,
-                                                      unsigned numWarps) {
-  assert(numWarps == 4 || numWarps == 8);
-  auto shape = getShapePerCTA(oldType);
-  assert(shape.size() == 2);
-  SmallVector<unsigned> sizePerThread;
-  SmallVector<unsigned> threadsPerWarp;
-  SmallVector<unsigned> warpsPerCTA;
-  SmallVector<unsigned> order;
-  SmallVector<unsigned> blocksPerTile = {(unsigned)shape[0] / M,
-                                         (unsigned)shape[1] / N};
-  int numBlocks = blocksPerTile[0] * blocksPerTile[1];
-  if (M == 64) {
-    unsigned numWarpGroups = numWarps / 4;
-    if (numBlocks == 1) {
-      // Split along the N dimension
-      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups * 2)};
-      threadsPerWarp = {16, 2};
-      warpsPerCTA = {4, numWarpGroups};
-    } else {
-      sizePerThread = {1, ceil<unsigned>(N, 2)};
-      threadsPerWarp = {16, 2};
-      warpsPerCTA = {0, 0};
-      // Distribute at most as many warp groups as there is blocks
-      // along M dimension.
-      warpsPerCTA[0] = 4 * std::min(blocksPerTile[0], numWarpGroups);
-      // Distribute rest of the warp groups along N dimension.
-      warpsPerCTA[1] = ceil<int>(numWarpGroups, warpsPerCTA[0] / 4);
-    }
+uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t offset,
+                               int32_t dim) {
+  auto layoutShape =
+      dropPipeliningDim(memDescType.getAllocShape(), memDescType.getEncoding());
+  if (memDescType.getRank() == 3 && dim == 0) {
+    auto layout = toLinearLayout(layoutShape, memDescType.getEncoding());
+    auto colDim = StringAttr::get(memDescType.getContext(), "col");
+    return offset * llvm::divideCeil(layout.getInDimSize(colDim) *
+                                         memDescType.getElementTypeBitWidth(),
+                                     32);
+  }
+
+  dim -= memDescType.getRank() - layoutShape.size();
+  auto llInv = toLinearLayout(memDescType).pseudoinvert();
+  auto dimNames = llvm::to_vector(llInv.getInDimNames());
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  logicalOffsets.reserve(dimNames.size());
+  for (auto dim : dimNames)
+    logicalOffsets.push_back({dim, 0});
+  logicalOffsets[dim].second = offset;
+
+  auto rowCol = llInv.apply(logicalOffsets);
+  uint32_t bitwidth = memDescType.getElementTypeBitWidth();
+  uint32_t offsetRow = rowCol[0].second;
+  uint32_t offsetCol = rowCol[1].second * bitwidth / 32;
+  return offsetCol | offsetRow << 16;
+}
+
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp) {
+  auto str_attr = [&](StringRef str) { return StringAttr::get(ctx, str); };
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kRow = str_attr("row");
+  auto kCol = str_attr("col");
+  // Set the output order to be kRow, kCol and the input order to be kReg first
+  LinearLayout tile = LinearLayout({{kReg, {}}, {kLane, {}}}, {kRow, kCol});
+  // Each register moves 32/bitwidth (= 2) columns when unpacked
+  if (unpacked) {
+    tile *= LinearLayout::zeros1D(1, kReg, kCol, 2);
+  }
+  if (atom == TMemAccessAtom::I32x32b) {
+    tile *= LinearLayout::identity1D(32, kLane, kRow);
+  } else if (atom == TMemAccessAtom::I16x32bx2) {
+    tile *= LinearLayout::identity1D(16, kLane, kRow);
+  } else if (atom == TMemAccessAtom::I16x64b) {
+    LinearLayout::BasesT bases;
+    bases[kLane] = std::vector<std::vector<int32_t>>{
+        {8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}};
+    tile *= LinearLayout(std::move(bases), {kRow, kCol});
+  } else if (atom == TMemAccessAtom::I16x128b) {
+    tile *= LinearLayout::identity1D(4, kLane, kCol) *
+            LinearLayout::identity1D(8, kLane, kRow) *
+            LinearLayout::identity1D(2, kReg, kRow);
+  } else if (atom == TMemAccessAtom::I16x256b) {
+    tile *= LinearLayout::identity1D(2, kReg, kCol) *
+            LinearLayout::identity1D(4, kLane, kCol) *
+            LinearLayout::identity1D(8, kLane, kRow) *
+            LinearLayout::identity1D(2, kReg, kRow);
   } else {
-    unsigned numWarpGroups = numWarps / 4;
-    if (shape[0] > 128) {
-      // Split along M dimension
-      sizePerThread = {1, N};
-      threadsPerWarp = {32, 1};
-      warpsPerCTA = {4 * numWarpGroups, 1};
+    llvm_unreachable("Unsupported TMEM access atom");
+  }
+  if (withWarp) {
+    auto nCol = tile.getOutDimSize(kCol);
+    auto bases = tile.getBases();
+    bases[kWarp].push_back({32, 0});
+    bases[kWarp].push_back({64, 0});
+    tile = LinearLayout(std::move(bases), {{kRow, 128}, {kCol, nCol}}, false);
+  }
+  return tile;
+}
+
+static std::optional<LinearLayout>
+getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
+                                unsigned numWarps, int bitwidth) {
+  auto dims = to_vector(ll.getOutDimNames());
+  assert(dims.size() == 2);
+  auto rowColDims = to_vector(ll.getInDimNames());
+  auto *ctx = dims[0].getContext();
+  // This code is dual to the one in lowerTMemLdSt
+  if (bitwidth != 32) {
+    auto kReg = StringAttr::get(ctx, "register");
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(ll, rowColDims[1], dims[1], 32 / bitwidth);
+
+    // Pack contiguous elements
+    // This works to pack b8 or b16 into b32 but also b8 into b16 and recurse
+    if (bestContig > 1) {
+      auto ret = getDistributedLayoutForTmemLdSt(quot, atom, numWarps,
+                                                 bitwidth * bestContig);
+      if (!ret)
+        return ret;
+      auto castbbitwidth = LinearLayout::identity1D(bestContig, kReg, dims[1]);
+      return castbbitwidth * ret.value();
+    }
+    if (auto maybeQuot = divideLeft(
+            ll, LinearLayout::zeros1D(32 / bitwidth, rowColDims[1], dims[1]) *
+                    LinearLayout::identity1D(2, rowColDims[1], dims[1]));
+        bitwidth == 16 && maybeQuot) {
+      // Unpacked case
+      auto ret =
+          getDistributedLayoutForTmemLdSt(*maybeQuot, atom, numWarps, 32);
+      if (!ret)
+        return ret;
+      auto castbbitwidth = LinearLayout::identity1D(2, kReg, dims[1]);
+      return castbbitwidth * ret.value();
+    } else if (auto maybeQuot =
+                   divideLeft(ll, LinearLayout::zeros1D(
+                                      32 / bitwidth, rowColDims[1], dims[1]))) {
+      // Software padding
+      assert(maybeQuot);
+      return getDistributedLayoutForTmemLdSt(*maybeQuot, atom, numWarps, 32);
+    } else if (ll.getInDimSize(rowColDims[1]) == 1) {
+      // Software padding with just one column
+      return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, 32);
     } else {
-      // Split along N dimension
-      sizePerThread = {1, ceil<unsigned>(N, numWarpGroups)};
-      threadsPerWarp = {32, 1};
-      warpsPerCTA = {4, numWarpGroups};
+      // This can fail for fp4_padded layouts as we don't support implicit
+      // padding and unpadding upon load yet.
+      return std::nullopt;
     }
   }
-  order = {0, 1};
-  auto ctaLayout = getCTALayout(oldType.getEncoding());
-  return triton::gpu::BlockedEncodingAttr::get(ctaLayout.getContext(),
-                                               sizePerThread, threadsPerWarp,
-                                               warpsPerCTA, order, ctaLayout);
-}
+  // getTileLayout returns the layout for a bitwidth of 32
+  assert(bitwidth == 32);
+  auto tile = getTileLayout(ctx, atom, false, /*withWarp=*/false);
+  // Plan:
+  // tile: register, lane -> row, cols
+  // ll: row, cols -> dim0, dim1
+  // We extend the tile to have the right vectorisation + warps and
+  // the result is given by
+  // ll o tile : register, lane, warp -> dim0, dim1
 
-DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
-                                                 RankedTensorType oldType,
-                                                 unsigned numWarps) {
-  bool prefer16x256 =
-      triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");
-  if (prefer16x256) {
-    std::optional<LinearLayout> ll =
-        getTmemLoadStoreLayout16x256(M, N, oldType, numWarps);
-    if (ll) {
-      return LinearEncodingAttr::get(oldType.getContext(), *ll);
+  auto nColsTile = tile.getOutDimSize(rowColDims[1]);
+  auto nColsLL = ll.getInDimSize(rowColDims[1]);
+  auto nColsMissing = nColsLL / nColsTile;
+  if (nColsMissing == 0) {
+    return std::nullopt;
+  }
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+  bool instr32Rows = atom == TMemAccessAtom::I32x32b;
+  bool layout16Rows =
+      ll.getBasis(rowColDims[0], llvm::Log2_32(16)) == ArrayRef{0, 0};
+
+  // We are choosing the distributed layout (ll o tile). In the lowering
+  // we will do ll^{-1} o (ll o tile) and we expect to get tile back.
+  // For this to be possible, ll should accept a left-inverse, that is, it
+  // should be injective
+  // In less fancy words, we look for the `comp` layout not to have any zero
+  // basis as that would disallow the resulting layout to be left-divisible by
+  // the tile
+  auto trivialBlock = LinearLayout::identity1D(1, kBlock, kBlock);
+  auto comp = (tile * trivialBlock)
+                  .compose(ll)
+                  .sublayout({kReg, kLane}, to_vector(ll.getOutDimNames()));
+  if (instr32Rows) {
+    // We will use 16x32bx2 instruction for lane=16 so we remove the last lane
+    // basis
+    comp = comp.resizeInDim(kLane, comp.getInDimSize(kLane) / 2);
+  }
+  if (!comp.isInjective())
+    return std::nullopt;
+
+  // Fit the warp bases either tiling on the RHS or in row=16
+  StringAttr row16;
+  // If we need to fit something (the instruction does not cover it
+  // and the layout has 32 rows) we first try to fit a warp, and if we
+  // can't we fit a register
+  if (!instr32Rows && !layout16Rows) {
+    if (numWarps > 4) {
+      row16 = kWarp;
+    } else {
+      row16 = kReg;
     }
   }
-  return getTmemLoadStoreLayout32x32b(M, N, oldType, numWarps);
+
+  // We reserve enough columns to fit in the warps
+  int warpsToTile = numWarps / ((row16 == kWarp) ? 8 : 4);
+  // Cap warps to tile above by nColsMissing. The rest go to broadcasting
+  int warpBroadcast = warpsToTile / std::min(nColsMissing, warpsToTile);
+  warpsToTile /= warpBroadcast;
+  nColsMissing /= warpsToTile;
+
+  if (nColsMissing > 1) {
+    if (instr32Rows && layout16Rows) {
+      // If the lane 16 would load repeated data, instead we make it load half
+      // of the data via the 16x32bx2 instruction
+      tile = divideLeft(tile, LinearLayout::identity1D(2, kLane, rowColDims[0]))
+                 .value();
+      tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]) *
+              LinearLayout::identity1D(2, kLane, rowColDims[1]);
+
+    } else {
+      tile *= LinearLayout::identity1D(nColsMissing, kReg, rowColDims[1]);
+    }
+  }
+
+  // add the warp bases. The M=64 + 2CTA case has already been handled
+  auto bases = tile.getBases();
+  auto &warpBases = bases[kWarp];
+  warpBases.push_back({32, 0});
+  warpBases.push_back({64, 0});
+
+  if (row16) {
+    bases[row16].push_back({16, 0});
+  }
+  tile = LinearLayout(std::move(bases),
+                      {{rowColDims[0], 128},
+                       {rowColDims[1], tile.getOutDimSize(rowColDims[1])}},
+                      false);
+  tile *= LinearLayout::identity1D(warpsToTile, kWarp, rowColDims[1]);
+  tile *= LinearLayout::zeros1D(warpBroadcast, kWarp, rowColDims[1]);
+  // Add CTAs as a trivial map
+  auto nCTAs = ll.getInDimSize(kBlock);
+  tile *= LinearLayout::identity1D(nCTAs, kBlock, kBlock);
+  assert(tile.getOutDimSize(rowColDims[1]) == ll.getInDimSize(rowColDims[1]));
+
+  auto ret = tile.compose(ll);
+  return ret;
 }
 
-DistributedEncodingTrait
+std::optional<LinearLayout>
+getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
+                                unsigned numWarps) {
+  assert(memType.getMemorySpace() ==
+         TensorMemorySpaceAttr::get(memType.getContext()));
+  assert(numWarps >= 4 && llvm::isPowerOf2_32(numWarps) &&
+         "numWarps must be a power of 2 and >= 4");
+  assert(atom != TMemAccessAtom::I16x32bx2 &&
+         "This layout is inferred sometimes for the 32x32b atom");
+  auto ll = toLinearLayout(memType);
+  auto bitwidth = memType.getElementTypeBitWidth();
+  return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, bitwidth);
+}
+
+DistributedEncodingTrait getDefaultLayoutForTmemLdSt(gpu::MemDescType memType,
+                                                     unsigned numWarps) {
+  auto *ctx = memType.getContext();
+  auto layout = getDistributedLayoutForTmemLdSt(
+      memType, TMemAccessAtom::I32x32b, numWarps);
+  assert(layout);
+  return LinearEncodingAttr::get(ctx, std::move(*layout));
+}
+
+std::optional<DistributedEncodingTrait>
 getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
                             int numWarps) {
-  auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      memType.getEncoding());
-  if (!tmemEnc || tmemEnc.getBlockM() != 128)
-    return {};
-  int M = tmemEnc.getBlockM();
-  int N = tmemEnc.getBlockN();
-  auto llEncoding = dyn_cast<LinearEncodingAttr>(tensorType.getEncoding());
-  if (!llEncoding)
-    return {};
-  auto CTALayout = getCTALayout(tensorType.getEncoding());
-  auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   if (numWarps != 8)
-    return {};
-  LinearLayout llLayout =
-      gpu::getTmemLoadLayoutSplitLongM(M, N, tensorType, numWarps);
-  return LinearEncodingAttr::get(tensorType.getContext(), llLayout);
-}
+    return std::nullopt;
 
-bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
-                                            MemDescType memType, int numWarps) {
-  auto layout = getTmemLoadLayoutSplitLongM(tensorType, memType, numWarps);
+  std::optional<LinearLayout> layout = getDistributedLayoutForTmemLdSt(
+      memType, TMemAccessAtom::I32x32b, numWarps);
   if (!layout)
-    return false;
-  return areLayoutsEquivalent(
-      tensorType.getShape(), cast<LayoutEncodingTrait>(layout),
-      cast<LayoutEncodingTrait>(tensorType.getEncoding()));
+    return std::nullopt;
+  auto ret = std::move(*layout);
+
+  // Optimisation for reductions:
+  // We can map lane=16 to any dimension, and it will be lowered to 32x16bx2.
+  // As such, if we have 8 warps and the basis warp=4 is mapped to a different
+  // dimension than warp=1, warp=2, and lane=16 is mapped to the same dimension
+  // as the first two warp bases, we can swap warp=4 and lane=16.
+  // Generally, we don't want warp=4 to have data on a different dimension to
+  // dim=1 and dim=2
+  auto *ctx = tensorType.getContext();
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto dims = to_vector(ret.getOutDimNames());
+
+  // In most cases this is going to be dim=0, but the optimization
+  // also applies for scales where we may be able to have the layout
+  // replicated across warps
+  for (int dim : {0, 1}) {
+    auto w1dim = ret.getBasis(kWarp, 0, dims[dim]) == 0;
+    auto w2dim = ret.getBasis(kWarp, 1, dims[dim]) == 0;
+    auto w4dim = ret.getBasis(kWarp, 2, dims[dim]) == 0;
+    auto l16dim = ret.getBasis(kLane, 4, dims[dim]) == 0;
+    if (l16dim != w4dim && w1dim == w2dim && w1dim == l16dim) {
+      auto bases = ret.getBases();
+      std::swap(bases[kWarp][2], bases[kLane][4]);
+      return LinearEncodingAttr::get(
+          tensorType.getContext(),
+          LinearLayout(std::move(bases), ret.getOutDims(), ret.isSurjective()));
+    }
+  }
+  return std::nullopt;
 }
 
 SmallVector<DistributedEncodingTrait>
@@ -187,36 +450,20 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
                          MemDescType memType) {
   int numWarps = lookupNumWarps(op);
   assert(numWarps % 4 == 0);
-
-  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-          memType.getEncoding())) {
-    return {triton::gpu::LinearEncodingAttr::get(
-        tensorType.getContext(),
-        getScaleTMEMStoreLinearLayout(tensorType, numWarps))};
-  }
-
   SmallVector<DistributedEncodingTrait> layouts;
-  auto attr =
-      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(memType.getEncoding());
-  int blockM = attr.getBlockM();
-  int blockN = attr.getBlockN();
-
-  if (DistributedEncodingTrait splitMLayout =
-          getTmemLoadLayoutSplitLongM(tensorType, memType, numWarps))
-    layouts.push_back(splitMLayout);
-
-  if (auto ll16x256 =
-          getTmemLoadStoreLayout16x256(blockM, blockN, tensorType, numWarps)) {
-    layouts.push_back(
-        LinearEncodingAttr::get(tensorType.getContext(), ll16x256.value()));
+  for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
+                    TMemAccessAtom::I16x128b, TMemAccessAtom::I16x64b}) {
+    auto ll = getDistributedLayoutForTmemLdSt(memType, atom, numWarps);
+    if (ll) {
+      layouts.push_back(LinearEncodingAttr::get(tensorType.getContext(),
+                                                std::move(ll.value())));
+    }
   }
-
-  layouts.push_back(nvidia_gpu::getTmemLoadStoreLayout32x32b(
-      blockM, blockN, tensorType, numWarps));
-
-  // TODO: Add support for more layout compatible with tmem load/store. There
-  // will only be a discret set of layout possible due to the limiations of
-  // tmem_load/store.
+  // Small hack until we generalise isDistributedLayoutTMemCompatible
+  auto ll = getTmemLoadLayoutSplitLongM(tensorType, memType, numWarps);
+  if (ll) {
+    layouts.push_back(ll.value());
+  }
   return layouts;
 }
 
@@ -224,22 +471,26 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType) {
-  SmallVector<DistributedEncodingTrait> layouts =
-      getTmemCompatibleLayouts(op, tensorType, memType);
-  auto enc = cast<LayoutEncodingTrait>(tensorType.getEncoding());
-  return llvm::any_of(layouts, [&](DistributedEncodingTrait layout) {
-    return areLayoutsEquivalent(tensorType.getShape(),
-                                cast<LayoutEncodingTrait>(layout), enc);
-  });
+  auto maxnreg = getContextualMaxNReg(op);
+  return succeeded(computeTMemLdStEncodingInfo(tensorType, memType, maxnreg));
 }
 
-LogicalResult
-TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                                 unsigned blockM, unsigned blockN,
-                                 unsigned colStride, unsigned CTASplitM,
-                                 unsigned CTASplitN) {
-  if (CTASplitM < 1 || CTASplitN < 1) {
-    return emitError() << "CTASplitM and CTASplitN must be greater than 0";
+LogicalResult TensorMemoryEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
+    unsigned blockN, unsigned colStride, gpu::CGAEncodingAttr cgaLayout,
+    bool twoCTAs, bool fp4Padded) {
+  if (cgaLayout.getRank() != 2) {
+    return emitError() << "CGALayout must have rank 2";
+  }
+  if (twoCTAs) {
+    auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
+    auto cgaLL = cgaLayout.getLinearLayout();
+    if (cgaLL.getInDimSizeLog2(kBlock) == 0 ||
+        cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
+      return emitError()
+             << "twoCTAs layout requires the first CGALayout block basis to "
+                "be [1, 0]";
+    }
   }
   if (blockM != 64 && blockM != 128) {
     return emitError() << "blockM must be 64 or 128 but got " << blockM;
@@ -247,27 +498,200 @@ TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (!(colStride >= 1 && llvm::isPowerOf2_32(colStride))) {
-    return emitError()
-           << "colStride must be a power of two greater than or equal to 1 "
-           << "but got " << colStride;
+  if (blockN > 512) {
+    return emitError() << "blockN must be less than or equal to 512 but got "
+                       << blockN;
+  }
+  if (!(colStride == 1 || colStride == 2 || colStride == 4)) {
+    return emitError() << "colStride must be 1, 2, or 4 but got "
+                       << "but got " << colStride;
+  }
+  if (fp4Padded && colStride != 1) {
+    return emitError() << "fp4Padded tensor memory layout requires colStride "
+                          "1 but got "
+                       << colStride;
   }
   return success();
 }
 
+LogicalResult TensorMemoryScalesEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    gpu::CGAEncodingAttr cgaLayout, TensorMemoryScalesBlockRepOrder) {
+  if (cgaLayout.getRank() != 2) {
+    return emitError() << "CGALayout must have rank 2";
+  }
+  return success();
+}
+
+unsigned getMMAv5InstructionN(MemDescType type) {
+  auto encoding = cast<TensorMemoryEncodingAttr>(type.getEncoding());
+  unsigned n = encoding.getBlockN();
+  if (type.getShape().back() < type.getAllocShape().back())
+    n = std::min<unsigned>(n, getShapePerCTA(type).back());
+  return n;
+}
+
 LogicalResult impl::verifyMMAv5Op(Operation *op) {
+  auto itf = cast<MMAv5OpInterface>(op);
+  auto aType = itf.getA().getType();
+  auto bType = itf.getB().getType();
+  auto dType = itf.getAccumulator().getType();
+  auto barriers = itf.getCompletionBarriers();
+  if (!itf.isAsync() && !barriers.empty())
+    return op->emitOpError("The op is synchronous but a barrier is present.");
+  auto encoding = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());
+  if (!encoding || aType.getRank() != 2 || bType.getRank() != 2 ||
+      dType.getRank() != 2 ||
+      !isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           SwizzledSharedEncodingAttr>(bType.getEncoding()) ||
+      cast<LayoutEncodingTrait>(aType.getEncoding()).getRank() != 2 ||
+      cast<LayoutEncodingTrait>(bType.getEncoding()).getRank() != 2 ||
+      (!bType.getElementType().isIntOrFloat() &&
+       !isa<PackedFloat4E2M1Type>(bType.getElementType())))
+    return op->emitOpError("expected rank-2 MMA operands, a shared-memory RHS, "
+                           "and a tensor-memory accumulator");
+  if (encoding.getFp4Padded())
+    return op->emitOpError("accumulator layout must not be fp4_padded");
+
+  if (aType.getElementType().isF32()) {
+    auto aAttrs = isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
+                      aType.getEncoding())
+                      ? getNvmmaSmemAttrs(aType)
+                      : std::nullopt;
+    auto bAttrs = getNvmmaSmemAttrs(bType);
+    if ((aAttrs && aAttrs->transposed) || (bAttrs && !bAttrs->transposed))
+      return op->emitOpError(
+          "transposed float32 shared-memory operands require "
+          "unsupported 32-byte swizzle atomicity");
+  }
+
   auto isInterleaved = [](MemDescType memdesc) {
     auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
-    return enc && getTmemAllocSizes(memdesc).numRows != 64 &&
-           enc.getBlockM() == 64;
+    return enc && enc.getBlockM() == 64 &&
+           getTmemAllocSizes(memdesc).numRows != 64;
   };
 
-  auto itf = cast<MMAv5OpInterface>(op);
-  if (isInterleaved(itf.getA().getType()) &&
-      isInterleaved(itf.getAccumulator().getType())) {
+  if (isInterleaved(aType) && isInterleaved(dType)) {
     return op->emitOpError(
         "does not support blockM=64 with interleaved blocks in TMEM layout");
   }
+  if (encoding.getTwoCTAs() != itf.getTwoCtas())
+    return op->emitOpError("accumulator layout must match the MMA CTA group");
+
+  auto *ctx = op->getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  unsigned ctaGroupSize = itf.getTwoCtas() ? 2 : 1;
+  unsigned n = getMMAv5InstructionN(dType);
+  if (n < 8 * ctaGroupSize || n > 256)
+    return op->emitOpError("MMA instruction N must be between ")
+           << 8 * ctaGroupSize << " and 256; got " << n;
+
+  int64_t nPerCTA = getShapePerCTA(dType)[1];
+  auto scaled = dyn_cast<TCGen5MMAScaledOp>(op);
+  bool bIsFp4 = scaled && scaled.getBType() == ScaleDotElemType::E2M1;
+  if (itf.getTwoCtas()) {
+    // [Note: numRepN > 1 and two_ctas]
+    // Consider, just as an example, num_ctas=16, and a huge tile of shape
+    // MNK = 512x64x2048
+    // This is an example of layout with numRepN=2 and two_ctas=true:
+    // Layout RHS:
+    // #ttg.memdesc<64x2048xf16,
+    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
+    //                      elementBitWidth = 16,
+    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
+    //
+    // As a LinearLayout:
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
+    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
+    //
+    // The issue is that the data from the CTA1 should be next to that of the
+    // first part of the instruction. Now, the max instruction size is 128x256,
+    // so the layout we should use is
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
+    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
+    // (note how we swapped the bases [0, 256] and [0, 128])
+    // The issue with this layout is that it breaks the invariant that the
+    // CGALayout splits the CGA tile into contiguous CTA tiles,
+    // i.e. total_layout = cta_layout * cga_layout.
+    // This is used all over the place, to the point that for all legacy layouts
+    // we represent the CGALayout as the `cga_layout` we have to multiply on the
+    // right.
+    // We could allow with a bit of effort SharedLinearLayouts that did not
+    // divide on the right by a CGALayout, but for now we throw a lovely error.
+    if (nPerCTA > n)
+      return op->emitOpError(
+          "two-CTA MMA requires a single instruction along N");
+    auto bLayout = toLinearLayout(bType);
+    auto block = StringAttr::get(ctx, "block");
+    if (bLayout.getInDimSize(block) < 2)
+      return op->emitOpError("B layout must contain a CTA pair");
+    unsigned bCtaOffset = bLayout.getBasis(block, 0, dims[1]);
+    if (bIsFp4) {
+      auto attrs = getNvmmaSmemAttrs(bType);
+      if (!attrs)
+        return op->emitOpError(
+            "B shared-memory layout is not compatible with MMA");
+      if (!attrs->transposed)
+        bCtaOffset *= 2;
+    }
+    unsigned expectedN = n / 2 < nPerCTA ? n / 2 : 0;
+    if (bCtaOffset != expectedN)
+      return op->emitOpError("B CTA layout does not match MMA instruction N = ")
+             << n;
+  }
+
+  if (nPerCTA < n) {
+    auto bLayout = toLinearLayout(bType).pseudoinvert();
+    for (auto [dim, size] : llvm::zip_equal(dims, bType.getShape()))
+      bLayout = bLayout.resizeInDim(dim, size);
+    auto attrsAndCore =
+        getNvmmaSmemAttrs(bLayout, bType.getElementTypeBitWidth());
+    if (!attrsAndCore)
+      return op->emitOpError(
+          "B shared-memory layout is not compatible with MMA");
+    const auto &[attrs, coreLayout] = *attrsAndCore;
+    unsigned requiredN = n / ctaGroupSize;
+    if (bIsFp4 && !attrs.transposed)
+      requiredN /= 2;
+    if (requiredN > bType.getDimSize(1) &&
+        bType.getDimSize(1) != bType.getAllocShape().back())
+      return op->emitOpError(
+          "cannot expand the N dimension of a shared-memory subview");
+    if (bType.getShape() !=
+            dropPipeliningDim(bType.getAllocShape(), bType.getEncoding()) &&
+        !getReps(bLayout, coreLayout))
+      return op->emitOpError(
+          "overlapping MMA core matrices require a complete allocation");
+    if (requiredN > std::max(bLayout.getInDimSize(dims[1]),
+                             coreLayout.getInDimSize(dims[1])) &&
+        (attrs.swizzlingByteWidth != 0 ||
+         bLayout.getInDimSize(dims[1]) > coreLayout.getInDimSize(dims[1])))
+      return op->emitOpError(
+                 "B shared-memory layout does not support MMA instruction N = ")
+             << n;
+  }
+
+  // Complete allocations already have the declared instruction layout.
+  auto allocShape = dropPipeliningDim(dType.getAllocShape(), encoding);
+  if (dType.getShape() == allocShape)
+    return success();
+
+  auto instrEncoding = TensorMemoryEncodingAttr::get(
+      ctx, encoding.getBlockM(), n, encoding.getColStride(),
+      encoding.getCGALayout(), encoding.getTwoCTAs());
+  SmallVector<int64_t> instrShape = {encoding.getBlockM(), n};
+  auto expected = ensureLayoutNotLargerThan(
+      toLinearLayout(dType.getShape(), instrEncoding), dims, instrShape);
+  auto actual = ensureLayoutNotLargerThan(toLinearLayout(allocShape, encoding),
+                                          dims, instrShape);
+  auto col = StringAttr::get(ctx, "col");
+  if (expected.getInDimSize(col) > actual.getInDimSize(col) ||
+      expected.resizeInDim(col, actual.getInDimSize(col)) != actual)
+    return op->emitOpError(
+               "accumulator layout does not match MMA instruction N = ")
+           << n;
   return success();
 }
 
@@ -279,12 +703,130 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 // Attribute methods
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// Type methods
+//===----------------------------------------------------------------------===//
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Printer/Parser
+//===----------------------------------------------------------------------===//
+// Format: !ttng.tensordesc_im2col<64x128xf16>
+//         !ttng.tensordesc_im2col<64x128xf16, #shared>
+Type TensorDescIm2ColType::parse(AsmParser &parser) {
+  if (failed(parser.parseLess()))
+    return Type();
+
+  SmallVector<int64_t> shape;
+  if (failed(parser.parseDimensionList(shape, /*allowDynamic=*/false)))
+    return Type();
+
+  Type elementType;
+  if (failed(parser.parseType(elementType)))
+    return Type();
+
+  Attribute sharedLayout;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseAttribute(sharedLayout)))
+      return Type();
+  }
+
+  if (failed(parser.parseGreater()))
+    return Type();
+
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
+  return TensorDescIm2ColType::getChecked(loc, parser.getContext(), shape,
+                                          elementType, sharedLayout);
+}
+
+void TensorDescIm2ColType::print(AsmPrinter &printer) const {
+  printer << "<";
+  for (auto dim : getShape())
+    printer << dim << "x";
+  printer << getElementType();
+  if (getSharedLayout())
+    printer << ", " << getSharedLayout();
+  printer << ">";
+}
+
+//===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Verifier
+//===----------------------------------------------------------------------===//
+LogicalResult
+TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
+                             ArrayRef<int64_t> shape, Type elementType,
+                             Attribute sharedLayout) {
+  if (shape.size() != 2) {
+    return emitError()
+           << "TensorDescIm2ColType requires rank-2 shape, got rank "
+           << shape.size();
+  }
+  return success();
+}
+
+namespace {
+//===----------------------------------------------------------------------===//
+// Cache Policy Interface
+//===----------------------------------------------------------------------===//
+class TritonNvidiaGPUCachePolicyInterface
+    : public triton::DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, triton::CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported NVIDIA cache policy attribute "
+                         << cachePolicy;
+    return triton::verifyCacheModifier(policy.getCacheModifier(), operation,
+                                       emitError);
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Verify Tensor/MemDesc Layout Interface
+//===----------------------------------------------------------------------===//
+class TritonNvidiaGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+public:
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    Dialect *dialect =
+        op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
+    auto *verifyLayoutInterface =
+        dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
+    if (!verifyLayoutInterface)
+      return makeErr() << "Could not access TritonGPU layout verifier.";
+    return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
+                                                     makeErr);
+  }
+
+  LogicalResult verifyMemDescLayout(
+      Attribute layout, Type type, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    Dialect *dialect =
+        op->getContext()->getOrLoadDialect<triton::gpu::TritonGPUDialect>();
+    auto *verifyLayoutInterface =
+        dyn_cast<triton::DialectVerifyTensorLayoutInterface>(dialect);
+    if (!verifyLayoutInterface)
+      return makeErr() << "Could not access TritonGPU layout verifier.";
+    return verifyLayoutInterface->verifyMemDescLayout(layout, type, op,
+                                                      makeErr);
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // ASM Interface (i.e.: alias)
 //===----------------------------------------------------------------------===//
-namespace {
 class TritonGPUOpAsmInterface : public OpAsmDialectInterface {
 public:
   using OpAsmDialectInterface::OpAsmDialectInterface;
@@ -301,6 +843,53 @@ public:
     return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
+
+struct DivFByConstant : public OpRewritePattern<arith::DivFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::DivFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<Float32Type, RankedTensorType>(op.getType()) ||
+        !getElementTypeOrSelf(op.getType()).isF32())
+      return failure();
+
+    auto targetInfo =
+        triton::TargetInfoBase::fromModuleOp(op->getParentOfType<ModuleOp>());
+    if (!targetInfo || !targetInfo->isCuda())
+      return failure();
+
+    // This range keeps both the denominator and its reciprocal normal.
+    auto inRange = [](APFloat value) {
+      value.clearSign();
+      return value >= APFloat(0x1p-126f) && value <= APFloat(0x1p126f);
+    };
+    APFloat denominator(0.0f);
+    DenseFPElementsAttr denominators;
+    Value divisor = op.getRhs();
+    if (matchPattern(op.getRhs(), m_ConstantFloat(&denominator))) {
+      if (!inRange(denominator))
+        return failure();
+      if (isa<RankedTensorType>(op.getType()))
+        divisor = arith::ConstantOp::create(
+            rewriter, op.getLoc(),
+            rewriter.getFloatAttr(rewriter.getF32Type(), denominator));
+    } else if (!matchPattern(op.getRhs(), m_Constant(&denominators)) ||
+               !llvm::all_of(denominators.getValues<APFloat>(), inRange)) {
+      return failure();
+    }
+
+    auto one = arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getOneAttr(divisor.getType()));
+    Value reciprocal = triton::ApproxDivFOp::create(
+        rewriter, op.getLoc(), divisor.getType(), one, divisor);
+    if (reciprocal.getType() != op.getType())
+      reciprocal = triton::SplatOp::create(rewriter, op.getLoc(), op.getType(),
+                                           reciprocal);
+    rewriter.replaceOpWithNewOp<arith::MulFOp>(op, op.getLhs(), reciprocal);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -314,8 +903,19 @@ void TritonNvidiaGPUDialect::initialize() {
 #define GET_OP_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
       >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
+      >();
+  addInterfaces<TritonNvidiaGPUCachePolicyInterface>();
+  addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();
+}
+
+void TritonNvidiaGPUDialect::getCanonicalizationPatterns(
+    RewritePatternSet &patterns) const {
+  patterns.add<DivFByConstant>(getContext());
 }
 
 // verify TritonNvidiaGPU ops

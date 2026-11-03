@@ -1,6 +1,8 @@
 #ifndef TRITON_IR_UTILITY_H_
 #define TRITON_IR_UTILITY_H_
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
@@ -9,6 +11,16 @@ namespace mlir {
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
+
+// Returns the bit width of a type, treating pointer-like types as 64-bit.
+// This handles LLVM dialect pointer types.
+inline int getIntOrFloatOrPtrBitWidth(Type type) {
+  if (isa<LLVM::LLVMPointerType, triton::PointerType>(type))
+    return kPtrBitWidth;
+  if (isa<triton::PackedFloat4E2M1Type>(type))
+    return 8;
+  return type.getIntOrFloatBitWidth();
+}
 
 template <typename T, typename U> SmallVector<T> convertType(ArrayRef<U> in) {
   SmallVector<T> out;
@@ -183,13 +195,19 @@ Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 // Get the value of the induction variable at the end of the loop.
 Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 
-MakeTensorPtrOp getMakeTensorPtrOp(Value v);
-
 bool isHostSideDescriptor(Value v);
 
 bool isKernel(FunctionOpInterface funcOp);
 
 unsigned getBitwidth(RankedTensorType ty);
+
+// If the value "anchor" is compared against a statically-computed bound, return
+// inclusive lower and upper bounds lb <= anchor <= ub. Depending on the
+// comparison operator, one of the bounds is a computed one while the other is
+// derived from the data type of anchor.
+std::optional<ConstantIntRanges> getBoundFromCmpOp(arith::CmpIOp cmpOp,
+                                                   Value anchor);
+
 } // namespace triton
 } // namespace mlir
 

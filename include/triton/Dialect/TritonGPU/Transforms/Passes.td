@@ -3,6 +3,13 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonGPUOptimizeThreadRegions : Pass<"tritongpu-optimize-thread-regions", "mlir::ModuleOp"> {
+  let summary = "Execute scalar protocols and their consumers on their owning threads";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect", "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
@@ -61,7 +68,7 @@ def TritonGPUHoistTMEMAlloc : Pass<"tritongpu-hoist-tmem-alloc", "mlir::ModuleOp
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
   let options = [
-    Option<"hoistOutOfIf", "hoist-out-of-if",
+    Option<"postPipeline", "post-pipeline",
            "bool", /*default*/"false",
            "Hoist TMEM allocations out of if statements">
   ];
@@ -121,22 +128,22 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
   ];
 }
 
-def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
-  let summary = "test pass for rewriting partition dependencies";
+def TritonGPUNormalizeWSWhileLoops : Pass<"tritongpu-normalize-ws-while-loops", "mlir::ModuleOp"> {
+  let summary = "normalize while loops used by warp specialization";
 
   let description = [{
-    The `tritongpu-rewrite-partition-dependencies` pass analyzes the partitions
-    assigned to a loop and their SSA dependencies. It rewrites the dependencies
-    to be passed through shared memory, applying multi-buffering according to
-    the assigned stages of the partitions.
+    For CLC `scf.while` operations, promotes `tt.warp_specialize` from one or
+    more direct sibling `scf.for` operations to the enclosing loop. Then
+    normalizes every `scf.while` nested in a warp-specialized loop to use
+    matching state and result signatures.
   }];
 
   let dependentDialects = [
+    "mlir::triton::TritonDialect",
     "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::arith::ArithDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-    "mlir::triton::nvws::NVWSDialect"
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect"
   ];
 }
 
@@ -177,15 +184,22 @@ def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir:
 }
 
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
-  let summary = "3xTF32 trick";
+  let summary = "Emulate dot-product tensor core precision using TF32s or BF16s";
 
   let description = [{
-    Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
-    to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385
+      Generic pass to emulate/decompose f32 `DotOp` instructions.
+    * Decompose fp32 `DotOp` instructions into 4 pointwise ops and 3 fp16 `DotOp`s
+      to allow using TensorCores. See https://github.com/NVIDIA/cutlass/discussions/385.
+    * Decompose fp32 `DotOp` instructions into BF16 operations.
+      See https://arxiv.org/abs/1904.06376
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+  let options = [
+    Option<"emuTF32", "emu-tf32",
+           "bool", /*default*/"false",
+           "whether to handle InputPrecision TF32xN for Nvidia GPUs">
+  ];
 }
 
 def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
@@ -222,7 +236,8 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
+                           "mlir::triton::TritonDialect",
+                           "mlir::math::MathDialect"];
 }
 
 def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir::ModuleOp"> {
@@ -240,7 +255,7 @@ def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir
   let options = [
     Option<"hoistLayoutConversion", "hoist-layout-conversion",
            "bool", /*default*/"true",
-           "whether to move conver to dot operand earlier pass elementwise ops">
+           "whether to move convert to dot operand earlier pass elementwise ops">
   ];
 }
 
@@ -248,8 +263,8 @@ def TritonGPUCoalesce: Pass<"tritongpu-coalesce", "mlir::ModuleOp"> {
   let summary = "coalesce";
 
   let description = [{
-    The pass analyses loads/stores with type `tensor<tt.ptr<>>` or
-    `tt.ptr<tensor<>>` and replaces the layouts of these operations with
+    The pass analyses loads/stores with type `tensor<tt.ptr<>>` and replaces
+    the layouts of these operations with
     coalesced layouts, i.e. cache friendly access patterns.
     Layout conversions are inserted before and after the load/store op
     to maintain consistency with the rest of the program.
@@ -273,6 +288,12 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
 
+  let options = [
+    Option<"disableRematSplitting", "disable-remat-splitting",
+           "bool", /*default*/"false",
+           "prevent rematerialization from splitting or duplicating "
+           "convert-layout work">
+  ];
 }
 
 def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality", "mlir::ModuleOp"> {

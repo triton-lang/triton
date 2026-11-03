@@ -9,30 +9,19 @@
 
 using namespace mlir::triton::gpu;
 
-namespace mlir::triton::gpu {
-
-Type getElementType(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<RankedTensorType>(type))
-    return tensorType.getElementType();
-  return type;
-}
-
-int getNumElementsPerThreads(Type type,
-                             const LLVMTypeConverter *typeConverter) {
-  int numElemsPerThread = 1;
-  if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
-    auto structType =
-        dyn_cast<LLVM::LLVMStructType>(typeConverter->convertType(type));
-    if (structType)
-      numElemsPerThread = structType.getBody().size();
-  }
-  return numElemsPerThread;
-}
-
-} // namespace mlir::triton::gpu
-
 namespace {
+
+struct AnnotateOpConversion : public ConvertOpToLLVMPattern<AnnotateOp> {
+  using ConvertOpToLLVMPattern<AnnotateOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(AnnotateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -45,18 +34,19 @@ struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
     auto typeConverter = getTypeConverter();
     auto resultTensorTy = dyn_cast<RankedTensorType>(resultTy);
     if (resultTensorTy) {
-      unsigned elems = getTotalElemsPerThread(resultTy);
+      unsigned elems = getUniqueElemsPerThread(resultTy);
       Type elemTy = typeConverter->convertType(
           cast<PointerType>(resultTensorTy.getElementType()).getPointeeType());
       Type ptrTy = typeConverter->convertType(resultTensorTy.getElementType());
-      auto ptrs = unpackLLElements(loc, adaptor.getPtr(), rewriter);
-      auto offsets = unpackLLElements(loc, adaptor.getOffset(), rewriter);
+      auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+      auto offsets =
+          unpackUniqueTensorElements(loc, adaptor.getOffset(), rewriter);
       SmallVector<Value> resultVals(elems);
       for (unsigned i = 0; i < elems; ++i) {
         resultVals[i] = b.gep(ptrTy, elemTy, ptrs[i], offsets[i]);
       }
-      Value view =
-          packLLElements(loc, typeConverter, resultVals, rewriter, resultTy);
+      Value view = packUniqueTensorElements(loc, typeConverter, resultVals,
+                                            rewriter, resultTy);
       rewriter.replaceOp(op, view);
     } else {
       assert(isa<PointerType>(resultTy));
@@ -83,9 +73,9 @@ struct CmpIOpConversion
                                           Type elemTy,
                                           MultipleOperandsRange operands,
                                           Location loc) const {
-    return {rewriter.create<LLVM::ICmpOp>(
-        loc, elemTy, ArithCmpIPredicateToLLVM(op.getPredicate()),
-        operands[0][0], operands[0][1])};
+    return {LLVM::ICmpOp::create(rewriter, loc, elemTy,
+                                 ArithCmpIPredicateToLLVM(op.getPredicate()),
+                                 operands[0][0], operands[0][1])};
   }
 
   static LLVM::ICmpPredicate
@@ -123,9 +113,9 @@ struct CmpFOpConversion
   createDestOps(arith::CmpFOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter, Type elemTy,
                 MultipleOperandsRange operands, Location loc) {
-    return {rewriter.create<LLVM::FCmpOp>(
-        loc, elemTy, ArithCmpFPredicateToLLVM(op.getPredicate()),
-        operands[0][0], operands[0][1])};
+    return {LLVM::FCmpOp::create(rewriter, loc, elemTy,
+                                 ArithCmpFPredicateToLLVM(op.getPredicate()),
+                                 operands[0][0], operands[0][1])};
   }
 
   static LLVM::FCmpPredicate
@@ -163,31 +153,20 @@ struct MulhiUIOpConversion
   using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
 
   SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+    assert(bitWidth == 32 || bitWidth == 64);
+    Type wideTy = rewriter.getIntegerType(2 * bitWidth);
+    Value lhs = b.zext(wideTy, operands[0][0]);
+    Value rhs = b.zext(wideTy, operands[0][1]);
+    Value high = b.lshr(b.mul(lhs, rhs), b.int_val(2 * bitWidth, bitWidth));
+    return {b.trunc(elemTy, high)};
   }
-
-protected:
-  const TargetInfoBase &targetInfo;
 };
 
 struct ExternElementwiseOpConversion
@@ -207,11 +186,20 @@ struct ExternElementwiseOpConversion
     if (funcName.empty())
       llvm::errs() << "ExternElementwiseOpConversion";
 
-    Type funcType = getFunctionType(elemTy, operands[0]);
+    // Keep TF32 as f32 in Triton IR; NVVM returns its raw i32 bits.
+    bool bitcastTf32 = elemTy.isF32() && operands[0].size() == 1 &&
+                       operands[0][0].getType().isF32() &&
+                       (funcName == "llvm.nvvm.f2tf32.rn" ||
+                        funcName == "llvm.nvvm.f2tf32.rna");
+    Type funcType = getFunctionType(
+        bitcastTf32 ? rewriter.getI32Type() : elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
         rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    Value result =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+    if (bitcastTf32)
+      result = LLVM::BitcastOp::create(rewriter, loc, elemTy, result);
+    return {result};
   }
 };
 
@@ -232,9 +220,12 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
-      Type elemTy = getElementType(op.getOperand(i));
-      unsigned bitWidth =
-          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+      if (isa<MemDescType>(op.getOperand(i).getType())) {
+        packedOperands.push_back(operands[0][i]);
+        continue;
+      }
+      Type elemTy = getElementTypeOrSelf(op.getOperand(i));
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
       unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
@@ -273,10 +264,10 @@ struct ElementwiseInlineAsmOpConversion
     // wrapped in a struct.
     SmallVector<Type> asmRetTypes;
     for (auto result : op.getResult()) {
-      auto ty = getTypeConverter()->convertType(getElementType(result));
+      auto ty = getTypeConverter()->convertType(getElementTypeOrSelf(result));
 
       // Pack return elements into 32-bits.
-      unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(ty);
       unsigned numElemsPerReg =
           std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
       assert(op.getPackedElement() % numElemsPerReg == 0);
@@ -290,20 +281,19 @@ struct ElementwiseInlineAsmOpConversion
     Type asmRetType =
         asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
 
-    Value asmResults =
-        rewriter
-            .create<LLVM::InlineAsmOp>(
-                loc, asmRetType,
-                /*operands=*/packedOperands,
-                /*asm_string=*/op.getAsmString(),
-                /*constraints=*/op.getConstraints(),
-                /*has_side_effects=*/!op.getPure(),
-                /*is_align_stack=*/false, LLVM::TailCallKind::None,
-                /*asm_dialect=*/
-                LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                          LLVM::AsmDialect::AD_ATT),
-                /*operand_attrs=*/ArrayAttr())
-            ->getResult(0);
+    Value asmResults = LLVM::InlineAsmOp::create(
+                           rewriter, loc, asmRetType,
+                           /*operands=*/packedOperands,
+                           /*asm_string=*/op.getAsmString(),
+                           /*constraints=*/op.getConstraints(),
+                           /*has_side_effects=*/!op.getPure(),
+                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                           /*convergent=*/false,
+                           /*asm_dialect=*/
+                           LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                                     LLVM::AsmDialect::AD_ATT),
+                           /*operand_attrs=*/ArrayAttr())
+                           ->getResult(0);
 
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
@@ -338,14 +328,22 @@ struct ElementwiseInlineAsmOpConversion
 
     // Layout is unpackedOperands[operand][elem].
     SmallVector<SmallVector<Value>> unpackedOperands;
-    for (auto operand : adaptor.getOperands()) {
-      auto argTy = op->getOperand(0).getType();
-      auto subOperands = unpackLLElements(loc, operand, rewriter);
+    for (auto [original, operand] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        Value address =
+            getMemDescAddress(rewriter, loc, getTypeConverter(), desc, operand);
+        unpackedOperands.emplace_back(
+            getUniqueElemsPerThread(op->getResult(0).getType()), address);
+        continue;
+      }
+      auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
       unpackedOperands.push_back(subOperands);
     }
 
-    int numElemsPerThread = getNumElementsPerThreads(op->getResult(0).getType(),
-                                                     getTypeConverter());
+    auto resultTy = op->getResult(0).getType();
+    int numElemsPerThread =
+        isa<RankedTensorType>(resultTy) ? getUniqueElemsPerThread(resultTy) : 1;
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
@@ -394,8 +392,9 @@ struct ElementwiseInlineAsmOpConversion
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
-      outs.push_back(packLLElements(loc, getTypeConverter(), unpackedResults[i],
-                                    rewriter, op->getResult(i).getType()));
+      outs.push_back(packUniqueTensorElements(loc, getTypeConverter(),
+                                              unpackedResults[i], rewriter,
+                                              op->getResult(i).getType()));
     }
 
     rewriter.replaceOp(op, outs);
@@ -403,18 +402,58 @@ struct ElementwiseInlineAsmOpConversion
   }
 };
 
-struct AbsIOpConversion
-    : ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion> {
-  using Base = ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+struct InlineAsmOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::InlineAsmOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  SmallVector<Value> createDestOps(math::AbsIOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {rewriter.create<LLVM::AbsOp>(loc, elemTy, operands[0][0],
-                                         /*is_int_min_poison=*/false)};
+  LogicalResult
+  matchAndRewrite(triton::gpu::InlineAsmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto *converter = getTypeConverter();
+    SmallVector<Value> operands;
+    for (auto [original, lowered] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        operands.push_back(
+            getMemDescAddress(rewriter, loc, converter, desc, lowered));
+      } else {
+        auto values =
+            unpackTensorElements(loc, lowered, rewriter, original.getType());
+        llvm::append_range(operands, values);
+      }
+    }
+
+    SmallVector<Type> resultTypes;
+    for (Type type : op.getResultTypes())
+      resultTypes.append(getTotalElemsPerThread(type),
+                         converter->convertType(getElementTypeOrSelf(type)));
+    Type returnType = LLVM::LLVMVoidType::get(ctx);
+    if (resultTypes.size() == 1)
+      returnType = resultTypes.front();
+    else if (!resultTypes.empty())
+      returnType = struct_ty(resultTypes);
+    auto call = LLVM::InlineAsmOp::create(
+        rewriter, loc, returnType, operands, op.getAsmString(),
+        op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        /*convergent=*/false,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
+
+    SmallVector<Value> elements;
+    if (!resultTypes.empty())
+      elements = unpackLLElements(loc, call.getResult(0), rewriter);
+    SmallVector<Value> results;
+    unsigned offset = 0;
+    for (Type type : op.getResultTypes()) {
+      unsigned count = getTotalElemsPerThread(type);
+      results.push_back(packTensorElements(
+          loc, converter, ArrayRef(elements).slice(offset, count), rewriter,
+          type));
+      offset += count;
+    }
+    rewriter.replaceOp(op, results);
+    return success();
   }
 };
 
@@ -436,11 +475,11 @@ struct AbsFOpConversion
       assert(num_bits <= 16);
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
-      auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
+      auto maskConst = LLVM::ConstantOp::create(rewriter, loc, maskAttr);
       return {b.and_(operands[0][0], maskConst)};
     }
 
-    return {rewriter.create<LLVM::FAbsOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FAbsOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -462,9 +501,11 @@ struct SelectOpConversion
     } else {
       llvmOperands = {operands[0][0], operands[0][1], operands[0][2]};
     }
-    return {rewriter.create<LLVM::SelectOp>(
-        loc, llvmOperands[1].getType(), llvmOperands,
-        adaptor.getAttributes().getValue())};
+    auto attrs = splitBuilderAttributes<LLVM::SelectOp>(
+        rewriter, loc, adaptor.getAttributes().getValue());
+    return {LLVM::SelectOp::create(rewriter, loc, llvmOperands[1].getType(),
+                                   llvmOperands, attrs.properties,
+                                   attrs.discardableAttrs)};
   }
 };
 template <typename OpTy>
@@ -499,24 +540,24 @@ struct MinMaxFOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     if (hwNanPropagationSupported) {
-      return {rewriter.create<DestOpNanProp>(loc, elemTy, operands[0][0],
-                                             operands[0][1])};
+      return {DestOpNanProp::create(rewriter, loc, elemTy, operands[0][0],
+                                    operands[0][1])};
     }
     // Handle workaround for NaN propagation, i.e. software emulation of NaN
     // propagation. If any of the operands is NaN, return NaN.
     auto lhs = operands[0][0];
     auto rhs = operands[0][1];
     auto lhsIsNan =
-        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, lhs, lhs);
+        LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, lhs, lhs);
     auto rhsIsNan =
-        rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une, rhs, rhs);
-    auto isNan = rewriter.create<LLVM::OrOp>(loc, lhsIsNan, rhsIsNan);
-    auto nonNanRes = rewriter.create<DestOpNoNanProp>(loc, elemTy, lhs, rhs);
+        LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, rhs, rhs);
+    auto isNan = LLVM::OrOp::create(rewriter, loc, lhsIsNan, rhsIsNan);
+    auto nonNanRes = DestOpNoNanProp::create(rewriter, loc, elemTy, lhs, rhs);
 
     auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
 
     // Select the result based on the isNan flag.
-    return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+    return {LLVM::SelectOp::create(rewriter, loc, isNan, nan, nonNanRes)};
   }
 
 private:
@@ -543,28 +584,28 @@ struct ClampFOpConversion
     // Clip pattern not found, use min/max.
     if (op.getPropagateNan() == PropagateNan::ALL) {
       if (targetInfo.supportMaximumMinimum()) {
-        auto v = rewriter.create<LLVM::MaximumOp>(loc, elemTy, operands[0][0],
-                                                  operands[0][1]);
-        return {rewriter.create<LLVM::MinimumOp>(loc, v, operands[0][2])};
+        auto v = LLVM::MaximumOp::create(rewriter, loc, elemTy, operands[0][0],
+                                         operands[0][1]);
+        return {LLVM::MinimumOp::create(rewriter, loc, v, operands[0][2])};
       }
       // On pre-80 compute capability, we need to handle NaN propagation
       // manually. We need to check only the first operand for clamp.
       auto lhs = operands[0][0];
-      auto isNan = rewriter.create<LLVM::FCmpOp>(loc, LLVM::FCmpPredicate::une,
-                                                 lhs, lhs);
-      auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                               operands[0][1]);
-      auto nonNanRes = rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2]);
+      auto isNan = LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une,
+                                        lhs, lhs);
+      auto v = LLVM::MaxNumOp::create(rewriter, loc, elemTy, operands[0][0],
+                                      operands[0][1]);
+      auto nonNanRes = LLVM::MinNumOp::create(rewriter, loc, v, operands[0][2]);
       auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
       // Select the result based on the isNan flag.
-      return {rewriter.create<LLVM::SelectOp>(loc, isNan, nan, nonNanRes)};
+      return {LLVM::SelectOp::create(rewriter, loc, isNan, nan, nonNanRes)};
     }
 
     // No NaN propagation.
     assert(op.getPropagateNan() == PropagateNan::NONE);
-    auto v = rewriter.create<LLVM::MaxNumOp>(loc, elemTy, operands[0][0],
-                                             operands[0][1]);
-    return {rewriter.create<LLVM::MinNumOp>(loc, v, operands[0][2])};
+    auto v = LLVM::MaxNumOp::create(rewriter, loc, elemTy, operands[0][0],
+                                    operands[0][1]);
+    return {LLVM::MinNumOp::create(rewriter, loc, v, operands[0][2])};
   }
 
 protected:
@@ -585,8 +626,7 @@ struct MapElementwiseOpConversion
 
     auto operands = adaptor.getOperands();
     const auto nOperands = operands.size();
-    const auto nElems =
-        cast<LLVM::LLVMStructType>(operands[0].getType()).getBody().size();
+    const auto nElems = getUniqueElemsPerThread(op->getOperand(0).getType());
     const auto nElemsPerPack = op.getPack();
     if (nElems % nElemsPerPack != 0)
       return op->emitError()
@@ -599,7 +639,7 @@ struct MapElementwiseOpConversion
 
     SmallVector<Value> scalarOperands(nOperands * nElems);
     for (auto iOp : llvm::seq(nOperands)) {
-      auto elems = unpackLLElements(loc, operands[iOp], rewriter);
+      auto elems = unpackUniqueTensorElements(loc, operands[iOp], rewriter);
       assert(elems.size() == nElems);
       for (auto iPack : llvm::seq(nPacks)) {
         auto *packOperands =
@@ -612,7 +652,6 @@ struct MapElementwiseOpConversion
     }
 
     auto &scalarOp = op.getScalarOp();
-    Region &parent = *rewriter.getBlock()->getParent();
 
     auto nOutputs = op.getNumResults();
     SmallVector<Value> scalarOutputs(nOutputs * nElems);
@@ -634,8 +673,8 @@ struct MapElementwiseOpConversion
     SmallVector<Value> packedOutputs(nOutputs);
     for (auto iOut : llvm::seq(nOutputs)) {
       ArrayRef<Value> vals(&scalarOutputs[iOut * nElems], nElems);
-      packedOutputs[iOut] =
-          packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
+      packedOutputs[iOut] = packUniqueTensorElements(
+          loc, typeConverter, vals, rewriter, op.getType(iOut));
     }
     rewriter.replaceOp(op, packedOutputs);
     return success();
@@ -664,10 +703,10 @@ void mlir::triton::populateClampFOpToLLVMPattern(
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
-    PatternBenefit benefit) {
-#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP, ...)                                 \
+  patterns.add<                                                                \
+      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
       typeConverter, axisInfoAnalysis, benefit);
 
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
@@ -675,6 +714,9 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
+  POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
+  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
+                    [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
@@ -725,12 +767,12 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
+  patterns.add<AnnotateOpConversion>(typeConverter, benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
-  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MapElementwiseOpConversion>(typeConverter, benefit);

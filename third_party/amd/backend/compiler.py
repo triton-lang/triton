@@ -1,15 +1,294 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled
 from dataclasses import dataclass
+import ctypes
 from typing import Any, Dict, Tuple
 from types import ModuleType
+import os
+import sys
 import hashlib
 import tempfile
 import re
 import functools
 import warnings
 from pathlib import Path
+
+instrument = functools.partial(_instrument, backend="amd")
+
+
+def get_amd_codegen_path() -> str:
+    if knobs.amd.codegen_path is not None:
+        return knobs.amd.codegen_path
+    if os.name == "nt":
+        library = "triton_amd_codegen.dll"
+    elif sys.platform == "darwin":
+        library = "libtriton_amd_codegen.dylib"
+    else:
+        library = "libtriton_amd_codegen.so"
+    return str(Path(__file__).parent / "lib" / library)
+
+
+def get_amd_bitcode_path(name: str) -> str:
+    libdir = Path(knobs.amd.bitcode_path) if knobs.amd.bitcode_path else Path(__file__).parent / "lib"
+    return str(libdir / f"{name}.bc")
+
+
+class _AMDGPUCodegenOptions(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("triple", ctypes.c_char_p),
+        ("processor", ctypes.c_char_p),
+        ("features", ctypes.c_char_p),
+        ("abi", ctypes.c_char_p),
+        ("flags", ctypes.c_char_p),
+        ("disabled_passes", ctypes.c_char_p),
+        ("enable_fp_fusion", ctypes.c_uint8),
+        ("disable_optimization", ctypes.c_uint8),
+        ("canonicalize_gep", ctypes.c_uint8),
+        ("dump_ir", ctypes.c_uint8),
+        ("enable_timing", ctypes.c_uint8),
+        # Read only by triton_amdgpu_translate_mir_to_asm.
+        ("enable_misched", ctypes.c_uint8),
+        ("emit_object", ctypes.c_uint8),
+    ]
+
+
+@functools.lru_cache()
+def _load_amd_codegen(path: str):
+    mode = getattr(os, "RTLD_LOCAL", 0) | getattr(os, "RTLD_NOW", 0)
+    library = ctypes.CDLL(path, mode=mode)
+    library.triton_amdgpu_compile.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_compile.restype = ctypes.c_int
+    library.triton_amdgpu_assemble.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_assemble.restype = ctypes.c_int
+    library.triton_amdgpu_translate_to_mir.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_translate_to_mir.restype = ctypes.c_int
+    library.triton_amdgpu_translate_mir_to_asm.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_translate_mir_to_asm.restype = ctypes.c_int
+    library.triton_amdgpu_free.argtypes = [ctypes.c_void_p]
+    library.triton_amdgpu_free.restype = None
+    library.triton_amdgpu_revision.argtypes = []
+    library.triton_amdgpu_revision.restype = ctypes.c_char_p
+    return library
+
+
+def get_amd_codegen_revision() -> str:
+    return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
+
+
+def _serialize_for_amd_codegen(src: str, enable_fp_fusion: bool) -> bytes:
+    # Serialize with Triton's LLVM, adapting alias-scope domains to the format
+    # supported by the independently pinned AMD code generator.
+    # Express fusion permission in the IR because newer LLVM versions no
+    # longer honor TargetOptions::AllowFPOpFusion during code generation.
+    return llvm.to_bitcode(src, enable_fp_fusion, legacy_alias_scopes=True)
+
+
+def _codegen_options(triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
+                     disable_optimization: bool = False, canonicalize_gep: bool = False, disabled_passes: str = "",
+                     dump_ir: bool = False, enable_timing: bool = False, enable_misched: bool = False,
+                     emit_object: bool = False) -> _AMDGPUCodegenOptions:
+    return _AMDGPUCodegenOptions(
+        # Must match codegenABIVersion in
+        # third_party/amd/backend/codegen/amdgpu_codegen.cc.
+        2,
+        triple.encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        b"",
+        ",".join(flags).encode("utf-8"),
+        disabled_passes.encode("utf-8"),
+        enable_fp_fusion,
+        disable_optimization,
+        canonicalize_gep,
+        dump_ir,
+        enable_timing,
+        enable_misched,
+        emit_object,
+    )
+
+
+def _raise_codegen_error(library, error: ctypes.c_void_p, fallback: str):
+    message = ctypes.string_at(error).decode("utf-8") if error.value else fallback
+    if error.value:
+        library.triton_amdgpu_free(error)
+    revision = library.triton_amdgpu_revision().decode("utf-8")
+    raise RuntimeError(f"AMD LLVM {revision}: {message}")
+
+
+def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
+                   disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
+                   enable_timing: bool) -> str:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    llvm_ir = _serialize_for_amd_codegen(src, enable_fp_fusion)
+    options = _codegen_options(
+        triple,
+        processor,
+        features,
+        flags=flags,
+        enable_fp_fusion=enable_fp_fusion,
+        disable_optimization=disable_optimization,
+        canonicalize_gep=canonicalize_gep,
+        disabled_passes=disabled_passes,
+        dump_ir=dump_ir,
+        enable_timing=enable_timing,
+    )
+    assembly = ctypes.c_void_p()
+    assembly_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
+                                           ctypes.byref(assembly_size), ctypes.byref(error))
+    if status:
+        _raise_codegen_error(library, error, "unknown AMD code-generation failure")
+    try:
+        return ctypes.string_at(assembly, assembly_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(assembly)
+
+
+# Separates the MIR body from the scheduling DAG in a dumped MIR file. The
+# marker is preceded by a bare `---`, which opens the YAML document the DAG text
+# occupies; neither belongs to the MIR.
+MIR_DAG_MARKER = "\n========== SCHEDULING DAG ==========\n"
+
+
+def _strip_dag_section(text: str) -> str:
+    """Return just the MIR body of a dumped MIR file."""
+    body = text.split(MIR_DAG_MARKER, 1)[0]
+    return body[:-len("---")] if body.endswith("---") else body
+
+
+def translate_to_mir(src: str, triple: str, processor: str, features: str, flags: list[str], enable_fp_fusion: bool,
+                     dump_file_id: str, dump_dir: str, disabled_passes: str, dump_ir: bool) -> str:
+    """Dump the pre-machine-scheduler MIR and its scheduling DAG.
+
+    Runs on the AMD code generator's LLVM, the same one that produces the
+    shipped AMDGCN, so the dumped MIR describes what actually gets compiled.
+    """
+    library = _load_amd_codegen(get_amd_codegen_path())
+    llvm_ir = _serialize_for_amd_codegen(src, enable_fp_fusion)
+    options = _codegen_options(triple, processor, features, flags=flags, enable_fp_fusion=enable_fp_fusion,
+                               disabled_passes=disabled_passes, dump_ir=dump_ir)
+    mir = ctypes.c_void_p()
+    mir_size = ctypes.c_size_t()
+    dag = ctypes.c_void_p()
+    dag_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_translate_to_mir(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(mir),
+                                                    ctypes.byref(mir_size), ctypes.byref(dag), ctypes.byref(dag_size),
+                                                    ctypes.byref(error))
+    if status:
+        _raise_codegen_error(library, error, "unknown AMD MIR translation failure")
+    try:
+        mir_text = ctypes.string_at(mir, mir_size.value).decode("utf-8")
+        dag_text = ctypes.string_at(dag, dag_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(mir)
+        library.triton_amdgpu_free(dag)
+
+    dump_filename = os.path.join(dump_dir, dump_file_id + ".txt")
+    with open(dump_filename, "w") as dump_file:
+        dump_file.write(mir_text)
+        dump_file.write("---")
+        dump_file.write(MIR_DAG_MARKER)
+        dump_file.write(dag_text)
+    print(f"MIR dumped to: {dump_filename}", file=sys.stderr)
+    return mir_text
+
+
+def translate_mir_to_asm(mir_path: str, triple: str, processor: str, features: str, flags: list[str],
+                         enable_fp_fusion: bool, is_object: bool, enable_misched: bool, dump_ir: bool) -> str:
+    """Resume code generation from a dumped (and possibly rescheduled) MIR file."""
+    library = _load_amd_codegen(get_amd_codegen_path())
+    with open(mir_path, "r") as mir_file:
+        mir_text = mir_file.read()
+    # Drop the scheduling DAG section translate_to_mir appended; it is our own
+    # annotation, not MIR.
+    source = _strip_dag_section(mir_text).encode("utf-8")
+    options = _codegen_options(
+        triple,
+        processor,
+        features,
+        flags=flags,
+        enable_fp_fusion=enable_fp_fusion,
+        enable_misched=enable_misched,
+        emit_object=is_object,
+        dump_ir=dump_ir,
+    )
+    output = ctypes.c_void_p()
+    output_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_translate_mir_to_asm(source, len(source), ctypes.byref(options),
+                                                        ctypes.byref(output), ctypes.byref(output_size),
+                                                        ctypes.byref(error))
+    if status:
+        _raise_codegen_error(library, error, "unknown AMD MIR code-generation failure")
+    try:
+        return ctypes.string_at(output, output_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(output)
+
+
+def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    source = assembly.encode("utf-8")
+    object_file = ctypes.c_void_p()
+    object_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_assemble(
+        source,
+        len(source),
+        amd.get_target_triple(processor).encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        ctypes.byref(object_file),
+        ctypes.byref(object_size),
+        ctypes.byref(error),
+    )
+    if status:
+        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD assembly failure"
+        if error.value:
+            library.triton_amdgpu_free(error)
+        revision = library.triton_amdgpu_revision().decode("utf-8")
+        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+    try:
+        return ctypes.string_at(object_file, object_size.value)
+    finally:
+        library.triton_amdgpu_free(object_file)
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -19,12 +298,73 @@ def get_min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_schedule_enabled(arch, use_async_copy):
-    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)
-            ) if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
+    return (arch == "gfx942" or (arch == "gfx950" and use_async_copy is True)) \
+        if knobs.amd.use_block_pingpong is None else knobs.amd.use_block_pingpong
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942") if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx117" in arch or "gfx120" in arch) \
+        if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
+
+
+def is_async_copy_enabled(base_arch):
+    return (base_arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
+
+
+def is_coexec_scheduler_enabled(arch):
+    if knobs.amd.use_coexec_scheduler is not None:
+        return knobs.amd.use_coexec_scheduler
+    return arch == "gfx1250"
+
+
+def is_expert_scheduling_enabled(base_arch):
+    if knobs.amd.use_expert_scheduling is not None:
+        return knobs.amd.use_expert_scheduling
+    return base_arch == "gfx1250"
+
+
+def get_llvm_flags(options):
+    """LLVM command line flags for every LLVM pipeline run of a compilation.
+
+    Each flag is either a bare option name, which is set to true, or
+    "name=value". These are process-wide LLVM options: compilations sharing a
+    process can only run in parallel while they use identical flags. Prefer
+    per-function LLVM attributes (see make_llir) whenever LLVM offers one.
+    """
+    flags = []
+    # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
+    # s_wait_alu va_vdst waits in expert scheduling mode.
+    if options.arch == "gfx1250" and is_expert_scheduling_enabled(options.arch):
+        flags.append("amdgpu-anti-hints-for-va-vdst")
+    # User-requested options come last so they override the defaults above.
+    flags.extend(f"{name}={value}" for name, value in options.llvm_cl_opts)
+    return flags
+
+
+def is_fpsan_supported(base_arch):
+    return base_arch in ["gfx942", "gfx950", "gfx1250"]
+
+
+def is_consan_supported(base_arch):
+    return base_arch == "gfx1250"
+
+
+def _parse_llvm_key_values(attrs, bare_value=""):
+    if not isinstance(attrs, str):
+        return tuple(attrs)
+    parsed = []
+    for attr in attrs.split(","):
+        name, sep, value = attr.partition("=")
+        name = name.strip()
+        if name:
+            parsed.append((name, value.strip() if sep else bare_value))
+    return tuple(parsed)
+
+
+@functools.lru_cache(None)
+def file_hash(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -34,7 +374,6 @@ class HIPOptions:
     num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
-    cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
@@ -45,8 +384,8 @@ class HIPOptions:
     supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
-    enable_fp_fusion: bool = True
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
+    enable_fp_fusion: bool = False
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
@@ -54,22 +393,37 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
+    # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
+    wgp_cu_mode: str = "wgp"
 
-    # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
-    # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
-    # The option is experimental and may change at any time regarding its semantics and/or may
-    # be gone entirely anytime.
-    #
-    # Current experimental scheduling variants:
-    #
-    # attention: enables a bunch of optimizations for attention kernels, including:
-    #            - iglp 2 and sched.barrier around it
-    #            - sink-insts-to-avoid-spills flag to avoid register spills
-    schedule_hint: str = 'none'
+    # Experimental hint for how the AMD backend schedules a kernel's instructions. The only
+    # recognized value is "mfma-schedule" (gfx942 and gfx950): run the MFMA scheduler on the optimized
+    # LLVM IR. It interleaves the MFMAs of each hot loop with the memory operations that are
+    # independent of them, keeping the matrix unit busy, and pins that order with
+    # llvm.amdgcn.sched.barrier so LLVM's machine schedulers preserve it. Kernels without an
+    # eligible loop are left untouched. MFMA accumulators pinned with `cd_regclass` keep their
+    # pins next to the moved MFMAs.
+    schedule_hint: str = ''
+
+    # Experimental: intended for development and debugging; may change or be removed without notice.
+    # Comma-separated LLVM function attributes; bare names are emitted as valueless attributes.
+    # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
+    llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
+
+    # Experimental: intended for development and debugging; may change or be removed without notice.
+    # Comma-separated LLVM command line options applied to every LLVM pipeline run of this kernel;
+    # bare names are set to true. Option names omit the leading dash.
+    # Example: llvm_cl_opts="amdgpu-use-amdgpu-trackers,unroll-threshold=150"
+    llvm_cl_opts: str | Tuple[Tuple[str, str], ...] = ""
 
     def __post_init__(self):
-        gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
+        if self.wgp_cu_mode not in ("wgp", "cu"):
+            raise ValueError("wgp_cu_mode must be 'wgp' or 'cu'")
+        # The arch without the "-strict" suffix.
+        base_arch = self.arch.removesuffix("-strict")
+        object.__setattr__(self, 'base_arch', base_arch)
+        gfx_major = int(base_arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -81,19 +435,23 @@ class HIPOptions:
             )
             object.__setattr__(self, 'kpack', 1)
 
-        default_libdir = Path(__file__).parent / 'lib'
+        object.__setattr__(self, 'llvm_fn_attrs', _parse_llvm_key_values(self.llvm_fn_attrs))
+        object.__setattr__(self, 'llvm_cl_opts', _parse_llvm_key_values(self.llvm_cl_opts, bare_value="true"))
+
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         for lib in ["ocml", "ockl"]:
-            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+            extern_libs[lib] = get_amd_bitcode_path(lib)
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
 
     def hash(self):
-        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
+        hash_dict = dict(self.__dict__)
+        # Linking is order-sensitive when libraries provide overlapping symbols.
+        hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in hash_dict["extern_libs"])
+        key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 class HIPBackend(BaseBackend):
-    instrumentation = None
     supports_native_tensor_specialization = False
 
     @staticmethod
@@ -101,6 +459,13 @@ class HIPBackend(BaseBackend):
         return target.backend == 'hip'
 
     def __init__(self, target: GPUTarget) -> None:
+        if not isinstance(target.warp_size, int):
+            try:
+                warp_size = int(target.warp_size)
+            except ValueError:
+                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'")
+            target = GPUTarget(target.backend, target.arch, warp_size)
+
         super().__init__(target)
         assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
@@ -109,10 +474,17 @@ class HIPBackend(BaseBackend):
         return f"hip:{options.arch}"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': knobs.runtime.override_arch or self.target.arch}
+        # Enable debug mode for ConSan, so device-side assertions are not optimized out
+        if is_enabled(opts, "consan"):
+            opts["debug"] = True
+            opts["sanitize_overflow"] = False
 
-        if opts.get("num_ctas", 1) > 1:
-            raise ValueError("num_ctas > 1 not supported for AMD GPUs")
+        args = {'arch': knobs.runtime.override_arch or self.target.arch}
+        if opts.get("schedule_hint", "") not in ("", "mfma-schedule"):
+            raise ValueError(f"schedule_hint: unknown value {opts['schedule_hint']!r}; supported: 'mfma-schedule'")
+
+        if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
+            raise ValueError(f"num_ctas > 1 not supported on {self.target.arch}")
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':
@@ -128,9 +500,8 @@ class HIPBackend(BaseBackend):
             deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
             args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
-        if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -138,9 +509,6 @@ class HIPBackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -153,17 +521,29 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
+
+    # is_within_2gb() needs to check for a torch subobject and this var tracks torch
+    # availability state: None - not tested, True - torch is present. Anything else -
+    # no torch available. First call to is_within_2gb() checks torch availability
+    # and caches it.
+    _torch_available: None | bool = None
 
     @staticmethod
     def is_within_2gb(arg):
-        import torch
+        if HIPBackend._torch_available is None:
+            try:
+                import torch
+                HIPBackend._torch_available = True
+            except ImportError:
+                HIPBackend._torch_available = False
+        elif HIPBackend._torch_available:
+            import torch
 
         MAX_INT_32 = 2**31 - 1
         if hasattr(arg, "ptr_range"):
             return arg.ptr_range() <= MAX_INT_32
-        if isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
+        if HIPBackend._torch_available and isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
             return arg.untyped_storage().size() <= MAX_INT_32
         return False
 
@@ -186,8 +566,8 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        if not amd.supports_tdm(options.arch):
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
@@ -207,7 +587,9 @@ class HIPBackend(BaseBackend):
         pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        emuTF32 = False
         passes.ttgpuir.add_coalesce(pm)
+        passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
@@ -215,43 +597,52 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         amd.passes.ttgpuir.add_optimize_dot_operands(pm, options.arch)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+        amd.passes.ttgpuir.add_sink_layout_conversions(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        use_async_copy = knobs.amd.use_async_copy
+        use_async_copy = is_async_copy_enabled(options.base_arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
-
+        amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
+        amd.passes.ttgpuir.add_convert_to_tensor_ops(pm)
         passes.common.add_canonicalizer(pm)
-        if options.schedule_hint.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if is_in_thread_transpose_enabled(options.arch):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
-        amd.passes.ttgpuir.add_reorder_instructions(pm)
+        amd.passes.ttgpuir.add_move_up_prologue_loads(pm)
         if use_block_pingpong and options.num_stages > 1:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
-            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch, knobs.amd.use_buffer_atomics)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(
+                pm,
+                options.arch,
+                knobs.amd.use_buffer_atomics,
+                knobs.amd.buffer_ops_analyze_small_tensor_range,
+            )
+            amd.passes.ttgpuir.add_optimize_buffer_op_ptr(pm)
 
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
+        amd.passes.ttgpuir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if use_async_copy:
-            amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
+            amd.passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     @staticmethod
@@ -261,13 +652,24 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
 
         passes.gluon.add_inliner(pm)
+        passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
+        passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
+            passes.common.add_symbol_dce(pm)
+        amd.passes.ttgpuir.add_warp_pipeline(pm)
+        passes.ttgpuir.add_allocate_warp_groups(pm)
+
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
+            amd.passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     @staticmethod
@@ -276,21 +678,24 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # custom_lds_size is an experimental parameter that defines amount of LDS available
-        # for one thread block. Measured in bytes.
-        #
-        # If custom_lds_size = 0, pass will consider all LDS is available for one threads block,
-        # LDS size is determined by provided arch name.
-        custom_lds_size = 0
-        amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
+        amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
 
-        amd.passes.ttgpuir.add_allocate_shared_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        # Reserve LDS space for ConSan captures before allocation computes offsets.
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+            passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
+        amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
+        # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        amd.passes.ttgpuir.add_membar(pm, options.arch)
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+            passes.ttgpuir.add_concurrency_sanitizer(pm)
+            passes.gluon.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
@@ -299,7 +704,10 @@ class HIPBackend(BaseBackend):
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ, options.wgp_cu_mode == "cu")
+        # Lower Proton segment values before warp specialization captures partition operands.
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
+        amd.passes.ttgpuir.add_warp_specialize_to_llvm(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
 
@@ -309,17 +717,12 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
 
-        if options.schedule_hint.lower() != "none":
-            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
-
-        # This can not be moved below the di_scope pass
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
-
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, options.arch, __HIP_FTZ)
+        # Cleanup leftover unrealized_conversion_casts before converted to LLVM.
+        passes.convert.add_reconcile_unrealized_casts(pm)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
@@ -333,7 +736,7 @@ class HIPBackend(BaseBackend):
             # insert dbg intrinsic with several DI Attribute including source
             # var name and type info note: unknown reason for now, but this
             # pass and add_di_scope has to be run separately, otherwise if we
-            # put them into previous pipline, it trigger a segmentfault without
+            # put them into previous pipeline, it trigger a segmentfault without
             # any error message; could be due to a bug in mlir or pybind11
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
@@ -344,11 +747,12 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        amd.attach_target_triple(llvm_mod)
+        target_triple = amd.get_target_triple(options.arch)
+        amd.attach_target_triple(llvm_mod, options.arch)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
+        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -360,64 +764,108 @@ class HIPBackend(BaseBackend):
         amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
 
         # Set kernel attributes first given this may affect later optimizations.
-        fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
-        # The public kernel should be kernel 0.
-        fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
-        # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
-        # This attribute may be attached to a kernel function definition and is an optimization hint.
-        # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
-        # specifies the requested maximum number of waves per EU (must be >= <min> if specified).
-        # If <max> is omitted, then there is no restriction on the maximum number of waves per EU other than
-        # the one dictated by the hardware for which the kernel is compiled. Passing 0, 0 as <min>, <max>
-        # implies the default behavior (no limits).
-        # Specifying N, N forces LLVM to focus on a single register count, simplifies some heuristics
-        # and may improve scheduling.
-        fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
+        # The kernel is the only non-declaration function with external linkage;
+        # instrumentation helpers (e.g. ConSan) use internal linkage.
+        kernel_fn = next(
+            (fn for fn in llvm_mod.get_functions() if not fn.is_declaration() and fn.is_external_linkage()), None)
+        if not kernel_fn:
+            raise RuntimeError("Could not find kernel function")
+        kernel_fn.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
+
+        cluster_dim = metadata["num_ctas"]
+        kernel_fn.add_fn_attr("amdgpu-cluster-dims", f"{cluster_dim},1,1")
+        # warp-specialization mutates num_warps
+        total_warps_num = options.num_warps
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        if total_num_warps is not None:
+            total_warps_num = total_num_warps
+        kernel_fn.add_fn_attr("amdgpu-flat-work-group-size", f"1,{total_warps_num*options.warp_size}")
+        kernel_fn.add_fn_attr("uniform-work-group-size", "true")
+        # "amdgpu-waves-per-eu"="<min>[,<max>]" allows controlling the minimal and (optional)
+        # maximal number of waves per SIMD. If <max> is omitted, then no restriction other than
+        # whatever allowed by the hardware for occupancy.
+        # Specifying "N,N" forces LLVM to focus on a single register budget, simplifies some
+        # heuristics and may improve scheduling.
+        if options.waves_per_eu != 0:
+            kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
+
+        if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
+            kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
+
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
-        fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        kernel_fn.add_fn_attr("denormal-fp-math-f32", denormal_mode)
+
         if knobs.compilation.enable_asan:
-            fns[0].add_fn_target_feature("+xnack")
-            fns[0].add_fn_asan_attr()
+            kernel_fn.add_fn_target_feature("+xnack")
+            kernel_fn.add_fn_asan_attr()
+        if options.wgp_cu_mode == "cu":
+            if knobs.compilation.enable_asan:
+                raise ValueError("wgp_cu_mode='cu' is not supported together with TRITON_ENABLE_ASAN")
+            if any(name == "target-features" for name, _ in options.llvm_fn_attrs):
+                raise ValueError("llvm_fn_attrs cannot override 'target-features' when wgp_cu_mode='cu'")
+            kernel_fn.add_fn_target_feature("+cumode")
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        amd.set_all_fn_arg_inreg(fns[0])
+        #
+        # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
+        # not serializable to/from MIR YAML
+        if not (knobs.amd.swap_mir or knobs.amd.dump_mir):
+            amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
-            default_libdir = Path(__file__).parent / 'lib'
-            paths = [
-                str(default_libdir / 'asanrtl.bc'),
-                str(default_libdir / "ocml.bc"),
-                str(default_libdir / "ockl.bc")
-            ]
+            paths = [get_amd_bitcode_path(name) for name in ("asanrtl", "ocml", "ockl")]
             llvm.link_extern_libs(llvm_mod, paths)
         elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
+        if is_expert_scheduling_enabled(options.base_arch):
+            # LLVM reads this attribute per function. Apply it after linking so
+            # external device-library definitions are covered as well.
+            for fn in llvm_mod.get_functions():
+                if not fn.is_declaration():
+                    fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
+
+        # Apply user-provided attributes after every attribute managed above so
+        # that they take precedence.
+        for name, value in options.llvm_fn_attrs:
+            kernel_fn.remove_fn_attr(name)
+            kernel_fn.add_fn_attr(name, value)
+
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options),
+                             options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
+        # Attributes provided through llvm_fn_attrs are kept.
         if amd.has_architected_sgprs(options.arch):
-            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-x")
-            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-y")
-            fns[0].remove_fn_attr("amdgpu-no-workgroup-id-z")
+            user_attrs = {name for name, _ in options.llvm_fn_attrs}
+            for dim in "xyz":
+                attr = f"amdgpu-no-workgroup-id-{dim}"
+                if attr not in user_attrs:
+                    kernel_fn.remove_fn_attr(attr)
 
-        if knobs.amd.scalarize_packed_fops:
-            amd.add_scalarize_packed_fops_llvm_pass(fns[0])
+        # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
+        if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
+            amd.add_mfma_schedule_pass(kernel_fn, options.arch)
 
         # Get some metadata
+        metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         # Disable inlining of print related functions,
         # because inlining of these function could slow down compilation significantly
         amd.disable_print_inline(llvm_mod)
@@ -432,16 +880,46 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        flags = []
-        # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
-        # into loops to avoid register spills in the MachineSinking pass, while it
-        # can also lead to regression in some cases. But from current observation,
-        # the regression is not significant. It would be better to have some heuristics.
-        if options.schedule_hint == 'attention':
-            flags.append('sink-insts-to-avoid-spills')
-        features = '-real-true16' if 'gfx11' in options.arch else ''
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False)
+        flags = get_llvm_flags(options)
+        features = ''
+        target_triple = amd.get_target_triple(options.arch)
+        ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        dump_file_id = names[0] + '_' + ir_hash
+
+        disable_llvm_opt = knobs.getenv_bool("DISABLE_LLVM_OPT", False)
+        disabled_passes = ""
+        if not disable_llvm_opt:
+            requested_passes = os.environ.get("DISABLE_LLVM_OPT", "")
+            if requested_passes.lower() not in {"0", "false", "off"}:
+                disabled_passes = requested_passes
+        dump_llvm_ir = knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False)
+
+        if knobs.amd.dump_mir:
+            # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
+            # from that same MachineFunction, the scheduling DAG (a (bb, position)
+            # edge list appended after the SCHEDULING DAG marker).
+            _ = translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
+                                 dump_file_id, knobs.amd.dump_mir, disabled_passes, dump_llvm_ir)
+        if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
+            raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
+        if knobs.amd.swap_mir:
+            amdgcn = translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'), target_triple,
+                                          options.arch, features, flags, options.enable_fp_fusion, False,
+                                          knobs.amd.swap_mir_enable_misched, dump_llvm_ir)
+        else:
+            amdgcn = compile_amdgpu(
+                src,
+                target_triple,
+                options.arch,
+                features,
+                flags=flags,
+                enable_fp_fusion=options.enable_fp_fusion,
+                disable_optimization=disable_llvm_opt,
+                canonicalize_gep=False,
+                disabled_passes=disabled_passes,
+                dump_ir=dump_llvm_ir,
+                enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
+            )
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -449,10 +927,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        target_features = ''
+        target_features = []
         if knobs.compilation.enable_asan:
-            target_features = '+xnack'
-        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
+            target_features.append('+xnack')
+        hsaco = assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, "wb") as fd_in:
@@ -467,6 +945,7 @@ class HIPBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
+            stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
@@ -476,4 +955,4 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return f'{self.target}'
+        return f'{self.target}-{get_amd_codegen_revision()}'

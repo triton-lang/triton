@@ -4,10 +4,14 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 
 using namespace mlir;
 using namespace mlir::triton;
+
+#include "triton/Dialect/Triton/IR/TypeInterfaces.cpp.inc"
+#include "triton/Dialect/Triton/IR/TypesEnums.cpp.inc"
 
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/Types.cpp.inc"
@@ -22,7 +26,48 @@ void TritonDialect::registerTypes() {
       >();
 }
 
+// Format: !tt.tensordesc<128x64xf16>
+//         !tt.tensordesc<128x64xf16, #shared>
+Type TensorDescType::parse(AsmParser &parser) {
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
+  if (failed(parser.parseLess()))
+    return Type();
+
+  SmallVector<int64_t> shape;
+  if (failed(parser.parseDimensionList(shape, /*allowDynamic=*/false)))
+    return Type();
+
+  Type elementType;
+  if (failed(parser.parseType(elementType)))
+    return Type();
+
+  Attribute sharedLayout;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseAttribute(sharedLayout)))
+      return Type();
+  }
+
+  if (failed(parser.parseGreater()))
+    return Type();
+
+  return TensorDescType::getChecked(loc, parser.getContext(), shape,
+                                    elementType, sharedLayout);
+}
+
+void TensorDescType::print(AsmPrinter &printer) const {
+  printer << "<";
+  for (auto dim : getShape())
+    printer << dim << "x";
+  printer << getElementType();
+  if (getSharedLayout())
+    printer << ", " << getSharedLayout();
+  printer << ">";
+}
+
+// Format: !tt.ptr<f32>            (defaults to the "global" address space)
+//         !tt.ptr<f32, "descriptor">
 Type PointerType::parse(AsmParser &parser) {
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (parser.parseLess())
     return Type();
 
@@ -30,24 +75,51 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseType(pointeeType))
     return Type();
 
-  int addressSpace = 1;
+  PtrAddrSpace addressSpace = PtrAddrSpace::Global;
   if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseInteger(addressSpace))
+    std::string name;
+    if (parser.parseString(&name))
       return Type();
+    std::optional<PtrAddrSpace> symbolized = symbolizePtrAddrSpace(name);
+    if (!symbolized) {
+      parser.emitError(parser.getCurrentLocation())
+          << "invalid pointer address space '" << name << "'";
+      return Type();
+    }
+    addressSpace = *symbolized;
   }
 
   if (parser.parseGreater())
     return Type();
 
-  return PointerType::get(pointeeType, addressSpace);
+  return PointerType::getChecked(loc, pointeeType, addressSpace);
 }
 
 void PointerType::print(AsmPrinter &printer) const {
-  if (getAddressSpace() == 1) {
-    printer << "<" << getPointeeType() << ">";
-  } else {
-    printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
+  printer << "<" << getPointeeType();
+  if (getAddressSpace() != PtrAddrSpace::Global)
+    printer << ", \"" << stringifyPtrAddrSpace(getAddressSpace()) << "\"";
+  printer << ">";
+}
+
+LogicalResult
+TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
+                       ArrayRef<int64_t> shape, Type elementType,
+                       Attribute sharedLayout) {
+  if (isa<RankedTensorType>(elementType)) {
+    return emitError()
+           << "tensor descriptors must not wrap tensor types; use "
+              "!tt.tensordesc<shape x element-type[, layout]> instead";
   }
+  return success();
+}
+
+LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
+                                  Type pointeeType, PtrAddrSpace addressSpace) {
+  if (!pointeeType.isIntOrFloat() && !isa<PackedFloat4E2M1Type>(pointeeType))
+    return emitError()
+           << "pointer types must point to integer or floating-point types";
+  return success();
 }
 
 namespace mlir {
@@ -57,8 +129,8 @@ namespace triton {
 unsigned getPointeeBitWidth(Type type) {
   auto pointeeType = getPointeeType(type);
   if (auto tensorTy = dyn_cast<RankedTensorType>(pointeeType))
-    return tensorTy.getElementType().getIntOrFloatBitWidth();
-  return pointeeType.getIntOrFloatBitWidth();
+    return getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
+  return getIntOrFloatOrPtrBitWidth(pointeeType);
 }
 
 Type getI1SameShape(Type type) {
@@ -92,45 +164,26 @@ Type getI32SameShape(Type type) {
 Type getPointerTypeSameShape(Type type) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     Type elementType = tensorTy.getElementType();
-    PointerType ptrType = PointerType::get(elementType, 1);
+    PointerType ptrType = PointerType::get(elementType);
     return tensorTy.clone(ptrType);
   } else {
-    return PointerType::get(type, 1);
+    return PointerType::get(type);
   }
 }
 
-Type getPointerTypeToElement(Type type) {
-  Type elementType = getElementTypeOrSelf(type);
-  PointerType ptrType = PointerType::get(elementType, 1);
-  return ptrType;
+bool elementTypeMatchesPointee(Type valueTy, Type ptrTy) {
+  auto ptrType = dyn_cast<PointerType>(ptrTy);
+  return ptrType && getElementTypeOrSelf(valueTy) == ptrType.getPointeeType();
 }
 
-// upstream Triton only uses address space 1 for Pointer Type
-Type getPointerType(Type type, int addressSpace) {
+Type getPointerType(Type type, PtrAddrSpace addressSpace) {
   return PointerType::get(type, addressSpace);
 }
 
-int getAddressSpace(Type type) {
+PtrAddrSpace getAddressSpace(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))
     return ptrType.getAddressSpace();
-  return 1;
-}
-
-bool isTensorPointerType(Type type) {
-  if (auto ptrType = dyn_cast<PointerType>(type))
-    return isa<RankedTensorType>(ptrType.getPointeeType());
-  return false;
-}
-
-bool isTensorOrTensorPointerType(Type type) {
-  return isa<RankedTensorType>(type) || isTensorPointerType(type);
-}
-
-Type getElementTypeOfTensorPointerType(Type type) {
-  if (auto ptrType = dyn_cast<PointerType>(type))
-    if (auto tensorTy = dyn_cast<RankedTensorType>(ptrType.getPointeeType()))
-      return tensorTy.getElementType();
-  return {};
+  return PtrAddrSpace::Global;
 }
 
 } // namespace triton

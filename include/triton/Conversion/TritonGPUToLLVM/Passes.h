@@ -18,6 +18,8 @@ namespace triton::gpu {
 #define GEN_PASS_REGISTRATION
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 
+void runGlobalScratchMemoryAllocation(ModuleOp module);
+
 } // namespace triton::gpu
 
 } // namespace mlir

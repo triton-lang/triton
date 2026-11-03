@@ -1,20 +1,23 @@
-#ifndef TRITONAMD_ANALYSIS_AXIS_INFO_EXT_H
-#define TRITONAMD_ANALYSIS_AXIS_INFO_EXT_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_
 
-#include "include/triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/AxisInfo.h"
 
 namespace mlir::triton::AMD {
 
-struct AxisInfoExt {
-  static void addVisitors(mlir::triton::AxisInfoVisitorList &visitors);
+class AxisInfoAnalysisExt : public triton::AxisInfoAnalysis {
+public:
+  AxisInfoAnalysisExt(DataFlowSolver &solver);
+
+  static triton::AxisInfoAnalysis *loadAnalysis(DataFlowSolver *solver);
 };
 
 class ModuleAxisInfoAnalysis : public mlir::triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-      : mlir::triton::ModuleAxisInfoAnalysis(moduleOp,
-                                             AxisInfoExt::addVisitors) {}
+      : mlir::triton::ModuleAxisInfoAnalysis(
+            moduleOp, AxisInfoAnalysisExt::loadAnalysis) {}
 };
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_AXISINFOEXT_H_

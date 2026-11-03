@@ -1,18 +1,30 @@
 import json
 import pathlib
 
-from typing import NamedTuple
+from typing import NamedTuple, Tuple, Optional
 
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia.ampere import async_copy
+from triton.experimental.gluon.language.nvidia.blackwell import clc
+from triton.experimental.gluon.language.nvidia.hopper import mbarrier
+from triton._internal_testing import (
+    is_ampere_or_newer,
+    is_cuda,
+    is_hip,
+    is_hip_cdna2,
+    is_hip_cdna4,
+    supports_tma,
+    supports_ws,
+)
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws
 
 pl.enable_semantic("triton")
 
@@ -52,14 +64,14 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_jit(tmp_path):
+def test_jit(device, tmp_path):
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_instrumentation.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
@@ -72,7 +84,9 @@ def test_jit(tmp_path):
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
-def test_record(method, tmp_path: pathlib.Path):
+def test_record(method, device, fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.compilation.disable_line_info = False
+
     from contextlib import contextmanager
 
     @contextmanager
@@ -109,10 +123,9 @@ def test_record(method, tmp_path: pathlib.Path):
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_record.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -146,9 +159,343 @@ def test_record(method, tmp_path: pathlib.Path):
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
 
+    # check ttir line info
+    start_loc = None
+    end_loc = None
+    for line in ttir.split("\n"):
+        if "proton.record start" in line:
+            start_loc = line.split("loc(")[1].split(")")[0]
+        elif "proton.record end" in line:
+            end_loc = line.split("loc(")[1].split(")")[0]
+        elif start_loc and f"#loc{start_loc}" in line:
+            assert "test_instrumentation.py" in line
+        elif end_loc and f"#loc{end_loc}" in line:
+            assert "test_instrumentation.py" in line
+
+    assert start_loc is not None and end_loc is not None
+
+    # check llir line info
+    llir_lines = pgm.asm["llir"].splitlines()
+    if is_cuda():
+        clock_instr = "clock"
+    else:
+        # The AMD lowering emits llvm.readcyclecounter in LLIR. The backend
+        # later selects s_memtime on gfx942/gfx950 or
+        # s_get_shader_cycles_u64 on CDNA5.
+        clock_instr = "readcyclecounter"
+    clock_loc = None
+    for line in llir_lines:
+        if clock_instr not in line or "!dbg" not in line:
+            continue
+        suffix = line.split("!dbg ")[1]
+        clock_loc = suffix.split(",")[0].split()[0]
+        break
+    assert clock_loc is not None
+    loc_line = next(
+        (line for line in llir_lines if clock_loc in line and "DILocation" in line),
+        None,
+    )
+    assert loc_line is not None
+    assert "line: " in loc_line and "line: 0" not in loc_line
+
+
+def test_event(device, tmp_path: pathlib.Path):
+
+    @triton.jit
+    def kernel(x_ptr):
+        value = tl.load(x_ptr)
+        event = pl.allocate_event("async")
+        pl.start_event(event)
+        value += 1
+        pl.end_event(event)
+        tl.store(x_ptr, value)
+
+    def find_node(node, name):
+        if node["frame"]["name"] == name:
+            return node
+        for child in node.get("children", []):
+            if result := find_node(child, name):
+                return result
+        return None
+
+    x = torch.tensor([5], device=device, dtype=torch.int32)
+    tree_path = tmp_path / "event.hatchet"
+    proton.start(str(tree_path.with_suffix("")), backend="instrumentation")
+    kernel[(1, )](x, num_warps=1)
+    proton.finalize()
+
+    with tree_path.open("rb") as f:
+        tree = json.load(f)[0]
+    async_node = find_node(tree, "async")
+    assert async_node["metrics"]["cycles"] > 0
+
+    trace_path = tmp_path / "event.chrome_trace"
+    proton.start(
+        str(trace_path.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+    )
+    kernel[(1, )](x, num_warps=1)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "async"]
+    assert len(async_events) == 1
+    assert async_events[0]["ph"] == "X"
+    assert async_events[0]["dur"] > 0
+    assert "bind_id" not in async_events[0]
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="requires Ampere or newer")
+def test_gluon_event(device, tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def kernel(output_ptr, input_ptr, BLOCK: gl.constexpr, NUM_TILES: gl.constexpr):
+        blocked_layout: gl.constexpr = gl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+        shared_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
+        shared = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], shared_layout)
+        rows = gl.arange(0, BLOCK, gl.SliceLayout(1, blocked_layout))[:, None]
+        cols = gl.arange(0, BLOCK, gl.SliceLayout(0, blocked_layout))[None, :]
+        offsets = rows * BLOCK + cols
+        tile_size: gl.constexpr = BLOCK * BLOCK
+
+        event = pl.allocate_event("async_copy")
+        pl.start_event(event)
+        async_copy.async_load(shared, input_ptr + offsets)
+        async_copy.commit_group()
+
+        for tile in tl.range(1, NUM_TILES):
+            async_copy.wait_group(0)
+            pl.end_event(event)
+            value = shared.load(blocked_layout)
+            gl.store(output_ptr + (tile - 1) * tile_size + offsets, value)
+
+            pl.start_event(event)
+            async_copy.async_load(shared, input_ptr + tile * tile_size + offsets)
+            async_copy.commit_group()
+
+        async_copy.wait_group(0)
+        pl.end_event(event)
+        value = shared.load(blocked_layout)
+        gl.store(output_ptr + (NUM_TILES - 1) * tile_size + offsets, value)
+
+    input = torch.randn((3, 32, 32), device=device, dtype=torch.float32)
+    output = torch.empty_like(input)
+    trace_path = tmp_path / "gluon_event.chrome_trace"
+    proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
+    kernel[(1, )](output, input, BLOCK=32, NUM_TILES=3, num_warps=4)
+    proton.finalize()
+    torch.testing.assert_close(output, input)
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "async_copy"]
+    events_by_warp = {}
+    for event in async_events:
+        assert event["ph"] == "X" and event["dur"] > 0
+        assert "bind_id" not in event
+        events_by_warp.setdefault(event["tid"], []).append(event)
+    assert events_by_warp
+    assert set(map(len, events_by_warp.values())) == {3}
+
+
+@pytest.mark.skipif(not supports_ws(), reason="requires warp specialization")
+def test_gluon_warp_specialized_event(tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def consumer(barrier, event):
+        mbarrier.wait(barrier, phase=0)
+        pl.end_event(event)
+
+    @gluon.jit
+    def producer(barrier, event):
+        pl.start_event(event)
+        mbarrier.arrive(barrier, count=1)
+
+    @gluon.jit
+    def kernel():
+        barrier = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(barrier, count=1)
+        event = pl.allocate_event("warp_specialized")
+        gl.warp_specialize([
+            (consumer, (barrier, event)),
+            (producer, (barrier, event)),
+        ], [4], [24])
+
+    trace_path = tmp_path / "warp_specialized_event.chrome_trace"
+    proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
+    kernel[(1, )](num_warps=4)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "warp_specialized"]
+    assert async_events
+
+    links = {}
+    for event in async_events:
+        assert event["ph"] == "X" and event["dur"] == 0
+        assert "bind_id" in event
+        links.setdefault(event["bind_id"], []).append(event)
+
+    assert len(links) == 4
+    for endpoints in links.values():
+        assert len(endpoints) == 2
+        start = next(event for event in endpoints if event.get("flow_out"))
+        end = next(event for event in endpoints if event.get("flow_in"))
+        assert start["tid"] != end["tid"]
+        assert start["ts"] <= end["ts"]
+
+
+@pytest.mark.skipif(not supports_ws(), reason="requires warp specialization")
+def test_gluon_warp_specialized_dynamic_event(tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def default_partition(iterations):
+        event = pl.allocate_event("dynamic_warp_specialized")
+        # The dynamic loop makes Proton's segment part of warp specialization's CFG.
+        for _ in range(iterations):
+            pl.start_event(event)
+            pl.end_event(event)
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit(do_not_specialize=["iterations"])
+    def kernel(iterations):
+        gl.warp_specialize([
+            (default_partition, (iterations, )),
+            (empty_partition, ()),
+        ], [4], [24])
+
+    trace_path = tmp_path / "warp_specialized_dynamic_event.chrome_trace"
+    proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
+    kernel[(1, )](2, num_warps=4)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "dynamic_warp_specialized"]
+    assert async_events
+    assert all(event["ph"] == "X" for event in async_events)
+
+
+def test_select_ids(device, tmp_path: pathlib.Path):
+    from contextlib import contextmanager
+
+    select_ids = [0, 2]
+    mode = proton.mode.Default(
+        sampling_strategy="selective",
+        sampling_options=",".join(str(i) for i in select_ids),
+        granularity="warp",
+    )
+
+    @contextmanager
+    def instrumentation(file_path):
+        proton.hooks.InstrumentationHook.enable_host_buffer = True
+        proton.start(
+            str(file_path.with_suffix("")),
+            backend="instrumentation",
+            mode=mode,
+        )
+        try:
+            yield
+        finally:
+            proton.hooks.InstrumentationHook.enable_host_buffer = False
+            proton.finalize()
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        with pl.scope("load_ops"):
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
+    temp_file = tmp_path / "test_select_ids.hatchet"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+
+    warp_indices = []
+
+    with instrumentation(temp_file):
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=4)
+        uid_num_offset = 36
+        uid_vec_offset = 40
+        uid_num = int.from_bytes(
+            proton.hooks.InstrumentationHook.host_buffer[uid_num_offset:uid_num_offset + 4].numpy().tobytes(),
+            "little",
+        )
+        assert uid_num == len(select_ids)
+        for i in range(uid_num):
+            offset = uid_vec_offset + i * 4
+            warp_id = int.from_bytes(
+                proton.hooks.InstrumentationHook.host_buffer[offset:offset + 4].numpy().tobytes(),
+                "little",
+            )
+            warp_indices.append(warp_id)
+        assert sorted(warp_indices) == select_ids
+
+
+def test_no_scope_zero_scratch(device, tmp_path: pathlib.Path):
+    from contextlib import contextmanager
+
+    # A kernel with no `pl.scope` is instrumented but allocates no profile scratch
+    # (profile_scratch_size == 0), so the profiling allocator is never invoked and
+    # `self.buffer` is None. This used to raise ZeroDivisionError in
+    # `_populate_host_buffer`; make sure monitoring such a kernel no longer crashes.
+    mode = proton.mode.Default()
+
+    @contextmanager
+    def instrumentation(file_path):
+        proton.hooks.InstrumentationHook.enable_host_buffer = True
+        proton.start(str(file_path.with_suffix("")), backend="instrumentation", mode=mode)
+        try:
+            yield
+        finally:
+            proton.hooks.InstrumentationHook.enable_host_buffer = False
+            proton.finalize()
+
+    @triton.jit
+    def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        tl.store(output_ptr + offsets, x + y, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
+    output = torch.empty_like(x)
+    temp_file = tmp_path / "test_no_scope_zero_scratch.hatchet"
+
+    with instrumentation(temp_file):
+        # Previously raised ZeroDivisionError in _populate_host_buffer.
+        add_kernel[(1, 1, 1)](x, y, output, size, BLOCK_SIZE=1024, num_warps=4)
+        # Header is still built even though there is no profile-scratch payload.
+        assert proton.hooks.InstrumentationHook.host_buffer is not None
+
 
 @pytest.mark.parametrize("hook", ["triton", None])
-def test_tree(tmp_path: pathlib.Path, hook):
+def test_tree(device, tmp_path: pathlib.Path, hook):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         BLOCK_SIZE = args["BLOCK_SIZE"]
@@ -175,10 +522,9 @@ def test_tree(tmp_path: pathlib.Path, hook):
             output = x + y
             tl.store(output_ptr + offsets, output, mask=mask)
 
-    torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_tree.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -204,7 +550,7 @@ def test_tree(tmp_path: pathlib.Path, hook):
         assert load_ops["children"][1]["metrics"]["normalized_cycles"] > 0
 
 
-def test_trace(tmp_path: pathlib.Path):
+def test_trace(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -244,10 +590,9 @@ def test_trace(tmp_path: pathlib.Path):
             output = x - y
             tl.store(output_ptr + offsets, output, mask=mask)
 
-    torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_trace.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -270,7 +615,7 @@ def test_trace(tmp_path: pathlib.Path):
         assert events[3]["cat"] == "sub_kernel"
 
 
-def test_multi_session(tmp_path: pathlib.Path):
+def test_multi_session(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -291,10 +636,9 @@ def test_multi_session(tmp_path: pathlib.Path):
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    torch.manual_seed(0)
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file_inst = tmp_path / "test_tree_inst.hatchet"
     temp_file_driver = tmp_path / "test_tree_driver.hatchet"
     output = torch.empty_like(x)
@@ -308,6 +652,11 @@ def test_multi_session(tmp_path: pathlib.Path):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
+    temp_file_restart = tmp_path / "test_tree_restart.hatchet"
+    session_id0 = proton.start(str(temp_file_restart.with_suffix("")), backend="instrumentation")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
     with open(temp_file_inst, "rb") as f:
         data = json.load(f)
         kernel_frame = data[0]["children"][0]
@@ -316,12 +665,22 @@ def test_multi_session(tmp_path: pathlib.Path):
 
     with open(temp_file_driver, "rb") as f:
         data = json.load(f)
-        kernel_frame = data[0]["children"][0]
-        assert "add_kernel" == kernel_frame["frame"]["name"]
+        kernel_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "add_kernel":
+                kernel_frame = child
+                break
+        assert kernel_frame is not None
         assert "time (ns)" in kernel_frame["metrics"]
 
+    with open(temp_file_restart, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]
+        assert "add_kernel" == kernel_frame["frame"]["name"]
+        assert "cycles" in kernel_frame["children"][0]["metrics"]
 
-def test_autotune(tmp_path: pathlib.Path):
+
+def test_autotune(device, tmp_path: pathlib.Path):
 
     def metadata_fn(
         grid: tuple,
@@ -360,10 +719,9 @@ def test_autotune(tmp_path: pathlib.Path):
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
-    torch.manual_seed(0)
     size = 2048
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
@@ -381,7 +739,7 @@ def test_autotune(tmp_path: pathlib.Path):
         assert "add_1024" in names
 
 
-def test_warp_spec(tmp_path: pathlib.Path):
+def test_warp_spec(device, tmp_path: pathlib.Path):
     if not supports_tma() or not supports_ws():
         pytest.skip("target backend does not support warp specialization and TMA")
 
@@ -396,7 +754,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
                           WARP_SPECIALIZE: tl.constexpr,  #
                           ):
         dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
-        pl.enter_scope("kernel")
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -427,7 +784,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
         offs_cm = pid_m * BLOCK_SIZE_M
         offs_cn = pid_n * BLOCK_SIZE_N
         c_desc.store([offs_cm, offs_cn], c)
-        pl.exit_scope("kernel")
 
     def matmul_tma(a, b, warp_specialize: bool):
         # Check constraints.
@@ -470,10 +826,9 @@ def test_warp_spec(tmp_path: pathlib.Path):
     mode = proton.mode.Default(metric_type="cycle", optimizations="clock32")
     temp_file = tmp_path / "test_warpspec.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
-    torch.manual_seed(0)
     M, N, K = 512, 512, 512
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+    a = torch.randn((M, K), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
+    b = torch.randn((K, N), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
     b = b.T.contiguous()
 
     matmul_tma(a, b, warp_specialize=HAS_WARP_SPECIALIZE)
@@ -481,14 +836,13 @@ def test_warp_spec(tmp_path: pathlib.Path):
 
     with open(temp_file, "rb") as f:
         data = json.load(f)
-        kernel_level = data[0]["children"][0]["children"][0]
-        assert kernel_level["children"][0]["frame"]["name"] == "loop"
-        assert kernel_level["children"][0]["metrics"]["cycles"] > 0
-        assert kernel_level["frame"]["name"] == "kernel"
-        assert kernel_level["metrics"]["cycles"] > 0
+        kernel = data[0]["children"][0]
+        assert kernel["children"][0]["frame"]["name"] == "loop"
+        assert kernel["children"][0]["metrics"]["cycles"] > 0
+        assert kernel["frame"]["name"] == "matmul_kernel_tma"
 
 
-def test_timeline(tmp_path: pathlib.Path):
+def test_timeline(device, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_timeline.chrome_trace"
     mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
     proton.start(
@@ -512,7 +866,7 @@ def test_timeline(tmp_path: pathlib.Path):
         pl.exit_scope("entire")
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
@@ -529,7 +883,8 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
-def test_globaltime(tmp_path: pathlib.Path):
+@pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
+def test_globaltime(device, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
         metric_type="cycle",
@@ -557,10 +912,9 @@ def test_globaltime(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
         pl.exit_scope("elementwise_add_kernel")
 
-    torch.manual_seed(0)
     size = 1024 * 2000
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     n_elements = output.numel()
     BLOCK_SIZE = 1024
@@ -579,3 +933,404 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert s > 1
         ts_diff = target[s - 1]["ts"] - target[0]["ts"]
         assert ts_diff >= target[0]["dur"]
+
+
+@pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
+def test_overhead(device, tmp_path: pathlib.Path):
+    temp_file_cycles = tmp_path / "test_overhead.hatchet"
+    temp_file_time = tmp_path / "test_overhead_time.hatchet"
+
+    @triton.jit()
+    def kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, LOOP: tl.constexpr):
+        pl.enter_scope("kernel")
+        for _ in range(16):
+            if LOOP:
+                pl.enter_scope("loop")
+            x = tl.load(x_ptr + tl.arange(0, BLOCK_SIZE))
+            tl.store(y_ptr + tl.arange(0, BLOCK_SIZE), x + 1)
+            if LOOP:
+                pl.exit_scope("loop")
+        pl.exit_scope("kernel")
+
+    BLOCK_SIZE = 256
+    x = torch.zeros(BLOCK_SIZE, device=device, dtype=torch.float32)
+    y = torch.zeros_like(x)
+
+    def bench():
+        with proton.scope("single"):
+            kernel[(1024, )](x, y, BLOCK_SIZE, False)
+        with proton.scope("loop"):
+            kernel[(1024, )](x, y, BLOCK_SIZE, True)
+
+    # warmup
+    bench()
+
+    proton.start(str(temp_file_time.with_suffix("")), )
+
+    with proton.scope("session0"):
+        bench()
+
+    proton.start(str(temp_file_cycles.with_suffix("")), backend="instrumentation",
+                 mode=proton.mode.Default(metric_type="cycle", buffer_size=4096))
+
+    with proton.scope("session1"):
+        bench()
+    proton.finalize()
+
+    with temp_file_time.open("rb") as f:
+        data = json.load(f)
+    root = data[0]
+
+    def non_metadata_children(node):
+        return [child for child in node.get("children", []) if child["frame"]["name"] != "metadata"]
+
+    def session_kernel_time(session_name: str) -> Tuple[int, int]:
+        session_node = next(child for child in non_metadata_children(root) if child["frame"]["name"] == session_name)
+        session_children = non_metadata_children(session_node)
+        single_node = next(child for child in session_children if child["frame"]["name"] == "single")
+        loop_node = next(child for child in session_children if child["frame"]["name"] == "loop")
+        single_kernel_node = next(child for child in non_metadata_children(single_node)
+                                  if child["frame"]["name"] == "kernel")
+        loop_kernel_node = next(child for child in non_metadata_children(loop_node)
+                                if child["frame"]["name"] == "kernel")
+        single_time = single_kernel_node["metrics"]["time (ns)"]
+        loop_time = loop_kernel_node["metrics"]["time (ns)"]
+        return single_time, loop_time
+
+    session0_single_time, session0_loop_time = session_kernel_time("session0")
+    session1_single_time, session1_loop_time = session_kernel_time("session1")
+    single_threshold = 1.2 if is_cuda() else 1.5
+    loop_threshold = 2.0 if is_cuda() else 3.0
+    assert session1_single_time / session0_single_time < single_threshold, "Simple kernel overhead too high"
+    assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
+
+
+def test_gmem_buffer(device, tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 512
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
+    temp_file = tmp_path / "test_gmem_buffer.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(buffer_type="global")
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+        mode=mode,
+    )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Assert we have exactly 4 events (2 warps × 2 scopes)
+        assert len(events) == 4
+
+        # Assert all events have the expected common fields
+        for event in events:
+            assert "ts" in event
+            assert "dur" in event
+            assert event["dur"] > 0
+
+        # Assert we have 2 kernel events and 2 load_ops events
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        load_ops_events = [e for e in events if e["name"] == "load_ops"]
+        assert len(kernel_events) == 2
+        assert len(load_ops_events) == 2
+
+        # Assert we have events from both warps
+        warp0_events = [e for e in events if "warp 0" in e["tid"]]
+        warp1_events = [e for e in events if "warp 1" in e["tid"]]
+        assert len(warp0_events) == 2
+        assert len(warp1_events) == 2
+
+
+def test_event_args(device, tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
+    temp_file = tmp_path / "test_block_metadata.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Verify we have events
+        assert len(events) > 0
+
+        # Verify each event has the required metadata in args
+        for event in events:
+            assert "args" in event
+            args = event["args"]
+
+            assert "Init Time (ns)" in args
+            assert "Post Final Time (ns)" in args
+            assert "Finalization Time (ns)" in args
+
+            # Verify timing values are reasonable
+            init_time = args["Init Time (ns)"]
+            post_final_time = args["Post Final Time (ns)"]
+            finalization_time = args["Finalization Time (ns)"]
+
+            assert init_time >= 0
+            assert post_final_time >= 0
+            assert finalization_time >= 0
+
+
+def test_threaded_kernel_call(device, tmp_path: pathlib.Path):
+
+    import threading
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 256
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+
+    temp_file = tmp_path / "test_threaded.chrome_trace"
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+    )
+
+    exception_holder = []
+
+    def run_kernel():
+        try:
+            add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+        except Exception as e:
+            exception_holder.append(e)
+
+    thread = threading.Thread(target=run_kernel)
+    thread.start()
+    thread.join()
+
+    proton.finalize()
+
+    assert len(exception_holder) == 0, f"Kernel raised exception: {exception_holder[0] if exception_holder else None}"
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+        assert len(events) > 0
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        assert len(kernel_events) > 0
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability(0)[0] < 10, reason="Requires Blackwell")
+@pytest.mark.parametrize(
+    "profile_data,file_suffix",
+    [
+        ("tree", ".hatchet"),
+        ("trace", ".chrome_trace"),
+    ],
+)
+def test_gluon_clc_profile(device, tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
+
+    @gluon.jit
+    def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
+        tile_id = gl.program_id(0)
+        has_work = gl.to_tensor(True)
+        phase = gl.to_tensor(0)
+
+        layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
+        clc_result = gl.allocate_shared_memory(gl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        while has_work:
+            with pl.scope("clc_add_step"):
+                offsets = tile_id * BLOCK_SIZE + gl.arange(0, BLOCK_SIZE, gl.BlockedLayout([1], [32], [4], [0]))
+                mask = offsets < n_elements
+                x = gl.load(x_ptr + offsets, mask)
+                y = gl.load(y_ptr + offsets, mask)
+                gl.store(out_ptr + offsets, x + y, mask)
+
+            clc.try_cancel(clc_result, clc_bar)
+            mbarrier.expect(clc_bar, 16)
+            mbarrier.wait(clc_bar, phase)
+
+            clc_response = clc.load_result(clc_result)
+            has_work = clc_response.is_canceled()
+            tile_id = clc_response.program_id(0)
+            phase = phase ^ 1
+
+    block_size = 256
+    num_tiles = torch.cuda.get_device_properties(0).multi_processor_count * 8
+    n_elements = block_size * num_tiles
+
+    x = torch.rand((n_elements, ), device=device, dtype=torch.float32)
+    y = torch.rand((n_elements, ), device=device, dtype=torch.float32)
+    out = torch.empty_like(x)
+    expected = x + y
+
+    temp_file = tmp_path / f"test_gluon_clc_vector_add_{profile_data}{file_suffix}"
+    start_kwargs = {"backend": "instrumentation"}
+    if profile_data == "trace":
+        start_kwargs["data"] = "trace"
+    proton.start(str(temp_file.with_suffix("")), **start_kwargs)
+    gluon_clc_vector_add_kernel[(num_tiles, )](x, y, out, n_elements, BLOCK_SIZE=block_size, num_warps=4)
+    proton.finalize()
+
+    torch.testing.assert_close(out, expected)
+
+    def find_frames(node, predicate):
+        results = []
+        if predicate(node):
+            results.append(node)
+        for child in node.get("children", []):
+            results.extend(find_frames(child, predicate))
+        return results
+
+    with temp_file.open("rb") as f:
+        data = json.load(f)
+        if profile_data == "tree":
+            root = data[0]
+            kernel_nodes = find_frames(root, lambda node: "gluon_clc_vector_add_kernel" in node["frame"]["name"])
+            clc_scope_nodes = find_frames(root, lambda node: node["frame"]["name"] == "clc_add_step")
+
+            assert len(kernel_nodes) > 0
+            assert len(clc_scope_nodes) > 0
+            assert clc_scope_nodes[0]["metrics"]["cycles"] > 0
+        else:
+            events = data["traceEvents"]
+            assert len(events) > 0
+            clc_scope_events = [event for event in events if event["name"] == "clc_add_step"]
+            kernel_category_events = [
+                event for event in events if "gluon_clc_vector_add_kernel" in event.get("cat", "")
+            ]
+            assert len(clc_scope_events) > 0
+            assert len(kernel_category_events) > 0
+            assert all(event["dur"] > 0 for event in clc_scope_events)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tensor_descriptor(device, num_ctas, tmp_path: pathlib.Path):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.skip("CTAs is unsupported for these cards")
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+
+        assert desc.shape[0] == M
+        assert desc.shape[1] == N
+        assert desc.strides[0] == N
+        assert desc.strides[1] == 1
+        assert desc.block_shape == [M_BLOCK, N_BLOCK]
+        pl.enter_scope("load_block")
+        block = desc.load([M_BLOCK, 2 * N_BLOCK])
+        pl.exit_scope("load_block")
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        assert size == 128 * num_ctas
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    M_BLOCK = 4
+    N_BLOCK = 4
+    M, N = M_BLOCK * 3, N_BLOCK * 4
+    inp = torch.randn((M, N), device=device, dtype=torch.float32)
+    out = inp.new_empty((M_BLOCK, N_BLOCK))
+
+    temp_file = tmp_path / "test_tensor_descriptor.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation", data="trace")
+
+    kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
+    expect = inp[1 * M_BLOCK:2 * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
+    torch.testing.assert_close(expect, out)
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+        trace_events = data["traceEvents"]
+        if num_ctas == 1:
+            assert len(trace_events) == 4
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
+            assert num_cta0_events == 4
+        else:
+            assert len(trace_events) == 8
+            num_cta0_events = sum(1 for e in trace_events if "CTA0" in e["pid"])
+            num_cta1_events = sum(1 for e in trace_events if "CTA1" in e["pid"])
+            assert num_cta0_events == 4
+            assert num_cta1_events == 4

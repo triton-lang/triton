@@ -26,19 +26,28 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
+
+#define GET_TYPEDEF_CLASSES
+#include "triton/Dialect/TritonNvidiaGPU/IR/Types.h.inc"
 
 namespace mlir::triton::nvidia_gpu::impl {
 LogicalResult verifyMMAv5Op(Operation *op);
 } // namespace mlir::triton::nvidia_gpu::impl
+
+#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.h.inc"
 
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
@@ -50,8 +59,48 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+struct PackedArithTypeInfo {
+  llvm::StringLiteral suffix;
+  unsigned lanes, registerBits;
+  char kind;
+
+  bool isFP4() const { return suffix == "e2m1x4"; }
+  unsigned storageLanes() const { return isFP4() ? lanes / 2 : lanes; }
+};
+
+struct PackedArithInstructionSpec {
+  const PackedArithTypeInfo *result;
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  StringRef modifiers;
+  unsigned operandSuffixes;
+};
+
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
+unsigned getPackedArithFp4Axis(PackedArithOp op);
+
+constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
+
+inline bool getModuleTwoCTAs(ModuleOp mod) {
+  auto attr = mod->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
+  return attr ? attr.getValue() : false;
+}
+
+inline bool getModuleTwoCTAs(Operation *op) {
+  return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
+}
+
+// Return the declared MMA N, restricted to a true N subview.
+unsigned getMMAv5InstructionN(gpu::MemDescType type);
+
+// Returns the required ordering of repeated TMEM scale blocks for one
+// tcgen05 scaled-MMA operand.
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType);
+
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
-  StringRef getName() final { return "<TensorMemory>"; }
+  StringRef getName() const final { return "<TensorMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
 struct TMemAllocation {
@@ -61,14 +110,55 @@ struct TMemAllocation {
   int numCols;
 };
 
+// Used to describe the layout of the TMEM load/store instructions
+enum class TMemAccessAtom { I32x32b, I16x64b, I16x128b, I16x256b, I16x32bx2 };
+
+inline int getElementsPerThread(TMemAccessAtom atom) {
+  switch (atom) {
+  case TMemAccessAtom::I32x32b:
+  case TMemAccessAtom::I16x64b:
+  case TMemAccessAtom::I16x32bx2:
+    return 1;
+  case TMemAccessAtom::I16x128b:
+    return 2;
+  case TMemAccessAtom::I16x256b:
+    return 4;
+  }
+  llvm_unreachable("Unknown TMemAccessAtom");
+}
+
+inline const char *getOpShape(TMemAccessAtom atom) {
+  switch (atom) {
+  case TMemAccessAtom::I32x32b:
+    return "32x32b";
+  case TMemAccessAtom::I16x64b:
+    return "16x64b";
+  case TMemAccessAtom::I16x128b:
+    return "16x128b";
+  case TMemAccessAtom::I16x256b:
+    return "16x256b";
+  case TMemAccessAtom::I16x32bx2:
+    return "16x32bx2";
+  }
+  llvm_unreachable("Unknown TMemAccessAtom");
+}
+
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp);
+
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-gpu::DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
-                                                      RankedTensorType oltType,
-                                                      unsigned numWarps);
-gpu::DistributedEncodingTrait
+uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t offset,
+                               int32_t dim);
+
+SmallVector<gpu::DistributedEncodingTrait>
+getTmemCompatibleLayouts(gpu::MemDescType memType, unsigned numWarps,
+                         ArrayRef<int64_t> ctaSplit = {1, 1});
+
+std::optional<gpu::DistributedEncodingTrait>
 getTmemLoadLayoutSplitLongM(RankedTensorType tensorType,
                             gpu::MemDescType memType, int numWarps);
+
 SmallVector<gpu::DistributedEncodingTrait>
 getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
                          gpu::MemDescType memType);
@@ -76,9 +166,27 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
-bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
-                                            gpu::MemDescType memType,
-                                            int numWarps);
+
+gpu::DistributedEncodingTrait
+getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps);
+
+std::optional<LinearLayout>
+getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
+                                unsigned numWarps);
+
+SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
+
+// Compact encoding of a CTA multicast group for a given broadcast mask:
+// `fixedBits` selects the CTA-id bits that identify the group leader, and
+// `pattern` is the recipient bitset for leader CTA 0 before shifting to the
+// current group.
+struct TMAMulticastMaskEncoding {
+  uint32_t fixedBits;
+  uint32_t pattern;
+};
+
+TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
+                                                     uint16_t broadcastBits);
 
 } // namespace mlir::triton::nvidia_gpu
 

@@ -9,7 +9,8 @@ try:
 except ImportError:
     raise ImportError("Failed to import hatchet. `pip install llnl-hatchet` to get the correct version.")
 import numpy as np
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME, LaunchHook
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.metric import FLOPS_WIDTHS
 from triton.profiler import specs
 
 
@@ -33,14 +34,15 @@ def match_available_metrics(metrics, inclusive_metrics, exclusive_metrics):
 
 def remove_frames(database: json):
     # We first fine frames that match either one of the two conditions:
-    # 1. The frame name is COMPUTE_METADATA_SCOPE_NAME
+    # 1. The frame name is a metadata frame
     # 2. The frame has no metrics and no children
     # Then we go up from the located nodes and remove the parents if all children were
     # metadata nodes
     def remove_frame_helper(node):
         if "frame" not in node:
             return node
-        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME:
+        if node["frame"]["name"] == COMPUTE_METADATA_SCOPE_NAME or node["frame"]["name"].startswith(
+                f"{COMPUTE_METADATA_SCOPE_NAME}:"):
             return None
         if len(node["metrics"]) == 0 and len(node["children"]) == 0:
             return None
@@ -63,10 +65,9 @@ def remove_frames(database: json):
     return new_database
 
 
-def get_raw_metrics(file):
-    database = json.load(file)
+def get_raw_metrics(database) -> tuple[ht.GraphFrame, list[str], list[str], dict]:
     database = remove_frames(database)
-    device_info = database.pop(1)
+    device_info = {} if len(database) < 2 else database.pop(1)
     gf = ht.GraphFrame.from_literal(database)
     inclusive_metrics = gf.show_metric_columns()
     exclusive_metrics = [metric for metric in gf.dataframe.columns if metric not in inclusive_metrics]
@@ -80,7 +81,7 @@ def get_min_time_flops(df, device_info):
             arch = device_info[device_type][device_index]["arch"]
             num_sms = device_info[device_type][device_index]["num_sms"]
             clock_rate = device_info[device_type][device_index]["clock_rate"]
-            for width in LaunchHook.flops_width:
+            for width in FLOPS_WIDTHS:
                 idx = df["device_id"] == device_index
                 device_frames = df[idx]
                 if f"flops{width}" not in device_frames.columns:
@@ -124,7 +125,7 @@ default_flop_factor_dict = {"flop/s": 1, "gflop/s": 1e9, "tflop/s": 1e12}
 derivable_metrics.update(
     {key: FactorDict("flops", default_flop_factor_dict)
      for key in default_flop_factor_dict.keys()})
-for width in LaunchHook.flops_width:
+for width in FLOPS_WIDTHS:
     factor_name = f"flops{width}"
     factor_dict = {f"flop{width}/s": 1, f"gflop{width}/s": 1e9, f"tflop{width}/s": 1e12}
     derivable_metrics.update({key: FactorDict(factor_name, factor_dict) for key in factor_dict.keys()})
@@ -248,8 +249,8 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
 
     if print_sorted:
         print("Sorted kernels by metric " + metrics[0])
-        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-        for row in range(1, len(sorted_df)):
+        sorted_df = gf.dataframe.drop(index=gf.graph.roots).sort_values(by=[metrics[0]], ascending=False)
+        for row in range(len(sorted_df)):
             kernel_name = (sorted_df.iloc[row]["name"][:100] +
                            "..." if len(sorted_df.iloc[row]["name"]) > 100 else sorted_df.iloc[row]["name"])
             print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
@@ -258,7 +259,8 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
 
 def read(filename):
     with open(filename, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
+        database = json.load(f)
+        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(database)
         assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
         gf.update_inclusive_columns()
         return gf, inclusive_metrics, exclusive_metrics, device_info
@@ -272,9 +274,24 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None):
     return gf, metrics
 
 
+def apply_diff_profile(gf, derived_metrics, diff_file, metrics, include, exclude, threshold):
+    # Compute the diff against a secondary profile while keeping derived metrics consistent.
+    gf2, _ = parse(metrics, diff_file, include, exclude, threshold)
+
+    derived_inc_metrics = [metric for metric in derived_metrics if metric.endswith("(inc)")]
+    derived_exc_metrics = [metric for metric in derived_metrics if not metric.endswith("(inc)")]
+
+    gf.inc_metrics = derived_inc_metrics
+    gf.exc_metrics = derived_exc_metrics
+    gf2.inc_metrics = derived_inc_metrics
+    gf2.exc_metrics = derived_exc_metrics
+    return gf.sub(gf2)
+
+
 def show_metrics(file_name):
     with open(file_name, "r") as f:
-        _, inclusive_metrics, exclusive_metrics, _ = get_raw_metrics(f)
+        database = json.load(f)
+        _, inclusive_metrics, exclusive_metrics, _ = get_raw_metrics(database)
         print("Available inclusive metrics:")
         if inclusive_metrics:
             for raw_metric in inclusive_metrics:
@@ -404,8 +421,7 @@ proton-viewer -e ".*test.*" path/to/file.json
     elif metrics:
         gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold)
         if diff:
-            gf2, _ = parse(metrics, diff, include, exclude, threshold)
-            gf = gf.sub(gf2)
+            gf = apply_diff_profile(gf, derived_metrics, diff, metrics, include, exclude, threshold)
         print_tree(gf, derived_metrics, depth, format, print_sorted)
 
 

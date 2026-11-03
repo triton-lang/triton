@@ -2,17 +2,24 @@
 #include "Utility.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::getShapePerCTA;
+using ::mlir::triton::gpu::isPermutationMatrixLayout;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::toLinearLayout;
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring,
-                         bool isHopperF64);
+                         ConversionPatternRewriter &rewriter, bool isTuring);
+
+LogicalResult convertMMA(triton::instrument::DotI8Op op,
+                         triton::instrument::DotI8Op::Adaptor adaptor,
+                         const LLVMTypeConverter *typeConverter,
+                         ConversionPatternRewriter &rewriter, bool isTuring);
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                                   triton::DotScaledOp::Adaptor adaptor,
@@ -29,68 +36,87 @@ struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
 
-  ScaledDotOpConversion(LLVMTypeConverter &converter, int computeCapability,
+  ScaledDotOpConversion(LLVMTypeConverter &converter, int,
                         PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit),
-        computeCapability(computeCapability) {}
+      : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, triton::DotScaledOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto rty = cast<RankedTensorType>(op.getResult().getType());
+    if (!isPermutationMatrixLayout(
+            toLinearLayout(rty.getShape(), rty.getEncoding())))
+      return rewriter.notifyMatchFailure(
+          op, "ScaledDotOp result encoding must have a permutation-matrix "
+              "linear layout");
     return convertMMADotScaled(op, adaptor, getTypeConverter(), rewriter);
   }
-
-private:
-  int computeCapability;
 };
 
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
 
-  DotOpConversion(LLVMTypeConverter &converter, int computeCapability,
-                  PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit),
-        computeCapability(computeCapability) {}
+  DotOpConversion(LLVMTypeConverter &converter, int, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::DotOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     // D = A * B + C
-    Value A = op.getA();
-    Value D = op.getResult();
+    auto dType = op.getResult().getType();
+    auto dEncoding = dType.getEncoding();
 
-    // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShapePerCTA = getShapePerCTA(A.getType());
-    size_t reduceAxis = 1;
-    unsigned K = AShapePerCTA[reduceAxis];
-    bool isOuter = K == 1;
+    if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
+      return rewriter.notifyMatchFailure(
+          op,
+          "DotOp result encoding must have a permutation-matrix linear layout");
 
-    NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
-        cast<RankedTensorType>(D.getType()).getEncoding());
-    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
+    NvidiaMmaEncodingAttr mmaLayout =
+        dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
+    if (mmaLayout) {
       if (mmaLayout.getVersionMajor() == 2) {
-        bool isHopperF64 =
-            computeCapability == 90 &&
-            cast<RankedTensorType>(A.getType()).getElementType().isF64();
         return convertMMA(op, adaptor, getTypeConverter(), rewriter,
-                          mmaLayout.isTuring(), isHopperF64);
+                          mmaLayout.isTuring());
       }
 
       llvm::report_fatal_error(
           "Unsupported MMA kind found when converting DotOp to LLVM.");
     }
 
-    if (isa<BlockedEncodingAttr>(
-            cast<RankedTensorType>(D.getType()).getEncoding()))
+    if (isa<BlockedEncodingAttr>(dEncoding))
       return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+};
 
-private:
-  int computeCapability;
+struct DotI8OpConversion
+    : public ConvertOpToLLVMPattern<triton::instrument::DotI8Op> {
+  using ConvertOpToLLVMPattern<
+      triton::instrument::DotI8Op>::ConvertOpToLLVMPattern;
+
+  DotI8OpConversion(LLVMTypeConverter &converter, int, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::instrument::DotI8Op>(converter,
+                                                            benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::instrument::DotI8Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto dType = op.getD().getType();
+    auto dEncoding = dType.getEncoding();
+    if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
+      return rewriter.notifyMatchFailure(
+          op, "DotI8Op result encoding must have a permutation-matrix linear "
+              "layout");
+
+    auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
+    if (!mmaLayout || mmaLayout.getVersionMajor() != 2)
+      return rewriter.notifyMatchFailure(op,
+                                         "DotI8Op requires an MMAv2 layout");
+    return convertMMA(op, adaptor, getTypeConverter(), rewriter,
+                      mmaLayout.isTuring());
+  }
 };
 
 struct WarpGroupDotOpConversion
@@ -102,24 +128,8 @@ struct WarpGroupDotOpConversion
   matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    // D = A * B + C
-    Value A = op.getA();
-    TypedValue<RankedTensorType> D = op.getResult();
-
-    // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShapePerCTA = getShapePerCTA(A.getType());
-    size_t reduceAxis = 1;
-    unsigned K = AShapePerCTA[reduceAxis];
-    bool isOuter = K == 1;
-
-    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
-    if (!isOuter && supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
-      return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                          getThreadId(rewriter, loc));
-    }
-
-    return op.emitError(
-        "Unsupported WarpGroupDotOp found when converting TritonGPU to LLVM.");
+    return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                        getThreadId(rewriter, loc));
   }
 };
 
@@ -128,17 +138,11 @@ struct WarpGroupDotWaitOpConversion
   using ConvertOpToLLVMPattern<
       triton::nvidia_gpu::WarpGroupDotWaitOp>::ConvertOpToLLVMPattern;
 
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto pendings = op.getPendings();
-    Location loc = op.getLoc();
-    ValueRange inputs = adaptor.getInputs();
-    if (inputs.size() == 1) {
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
-          op, inputs.front(), pendings);
-      return success();
-    }
+  static FailureOr<Value> packInputs(Location loc, RewriterBase &rewriter,
+                                     ValueRange inputs) {
+    if (inputs.size() == 1)
+      return inputs.front();
+
     SmallVector<Type> types;
     // Pack the inputs into a single struct.
     for (Type type : inputs.getTypes()) {
@@ -149,32 +153,56 @@ struct WarpGroupDotWaitOpConversion
     }
     auto packedType =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
+    Value packed = LLVM::UndefOp::create(rewriter, loc, packedType);
     unsigned outputStructIndex = 0;
     for (Value input : inputs) {
       for (auto [i, type] : llvm::enumerate(
                cast<LLVM::LLVMStructType>(input.getType()).getBody())) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(loc, input, i);
-        packed = rewriter.create<LLVM::InsertValueOp>(
-            loc, packedType, packed, value, outputStructIndex++);
+        Value value = LLVM::ExtractValueOp::create(rewriter, loc, input, i);
+        packed = LLVM::InsertValueOp::create(rewriter, loc, packedType, packed,
+                                             value, outputStructIndex++);
       }
     }
-    Value packedOutput =
-        rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, packed, pendings);
-    // Unpack the output into the original struct types.
+    return packed;
+  }
+
+  static SmallVector<Value> unpackOutput(Location loc, RewriterBase &rewriter,
+                                         Value packedOutput, TypeRange types) {
     SmallVector<Value> outputs;
-    outputStructIndex = 0;
-    for (Type type : inputs.getTypes()) {
+    if (types.size() == 1) {
+      outputs.push_back(packedOutput);
+      return outputs;
+    }
+
+    // Unpack the output into the original struct types.
+    unsigned outputStructIndex = 0;
+    for (Type type : types) {
       auto structType = cast<LLVM::LLVMStructType>(type);
-      Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
+      Value unpacked = LLVM::UndefOp::create(rewriter, loc, structType);
       for (auto [i, type] : llvm::enumerate(structType.getBody())) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, packedOutput, outputStructIndex++);
-        unpacked = rewriter.create<LLVM::InsertValueOp>(loc, structType,
-                                                        unpacked, value, i);
+        Value value = LLVM::ExtractValueOp::create(rewriter, loc, packedOutput,
+                                                   outputStructIndex++);
+        unpacked = LLVM::InsertValueOp::create(rewriter, loc, structType,
+                                               unpacked, value, i);
       }
       outputs.push_back(unpacked);
     }
+    return outputs;
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    ValueRange inputs = adaptor.getInputs();
+    auto packed = packInputs(loc, rewriter, inputs);
+    if (failed(packed))
+      return failure();
+
+    auto wait = triton::nvgpu::WGMMAWaitGroupOp::create(rewriter, loc, *packed,
+                                                        op.getPendings());
+    auto outputs =
+        unpackOutput(loc, rewriter, wait.getResult(), inputs.getTypes());
     rewriter.replaceOp(op, outputs);
     return success();
   }
@@ -185,6 +213,7 @@ void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int computeCapability, PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
+  patterns.add<DotI8OpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
   patterns.add<ScaledDotOpConversion>(typeConverter, computeCapability,

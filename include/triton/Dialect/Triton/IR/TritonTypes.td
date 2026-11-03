@@ -4,6 +4,7 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
+include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 
 //
 // Types
@@ -14,8 +15,17 @@ class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
+def TT_FP4E2M1x2 : TritonTypeDef<"PackedFloat4E2M1", "fp4e2m1x2"> {
+    let summary = "Two E2M1 floating-point values packed in one byte";
+    let description = [{
+        The low nibble holds the first value and the high nibble the second.
+        Tensor dimensions and pointer offsets count packed pairs.
+    }];
+    let assemblyFormat = "";
+}
+
 // Floating-point Type
-def TT_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
+def TT_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F8E8M0FNU, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : RankedTensorOf<[TT_Float]>;
 def TT_FloatLike : AnyTypeOf<[TT_Float, TT_FloatTensor]>;
 
@@ -54,21 +64,27 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
     let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
 
     let description = [{
-        Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
+        Pointer type in Triton IR type system. Pointer types may only point to scalar element types.
     }];
 
-    let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
+    let parameters = (ins "Type":$pointeeType, "PtrAddrSpace":$addressSpace);
 
     let builders = [
         TypeBuilderWithInferredContext<(ins
             "Type":$pointeeType,
-            "int":$addressSpace
+            "PtrAddrSpace":$addressSpace
         ), [{
             return $_get(pointeeType.getContext(), pointeeType, addressSpace);
+        }]>,
+        TypeBuilderWithInferredContext<(ins
+            "Type":$pointeeType
+        ), [{
+            return $_get(pointeeType.getContext(), pointeeType, PtrAddrSpace::Global);
         }]>
     ];
 
     let hasCustomAssemblyFormat = 1;
+    let genVerifyDecl = 1;
 
     let skipDefaultBuilders = 1;
 }
@@ -84,46 +100,79 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 
 // Tensor Type
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
-def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
-
-// Pointer Type to Tensor Type: `ptr<tensor<>>`
-def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
+def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr, TT_FP4E2M1x2]>;
 
 // Any Type in Triton IR
-def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
+def TT_Type : AnyTypeOf<[TT_Float, TT_Int, TT_Ptr, TT_FP4E2M1x2, TT_Tensor]>;
+
+// Type constraint for any type implementing TensorDescInterface
+def TT_AnyTensorDescType : Type<
+  CPred<"::mlir::isa<::mlir::triton::TensorDescInterface>($_self)">,
+  "tensor descriptor type",
+  "::mlir::triton::TensorDescInterface"
+>;
 
 // Result type of MakeTensorDescriptor
-def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
+def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", [TT_TensorDescInterface]> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
 
   let description = [{
-      A portable abstraction for nvidia-TMA descriptors.
+      A portable abstraction for TMA descriptors.
+      This is the base tensor descriptor type for tiled tensor memory access.
+
+      Shape and elementType describe the block dimensions and data type.
+      The optional sharedLayout attribute carries the shared memory encoding
+      (e.g. swizzle pattern) that is assigned during lowering.
+
+      For specialized access patterns like im2col, see TensorDescIm2ColType
+      in the TritonNvidiaGPU dialect.
   }];
 
-  let parameters = (ins "RankedTensorType":$blockType);
-  let assemblyFormat = "`<` $blockType `>`";
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "Type":$elementType,
+    OptionalParameter<"Attribute">:$sharedLayout
+  );
 
   let builders = [
-    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
-      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+    // Builder from shape + elementType + sharedLayout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout
+    ), [{
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
+    }]>,
+    // Builder with signedness
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "bool":$isSigned
+    ), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
         auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
-        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
-        blockType = blockType.clone(elemTy);
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
       }
-      return Base::get($_ctxt, blockType);
+      return $_get(elementType.getContext(), shape, elementType, Attribute{});
+    }]>,
+    // Builder with signedness and shared layout
+    TypeBuilderWithInferredContext<(ins
+      "llvm::ArrayRef<int64_t>":$shape,
+      "Type":$elementType,
+      "Attribute":$sharedLayout,
+      "bool":$isSigned
+    ), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(elementType)) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        elementType = IntegerType::get(elementType.getContext(), intTy.getWidth(), sem);
+      }
+      return $_get(elementType.getContext(), shape, elementType, sharedLayout);
     }]>,
   ];
-  let extraClassDeclaration = [{
-    RankedTensorType getSignlessBlockType() const {
-      auto resTy = getBlockType();
-      if (auto intTy = llvm::dyn_cast<IntegerType>(resTy.getElementType())) {
-        auto width = resTy.getElementTypeBitWidth();
-        auto signlessTy = IntegerType::get(getContext(), width);
-        resTy = resTy.clone(signlessTy);
-      }
-      return resTy;
-    }
-  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
+  let genVerifyDecl = 1;
 }
 
 #endif

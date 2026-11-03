@@ -1,6 +1,7 @@
 graft bin
 graft cmake
 graft docs
+graft examples
 graft include
 graft lib
 graft python/src
@@ -14,3 +15,6 @@ include Makefile
 include python/build_helpers.py
 include python/requirements.txt
 include python/test-requirements.txt
+global-exclude __pycache__
+global-exclude __pycache__/*
+global-exclude *.py[cod]

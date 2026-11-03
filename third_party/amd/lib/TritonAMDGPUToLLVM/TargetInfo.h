@@ -1,41 +1,87 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "llvm/TargetParser/TargetParser.h"
-#include <string>
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include <optional>
 
 namespace mlir::triton::AMD {
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::optional<StringRef> arch, bool cuMode = false)
+      : targetFeatures(arch), cuMode(cuMode) {}
 
-  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+  StringRef getArch() const { return targetFeatures.getArch(); }
+  StringRef getBaseArch() const { return targetFeatures.getBaseArch(); }
+  amdgpu::ISAFamily getISAFamily() const {
+    return targetFeatures.getISAFamily();
+  }
+
+  bool isCuMode() const { return cuMode; }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  int getWarpSize() const;
+  int getWarpSize() const { return targetFeatures.getWarpSize(); }
 
-  int getSharedMemorySize() const;
+  int getSharedMemorySize() const {
+    return targetFeatures.getSharedMemorySize();
+  }
 
-  bool supportMaximumMinimum() const override;
+  int getSharedMemoryBanks() const override;
+
+  size_t getSharedMemoryPartitionSize() const override {
+    return targetFeatures.getSharedMemoryPartitionSize();
+  }
+
+  bool supportMaximumMinimum() const override {
+    return targetFeatures.supportMaximumMinimum();
+  }
+
+  bool supportDppBroadcast() const {
+    return targetFeatures.supportDppBroadcast();
+  }
+
+  bool isGFX1250Strict() const { return targetFeatures.isGFX1250Strict(); }
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
+
   void barrier(Location loc, RewriterBase &rewriter,
-               bool isWarpSync = false) const override;
+               triton::gpu::AddrSpace targets) const override;
+  void clusterBarrier(Location loc, RewriterBase &rewriter,
+                      Operation *sourceOp) const override;
+
+  void warpSync(Location loc, RewriterBase &rewriter) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Value val,
-                    Value pred) const override;
+                    Value ctaId, Value val, Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Value ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
-  bool canUseLDSTransLoad(int bitwidth) const;
+
+  // Describes the parameters of ds_read_tr for a particular data type.
+  using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
+  // Get the ds_read_tr parameters for the instruction that operates on the
+  // element granularity specified by bitWidth. Returns candidates ordered from
+  // largest (most restrictive) to smallest, so the lowering can try the more
+  // profitable instruction first and fall back.
+  SmallVector<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -53,10 +99,8 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op, unsigned numLaneToReduce,
-                  unsigned interleave) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -68,23 +112,123 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
+  bool requiresAssertTrap() const override { return true; }
+
+  void assertTrap(RewriterBase &rewriter, Location loc) const override;
+
   int getSharedAddressSpace() const override;
 
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
 
-  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+  bool supportBitwidth16Elementwise() const override {
+    return targetFeatures.supportBitwidth16Elementwise();
+  }
+  bool supportBitwidth32Elementwise() const override {
+    return targetFeatures.supportBitwidth32Elementwise();
+  }
 
-  void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                             Operation *llLoadOp) const override;
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
+
+  // Returns true if the target supports per lane addresses into LDS for
+  // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
+  // scattering and instead have to write warp coalesced into LDS
+  bool supportsDirectToLdsScatter() const {
+    return targetFeatures.supportsDirectToLdsScatter();
+  }
+
+  // Some architectures (GFX9) require alias information on direct-to-lds loads
+  // and loads from LDS so LLVM does not add conservative waits between those
+  // ops. For such case we ensure synchronization between data hazards via
+  // ttg.async_wait
+  bool requiresAliasInfoForAsyncOps() const {
+    return targetFeatures.requiresAliasInfoForAsyncOps();
+  }
+  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const {
+    return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
+  }
+  bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+    return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
+  }
+  bool supportsBufferLoadToLocal() const {
+    return targetFeatures.supportsBufferLoadToLocal();
+  }
+
+  // Whether this target uses asyncmark/wait_asyncmark intrinsics for
+  // async memory ops synchronization instead of waitcnt-based intrinsics waits.
+  bool useAsyncMarks() const { return targetFeatures.useAsyncMarks(); }
+
+  bool supportsMultiCTALaunch() const {
+    return targetFeatures.supportsMultiCTALaunch();
+  }
+  bool supportsMulticast() const { return targetFeatures.supportsMulticast(); }
+  unsigned getMaxMulticastMaskPopcount() const {
+    return targetFeatures.getMaxMulticastMaskPopcount();
+  }
+  bool supportsTDM() const { return targetFeatures.supportsTDM(); }
+  bool supportsClusterLoadBitWidth(int bitWidth) const {
+    return targetFeatures.supportsClusterLoadBitWidth(bitWidth);
+  }
+
+  // Whether this target supports buffer atomic read-modify-write (RMW)
+  // operations. This gates all buffer RMW conversions (BUFFER_ATOMIC_ADD,
+  // _AND, _OR, _XOR, _UMIN, _UMAX, _SWAP, _ADD_F32, _PK_ADD_F16, etc.).
+  // CAS (BUFFER_ATOMIC_CMPSWAP) is handled separately.
+  bool supportsBufferAtomicRMW() const {
+    return targetFeatures.supportsBufferAtomicRMW();
+  }
+  // Additional per-type gate for buffer atomic FADD. Integer RMW ops (ADD,
+  // AND, etc.) work on i32/i64 universally, but float FADD has ISA-specific
+  // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and
+  // BUFFER_ATOMIC_PK_ADD_{F16,BF16}:
+  //   - CDNA3 (gfx942): no BUFFER_ATOMIC_PK_ADD_BF16
+  //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
+  //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
+  //   - CDNA4, CDNA5: all float types supported (CDNA5 adds PK_ADD_BF16)
+  bool supportsBufferAtomicFadd(mlir::Type elementType) const {
+    return targetFeatures.supportsBufferAtomicFadd(elementType);
+  }
+  // Returns the cache policy (cpol) immediate for buffer atomic instructions.
+  // When hasUsers is true, sets SC0/TH_ATOMIC_RETURN to return pre-op value.
+  // On CDNA5, also sets SCOPE_DEV for device-wide visibility.
+  int32_t getBufferAtomicCachePolicy(bool hasUsers) const {
+    return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
+  }
+
+  bool supportsWaveId() const { return targetFeatures.supportsWaveId(); }
+  bool supportsPermlaneSwap() const {
+    return targetFeatures.supportsPermlaneSwap();
+  }
+  bool supportsCvtPkScalePk8() const {
+    return targetFeatures.supportsCvtPkScalePk8();
+  }
+  bool supportsCvtPkScalePk8Upcast() const {
+    return targetFeatures.supportsCvtPkScalePk8Upcast();
+  }
+  bool supportsCvtPkScalePk8Block16() const {
+    return targetFeatures.supportsCvtPkScalePk8Block16();
+  }
+  bool supportsHwScaledUpcast() const {
+    return targetFeatures.supportsHwScaledUpcast();
+  }
+  bool supportsHwScaledDowncast() const {
+    return targetFeatures.supportsHwScaledDowncast();
+  }
+
+  // Returns the hardware-specific tiles for shared memory loads and stores.
+  // The returned pair is in the format {LoadTile, StoreTile}.
+  std::pair<mlir::triton::gpu::LocalMemOpTile,
+            mlir::triton::gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
                   bool useStdErr) const;
 
-  std::string arch;
+  amdgpu::TargetFeatures targetFeatures;
+  bool cuMode;
 };
 } // namespace mlir::triton::AMD
 

@@ -1,25 +1,49 @@
+import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.hopper.tma import (
+    async_atomic_add,
+    async_atomic_and,
+    async_atomic_max,
+    async_atomic_min,
+    async_atomic_or,
+    async_atomic_xor,
     async_copy_global_to_shared,
     async_copy_shared_to_global,
+    async_load,
+    async_load_im2col,
+    async_store,
     store_wait,
     tensor_descriptor,
     tensor_descriptor_type,
+    make_tensor_descriptor,
+    _emit_alignment_check,
+    _tma_cache_policy,
 )
 
 __all__ = [
     "async_gather",
     "async_scatter",
+    "async_atomic_add",
+    "async_atomic_and",
+    "async_atomic_max",
+    "async_atomic_min",
+    "async_atomic_or",
+    "async_atomic_xor",
     "async_copy_global_to_shared",
     "async_copy_shared_to_global",
+    "async_load",
+    "async_load_im2col",
+    "async_store",
     "store_wait",
     "tensor_descriptor",
     "tensor_descriptor_type",
+    "make_tensor_descriptor",
 ]
 
 
 @builtin
-def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _semantic=None):
+def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, multicast=False, cache_policy=None,
+                 _semantic=None):
     """
     Asynchronously gather elements from global memory to shared memory using TMA.
 
@@ -30,15 +54,35 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, _
         barrier (shared_memory_descriptor): Barrier that will be signaled when the operation is complete.
         result (tensor_memory_descriptor): Result shared memory, must have NVMMASharedLayout.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Enable multicast.
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            eviction policy. None leaves the policy unspecified. Cache policies
+            are performance hints and do not affect synchronization.
     """
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, (y_offset, ), "async_gather", "y_offset", _semantic=_semantic)
+
     pred = _semantic.to_tensor(pred)
     y_offset = _semantic.to_tensor(y_offset)
+    multicast = ttgl._unwrap_if_constexpr(multicast)
+    cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
     _semantic.builder.create_async_tma_gather(tensor_desc.handle, x_offsets.handle, y_offset.handle, barrier.handle,
-                                              result.handle, pred.handle)
+                                              result.handle, pred.handle, multicast, cache_policy)
+
+
+def _emit_scatter_nonnegative_check(x_offsets, y_offset, _semantic=None):
+    y_offset = ttgl.to_tensor(y_offset, _semantic=_semantic)
+    zero = ttgl.to_tensor(0, _semantic=_semantic)
+
+    is_nonnegative = y_offset.__ge__(zero, _semantic=_semantic)
+    ttgl.device_assert(is_nonnegative, "async_scatter y_offset cannot be negative", _semantic=_semantic)
+
+    is_nonnegative = x_offsets.__ge__(zero, _semantic=_semantic)
+    ttgl.device_assert(is_nonnegative, "async_scatter x_offsets cannot have any negative elements", _semantic=_semantic)
 
 
 @builtin
-def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
+def async_scatter(tensor_desc, x_offsets, y_offset, src, cache_policy=None, _semantic=None):
     """
     Asynchronously scatter elements from shared memory to global memory using TMA.
 
@@ -47,6 +91,15 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
         x_offsets (tensor): 1D tensor of X offsets.
         y_offset (int): Scalar Y offset.
         src (tensor_memory_descriptor): The source data, must be in NVMMASharedLayout.
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            eviction policy. None leaves the policy unspecified. Cache policies
+            are performance hints and do not affect synchronization.
     """
+    if _semantic.builder.options.enable_iisan:
+        _emit_alignment_check(tensor_desc, (y_offset, ), "async_scatter", "y_offset", _semantic=_semantic)
+        _emit_scatter_nonnegative_check(x_offsets, y_offset, _semantic=_semantic)
+
     y_offset = _semantic.to_tensor(y_offset)
-    _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle)
+    cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
+    _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle,
+                                               cache_policy)

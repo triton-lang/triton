@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
@@ -30,9 +31,6 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
           scaledDotOp.getResult().getType().getEncoding()))
     return failure();
 
-  // TODO: add support for m/n packed formats.
-  if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
-    return failure();
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                     scaledDotOp.getBElemType(), rewriter);
@@ -41,8 +39,8 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
   scaledA = cvtDotOperand(rewriter, scaledDotOp, 0, scaledA);
   auto scaledB = scaleArg(rewriter, scaledDotOp, 1, computeType);
   scaledB = cvtDotOperand(rewriter, scaledDotOp, 1, scaledB);
-  auto newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), scaledA, scaledB,
-                                       scaledDotOp.getC());
+  auto newDot = DotOp::create(rewriter, scaledDotOp.getLoc(), scaledA, scaledB,
+                              scaledDotOp.getC());
 
   rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
                                                scaledDotOp.getType(), newDot);
@@ -61,11 +59,23 @@ DecomposeScaledBlocked::getComputeType(ScaleDotElemType aType,
 TypedValue<RankedTensorType>
 DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
                                   TypedValue<RankedTensorType> scale,
-                                  FloatType computeType) const {
+                                  FloatType computeType, bool handleNan) const {
   auto loc = scale.getLoc();
   auto scaleTy = scale.getType();
+  if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
+    scaleTy = scaleTy.clone(rewriter.getI8Type());
+    scale = cast<TypedValue<RankedTensorType>>(
+        BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
+  }
   assert(computeType == rewriter.getBF16Type() ||
          computeType == rewriter.getF16Type());
+
+  if (isa<FloatType>(scaleTy.getElementType())) {
+    auto scaleType = scaleTy.clone(computeType);
+    return cast<TypedValue<RankedTensorType>>(
+        FpToFpOp::create(rewriter, loc, scaleType, scale, RoundingModeAttr{})
+            .getResult());
+  }
 
   // Choose an fp type that can fit the scale value.
   FloatType largeFpType = computeType == rewriter.getF16Type()
@@ -75,63 +85,95 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   auto intType = rewriter.getIntegerType(intWidth);
 
   auto zexted =
-      rewriter.create<arith::ExtUIOp>(loc, scaleTy.clone(intType), scale);
+      arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(intType), scale);
   // getFpMantissaWidth() returns the number of bits in the mantissa plus the
   // sign bit!
   int shiftValue = largeFpType.getFPMantissaWidth() - 1;
   auto shiftConst =
-      rewriter.create<arith::ConstantIntOp>(loc, shiftValue, intWidth);
+      arith::ConstantIntOp::create(rewriter, loc, shiftValue, intWidth);
   auto shift =
-      rewriter.create<SplatOp>(loc, scaleTy.clone(intType), shiftConst);
-  auto shlRes = rewriter.create<arith::ShLIOp>(loc, zexted, shift);
+      SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
+  Value scaleBits = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+  if (computeType.isBF16()) {
+    // E8M0 byte zero is 2^-127, which is subnormal in bf16 and rounds to
+    // zero in fp16.
+    auto minScaleBits = arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
+    auto minScale =
+        SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
+    scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
+  }
   Value scaleFP =
-      rewriter.create<BitcastOp>(loc, scaleTy.clone(largeFpType), shlRes);
+      BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
+  if (handleNan) {
+    // Preserve finite scales and turn byte 255's infinity encoding into NaN.
+    auto zero =
+        arith::ConstantOp::create(rewriter, loc, scaleFP.getType(),
+                                  rewriter.getZeroAttr(scaleFP.getType()));
+    scaleFP = math::FmaOp::create(rewriter, loc, scaleFP, zero, scaleFP);
+  }
   if (largeFpType != computeType) {
-    scaleFP = rewriter.create<arith::TruncFOp>(loc, scaleTy.clone(computeType),
-                                               scaleFP);
+    scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(computeType),
+                                      scaleFP);
   }
   return cast<TypedValue<RankedTensorType>>(scaleFP);
 }
 
 TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
-    PatternRewriter &rewriter, DotScaledOp scaledDotOp, ModuleOp mod,
-    TypedValue<RankedTensorType> scale, int dim) const {
-  auto *ctx = rewriter.getContext();
+    PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+    TypedValue<RankedTensorType> scale, int dim, Attribute dstEncoding) const {
   auto loc = scale.getLoc();
   auto scaleTy = scale.getType();
-  auto rank = scaleTy.getRank();
-  // 2.1) Expand dims along the last dimension
-  {
-    // 2.1.1) Find default encoding for ExpandDims
-    auto shape = to_vector(scaleTy.getShape());
-    shape.insert(shape.end(), 1);
-    auto nWarps = lookupNumWarps(scaledDotOp);
-    auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
-    auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
-    auto blockedEnc =
-        getDefaultBlockedEncoding(ctx, shape, nWarps, threadsPerWarp, numCTAs);
-    // 2.1.2) Cast scale16 to SliceEncoding
-    auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
-    auto sliceType = scaleTy.cloneWithEncoding(sliceEnc);
-    scale = rewriter.create<ConvertLayoutOp>(loc, sliceType, scale);
-  }
-  auto expandScale = rewriter.create<ExpandDimsOp>(loc, scale, rank);
-  // 2.2) Broadcast the dimension to size 32
-  auto scaleShape = to_vector(scaleTy.getShape());
-  scaleShape.push_back(32);
-  auto broadcastScale = rewriter.create<BroadcastOp>(
-      loc, expandScale.getType().clone(scaleShape), expandScale);
-  // 2.3) Transpose the dimension to the scaled dimension
-  auto transposeOrder = llvm::to_vector(llvm::seq<int32_t>(rank));
-  transposeOrder.insert(transposeOrder.begin() + dim + 1, rank);
-  auto transposedScale =
-      rewriter.create<TransOp>(loc, broadcastScale, transposeOrder);
-  // 2.4) Reshape to the shape of v
-  scaleShape.pop_back();
-  scaleShape[dim] *= 32;
-  auto reshapeScale =
-      rewriter.create<ReshapeOp>(loc, scaleShape, transposedScale);
-  return reshapeScale;
+  int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
+
+  // We want to broadcast the scales along dim. To do this:
+  //   1. Introduce a size 1 dimension right after dim
+  //   2. Broadcast the new dim to the scale factor
+  //   3. Reshape it to get the result shape.
+
+  // Compute the shape after each step.
+  auto expandedShape = to_vector(scaleTy.getShape());
+  expandedShape.insert(expandedShape.begin() + dim + 1, 1);
+  auto broadcastShape = expandedShape;
+  broadcastShape[dim + 1] = scaleFactor;
+  auto resultShape = to_vector(scaleTy.getShape());
+  resultShape[dim] *= scaleFactor;
+
+  // It is more efficient to perform a layout conversion before broadcasting,
+  // since there are fewer elements. Infer the source encoding that will produce
+  // dstEncoding after the broadcast and reshape.
+  auto interface = cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
+  Attribute broadcastEncoding;
+  auto result = interface->inferReshapeOpEncoding(
+      resultShape, dstEncoding, broadcastShape, broadcastEncoding, loc);
+  assert(succeeded(result));
+  Attribute srcEncoding;
+  result = interface->inferReshapeOpEncoding(
+      expandedShape, broadcastEncoding, scaleTy.getShape(), srcEncoding, loc);
+  assert(succeeded(result));
+
+  auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
+
+  // Convert the scales to the desired type.
+  scale = ConvertLayoutOp::create(rewriter, loc, srcType, scale);
+
+  // Introduce the new dimension.
+  auto expandType = RankedTensorType::get(
+      expandedShape, scaleTy.getElementType(), broadcastEncoding);
+  // We know this layout avoids having any layout conversions after we expand
+  // the scales, so mark the layout as efficient. Otherwise, forward layout
+  // propagation may try to sink the convert layout.
+  auto expandScale =
+      ReshapeOp::create(rewriter, loc, expandType, scale,
+                        /*efficient_layout=*/rewriter.getUnitAttr());
+  // Broadcast the dimension to the microscaling factor.
+  auto broadcastType = RankedTensorType::get(
+      broadcastShape, scaleTy.getElementType(), broadcastEncoding);
+  auto broadcastScale =
+      BroadcastOp::create(rewriter, loc, broadcastType, expandScale);
+  auto resultType =
+      RankedTensorType::get(resultShape, scaleTy.getElementType(), dstEncoding);
+  // Reshape to fold in the broadcasted dimension and get the final result.
+  return ReshapeOp::create(rewriter, loc, resultType, broadcastScale);
 }
 
 TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
@@ -144,32 +186,38 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
 
   // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
   auto loc = scale.getLoc();
-  auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
   // Scale is NaN
   auto scaleTy = scale.getType();
-  auto constFF = rewriter.create<arith::ConstantOp>(
-      loc, scaleTy,
-      DenseElementsAttr::get(scaleTy,
-                             APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
-  auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
-      rewriter
-          .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, scale, constFF)
-          .getResult());
-  auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
-  // Make scale is NaN compatible with mxfp
-  auto condTy = cond.getType();
-  condTy = condTy.cloneWithEncoding(mxfp.getType().getEncoding());
-  cond = rewriter.create<ConvertLayoutOp>(loc, condTy, cond);
+  TypedValue<RankedTensorType> scaleIsNan;
+  if (isa<FloatType>(scaleTy.getElementType())) {
+    auto computeType = cast<FloatType>(mxfp.getType().getElementType());
+    auto scaleFp = scaleTo16(rewriter, scale, computeType, /*handleNan=*/true);
+    scaleIsNan = cast<TypedValue<RankedTensorType>>(
+        arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO, scaleFp,
+                              scaleFp)
+            .getResult());
+  } else {
+    auto constFF = arith::ConstantOp::create(
+        rewriter, loc, scaleTy,
+        DenseElementsAttr::get(scaleTy,
+                               APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
+    scaleIsNan = cast<TypedValue<RankedTensorType>>(
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, scale,
+                              constFF)
+            .getResult());
+  }
+  auto cond = broadcastScale(rewriter, scaledDotOp, scaleIsNan, dim,
+                             mxfp.getType().getEncoding());
 
   // Create NaN
   auto mxfpTy = mxfp.getType();
   auto nan = APFloat::getNaN(
       cast<FloatType>(mxfpTy.getElementType()).getFloatSemantics());
-  auto constNan = rewriter.create<arith::ConstantOp>(
-      loc, mxfpTy, DenseElementsAttr::get(mxfpTy, nan));
+  auto constNan = arith::ConstantOp::create(
+      rewriter, loc, mxfpTy, DenseElementsAttr::get(mxfpTy, nan));
 
-  auto result = rewriter.create<arith::SelectOp>(loc, cond, constNan, mxfp);
+  auto result = arith::SelectOp::create(rewriter, loc, cond, constNan, mxfp);
   return cast<TypedValue<RankedTensorType>>(result.getResult());
 }
 
@@ -182,7 +230,6 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   auto isFp4 =
       ScaleDotElemType::E2M1 ==
       (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
-  auto fastMath = scaledDotOp.getFastMath();
 
   auto loc = v.getLoc();
   auto rank = v.getType().getRank();
@@ -190,34 +237,33 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
 
   // 0) Upcast value to computeType (fp16/bf16)
   if (isFp4) {
-    // We always pack along the fastest moving dimension, kDim
-    v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, kDim);
+    bool kPack =
+        opIdx == 0 ? scaledDotOp.getLhsKPack() : scaledDotOp.getRhsKPack();
+    int packedDim = kPack ? kDim : (opIdx == 0 ? rank - 2 : rank - 1);
+    v = Fp4ToFpOp::create(rewriter, loc, v, computeType, packedDim);
   } else {
     auto vType16 = v.getType().clone(computeType);
     v = cast<TypedValue<RankedTensorType>>(
-        rewriter.create<FpToFpOp>(loc, vType16, v).getResult());
+        FpToFpOp::create(rewriter, loc, vType16, v, RoundingModeAttr{})
+            .getResult());
   }
   if (!scale)
     return v;
 
-  // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
-  auto reshapeScale = extendAndBroadcastScale(rewriter, scaledDotOp, scale,
-                                              computeType, v.getType(), opIdx);
+  // Cast scale to fp16/bf16, broadcast it and convert its layout.
+  auto reshapeScale = extendAndBroadcastScale(
+      rewriter, scaledDotOp, scale, computeType, v.getType(), opIdx,
+      /*handleNan=*/!scaledDotOp.getFastMath());
 
-  // 2) Multiply
-  auto mxfp = cast<TypedValue<RankedTensorType>>(
-      rewriter.create<arith::MulFOp>(loc, v, reshapeScale).getResult());
-
-  // 3) If the scale is NaN, return NaN, else return the scaled value.
-  return maskNan(rewriter, scaledDotOp, mxfp, scale, kDim);
+  return cast<TypedValue<RankedTensorType>>(
+      arith::MulFOp::create(rewriter, loc, v, reshapeScale).getResult());
 }
 
 TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
     PatternRewriter &rewriter, DotScaledOp scaledDotOp,
     TypedValue<RankedTensorType> &scale, FloatType computeType,
-    RankedTensorType dstType, int opIdx) const {
+    RankedTensorType dstType, int opIdx, bool handleNan) const {
   auto loc = scale.getLoc();
-  auto mod = scaledDotOp->getParentOfType<ModuleOp>();
   auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
   auto rank = v.getType().getRank();
   auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
@@ -229,15 +275,15 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
   // Notice: this is an inplace change.
   if (opIdx == 1) {
     auto order = getTransposeOrder(rank);
-    scale = rewriter.create<TransOp>(loc, scale, order);
+    scale = TransOp::create(rewriter, loc, scale, order);
   }
 
   // 1) Cast scale to compute type (fp16/bf16)
-  auto scale16 = scaleTo16(rewriter, scale, computeType);
+  auto scale16 = scaleTo16(rewriter, scale, computeType, handleNan);
 
   // 2) Broadcast scale to the same shape as v and convert the layout
-  auto reshapeScale = broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
-  return rewriter.create<ConvertLayoutOp>(loc, dstType, reshapeScale);
+  return broadcastScale(rewriter, scaledDotOp, scale16, kDim,
+                        dstType.getEncoding());
 }
 
 TypedValue<RankedTensorType>
@@ -250,7 +296,7 @@ DecomposeScaledBlocked::cvtDotOperand(PatternRewriter &rewriter,
   auto encoding =
       DotOperandEncodingAttr::get(ctx, opIdx, retEnc, vType.getElementType());
   auto retTy = vType.cloneWithEncoding(encoding);
-  return rewriter.create<ConvertLayoutOp>(v.getLoc(), retTy, v);
+  return ConvertLayoutOp::create(rewriter, v.getLoc(), retTy, v);
 }
 
 void populateDecomposeScaledBlockedPatterns(RewritePatternSet &patterns,

@@ -14,6 +14,7 @@ python/triton_kernels/triton*.egg-info/
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so
+python/triton/_C/*.so.*
 python/triton/_C/*.dylib
 python/triton/_C/*.pdb
 python/triton/_C/*.exe
@@ -37,11 +38,11 @@ python/triton/tools/extra
 # Proton
 python/triton/profiler
 
-# Pytest
-pytest.ini
-
 # Instrumentation
 python/triton/instrumentation
+
+# MLIR Plugin
+python/triton/plugins
 
 # Python caches
 __pycache__/
@@ -69,11 +70,20 @@ ptxas
 # Third-party include
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
+third_party/nvidia/backend/lib/cupti-blackwell
+third_party/nvidia/backend/lib/gsan.ll
+third_party/nvidia/backend/lib/gsan-profile.ll
+third_party/amd/backend/lib/libtriton_amd_codegen.dylib
+third_party/amd/backend/lib/libtriton_amd_codegen.so
+third_party/amd/backend/lib/triton_amd_codegen.dll
 
 # Docs
 docs/_build/
+docs/_generated/
+docs/gluon/api/generated/
 docs/python-api/generated/
 docs/dialects/
+docs/getting-started/examples
 docs/getting-started/tutorials
 docs/sg_execution_times.rst
 !python/tutorials/*.py
@@ -92,3 +102,5 @@ docs/sg_execution_times.rst
 
 # macOS
 .DS_Store
+
+AGENTS.override.md

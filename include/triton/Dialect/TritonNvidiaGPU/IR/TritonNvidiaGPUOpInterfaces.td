@@ -3,6 +3,79 @@
 
 include "mlir/IR/OpBase.td"
 
+def TMAOpInterface : OpInterface<"TMAOpInterface"> {
+  let description = [{
+    Common interface for asynchronous TMA operations.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the tensor descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getDesc",
+      /*args=*/(ins)>,
+  ];
+}
+
+def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface]> {
+  let description = [{
+    Common interface for asynchronous TMA operations that write shared memory.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the destination memory descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getResult",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the completion barrier",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getBarrier",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the completion barrier operand",
+      /*retType=*/"::mlir::OpOperand&",
+      /*methodName=*/"getBarrierMutable",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get the predicate",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getPred",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Return true if this load uses multicast",
+      /*retType=*/"bool",
+      /*methodName=*/"getMulticast",
+      /*args=*/(ins)>,
+  ];
+}
+
+def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface]> {
+  let description = [{
+    Common interface for asynchronous TMA operations that read shared memory.
+  }];
+
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Get the source memory descriptor",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getSrc",
+      /*args=*/(ins)>,
+    InterfaceMethod<
+      /*desc=*/"Get mutable source memory descriptor",
+      /*retType=*/"::mlir::OpOperand&",
+      /*methodName=*/"getSrcMutable",
+      /*args=*/(ins)>,
+  ];
+}
+
 def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
   let description = [{
      This interface is implemented by MMAv5 dot and dot scaled ops.
@@ -15,6 +88,9 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
     InterfaceMethod<"Return the A operand.",
                     "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
                     "getA">,
+    InterfaceMethod<"Return the B operand.",
+                    "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+                    "getB">,
     InterfaceMethod<"Return the accumulator init flag.",
                     "::mlir::Value",
                     "useAccumulator">,
@@ -22,10 +98,22 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setUseAccumulator",
                     (ins "::mlir::Value":$flag)>,
+    InterfaceMethod<"Return the completion barriers of this MMAv5 op.",
+                    "::mlir::ValueRange",
+                    "getCompletionBarriers">,
+    InterfaceMethod<"Return the completion barrier predicates of this MMAv5 op.",
+                    "::mlir::ValueRange",
+                    "getCompletionBarrierPreds">,
+    InterfaceMethod<"Return the completion descriptor operands of this MMAv5 op.",
+                    "::llvm::SmallVector<::mlir::Value>",
+                    "getCompletionDescs">,
     InterfaceMethod<"Associate a new completion barrier to this MMAv5 op.",
                     "void",
                     "addCompletionBarrier",
                     (ins "::mlir::Value":$barrier, "::mlir::Value":$pred)>,
+    InterfaceMethod<"Return true if this MMAv5 op uses multicast completion metadata.",
+                    "bool",
+                    "getMulticast">,
     InterfaceMethod<"Return the accumulator.",
                     "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
                     "getAccumulator">,
@@ -53,6 +141,9 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setIsAsync",
                     (ins "bool":$isAsync)>,
+    InterfaceMethod<"Return true if this MMA op uses two CTAs.",
+                    "bool",
+                    "getTwoCtas">,
     InterfaceMethod<"Return true if this MMA op executes asynchronously.",
                     "bool",
                     "isAsync">

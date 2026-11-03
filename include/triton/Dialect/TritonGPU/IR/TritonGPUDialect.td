@@ -8,6 +8,9 @@ def TritonGPU_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton::gpu";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let hasOperationAttrVerify = 1;
 
   let description = [{
@@ -35,7 +38,6 @@ def TritonGPU_Dialect : Dialect {
 
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
-  let usePropertiesForAttributes = 1;
 }
 
 #endif

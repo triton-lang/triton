@@ -1,6 +1,7 @@
 from __future__ import annotations
+import inspect
 import math
-from typing import TypeVar, List, TYPE_CHECKING, Tuple
+from typing import Callable, TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
 
@@ -8,13 +9,17 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
+from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout, CoalescedLayout,
+                       SharedLinearLayout, _get_shape_per_cta)
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
-    constexpr,
+    _CachePolicy as CachePolicy,
+    _normalize_cache_policy,
+    aggregate_replace,
     base_value,
     base_type,
+    constexpr,
     dtype,
     block_type,  # TODO: block type with layout info
     pointer_type,
@@ -28,6 +33,8 @@ from triton.language.core import (
     uint16,
     uint32,
     uint64,
+    float4e2m1x2,
+    float8e8m0fnu,
     float8e5,
     float8e5b16,
     float8e4nv,
@@ -48,6 +55,8 @@ from triton.language.core import (
 # We define __all__ only to appease the python linter, these are not used in
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
+    "aggregate_replace",
+    "CachePolicy",
     "constexpr",
     "pointer_type",
     "void",
@@ -60,6 +69,8 @@ __all__ = [
     "uint16",
     "uint32",
     "uint64",
+    "float4e2m1x2",
+    "float8e8m0fnu",
     "float8e5",
     "float8e5b16",
     "float8e4nv",
@@ -74,9 +85,10 @@ __all__ = [
     "static_range",
     "tuple",
     "tuple_type",
+    "num_ctas",
 ]
 
-T = TypeVar("T")
+T = TypeVar("T", bound=Callable)
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
@@ -84,7 +96,6 @@ GLUON_BUILTIN = "__triton_builtin__"
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -94,31 +105,41 @@ def builtin(fn: T) -> T:
         return fn(*args, **kwargs)
 
     setattr(wrapper, GLUON_BUILTIN, True)
+    wrapper.signature = inspect.signature(fn)
 
     return wrapper
 
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
+add = builtin(tl_core.add)
 associative_scan = builtin(tl_core.associative_scan)
+assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
+atomic_load = builtin(tl_core.atomic_load)
 atomic_max = builtin(tl_core.atomic_max)
 atomic_min = builtin(tl_core.atomic_min)
 atomic_or = builtin(tl_core.atomic_or)
+atomic_poll = builtin(tl_core.atomic_poll)
+atomic_store = builtin(tl_core.atomic_store)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
+cast = builtin(tl_core.cast)
+clamp = builtin(tl_core.clamp)
 device_assert = builtin(tl_core.device_assert)
+device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
+gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
-load = builtin(tl_core.load)
 map_elementwise = builtin(tl_core.map_elementwise)
 max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
 maximum = builtin(tl_core.maximum)
 minimum = builtin(tl_core.minimum)
+mul = builtin(tl_core.mul)
 multiple_of = builtin(tl_core.multiple_of)
 num_programs = builtin(tl_core.num_programs)
 permute = builtin(tl_core.permute)
@@ -128,9 +149,85 @@ reshape = builtin(tl_core.reshape)
 split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
-store = builtin(tl_core.store)
+sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
+expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
+
+
+@builtin
+def inline_asm(asm, constraints="", args=(), result_types=(), is_pure=False, _semantic=None):
+    """Execute one inline assembly block per participating thread.
+
+    Tensor inputs are unpacked in their layout's register order, including
+    replicated register positions. Scalar inputs are uniform and memory
+    descriptors become one uniform ``i32`` address of their logical origin.
+    Inputs are not broadcast, and elements smaller than 32 bits are not packed.
+
+    ``result_types`` is a scalar dtype, a :class:`distributed_type`, or a
+    sequence of these types. A single type returns one tensor; a sequence
+    returns a tuple. The default empty sequence produces no results. Tensor
+    inputs and outputs require explicit distributed layouts. Scalar outputs
+    must be uniform, and replicated tensor elements must agree with the layout.
+
+    ``asm`` may be a string or a ``@gluon.constexpr_function`` returning a
+    string. The function receives ``(outputs, inputs)``, each a tuple of
+    operand-reference tuples. References are numbered outputs first, then
+    inputs, e.g. ``(("$0", "$1"),)``. Only these strings, not runtime values,
+    are passed to the function. Normal Python iteration and slicing can be
+    used to generate assembly for large groups of per-thread elements.
+
+    ``constraints`` is an LLVM constraint string, or a tuple with one constraint
+    per logical output followed by each input. Tuple entries are repeated for
+    every element in their group. Use a string for explicitly numbered ties or
+    clobbers.
+
+    Descriptor operands require ``is_pure=False``. The compiler does not model
+    their memory accesses or insert synchronization for them. Callers must
+    provide barriers, fences, and asynchronous completion before storage reuse.
+    All accesses must stay within the descriptor views.
+
+    Example::
+
+        @gluon.constexpr_function
+        def add_bias(outputs, inputs):
+            out, = outputs
+            x, bias = inputs
+            return "\\n".join(
+                f"add.f32 {dst}, {src}, {bias[0]};"
+                for dst, src in zip(out, x)
+            )
+
+        y = gl.inline_asm(add_bias, ("=&f", "f", "f"), [x, bias],
+                          x.type, is_pure=True)
+    """
+    return _semantic.inline_asm(asm, constraints, args, result_types, is_pure)
+
+
+@builtin
+def load(pointer, mask=None, other=None, *, cache_modifier=None, eviction_policy=None, volatile=False,
+         cache_policy=None, _semantic=None):
+    """Load from memory, optionally using a cache policy."""
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    if other is not None:
+        other = _semantic.to_tensor(other)
+    volatile = _unwrap_if_constexpr(volatile)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
+
+
+@builtin
+def store(pointer, value, mask=None, *, cache_modifier=None, eviction_policy=None, cache_policy=None, _semantic=None):
+    """Store to memory, optionally using a cache policy."""
+    value = _semantic.to_tensor(value)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 class distributed_type(block_type):
@@ -142,7 +239,7 @@ class distributed_type(block_type):
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
         assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
-        if not isinstance(layout, AutoLayout):
+        if not isinstance(layout, (AutoLayout, CoalescedLayout)):
             assert len(
                 shape
             ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
@@ -197,6 +294,23 @@ class shared_memory_descriptor_type(base_type):
     def __str__(self) -> str:
         return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
+    @property
+    def nbytes_per_cta(self) -> int:
+        if isinstance(self.layout, SharedLinearLayout):
+            cga_layout = []
+            dim_bases = [0] * len(self.shape)
+            for basis in self.layout.block_bases:
+                cga_basis = [0] * len(self.shape)
+                for dim, value in enumerate(basis):
+                    if value != 0:
+                        cga_basis[dim] = 1 << dim_bases[dim]
+                        dim_bases[dim] += 1
+                cga_layout.append(cga_basis)
+        else:
+            cga_layout = self.layout.cga_layout
+        shape_per_cta = _get_shape_per_cta(self.shape, cga_layout)
+        return math.prod(shape_per_cta) * self.element_ty.primitive_bitwidth // 8
+
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
                 and self.alloc_shape == other.alloc_shape)
@@ -206,7 +320,54 @@ class shared_memory_descriptor_type(base_type):
 
     def mangle(self) -> str:
         shape_str = "_".join([str(s) for s in self.shape])
-        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
+        alloc_shape_str = "_".join([str(s) for s in self.alloc_shape])
+        return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{alloc_shape_str}ASMD"
+
+
+def _add_atomic_scatter_docstring(kind: str) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        integer_only = kind in ("max", "min", "logical and", "logical or", "logical xor")
+        value_kind = "integer values" if integer_only else "values"
+        value_type = ("Integer tensor broadcast-compatible with :code:`indices`"
+                      if integer_only else "Tensor broadcast-compatible with :code:`indices`")
+        docstr = f"""
+    Performs an atomic scatter {kind} on this shared-memory descriptor.
+
+    For each input position :code:`I`, reads from and writes to the element whose
+    coordinate at :code:`axis` is replaced by :code:`indices[I]`:
+      :code:`old = dst[I[0], ..., indices[I], ..., I[n]]`
+      :code:`dst[I[0], ..., indices[I], ..., I[n]] = op(old, values[I])`
+    where :code:`op` is {kind}.
+
+    :code:`values`, :code:`indices`, and optional :code:`mask` are broadcast to a
+    common tensor shape before the atomic operation. The returned tensor has that
+    broadcasted shape. For example, with :code:`axis=1`, :code:`values` of shape
+    :code:`[N, 1]`, and :code:`indices` of shape :code:`[1, M]`, the operation
+    behaves as if both operands had shape :code:`[N, M]`:
+      :code:`old[i, j] = dst[i, indices[0, j]]`
+      :code:`dst[i, indices[0, j]] = op(old[i, j], values[i, 0])`
+    A :code:`mask` of shape :code:`[N, 1]` would also broadcast over :code:`M`.
+
+    Return the data stored at the scattered location before the atomic operation.
+
+    :param values: The {value_kind} with which to perform the atomic operation
+    :type values: {value_type}
+    :param indices: The indices to update along :code:`axis`
+    :type indices: Integer tensor
+    :param axis: The axis along which to update values
+    :type axis: int
+    :param mask: Boolean tensor broadcast-compatible with :code:`values` and :code:`indices`,
+        selecting which elements to update
+    :type mask: Tensor, optional
+
+    :note: This operation currently uses relaxed memory semantics. Users are responsible
+        for inserting mbarrier synchronization themselves.
+    """
+        func.__doc__ = docstr
+        return func
+
+    return _decorator
 
 
 class shared_memory_descriptor(base_value):
@@ -217,6 +378,9 @@ class shared_memory_descriptor(base_value):
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
         self.type = shared_memory_descriptor_type(element_ty, shape, layout, alloc_shape)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -236,6 +400,10 @@ class shared_memory_descriptor(base_value):
     @property
     def numel(self) -> int:
         return math.prod(self.shape)
+
+    @property
+    def nbytes_per_cta(self) -> int:
+        return self.type.nbytes_per_cta
 
     @property
     def layout(self):
@@ -269,6 +437,94 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_store(self, value)
 
     @builtin
+    def gather(self, indices, axis, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Gather elements from shared memory along a specified axis using an indices tensor.
+
+        For each output position I, the operation reads from src where the coordinate at
+        the gather axis is replaced by indices[I]:
+          result[I] = src[I[0], ..., indices[I], ..., I[n]]
+
+        Args:
+            indices (tensor): Tensor specifying which indices to gather along the axis.
+            axis (int): The axis along which to gather values.
+
+        Returns:
+            tensor: Gluon tensor with the gathered elements (same shape as indices).
+        """
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_gather(self, indices, axis)
+
+    @builtin
+    def scatter(self, values, indices, axis, _semantic: GluonSemantic = None):
+        """
+        Scatter elements to shared memory along a specified axis using an indices tensor.
+
+        For each input position I, the operation writes to dst where the coordinate at
+        the scatter axis is replaced by indices[I]:
+          dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+
+        Broadcasting:
+            values and indices are broadcast to a common tensor shape before the scatter.
+            For example, with axis=1, values of shape [N, 1] and indices of shape
+            [1, M] behave as if both operands had shape [N, M]:
+              dst[i, indices[0, j]] = values[i, 0]
+
+        Args:
+            values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
+            indices (tensor): Tensor specifying which indices to scatter to along the axis.
+            axis (int): The axis along which to scatter values.
+        """
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_scatter(self, values, indices, axis)
+
+    def _atomic_scatter_rmw(self, op, values, indices, axis, mask, _semantic: GluonSemantic = None) -> tensor:
+        values = _unwrap_if_constexpr(values)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        mask = _unwrap_if_constexpr(mask)
+        if mask is not None:
+            mask = _semantic.to_tensor(mask)
+        return _semantic.shared_atomic_scatter_rmw(self, op, values, indices, axis, mask)
+
+    @builtin
+    @_add_atomic_scatter_docstring("add")
+    def atomic_scatter_add(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("add", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("max")
+    def atomic_scatter_max(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("max", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("min")
+    def atomic_scatter_min(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("min", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical and")
+    def atomic_scatter_and(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("and", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical or")
+    def atomic_scatter_or(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("or", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("logical xor")
+    def atomic_scatter_xor(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xor", values, indices, axis, mask, _semantic)
+
+    @builtin
+    @_add_atomic_scatter_docstring("exchange")
+    def atomic_scatter_xchg(self, values, indices, axis, mask=None, _semantic: GluonSemantic = None) -> tensor:
+        return self._atomic_scatter_rmw("xchg", values, indices, axis, mask, _semantic)
+
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Create a subview of shared memory by slicing along a given dimension.
@@ -330,21 +586,22 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (List[int]): The new shape.
-            layout (SharedLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (List[int]): The new shape. Defaults to the descriptor shape.
+            layout (SharedLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             shared_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         return _semantic.memdesc_reinterpret(self, dtype, shape, layout)
 
@@ -435,25 +692,6 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
-def gather(src, index, axis, _semantic=None):
-    """
-    Gather values from a tensor along a specified axis using an index tensor.
-
-    Args:
-        src (tensor): The source tensor to gather values from.
-        index (tensor): The index tensor specifying which values to gather.
-        axis (int): The axis along which to gather values.
-
-    Returns:
-        tensor: The gathered tensor.
-    """
-    src = _unwrap_if_constexpr(src)
-    index = _unwrap_if_constexpr(index)
-    axis = _unwrap_if_constexpr(axis)
-    return _semantic.gather(src, index, axis)
-
-
-@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
@@ -491,26 +729,40 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
-                    _semantic=None, _generator=None):
+def fp4_to_fp(src, elem_type, axis, _semantic=None):
+    """
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    return _semantic.fp4_to_fp(src, elem_type, axis)
+
+
+@builtin
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
+    This forks the current execution into a "default partition" and an arbitrary number of
+    "worker partitons". The default partition is executed in the same :code:`num_warps` warps as
+    the parent region, and may accept tensor arguments and return tensors. Worker partitions are
+    executed in additional warps, which sit idle while executing the parent region.
+
+    Note that calling warp_specialize recursively is not supported.
+
     Args:
-        default_args (List[Any]): Arguments for the default region.
-        default_partition (callable): Function to build the default execution region.
-        worker_args (List[Any]): Arguments for each warp partition.
-        worker_partitions (List[callable]): Functions for each warp partition.
-        worker_num_warps (List[int]): Number of warps per partition.
-        worker_num_regs (List[int]): Number of registers per partition.
+        functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition. The first of which is the default partition.
+        worker_num_warps (List[int]): Number of warps used for each worker partition.
+        worker_num_regs (List[int], optional): Number of registers for each worker partition.
+            If not None, will be used by backend for dynamic register reallocation.
 
     Returns:
-        Tuple[Any, ...]: Results from the default region.
+        Tuple[Any, ...]: Results from the default partition.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
-    worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
-                                     worker_num_regs, _generator)
+    if worker_num_regs is not None:
+        worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
+    return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 
 @builtin
@@ -522,11 +774,26 @@ def num_warps(_semantic=None, _generator=None):
 
 
 @builtin
-def thread_barrier(_semantic=None):
+def num_ctas(_semantic=None):
     """
-    Insert a barrier to synchronize threads within a CTA.
+    Returns the number of CTAs in the current kernel
     """
-    return _semantic.debug_barrier()
+    return _semantic.num_ctas()
+
+
+@builtin
+def barrier(*, cluster: bool = False, _semantic=None):
+    """
+    Insert a barrier to synchronize threads within a CTA, or across a cluster.
+
+    Args:
+        cluster (bool): Whether to synchronize across the CTA cluster.
+    """
+    cluster = _unwrap_if_constexpr(cluster)
+    num_ctas = _unwrap_if_constexpr(_semantic.num_ctas())
+    if num_ctas == 1 or not cluster:
+        return _semantic.debug_barrier()
+    _semantic.builder.create_cluster_barrier()
 
 
 @builtin
@@ -573,11 +840,14 @@ def dot_fma(a, b, acc, _semantic=None):
     assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
     assert a.type.layout.operand_index == 0, "a's operand index must be 0"
     assert b.type.layout.operand_index == 1, "b's operand index must be 1"
+    assert len(acc.shape) == 2 or len(acc.shape) == 3
+    assert len(acc.shape) == len(a.shape) == len(b.shape)
 
-    M, N = acc.shape
-    K = a.shape[1]
-    if M * N * K > 2**19:
-        warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
+    unified_dot_shape = acc.shape + a.shape[-1:]  # join batch/M/N and K in one list
+    if math.prod(unified_dot_shape) > 2**19:
+        dot_name = "batched dot" if len(acc.shape) == 3 else "dot"
+        shape_str = "x".join([str(x) for x in unified_dot_shape])
+        warnings.warn(f"Large {dot_name} FMA instruction size {shape_str} may have slow compile times")
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)

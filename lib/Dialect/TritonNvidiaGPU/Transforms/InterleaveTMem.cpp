@@ -71,14 +71,14 @@ findBufferAccessMemdescSubview(Operation *subview) {
     src = indexOp.getSrc();
     shape = to_vector(indexOp.getType().getShape());
     offsets = {indexOp.getIndex()};
-    for (auto i : llvm::seq(std::max<int>(0, shape.size() - 1)))
-      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
+    for (int i = 0, e = std::max<int>(0, shape.size() - 1); i < e; ++i)
+      offsets.push_back(arith::ConstantIntOp::create(builder, loc, 0, 32));
   } else {
     auto subsliceOp = cast<ttg::MemDescSubsliceOp>(subview);
     src = subsliceOp.getSrc();
     shape = to_vector(subsliceOp.getType().getShape());
     for (auto offset : subsliceOp.getOffsets())
-      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, offset, 32));
+      offsets.push_back(arith::ConstantIntOp::create(builder, loc, offset, 32));
   }
   auto [alloc, parentAccess] = findBufferAccess(src);
   if (!alloc)
@@ -124,8 +124,7 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
 
     // Look through `ttg.warp_specialize` explicit captures.
     if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
-      return findBufferAccess(
-          wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+      return findBufferAccess(wsOp.getExplicitCaptures()[arg.getArgNumber()]);
     }
 
     // Unknown block argument.
@@ -151,17 +150,18 @@ std::pair<Value, AccessRange> findBufferAccess(Value a) {
     return findBufferAccessMemdescSubview(defOp);
   }
 
-  // Subslice is a subview only on the N dimension.
+  // Subslice is a subview on one tensor dimension.
   if (auto subslice = dyn_cast<TMEMSubSliceOp>(defOp)) {
     auto [alloc, parentAccess] = findBufferAccess(subslice.getSrc());
     if (!alloc)
       return {};
-    if (!parentAccess.ranges[1])
+    unsigned dim = subslice.getDim();
+    if (!parentAccess.ranges[dim])
       return {alloc, parentAccess};
-    uint64_t mStart = parentAccess.ranges[1]->start() + subslice.getN();
-    uint64_t mSize = subslice.getType().getShape()[1];
+    uint64_t start = parentAccess.ranges[dim]->start() + subslice.getOffset();
+    uint64_t size = subslice.getType().getShape()[dim];
     AccessRange childAccess = parentAccess;
-    childAccess.ranges[1] = {{mStart, mStart + mSize}};
+    childAccess.ranges[dim] = {{start, start + size}};
     return {alloc, std::move(childAccess)};
   }
 
@@ -262,7 +262,6 @@ struct TritonNvidiaGPUInterleaveTMemPass
       TritonNvidiaGPUInterleaveTMemPass>::TritonNvidiaGPUInterleaveTMemPassBase;
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     SmallVector<std::pair<Operation *, Value>> opsToSink;
     m.walk([&](Operation *op) {

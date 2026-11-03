@@ -195,6 +195,109 @@ TEST_F(CircularLayoutParserTest, MultipleSegment) {
   }
 }
 
+TEST_F(CircularLayoutParserTest, AsyncEventsPairAcrossWarps) {
+  auto append32 = [&](uint32_t word) {
+    for (int i = 0; i < 4; ++i)
+      testData.push_back((word >> (i * 8)) & 0xff);
+  };
+  auto append64 = [&](uint64_t word) {
+    append32(word);
+    append32(word >> 32);
+  };
+  auto appendAsync = [&](bool isStart, uint32_t scopeId, uint32_t cycle) {
+    uint32_t tag = (scopeId << 23) | (1u << 22);
+    if (!isStart)
+      tag |= 1u << 31;
+    append32(tag);
+    append32(cycle);
+  };
+
+  append32(kPreamble);
+  append32(1);  // block id
+  append32(3);  // processor id
+  append32(32); // two 16-byte warp segments
+  append64(10);
+  append64(20);
+  append64(30);
+  append32(4); // warp 0: two records
+  append32(4); // warp 1: two records
+  appendAsync(true, 7, 100);
+  appendAsync(true, 7, 200);
+  appendAsync(false, 7, 150);
+  appendAsync(false, 7, 250);
+
+  config.numBlocks = 1;
+  config.totalUnits = 2;
+  config.scratchMemSize = testData.size();
+  config.uidVec = {0, 1};
+  auto buffer = ByteSpan(testData.data(), testData.size());
+  CircularLayoutParser parser(buffer, config);
+  parser.parse();
+
+  auto &block = parser.getResult()->blockTraces[0];
+  ASSERT_EQ(block.traces.size(), 2);
+  EXPECT_TRUE(block.traces[0].profileEvents.empty());
+  EXPECT_TRUE(block.traces[1].profileEvents.empty());
+  EXPECT_EQ(block.traces[0].asyncEvents.size(), 2);
+  EXPECT_EQ(block.traces[1].asyncEvents.size(), 2);
+  ASSERT_EQ(block.asyncLinks.size(), 2);
+  EXPECT_EQ(block.asyncLinks[0].first.uid, 0);
+  EXPECT_EQ(block.asyncLinks[0].second.uid, 1);
+  EXPECT_EQ(block.asyncLinks[0].first.entry->cycle, 100);
+  EXPECT_EQ(block.asyncLinks[0].second.entry->cycle, 150);
+  EXPECT_EQ(block.asyncLinks[1].first.uid, 0);
+  EXPECT_EQ(block.asyncLinks[1].second.uid, 1);
+  EXPECT_EQ(block.asyncLinks[1].first.entry->cycle, 200);
+  EXPECT_EQ(block.asyncLinks[1].second.entry->cycle, 250);
+}
+
+TEST_F(CircularLayoutParserTest, AsyncEventsPreferSameWarp) {
+  auto append32 = [&](uint32_t word) {
+    for (int i = 0; i < 4; ++i)
+      testData.push_back((word >> (i * 8)) & 0xff);
+  };
+  auto append64 = [&](uint64_t word) {
+    append32(word);
+    append32(word >> 32);
+  };
+  auto appendAsync = [&](bool isStart, uint32_t scopeId, uint32_t cycle) {
+    uint32_t tag = (scopeId << 23) | (1u << 22);
+    if (!isStart)
+      tag |= 1u << 31;
+    append32(tag);
+    append32(cycle);
+  };
+
+  append32(kPreamble);
+  append32(1);
+  append32(3);
+  append32(32);
+  append64(10);
+  append64(20);
+  append64(30);
+  append32(4);
+  append32(4);
+  appendAsync(true, 7, 100);
+  appendAsync(false, 7, 200);
+  appendAsync(true, 7, 110);
+  appendAsync(false, 7, 210);
+
+  config.numBlocks = 1;
+  config.totalUnits = 2;
+  config.scratchMemSize = testData.size();
+  config.uidVec = {0, 1};
+  auto buffer = ByteSpan(testData.data(), testData.size());
+  CircularLayoutParser parser(buffer, config);
+  parser.parse();
+
+  auto &links = parser.getResult()->blockTraces[0].asyncLinks;
+  ASSERT_EQ(links.size(), 2);
+  EXPECT_EQ(links[0].first.uid, 0);
+  EXPECT_EQ(links[0].second.uid, 0);
+  EXPECT_EQ(links[1].first.uid, 1);
+  EXPECT_EQ(links[1].second.uid, 1);
+}
+
 class CLParserSeqTraceTest : public CircularLayoutParserTest {
 public:
   CLParserSeqTraceTest() : CircularLayoutParserTest("seq") {}
@@ -272,4 +375,27 @@ TEST_F(CircularLayoutParserTest, TimeShift) {
   EXPECT_EQ(event0.second->cycle, 49);
   EXPECT_EQ(event1.first->cycle, 40);
   EXPECT_EQ(event1.second->cycle, 72);
+}
+TEST_F(CircularLayoutParserTest, AsyncEventTimeShift) {
+  auto result = std::make_shared<CircularLayoutParserResult>();
+  auto &block = result->blockTraces.emplace_back();
+  auto &startTrace = block.traces.emplace_back();
+  startTrace.uid = 0;
+  auto start = std::make_shared<CycleEntry>();
+  start->cycle = 100;
+  start->isAsync = true;
+  startTrace.asyncEvents.push_back(start);
+  auto &endTrace = block.traces.emplace_back();
+  endTrace.uid = 1;
+  auto end = std::make_shared<CycleEntry>();
+  end->cycle = 120;
+  end->isStart = false;
+  end->isAsync = true;
+  endTrace.asyncEvents.push_back(end);
+  block.asyncLinks.push_back({{0, start}, {1, end}});
+
+  timeShift(/*cost=*/7, result);
+
+  EXPECT_EQ(block.asyncLinks[0].first.entry->cycle, 93);
+  EXPECT_EQ(block.asyncLinks[0].second.entry->cycle, 113);
 }

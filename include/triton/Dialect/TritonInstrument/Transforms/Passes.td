@@ -13,4 +13,55 @@ def TritonInstrumentConcurrencySanitizer: Pass<"tritoninstrument-concurrency-san
                            "mlir::triton::instrument::TritonInstrumentDialect"];
 }
 
+def TritonInstrumentPrepareConSanCaptures: Pass<"tritoninstrument-prepare-consan-captures", "mlir::ModuleOp"> {
+  let summary = "Reserve shared memory for ConSan WarpSpecialize captures";
+
+  let description = [{
+    Estimates how many explicit captures the ConcurrencySanitizer pass will add
+    to WarpSpecializeOps and records the corresponding byte count on each
+    WarpSpecializeOp. Backend shared-memory allocation passes consume this
+    reservation before ConSan mutates the capture list.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+
+  let options = [
+    Option<"target", "target", "std::string", /*default*/"std::string{}",
+           "ConSan target hook key, e.g. amd or nvidia">
+  ];
+}
+
+def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::ModuleOp"> {
+  let summary = "Replace floating-point ops with integer-payload equivalents";
+
+  let description = [{
+    Diagnose calls that must be inlined to expose tensor memory allocations or
+    required kernel context. Then rewrite selected floating-point operations to
+    use integer payload semantics. Run symbol DCE before this pass to remove
+    unreachable private functions.
+  }];
+
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::math::MathDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+
+  let options = [
+    Option<"homomorphicCasts", "homomorphic-casts", "bool", /*default*/"false",
+           "Use truncating FPSan payload downcasts">
+  ];
+}
+
+def TritonInstrumentGlobalSanitizer: Pass<"tritoninstrument-global-sanitizer", "mlir::ModuleOp"> {
+  let summary = "Add gsan instrumentation to memory access operations.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+}
+
 #endif // TRITON_INSTRUMENT_PASSES

@@ -1,33 +1,89 @@
 #include "Utility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
-using mlir::triton::AMD::DppCtrl;
-using mlir::triton::AMD::ISAFamily;
+using mlir::triton::amdgpu::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
+namespace mlir::LLVM::AMD {
+
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy) {
+  if (!cachePolicy)
+    return triton::CacheModifier::NONE;
+  auto policy = dyn_cast<triton::CachePolicyAttr>(cachePolicy);
+  if (!policy)
+    return failure();
+  return policy.getCacheModifier();
+}
+
 namespace {
+
 enum class ShflKind : uint32_t {
   bfly = 0,
   up = 1,
-  down = 2,
-  idx = 3,
+  idx = 2,
 };
-} // namespace
 
-namespace mlir::LLVM::AMD {
-static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
-                               ISAFamily isaFamily, Value val, Value i,
-                               int strideInt, ShflKind mode, Value clamp) {
+Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
+              DppCtrl dppCtrl, uint32_t rowMask = 0xf, uint32_t bankMask = 0xf,
+              bool boundCtrl = true) {
+  return ROCDL::DPPUpdateOp::create(
+      rewriter, loc, src.getType(), old, src,
+      rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
+      rewriter.getI32IntegerAttr(rowMask), rewriter.getI32IntegerAttr(bankMask),
+      rewriter.getBoolAttr(boundCtrl));
+}
+
+Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
+                         uint32_t rowMask) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // PermlaneX16 reads the opposite 16-lane half of a 32-lane wave. It uses a
+  // 16-nibble selector to choose the source lane within that half.
+  // We use it to perform a shuffleXor with mask `rowMask ^ 16`.
+  assert(rowMask < 16 && "Expected a cross-row shuffleXor");
+  auto buildSelectorMask = [&](unsigned startLane) {
+    uint32_t sel = 0;
+    for (unsigned lane = 0; lane < 8; ++lane)
+      sel |= ((startLane + lane) ^ rowMask) << (lane * 4);
+    return sel;
+  };
+  Value loSel = b.i32_val(buildSelectorMask(0));
+  Value hiSel = b.i32_val(buildSelectorMask(8));
+  return ROCDL::PermlaneX16Op::create(rewriter, loc, val.getType(), val, val,
+                                      loSel, hiSel, true, false);
+}
+
+Value emitPermlaneSwapXor(Location loc, RewriterBase &rewriter, Value val,
+                          uint32_t laneMask) {
+  assert((laneMask == 16 || laneMask == 32) && "Expected a power of 2 mask");
+  assert(val.getType().isInteger(32) && "permlane_swap operates on i32 values");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+  const char *intrinsic = laneMask == 32 ? "llvm.amdgcn.permlane32.swap"
+                                         : "llvm.amdgcn.permlane16.swap";
+  Type retTy = struct_ty({i32_ty, i32_ty});
+  Value f = b.false_val();
+  Value perm = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retTy,
+                                               ValueRange{val, val, f, f})
+                   ->getResult(0);
+  Value v0 = b.extract_val(i32_ty, perm, 0);
+  Value v1 = b.extract_val(i32_ty, perm, 1);
+  Value isOriginalVal = b.icmp_eq(v0, val);
+  return b.select(isOriginalVal, v1, v0);
+}
+
+Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
+                        ISAFamily isaFamily, Value val, Value i, int strideInt,
+                        ShflKind mode, Value clamp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
@@ -44,7 +100,7 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                             clamp);
 
     if (bits < 32)
-      val = b.trunc(int_ty(bits), val);
+      val = b.trunc(int_ty(bits), val, LLVM::IntegerOverflowFlags::nsw);
     if (!valType.isIntOrIndex())
       val = b.bitcast(val, valType);
     return val;
@@ -76,106 +132,93 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     // https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/instinct-mi200-cdna2-instruction-set-architecture.pdf#page=180
     Value byteOffset = b.i32_val(2);
     Value permuteAddr = b.shl(lane, byteOffset);
-    return rewriter.create<ROCDL::DsBpermuteOp>(loc, valType, permuteAddr, val);
+    return ROCDL::DsBpermuteOp::create(rewriter, loc, valType, permuteAddr,
+                                       val);
   };
 
   switch (mode) {
-  case ShflKind::bfly:
-    if (strideInt > 16) {
-      Value stride = b.i32_val(32);
-      Value lineId = b.xor_(threadId, stride);
-      return bpermute(lineId);
-    } else if (strideInt == 16) {
-      if (isRDNA(isaFamily)) {
-        // Lane i in the upper 16 lanes reads the value from lane i in the lower
-        // 16 lanes and vice versa.
-        Value select_lo = b.i32_val(0x76543210);
-        Value select_hi = b.i32_val(0xfedcba98);
-        return rewriter.create<ROCDL::PermlaneX16Op>(
-            loc, valType, val, val, select_lo, select_hi, true, false);
-      } else {
-        Value offset = b.i32_val(0x401F);
-        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+  case ShflKind::bfly: {
+    // We have the following tools to decompose shuffleXor into DPP primitives.
+    // On CDNA:
+    //  - xor by 15  : reflect the lanes within each group of 16 lanes,
+    //  - xor by 8   : right rotate by 8 within each group of 16 lanes,
+    //  - xor by 7   : reflect the lanes within each group of 8 lanes,
+    //  - xor by 1-3 : perform a permutation within each group of 4 lanes.
+    // On RDNA:
+    //  - xor by 1-15 : row_xmask does exactly this.
+    //
+    // On RDNA, we also have permlanex16 which can perform xor by 16-31.
+    // On CDNA, one can see that any shuffleXor with `mask` in [1, 15] can
+    // be implemented using at most 2 DPP instructions by mapping the upper bits
+    // of `mask` to the `xor by 7` and `xor by 8` instructions.
+    uint32_t mask = strideInt;
+    if (mask == 0)
+      return val;
+    assert(mask < iWarpSize &&
+           "shuffle_xor expects a mask within the wave size");
+
+    auto makeDppCtrl = [](DppCtrl base, uint32_t arg) {
+      return static_cast<DppCtrl>(llvm::to_underlying(base) + arg);
+    };
+    auto makeQuadPermCtrl = [](uint32_t quadMask) {
+      DppCtrl ctrl = DppCtrl::QUAD_PERM_FIRST;
+      uint32_t ctrlBits = llvm::to_underlying(ctrl);
+      for (unsigned lane = 0; lane < 4; ++lane)
+        ctrlBits |= (lane ^ quadMask) << (lane * 2);
+      return static_cast<DppCtrl>(ctrlBits);
+    };
+    bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
+
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::CDNA5) {
+      if (mask < 16)
+        return emitDpp(loc, rewriter, val, val,
+                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
+      else if (mask < 32)
+        return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
+    } else if (triton::amdgpu::isCDNA(isaFamily) &&
+               (mask < 16 || usePermlaneSwap)) {
+      Value result = val;
+      uint32_t highBitsDppBasis = 0;
+
+      if (mask & 4)
+        highBitsDppBasis ^= 7;
+      if (mask & 8)
+        highBitsDppBasis ^= 8;
+
+      uint32_t quadMask = (mask & 0xf) ^ highBitsDppBasis;
+
+      if (highBitsDppBasis) {
+        DppCtrl highBitsDppCtrl;
+        switch (highBitsDppBasis) {
+        case 0x7:
+          highBitsDppCtrl = DppCtrl::ROW_HALF_MIRROR;
+          break;
+        case 0x8:
+          highBitsDppCtrl = makeDppCtrl(DppCtrl::ROW_ROR0, 8);
+          break;
+        case 0xf:
+          highBitsDppCtrl = DppCtrl::ROW_MIRROR;
+          break;
+        }
+        result = emitDpp(loc, rewriter, result, result, highBitsDppCtrl);
       }
+
+      if (quadMask) {
+        result =
+            emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask));
+      }
+
+      if (usePermlaneSwap) {
+        if (mask & 16)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 16);
+        if (mask & 32)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 32);
+      }
+      return result;
     } else {
-      if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA3,
-                               ISAFamily::RDNA4},
-                              isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3/RDNA4 right now, so
-        // we fallback to ds_swizzle for other architectures.
-        //
-        // This map facilates the butterfly shuffle pattern for a stride less
-        // than 16. The pattern stride is the key of the map.
-        DenseMap<short, unsigned int> masks{
-            {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
-        Value offset = b.i32_val(masks[strideInt]);
-        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
-      }
-
-      auto createDppOpWithoutBoundCtrl = [&](Value &old, Value &src,
-                                             uint32_t dppCtrl, uint32_t rowMask,
-                                             uint32_t bankMask) {
-        return rewriter.create<ROCDL::DPPUpdateOp>(
-            loc, valType, old, src, rewriter.getI32IntegerAttr(dppCtrl),
-            rewriter.getI32IntegerAttr(rowMask),
-            rewriter.getI32IntegerAttr(bankMask), rewriter.getBoolAttr(false));
-      };
-
-      const int allRows = 0xf;
-      const int allBanks = 0xf;
-
-      switch (strideInt) {
-      case 1: {
-        // quad_perm: 1, 0, 3, 2
-        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
-        std::array<uint32_t, 4> mask = {1, 0, 3, 2};
-        for (int i = 0; i < mask.size(); i++) {
-          dppCtrl |= mask[i] << (i * 2);
-        }
-        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
-                                           allBanks);
-      }
-      case 2: {
-        // quad_perm: 2, 3, 0, 1
-        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
-        std::array<uint32_t, 4> mask = {2, 3, 0, 1};
-        for (int i = 0; i < mask.size(); i++) {
-          dppCtrl |= mask[i] << (i * 2);
-        }
-        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
-                                           allBanks);
-      }
-      case 4: {
-        // row_shr:4 bank_mask: 0xa
-        auto ret = createDppOpWithoutBoundCtrl(
-                       val, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
-                       allRows, 0xa)
-                       .getRes();
-
-        // row_shl:4 bank_mask: 0x5
-        return createDppOpWithoutBoundCtrl(
-            ret, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
-            0x5);
-      }
-      case 8: {
-        // row_shr:8 bank_mask: 0xc
-        auto ret = createDppOpWithoutBoundCtrl(
-                       val, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
-                       allRows, 0xc)
-                       .getRes();
-
-        // row_shl:8 bank_mask: 0x3
-        return createDppOpWithoutBoundCtrl(
-            ret, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
-            0x3);
-      }
-      default:
-        assert(false &&
-               "bfly shfl with stride >= 16 should not be handled by dpp.");
-      }
+      return bpermute(b.xor_(laneId, b.i32_val(mask)));
     }
-    break;
+  }
   case ShflKind::up: {
     Value mask = b.icmp_slt(laneId, i);
     Value delta = b.sub(laneId, i);
@@ -191,9 +234,9 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   return Value();
 }
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter,
-                           ISAFamily isaFamily, Value val, Value i,
-                           int strideInt, ShflKind mode, Value clamp) {
+Value shuffleCommon(Location loc, RewriterBase &rewriter, ISAFamily isaFamily,
+                    Value val, Value i, int strideInt, ShflKind mode,
+                    Value clamp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // To shuffle pointers, convert them to i64.
   Type valTy = val.getType();
@@ -205,6 +248,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     result = b.inttoptr(valTy, result);
   return result;
 }
+
+} // namespace
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  ISAFamily isaFamily) {
@@ -301,29 +346,153 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
-  Value blockId =
-      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+  assert(moduleOp);
+
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
+  if (numCTAs == 1) {
+    // For single CTA the block id is the program id
+    Value blockId = ::mlir::gpu::BlockIdOp::create(rewriter, loc,
+                                                   mlir::gpu::Dimension(axis));
+    return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
+  }
+  // For multiple CTAs the cluster id is the program id
+  Type resType = rewriter.getI32Type();
+  Value clusterIdx = nullptr;
+  switch (axis) {
+  case ProgramIDDim::X: {
+    clusterIdx = ROCDL::ClusterIdXOp::create(rewriter, loc, resType);
+    break;
+  }
+  case ProgramIDDim::Y: {
+    clusterIdx = ROCDL::ClusterIdYOp::create(rewriter, loc, resType);
+    break;
+  }
+  case ProgramIDDim::Z: {
+    clusterIdx = ROCDL::ClusterIdZOp::create(rewriter, loc, resType);
+    break;
+  }
+  }
+  return clusterIdx;
+}
+
+// For multicast memory operations (e.g., cluster.load.async.to.lds), we need a
+// bitmask indicating which CTAs in the CGA/cluster will access the same memory
+// addresses. This allows the hardware to efficiently broadcast data to multiple
+// CTAs. The linear layout's free variables in the block dimension tell us which
+// CTAs form a "communication group" (i.e., access the same data):
+//   - Free bit at position k: CTAs whose IDs differ only in bit k access
+//     the same data and should be in the same multicast group.
+//   - Fixed bits (non-free): Distinguish between different groups that
+//     access different data.
+// The multicast mask has bit i set if CTA i is in the same communication
+// group as the current CTA. The free bits determine a groupMask whereas the
+// non-free bits determine the group offset:
+//   ctaMask = groupMask << groupOffset
+// where:
+//   - groupMask: Covers all 2^k CTAs in the group (k = number of free bits)
+//   - groupOffset: Starting position of this group, determined by fixed bits
+// As an example suppose we have 8 CTAs and freeVarMask = 0b101 (bits 0,2 free).
+// This creates 2 groups of 4 CTAs each:
+//   - Group 0: CTAs {0,1,4,5} (fixed bits = 0b000)
+//   - Group 1: CTAs {2,3,6,7} (fixed bits = 0b010)
+// For CTA 5 (0b101): groupOffset = 0b101 & 0b010 = 0 => ctaMask = 0b00110011
+// For CTA 7 (0b111): groupOffset = 0b111 & 0b010 = 2 => ctaMask = 0b11001100
+// If the group does not fit into `maxMaskPopcount` mask bits it is split into
+// equally sized subgroups, see below.
+Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
+                           const LinearLayout &regLayout,
+                           unsigned maxMaskPopcount) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+
+  auto kBlock = StringAttr::get(rewriter.getContext(), "block");
+  auto freeVarMask = regLayout.getFreeVariableMasks()[kBlock];
+
+  // If there are no free bits we do not share any data with other CTAs
+  if (freeVarMask == 0) {
+    return Value();
+  }
+
+  assert(maxMaskPopcount > 0 && "expected a non-zero multicast mask limit");
+
+  // A communication group spans 2^(number of free bits) CTAs, so we can only
+  // keep floor(log2(limit)) free bits. Dropping the highest free bits turns
+  // them into subgroup selectors.
+  // Example: freeVarMask = 0b1101 describes CTAs {0,1,4,5,8,9,12,13}; with a
+  // limit of 5 we keep bits 0 and 2 so bit 3 selects {0,1,4,5} or {8,9,12,13}.
+  int maxFreeBits = llvm::Log2_32(maxMaskPopcount);
+  int multicastFreeVarMask = freeVarMask;
+  while (llvm::popcount<uint32_t>(multicastFreeVarMask) > maxFreeBits)
+    multicastFreeVarMask ^= llvm::bit_floor<uint32_t>(multicastFreeVarMask);
+
+  if (multicastFreeVarMask != freeVarMask) {
+    unsigned numSharingCTAs = 1u << llvm::popcount<uint32_t>(freeVarMask);
+    unsigned numMulticastCTAs = 1u << maxFreeBits;
+    emitRemark(loc) << "Multicast group contains " << numSharingCTAs
+                    << " workgroups, exceeding the hardware limit of "
+                    << maxMaskPopcount << " set mask bits; splitting it into "
+                    << "subgroups of " << numMulticastCTAs
+                    << " workgroups. A cluster layout sharing data "
+                    << "among at most " << numMulticastCTAs
+                    << " workgroups may perform better.";
+  }
+
+  // Construct the groupMask with 1s at all positions representing CTAs in the
+  // (sub)group. We start with 0b1 and iterate over the retained free bits. For
+  // every retained bit at position k, we copy the current pattern 2^k positions
+  // higher.
+  // Example for multicastFreeVarMask = 0b101, x = non determined yet:
+  //   Initial:              groupMask = 0bxxxxxxx1 (positions {0})
+  //   Bit 0 (retained):     groupMask = 0bxxxxxx11 (positions {0,1})
+  //   Bit 1 (not retained): groupMask = 0bxxxx0011 (positions {0,1})
+  //   Bit 2 (retained):     groupMask = 0b00110011 (positions {0,1,4,5})
+  int groupMask = 1;
+  for (int log2 = 0; log2 < regLayout.getInDimSizeLog2(kBlock); log2++) {
+    if (!(multicastFreeVarMask & (1 << log2)))
+      continue;
+    groupMask = groupMask | (groupMask << (1 << log2));
+  }
+  // If all bits are retained we broadcast to all CTAs so return the group mask.
+  if (multicastFreeVarMask == regLayout.getInDimSize(kBlock) - 1) {
+    return b.i32_val(groupMask);
+  }
+  // The bits not retained (non-free bits plus subgroup selectors) set in the
+  // ctaId determine the group offset. For every such bit set at position k, we
+  // shift the groupMask by 2^k positions. This can be conveniently computed by
+  // masking the ctaId with the inverse of multicastFreeVarMask. Note that this
+  // never carries into a retained position because the shift amount and the
+  // groupMask cover disjoint bits.
+  // Example1: multicastFreeVarMask = 0b101
+  //   ~multicastFreeVarMask = 0b010
+  //   shiftAmount           = 0b101 & 0b010 = 0b000 (no shift needed)
+  //   blockMask             = 0b110011 << 0 = 0b00110011
+  // Example2: multicastFreeVarMask = 0b101, ctaId = 0b111 (cta 7)
+  //   ~multicastFreeVarMask = 0b010
+  //   shiftAmount           = 0b111 & 0b010 = 0b010 (shift by 2)
+  //   blockMask             = 0b110011 << 2 = 0b11001100
+  Value shiftAmount = b.and_(groupId, b.i32_val(~multicastFreeVarMask));
+  Value ctaMask = b.shl(b.i32_val(groupMask), shiftAmount);
+  return ctaMask;
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm,
+             Value pred, Value falseVal, Value multicastMask,
+             triton::CacheModifier cm, bool isVolatile,
              bool forceNoAliasAsyncLoads) {
-  return rewriter
-      .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
-                                            cm, forceNoAliasAsyncLoads)
+  return triton::amdgpu::MaskedLoadOp::create(
+             rewriter, loc, elemTy, ptr, pred, falseVal, multicastMask, cm,
+             isVolatile, forceNoAliasAsyncLoads)
       .getResult();
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
-                                                 forceNoAliasAsyncLoads);
+  triton::amdgpu::MaskedStoreOp::create(rewriter, loc, ptr, val, pred, cm,
+                                        forceNoAliasAsyncLoads);
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
-//   gfx942 and gfx950: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+//   CDNA3 and CDNA4: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
 // Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
 // bits to control scope and cacheability:
 // - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
@@ -346,8 +515,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
 // -------+-----+-----+-----+----+--
 static int32_t
-getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
-                                         bool isLoad) {
+getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(triton::CacheModifier cm,
+                                          bool isLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   switch (cm) {
@@ -379,16 +548,164 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
   return aux;
 }
 
-int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
-                                                 bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
+// Create the auxiliary/cachepolicy value for RDNA3 (and 3.5) buffer ops
+//
+// LLVM CPol bit layout (from SIDefines.h):
+//   bit 0 = GLC  (Graphics L1 cache, GL1)
+//   bit 1 = SLC  (Graphics L2 cache, GL2)
+//   bit 2 = DLC  (Memory-Attached Last-Level cache, MALL)
+//
+// Hardware semantics on RDNA3:
+//   GLC=1  forces MISS_EVICT at GL1 (bypass / invalidate L1 line).
+//   SLC=1  sets GL2 to STREAM (evict-first) policy, limiting L2 pollution.
+//   DLC=1  non-temporal hint for MALL: data is not expected to be reused,
+//          so skip MALL allocation. Ignored if MALL is not present.
+//   DLC=0  temporal (default): allow normal MALL caching.
+//
+// Cache modifier definitions (PTX/Triton semantics):
+//   .ca  Cache at All levels (L1+L2+MALL). Default load policy, LRU eviction.
+//   .cg  Cache at Global level only (L2 and below, bypass L1).
+//   .cs  Cache Streaming, likely accessed once. Evict-first to limit pollution.
+//   .cv  Cache Volatile. Invalidates matching L2 line and re-fetches.
+//   .wb  Write-Back at all cache levels (default store policy).
+//   .wt  Write-Through, writes data directly to system memory.
+//
+// -------+-----+-----+-----+-----+-----------
+// Op     | cm  | DLC | SLC | GLC | aux value
+// -------+-----+-----+-----+-----+-----------
+// Load   | .ca |  0  |  0  |  0  |  0
+//        | .cg |  0  |  0  |  1  |  1
+//        | .cs |  1  |  1  |  1  |  7
+//        | .cv |  1  |  1  |  1  |  7
+// -------+-----+-----+-----+-----+-----------
+// Store  | .wb |  0  |  0  |  0  |  0
+//        | .cg |  0  |  0  |  0  |  0
+//        | .cs |  1  |  1  |  1  |  7
+//        | .wt |  1  |  1  |  1  |  7
+// -------+-----+-----+-----+-----+-----------
+//
+// Condensed hardware behavior:
+//   DLC=0, SLC=0, GLC=0  -> temporal at all levels (MALL+GL2+GL1) (.ca/.wb)
+//   DLC=0, SLC=0, GLC=1  -> bypass GL1, cache in GL2              (.cg load)
+//   DLC=0, SLC=0, GLC=0  -> default (no special flags)            (.cg store)
+//   DLC=1, SLC=1, GLC=1  -> non-temporal: bypass GL1, stream GL2,
+//                           skip MALL                             (.cs/.cv/.wt)
+static int32_t getCtrlBitsForCacheModifierOnRDNA3(triton::CacheModifier cm,
+                                                  bool isLoad) {
+  const int glcBit = 0b1, slcBit = 0b10, dlcBit = 0b100;
   int32_t aux = 0;
-  if (setSC0)
-    aux |= sc0Bit;
-  if (setSC1)
-    aux |= sc1Bit;
-  if (setNT)
-    aux |= ntBit;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = 0;
+    break;
+  case triton::CacheModifier::CG:
+    if (isLoad)
+      aux |= glcBit;
+    break;
+  case triton::CacheModifier::CS:
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  case triton::CacheModifier::CV:
+    assert(isLoad);
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  case triton::CacheModifier::WB:
+    assert(!isLoad);
+    aux = 0;
+    break;
+  case triton::CacheModifier::WT:
+    assert(!isLoad);
+    aux |= glcBit | slcBit | dlcBit;
+    break;
+  default:
+    aux = 0;
+  }
+  return aux;
+}
+
+// Create the auxiliary/cache policy value for GFX12 family
+// ROCDL::RawPtrBufferLoad/StoreOp Vector Memory instructions (Flat, Global,
+// Scratch, and Buffer). These instructions have 2 control bits for scope and 3
+// control bits for temporal hint:
+// - SCOPE[1:0] System Cache level:
+//    0 CU  Coherent among all CU/WG threads in L1 cache
+//    1 SE  Coherent among all clients (threads) sharing a SE-cache(L2)
+//    2 DEV Coherent among all threads on the same device
+//    3 SYS Coherent in system
+// - TH[2:0] Temporal Hint for load:
+//    0 RT    regular temporal for both near and far caches
+//    1 NT    non-temporal (re-use not expected) for both near and far caches
+//    2 HT    High-priority temporal for both near and far caches
+//    3 LU    Last-use (non-temporal AND discard dirty if it hits)
+//    4 NT_RT non-temporal for near cache(s) and regular for far caches
+//    5 RT_NT regular for near cache(s) and non-temporal for far caches
+//    6 NT_HT non-temporal for near cache(s) and high-priority for far caches
+//    7       reserved
+// - TH[2:0] Temporal Hint for store:
+//    0 RT    regular temporal for both near and far caches
+//    1 NT    non-temporal (re-use not expected) for both near and far caches
+//    2 HT    High-priority temporal for both near and far caches
+//    3 WB    Same as "HT", but also overrides wr-rinse in far cache
+//    4 NT_RT non-temporal for near cache(s) and regular for far caches
+//    5 RT_NT regular for near cache(s) and non-temporal for far caches
+//    6 NT_HT non-temporal for near cache(s) and HT for far caches
+//    7 NT_WB non-temporal for near cache(s) and WB for far cache
+//
+// See detailed bit mapping of control bits of CPol enum
+// in llvm source code: llvm/lib/Target/AMDGPU/SIDefines.h
+//
+// Mapping between
+// -------+-----+-------+----+-
+// Op     | cm  | SCOPE | TH |
+// -------+-----+-------+----+-
+// Load   | .ca |  CU   | RT |
+//        | .cg |  DEV  | RT |
+//        | .cs |  CU   | NT |
+//        | .cv |  SYS  | LU | on CDNA5, this combination bypasses all caches
+// -------+-----+-------+----+-
+// Store  | .wb |  CU   | RT |
+//        | .cg |  DEV  | RT |
+//        | .cs |  CU   | NT |
+//        | .wt |  SYS  | RT | behavior for gfx12
+//        | .wt |  SYS  | WB | behavior for CDNA5, bypasses all caches
+// -------+-----+-------+----+-
+static int32_t getCtrlBitsForCacheModifierOn_GFX12(triton::CacheModifier cm,
+                                                   bool isLoad,
+                                                   bool cacheBypassAvailable) {
+  const int scopeShift = 3;
+  const int scopeCU = 0 << scopeShift;
+  const int scopeDev = 2 << scopeShift;
+  const int scopeSys = 3 << scopeShift;
+  const int THRegular = 0;
+  const int THNonTemp = 1;
+  const int THLastUse = 3;
+  const int THWriteBack = 3;
+  int aux = -1;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = scopeCU | THRegular;
+    break;
+  case triton::CacheModifier::CG:
+    aux = scopeDev | THRegular;
+    break;
+  case triton::CacheModifier::CS:
+    aux = scopeCU | THNonTemp;
+    break;
+  case triton::CacheModifier::CV:
+    assert(isLoad);
+    aux = scopeSys | THLastUse;
+    break;
+  case triton::CacheModifier::WB:
+    assert(!isLoad);
+    aux = scopeCU | THRegular;
+    break;
+  case triton::CacheModifier::WT:
+    assert(!isLoad);
+    aux = scopeSys | (cacheBypassAvailable ? THWriteBack : THRegular);
+    break;
+  default:
+    aux = 0;
+  }
   return aux;
 }
 
@@ -406,23 +723,102 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
-  switch (targetInfo.getGPUKind()) {
-  case llvm::AMDGPU::GK_GFX942:
-  case llvm::AMDGPU::GK_GFX950:
-    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isLoad);
+  switch (targetInfo.getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
+    return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
+  case ISAFamily::RDNA4:
+    return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
+  case ISAFamily::CDNA5:
+    return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
 }
 
-Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
-                                 const Value &v) {
-  LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-  return rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v);
+FailureOr<int32_t>
+getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
+                           std::optional<triton::MemSyncScope> scope,
+                           bool isLoad,
+                           const mlir::triton::AMD::TargetInfo &targetInfo) {
+  const bool isGfx9 = llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                                         targetInfo.getISAFamily());
+  const bool isGfx12 = llvm::is_contained({ISAFamily::RDNA4, ISAFamily::CDNA5},
+                                          targetInfo.getISAFamily());
+  const bool isCDNA5 = targetInfo.getISAFamily() == ISAFamily::CDNA5;
+  int32_t aux = 0;
+  if (auto gfx9Policy =
+          dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
+              cachePolicy)) {
+    if (!isGfx9)
+      return op->emitOpError(
+          "the gfx9 cache policy is only supported on CDNA3 and CDNA4");
+    const int ntBit = 0b10;
+    if (gfx9Policy.getNontemporal())
+      aux |= ntBit;
+  } else if (auto gfx12Policy =
+                 dyn_cast_if_present<triton::amdgpu::CachePolicyGfx12Attr>(
+                     cachePolicy)) {
+    if (!isGfx12)
+      return op->emitOpError(
+          "the gfx12 cache policy is only supported on RDNA4 and CDNA5");
+    // TH[2:0] holds the temporal hint, whose values match the enum's.
+    aux |= static_cast<int32_t>(gfx12Policy.getTemporal());
+  } else {
+    auto cm = getCacheModifier(cachePolicy);
+    if (failed(cm))
+      return op->emitOpError(
+          "target cache policy is not supported on AMD targets");
+    aux = getCtrlBitsForCacheModifierOnTarget(*cm, isLoad, targetInfo);
+  }
+  if (!scope)
+    return aux;
+  if (isGfx9) {
+    // gfx9 encodes the scope of a non-atomic access in SC[1:0]: none = wave,
+    // SC0 = workgroup, SC1 = agent, SC0|SC1 = system.
+    const int sc0Bit = 0b1, sc1Bit = 0b10000;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      return aux | sc0Bit;
+    case triton::MemSyncScope::GPU:
+      return aux | sc1Bit;
+    case triton::MemSyncScope::SYSTEM:
+      return aux | sc0Bit | sc1Bit;
+    }
+  } else if (isGfx12) {
+    // gfx12 encodes it in SCOPE[4:3]: CU, SE, device or system. As in LLVM's
+    // memory model, the CU scope, the default, covers a workgroup on CDNA5,
+    // where it runs on one WGP, and on RDNA4 in CU mode. In RDNA4's WGP mode,
+    // its waves can run on both CUs of a WGP, each with its own L0 cache, so
+    // it needs the SE scope.
+    const int scopeShift = 3;
+    const int scopeSE = 1 << scopeShift, scopeDev = 2 << scopeShift,
+              scopeSys = 3 << scopeShift;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      return isCDNA5 || targetInfo.isCuMode() ? aux : aux | scopeSE;
+    case triton::MemSyncScope::GPU:
+      return aux | scopeDev;
+    case triton::MemSyncScope::SYSTEM:
+      return aux | scopeSys;
+    }
+  } else {
+    return op->emitOpError("scope on buffer loads and stores is only "
+                           "supported on CDNA3, CDNA4, CDNA5 and RDNA4");
+  }
+  return op->emitOpError("unsupported scope on a buffer load or store");
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
   Type basePtrType = basePtr.getType();
+  // Accesses through a buffer descriptor behave like ones through a global
+  // pointer to its element type.
+  if (auto desc = dyn_cast<triton::amdgpu::BufferDescType>(basePtrType))
+    basePtrType = triton::PointerType::get(desc.getElementType(),
+                                           triton::PtrAddrSpace::Global);
   auto offsetType = cast<RankedTensorType>(offset.getType());
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
@@ -454,11 +850,8 @@ unsigned getContiguity(Value ptr, Value offset,
   // FIXME (Alex): this should not be needed anymore because it's done inside
   // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
-  auto linearLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto llAttr =
-      triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
   auto order = triton::gpu::getOrder(tensorTy);
-  auto contigPerThread = llAttr.getContigPerThread();
+  auto contigPerThread = triton::gpu::getContigPerThread(tensorTy);
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
   contiguity = std::min(contiguity, contigPerThread[order[0]]);
@@ -479,7 +872,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
-  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  auto pointeeBitWidth =
+      triton::getPointeeBitWidth(getPointerTypeWithShape(ptr, offset));
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
@@ -504,79 +898,172 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
-                                      const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp,
-                                      unsigned vecSize) {
+// Returns true if we can perform coalesced write from the source encoding to
+// the destination encoding.
+static bool
+canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
+                                 const LinearLayout &srcToSharedLayout,
+                                 unsigned threadsPerWarp) {
+  auto kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
+
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
-    LDBG("Load vectorization ("
-         << vecSize << ") and contiguity (" << contig
-         << ") do not match resulting in strided writes");
+
+  // Create a coalesced/identity layout and see if it divides srcToShared
+  auto coalescedLayout =
+      LinearLayout::identity1D(contig, kReg, kOffset) *
+      LinearLayout::identity1D(threadsPerWarp, kLane, kOffset);
+
+  return divideLeft(srcToSharedLayout, coalescedLayout).has_value();
+}
+
+// On architectures supporting scattering into LDS we are only constraint by the
+// minimal vector size. On architectures not support scattering, e.g. gfx9,
+// direct to LDS loads do not support per lane shared offsets. We need to ensure
+// that each warp writes coalesced into shared memory. This means we cannot
+// exceed the supported load width because splitting them would cause strided
+// (non coalesced) writes. Additionally:
+// 1. For *non* swizzled shared encodings we check if they result in coalesced
+//    writes and can then lower them directly to the intrinsics.
+// 2. For swizzled shared encodings we need to transfer the swizzling to the
+//    source pointers. For now this is done by swizzling the pointers
+//    between the lane of a warp via permute. This only works if the swizzle
+//    pattern does not exchange elements between warps which holds for all
+//    our swizzle patterns. There is still a check performed to not silently
+//    produce wrong results if we invalidate the condition in the future
+bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
+                        RankedTensorType srcTy, Attribute dstEnc,
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        DirectToLdsVecInfo vecInfo,
+                        std::string *failureReason) {
+  auto setReason = [&](std::string reason) {
+    if (failureReason)
+      *failureReason = std::move(reason);
+  };
+
+  // For padded encodings restrict vec by the min interval
+  auto paddedEnc = triton::gpu::getPaddedEncoding(dstEnc);
+  if (paddedEnc) {
+    unsigned maxAllowedVecSize = paddedEnc.getMinInterval();
+    // Without scattering support, padding can only be inserted at warp
+    // boundaries. This means minInterval must be a multiple of (vectorSize *
+    // warpSize) which becomes vectorSize <= minInterval / warpSize.
+    if (!targetInfo.supportsDirectToLdsScatter())
+      maxAllowedVecSize = paddedEnc.getMinInterval() / targetInfo.getWarpSize();
+
+    vectorSize = std::min(vectorSize, maxAllowedVecSize);
+  }
+
+  // Check that vectorSize is not smaller than the minimal supported vector size
+  int elemBitWidth = tt::getPointeeBitWidth(srcTy);
+  if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
+    LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
+    std::string guidance =
+        " Increase the provable alignment of the source (e.g. tl.multiple_of "
+        "on the base pointer, or aligning the leading dimensions) so a wider "
+        "vector can be used.";
+    if (vecInfo.maskIsLimiting()) {
+      guidance =
+          " The mask is the limiting factor: the pointers/offsets allow a "
+          "vector of " +
+          std::to_string(vecInfo.fromPtr) + " element(s) but the mask only " +
+          std::to_string(vecInfo.fromMask) +
+          ". A direct-to-LDS copy transfers each lane's whole vector in a "
+          "single transaction, so every vector-width group of mask values must "
+          "be identical. Align the mask boundary to the vector width, or peel "
+          "the ragged remainder into a separate load.";
+    }
+    setReason("the load can only be vectorized to " +
+              std::to_string(vectorSize) + " element(s) (" +
+              std::to_string(vectorSize * elemBitWidth) +
+              " bits), which is narrower than any direct-to-LDS transaction "
+              "width supported on this target." +
+              guidance);
     return false;
   }
 
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = contig * (1 << inLane);
-    if (basis != expected) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for lane "
-           << 1 + inLane << "; given " << basis << " but expected "
-           << expected);
-      return false;
+  // Following checks are specific to architectures not supporting scattering
+  if (targetInfo.supportsDirectToLdsScatter())
+    return true;
+
+  // Compute the blocked -> shared linear layout to check preconditions
+  LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout sharedLayout;
+  if (paddedEnc) {
+    sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(dstAllocShape, dstEnc);
+  } else {
+    sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
+
+    // Use a non swizzled layout since we apply swizzling to the src pointers
+    auto swizzledEnc =
+        dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
+    if (swizzledEnc && swizzledEnc.getMaxPhase() != 1) {
+      auto flatSharedEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
+          srcTy.getContext(), swizzledEnc.getVec(), 1, 1,
+          swizzledEnc.getOrder(), swizzledEnc.getCGALayout());
+      sharedLayout = tt::gpu::toLinearLayout(dstAllocShape, flatSharedEnc);
     }
   }
-  // Additionally we could swizzle based on the warp dimension so we need to
-  // check that when all bases are divided by contig, none of the first
-  // (log2(warpSize) + 1) bits are set to 1
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  assert(llvm::isPowerOf2_32(contig));
-  unsigned mask = (threadsPerWarp * contig) - 1;
-  StringAttr kWarp = rewriter.getStringAttr("warp");
-  for (int inWarp : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kWarp))) {
-    auto basis = srcToSharedLayout.getBasis(kWarp, inWarp)[0];
-    if ((basis & mask) != 0) {
-      LDBG("detected uncoalesced layout from blocked to shared in async copy "
-           "for warp "
-           << inWarp);
-      return false;
-    }
-  }
+  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
-  return true;
-}
-
-bool doesSwizzleInsideWarp(RewriterBase &rewriter,
-                           const LinearLayout &srcToSharedLayout,
-                           unsigned threadsPerWarp) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  // If all bases in lane dimension are below threadsPerWarp multiplied with the
-  // contiguity we do not swizzle across warp boundaries.
-  assert(llvm::isPowerOf2_32(threadsPerWarp));
-  unsigned upperLimit = threadsPerWarp * contig;
-
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    if (basis >= upperLimit) {
-      return false;
-    }
+  // The reg->shared layout can only write `contig` consecutive elements
+  // coalesced into LDS. A load narrower than `contig` would leave gaps between
+  // lanes and produce strided writes, so we cannot lower it here.
+  if (vectorSize < contig) {
+    LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
+                                << contig << ") resulting in strided writes");
+    setReason(
+        "the global load vectorization (" + std::to_string(vectorSize) +
+        ") is smaller than the shared memory contiguity (" +
+        std::to_string(contig) +
+        "), which would require strided LDS writes. Adjust the blocked or "
+        "shared encoding so the two agree.");
+    return false;
   }
+  // If the requested load is wider than what the layout can write coalesced,
+  // reduce it so that each load instruction writes exactly one coalesced chunk.
+  // The lowering then emits multiple (narrower) direct-to-LDS loads.
+  vectorSize = contig;
+
+  // The reduced width must still be a supported direct-to-LDS load width.
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
+    LDBG("coalesced load width (" << vectorSize
+                                  << ") is not a supported direct-to-LDS load");
+    setReason(
+        "the coalesced " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this target");
+    return false;
+  }
+
+  if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
+                                        targetInfo.getWarpSize())) {
+    LDBG("Does not write coalesced into LDS");
+    setReason("the resulting writes into shared memory are not coalesced for a "
+              "vectorization of " +
+              std::to_string(vectorSize) +
+              " element(s). Adjust the blocked or shared encoding so each warp "
+              "writes a contiguous range.");
+    return false;
+  }
+
   return true;
 }
 
-bool isUsedByDotScaledOp(Operation *op) {
-  const ForwardSliceOptions fwdOpt;
-  SetVector<mlir::Operation *> forwardSliceSet;
-  getForwardSlice(op, &forwardSliceSet, fwdOpt);
-
-  return std::any_of(
-      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
-        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
-            operation);
-      });
+// For a region iter arg of an scf.for, return the yield operand that feeds it
+// on the back-edge. Returns {} if the parent isn't scf.for or the arg is the
+// induction variable.
+static Value resolveLoopBackedge(BlockArgument bbArg) {
+  auto forOp = dyn_cast<scf::ForOp>(bbArg.getOwner()->getParentOp());
+  if (!forOp)
+    return {};
+  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  int iterArgIdx = bbArg.getArgNumber() - forOp.getNumInductionVars();
+  if (iterArgIdx < 0 || iterArgIdx >= (int)yieldOp.getNumOperands())
+    return {};
+  return yieldOp.getOperand(iterArgIdx);
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
@@ -597,6 +1084,37 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       }
     }
   }
+
+  // Cross-iteration: for each op in the forward slice (including dotOp itself)
+  // that is consumed by a scf.yield, resolve to the corresponding iter arg and
+  // check that iter arg's forward slice for a dot.
+  fwdSlices.insert(dotOp);
+  for (Operation *op : fwdSlices) {
+    for (Value result : op->getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
+        if (!yieldOp)
+          continue;
+        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+        if (!forOp)
+          continue;
+        BlockArgument nextIterArg =
+            forOp.getRegionIterArg(use.getOperandNumber());
+        SetVector<Operation *> argFwdSlices;
+        getForwardSlice(nextIterArg, &argFwdSlices, fwdOpt);
+        for (Operation *argOp : argFwdSlices) {
+          auto dOp = dyn_cast<tt::DotOpInterface>(argOp);
+          if (!dOp || dOp == dotOp)
+            continue;
+          Value dotOperand = (opIdx == 0) ? dOp.getA() : dOp.getB();
+          if (dotOperand == nextIterArg ||
+              (dotOperand.getDefiningOp() &&
+               argFwdSlices.contains(dotOperand.getDefiningOp())))
+            return true;
+        }
+      }
+    }
+  }
   return false;
 }
 
@@ -609,21 +1127,70 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   bwdOpt.filter = isInSameRegion;
   SetVector<Operation *> bwdSlices;
   Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
+  if (opA) {
+    (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
+    if (llvm::find_if(bwdSlices, [](Operation *op) {
+          return isa<tt::DotOpInterface>(op);
+        }) != bwdSlices.end())
+      return true;
+  }
+
+  // Cross-iteration: if operand A (or its backward slice) touches a block
+  // arg, resolve via the yield back-edge and check the backward slice of
+  // the yielded value for a dot (mirrors the intra-iteration check above).
+  SmallVector<BlockArgument, 4> bbArgs;
+  if (auto bbArg = dyn_cast<BlockArgument>(dotOp.getA())) {
+    bbArgs.push_back(bbArg);
+  } else if (opA) {
+    bwdSlices.insert(opA);
+    for (Operation *sliceOp : bwdSlices)
+      for (Value operand : sliceOp->getOperands())
+        if (auto bbArg = dyn_cast<BlockArgument>(operand))
+          bbArgs.push_back(bbArg);
+  }
+
+  for (BlockArgument bbArg : bbArgs) {
+    Value yieldVal = resolveLoopBackedge(bbArg);
+    if (!yieldVal)
+      continue;
+    Operation *yieldDef = yieldVal.getDefiningOp();
+    if (!yieldDef)
+      continue;
+    SetVector<Operation *> yieldBwdSlices;
+    (void)getBackwardSlice(yieldDef, &yieldBwdSlices, bwdOpt);
+    yieldBwdSlices.insert(yieldDef);
+    if (llvm::find_if(yieldBwdSlices, [&dotOp](Operation *op) {
+          return isa<tt::DotOpInterface>(op) && op != dotOp;
+        }) != yieldBwdSlices.end())
+      return true;
+  }
+
   return false;
+}
+
+Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
+                        bool isE4M3FN) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (isE4M3FN) {
+    // Position the 7 magnitude bits at f32 bits [26:20] and multiply by
+    // 2^120 to correct the exponent bias (f32 bias 127 - E4M3 bias 7 = 120).
+    Value absVal = b.and_(fp8Val, b.i8_val(0x7F));
+    Value vi32 = b.shl(b.zext(i32_ty, absVal), b.i32_val(20));
+    Value rawF32 = b.fmul(b.bitcast(vi32, f32_ty), b.f32_val(0x1p120f));
+    Value signBit =
+        b.shl(b.and_(b.zext(i32_ty, fp8Val), b.i32_val(0x80)), b.i32_val(24));
+    return b.bitcast(b.or_(b.bitcast(rawF32, i32_ty), signBit), f32_ty);
+  }
+  // E5M2 -> f16 (same exponent format, simple shift) -> fpext to f32.
+  Value i16Val = b.shl(b.zext(i16_ty, fp8Val), b.i16_val(8));
+  return b.fpext(f32_ty, b.bitcast(i16Val, f16_ty));
 }
 
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    ISAFamily isaFamily, Value scale) {
-  assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
-         "Expected UpcastMXFPOp or Fp4ToFpOp");
+                                    ISAFamily isaFamily) {
+  assert((isa<triton::gpu::Fp4ToFpOp, triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
+         "Expected Fp4ToFpOp or ScaledUpcastFp4Op");
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto permU32FnTy =
@@ -663,29 +1230,17 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     res_7531 = b.and_(res_7531, s_7531);
 
     // Step 5: convert fp8 to fp32
-    Value res_20 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
-    Value res_64 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
-    Value res_31 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
-    Value res_75 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_20 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_64 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_31 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_75 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
     SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
-    if (scale) {
-      // pack 2 values together to help llvm backend codegen
-      Value scaleF32 =
-          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-      Type v2f32 = vec_ty(f32_ty, 2);
-      Value pkScale = b.undef(v2f32);
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
-      Type v2i32 = vec_ty(i32_ty, 2);
-      for (unsigned i = 0; i < 4; i++) {
-        Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
-        pkVals[i] = (b.bitcast(pkScaled, v2i32));
-      }
-    }
+    for (Value &value : pkVals)
+      value = b.bitcast(value, vec_ty(i32_ty, 2));
     Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
     Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
     Value e2 = b.extract_element(pkVals[0], b.i32_val(1));

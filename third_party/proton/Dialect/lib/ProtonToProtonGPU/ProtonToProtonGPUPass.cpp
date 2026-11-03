@@ -57,16 +57,62 @@ template <typename T, typename OP> bool hasOperator(T *o) {
   return exist;
 }
 
+template <typename T> bool hasProtonEvent(T *o) {
+  bool exists = false;
+  o->walk([&](Operation *op) {
+    if (isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op)) {
+      exists = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return exists;
+}
+
 void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
-    auto loc = wsOp.getLoc();
-    if (hasOperator<Operation, proton::RecordOp>(wsOp.getOperation())) {
-      wsOp->insertOperands(wsOp->getNumOperands(), {buffer, profileMem});
+    auto partOp = wsOp.getPartitionOp();
+    if (hasProtonEvent(partOp.getOperation())) {
+      auto loc = wsOp.getLoc();
+      // All worker partitions share the same explicit capture list.
+      partOp->insertOperands(partOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
         region->addArgument(buffer.getType(), loc);
         region->addArgument(profileMem.getType(), loc);
       }
     }
+  }
+}
+
+void lowerEvent(OpBuilder &builder, Operation *op, Value targetSegment,
+                IntegerType clkType, MetricType metricType,
+                ModuleScopeIdAllocation &scopeInfo) {
+  builder.setInsertionPoint(op);
+  if (auto eventAlloc = dyn_cast<proton::AllocateEventOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(eventAlloc);
+    Value event =
+        arith::ConstantIntOp::create(builder, eventAlloc.getLoc(), scopeId, 32);
+    eventAlloc.getEvent().replaceAllUsesWith(event);
+    eventAlloc.erase();
+    return;
+  }
+
+  Value counter =
+      gpu::ReadCounterOp::create(builder, op->getLoc(), clkType, metricType);
+
+  if (auto record = dyn_cast<proton::RecordOp>(op)) {
+    int scopeId = scopeInfo.getOpScopeId(record);
+    gpu::CircularStoreOp::create(builder, record.getLoc(), targetSegment,
+                                 counter, Value(), record.getIsStart(),
+                                 builder.getI32IntegerAttr(scopeId));
+    record.erase();
+    return;
+  }
+  if (auto event = dyn_cast<proton::EventOp>(op)) {
+    gpu::CircularStoreOp::create(builder, event.getLoc(), targetSegment,
+                                 counter, event.getEvent(), event.getIsStart(),
+                                 IntegerAttr());
+    event.erase();
   }
 }
 
@@ -78,11 +124,11 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
       clockExtension ? mlir::IntegerType::get(builder.getContext(), 64)
                      : mlir::IntegerType::get(builder.getContext(), 32);
 
-  // Replace all proton::RecordOp in the worker warps.
+  // Replace all Proton events in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
-    auto loc = partitions.getLoc();
     for (auto &partition : partitions.getPartitionRegions()) {
-      if (hasOperator<Region, proton::RecordOp>(&partition)) {
+      auto loc = partitions.getLoc();
+      if (hasProtonEvent(&partition)) {
         Block &block = partition.front();
         builder.setInsertionPointToStart(&block);
         int argNum = block.getNumArguments();
@@ -90,45 +136,41 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         auto profileMemArg = block.getArgument(argNum - 1);
 
         // Create a new segment for the worker warp.
-        Value newSegment = builder.create<gpu::SegmentAllocOp>(
-            loc, segment.getType(), bufferArg);
+        Value newSegment = gpu::SegmentAllocOp::create(
+            builder, loc, segment.getType(), bufferArg);
 
         // Restore warp-level context before profiling.
-        builder.create<gpu::RestoreCtxOp>(loc, newSegment, profileMemArg);
+        gpu::RestoreCtxOp::create(builder, loc, newSegment, profileMemArg);
 
-        // Replace all proton::RecordOp.
-        partition.walk([&](proton::RecordOp record) {
-          builder.setInsertionPoint(record);
-
-          Value counter =
-              builder.create<gpu::ReadCounterOp>(loc, clkType, metricType);
-          int scopeId = scopeInfo.getOpScopeId(record);
-          builder.create<gpu::CircularStoreOp>(loc, newSegment, counter,
-                                               record.getIsStart(), scopeId);
-          record.erase();
+        // Replace all Proton events.
+        partition.walk([&](Operation *op) {
+          if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(
+                  op))
+            return;
+          lowerEvent(builder, op, newSegment, clkType, metricType, scopeInfo);
         });
 
-        // Save warp-level context after profiling.
+        // Finalize and save warp-level context before each warp returns.
         partition.walk([&](triton::gpu::WarpReturnOp ret) {
           builder.setInsertionPoint(ret);
-          builder.create<gpu::SaveCtxOp>(loc, newSegment, profileMemArg);
+          // TODO(Keren): This is not ideal if we have multiple warp specialize
+          // ops in a program. In that case, we should use SaveCtxOp here at
+          // warp return and only write back data in FinalizeOp at the end of
+          // kernel. Active warps in the default warp group can write data on
+          // behalf of inactive warps in other warp groups.
+          gpu::FinalizeOp::create(builder, loc, newSegment, profileMemArg);
         });
       }
     }
   });
 
-  // Replace all proton::RecordOp in the master warps. For the master warps, we
+  // Replace all Proton events in the master warps. For the master warps, we
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
-  auto loc = func.getLoc();
-  func->walk([&](proton::RecordOp record) {
-    builder.setInsertionPoint(record);
-    Value counter =
-        builder.create<gpu::ReadCounterOp>(loc, clkType, metricType);
-    int scopeId = scopeInfo.getOpScopeId(record);
-    builder.create<gpu::CircularStoreOp>(loc, segment, counter,
-                                         record.getIsStart(), scopeId);
-    record.erase();
+  func->walk([&](Operation *op) {
+    if (!isa<proton::RecordOp, proton::EventOp, proton::AllocateEventOp>(op))
+      return;
+    lowerEvent(builder, op, segment, clkType, metricType, scopeInfo);
   });
 
   return success();
@@ -137,8 +179,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
                           int segmentNum) {
   const int bytesPerEntry = gpu::getBytesPerClockEntry();
-  const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
-  const int circularHeaderSize = gpu::getCircularHeaderSize(); // byte size
   sharedMemUsed = llvm::alignTo(sharedMemUsed, bytesPerEntry);
   if (sharedMemUsed >= maxSharedMemSize) {
     // We just assume there's enough shared memory and error out if not during
@@ -151,8 +191,8 @@ int getAllocSharedMemSize(int maxSharedMemSize, int sharedMemUsed,
   int numSharedEntries = segmentByteSizeShared * segmentNum / bytesPerEntry;
   int allocSharedMemSize = numSharedEntries * bytesPerEntry;
 
-  int estimatedOccupany = maxSharedMemSize / std::max(1, sharedMemUsed);
-  if (estimatedOccupany <= 1)
+  int estimatedOccupancy = maxSharedMemSize / std::max(1, sharedMemUsed);
+  if (estimatedOccupancy <= 1)
     return allocSharedMemSize;
 
   int maxAllocSharedMemSize = maxSharedMemSize * maxSharedMemRatio;
@@ -214,8 +254,11 @@ public:
       sharedMemUsed =
           mod->getAttrOfType<mlir::IntegerAttr>("ttg.shared").getInt();
 
-    int allocSharedMemSize =
-        getAllocSharedMemSize(maxSharedMemSize, sharedMemUsed, segmentNum);
+    int numCTAs = triton::gpu::lookupNumCTAs(func);
+    auto maxSharedMemSizePerCTA = maxSharedMemSize / numCTAs;
+
+    int allocSharedMemSize = getAllocSharedMemSize(maxSharedMemSizePerCTA,
+                                                   sharedMemUsed, segmentNum);
 
     const int bytesPerEntry = gpu::getBytesPerClockEntry();
 
@@ -236,7 +279,10 @@ public:
       else
         allocBufferSize = allocSharedMemSize;
     } else if (bufferType == gpu::BufferType::GLOBAL) {
-      allocBufferSize = bufferSize;
+      if (bufferSize > 0)
+        allocBufferSize = bufferSize.getValue();
+      else
+        allocBufferSize = 16384 * segmentNum; // 16KB per profiling unit
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
@@ -267,48 +313,54 @@ public:
            llvm::Twine(allocProfileScratchSize) + " bytes.");
     }
 
-    Value buffer;
-    auto ctaLayout =
-        triton::gpu::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                                        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-    auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
-        context, 1, 1, 1, {0}, ctaLayout);
+    Value profileMem = triton::gpu::GlobalScratchAllocOp::create(
+        builder, loc, triton::getPointerType(builder.getI32Type()),
+        allocProfileScratchSize, profileScratchAlignment,
+        builder.getUnitAttr());
+    gpu::InitializeOp::create(builder, loc, profileMem);
 
+    Value segment;
+    Value buffer;
     if (bufferType == gpu::BufferType::SHARED) {
+      auto cgaLayout =
+          triton::gpu::CGAEncodingAttr::get1DLayout(context, numCTAs);
+      auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+          context, 1, 1, 1, {0}, cgaLayout);
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
-          {allocBufferSize / 4}, builder.getI32Type(), encoding,
+          {allocBufferSize / 4, 1}, builder.getI32Type(), encoding,
           sharedMemorySpace, /*mutable_memory=*/true);
-      buffer = builder.create<triton::gpu::LocalAllocOp>(loc, sharedBufferType);
+      buffer =
+          triton::gpu::LocalAllocOp::create(builder, loc, sharedBufferType);
+      Attribute memorySpace =
+          mlir::cast<triton::gpu::MemDescType>(buffer.getType())
+              .getMemorySpace();
+
+      auto segmentType = gpu::SegmentType::get(
+          context, allocBufferSize, memorySpace, granularity, selectIdVec);
+      segment = gpu::SegmentAllocOp::create(builder, loc, segmentType, buffer);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
-      mlir::emitError(loc, "not implemented yet");
-      return failure();
+      Attribute memorySpace = gpu::GlobalMemorySpaceAttr::get(context);
+      auto segmentType = gpu::SegmentType::get(
+          context, allocBufferSize, memorySpace, granularity, selectIdVec);
+      int offset = (circularHeaderSize + numWarps * 4) / 4;
+      Type offsetType = builder.getI32Type();
+      Value offsetVal = arith::ConstantOp::create(
+          builder, loc, offsetType, builder.getIntegerAttr(offsetType, offset));
+      buffer = triton::AddPtrOp::create(builder, loc, profileMem.getType(),
+                                        profileMem, offsetVal);
+      segment = gpu::SegmentAllocOp::create(builder, loc, segmentType, buffer);
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
     }
 
-    auto memorySpace =
-        mlir::cast<triton::gpu::MemDescType>(buffer.getType()).getMemorySpace();
-    auto segmentType = gpu::SegmentType::get(
-        context, allocBufferSize, memorySpace, granularity, selectIdVec);
-    Value segment =
-        builder.create<gpu::SegmentAllocOp>(loc, segmentType, buffer);
-
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-
-    // Set insertion point to the start of the function
-    builder.setInsertionPointToStart(&func.getBody().front());
-
-    Value profileMem = builder.create<gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
-    builder.create<gpu::InitializeOp>(loc, profileMem);
 
     if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
             func.getOperation()))
-      builder.create<gpu::InitCtxOp>(loc, profileMem);
+      gpu::InitCtxOp::create(builder, loc, profileMem);
 
     instrumentWarpSpecializeOps(func, buffer, profileMem);
 
@@ -318,8 +370,12 @@ public:
 
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
-      builder.create<mlir::gpu::BarrierOp>(loc);
-      builder.create<gpu::FinalizeOp>(loc, segment, profileMem);
+      mlir::triton::gpu::BarrierOp::create(
+          builder, loc,
+          triton::gpu::AddrSpace::Local | triton::gpu::AddrSpace::GlobalRead |
+              triton::gpu::AddrSpace::GlobalWrite);
+
+      gpu::FinalizeOp::create(builder, loc, segment, profileMem);
     });
 
     return success();
@@ -349,9 +405,9 @@ public:
 
     FuncOp func = *m.getOps<triton::FuncOp>().begin();
 
-    // Check if there are any proton records to process
-    if (!hasOperator<Operation, proton::RecordOp>(func.getOperation())) {
-      return; // No proton records to process, silently return
+    // Check if there are any Proton events to process.
+    if (!hasProtonEvent(func.getOperation())) {
+      return; // No Proton events to process, silently return.
     }
 
     // Validate profile scratch alignment

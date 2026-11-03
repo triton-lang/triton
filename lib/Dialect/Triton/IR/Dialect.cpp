@@ -14,9 +14,31 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+
 //===----------------------------------------------------------------------===//
 // TritonDialect Dialect Interfaces
 //===----------------------------------------------------------------------===//
+
+namespace {
+
+class TritonCachePolicyInterface : public DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported Triton cache policy attribute "
+                         << cachePolicy;
+    return verifyCacheModifier(policy.getCacheModifier(), operation, emitError);
+  }
+};
+
+} // namespace
 
 bool TritonInlinerInterface::isLegalToInline(Operation *call,
                                              Operation *callable,
@@ -40,8 +62,8 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
 
   // Replace the return with a branch to the dest.
   OpBuilder builder(op);
-  builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest,
-                                     returnOp.getOperands());
+  mlir::cf::BranchOp::create(builder, op->getLoc(), newDest,
+                             returnOp.getOperands());
   op->erase();
 }
 
@@ -58,8 +80,35 @@ void TritonInlinerInterface::handleTerminator(Operation *op,
     valuesToRepl[it.index()].replaceAllUsesWith(it.value());
 }
 
+Value TritonInlinerInterface::handleResult(OpBuilder &builder, Operation *call,
+                                           Operation *, Value result,
+                                           DictionaryAttr) const {
+  // Multi-result calls carry hints on per-result tt.annotate operations.
+  if (call->getNumResults() != 1)
+    return result;
+
+  SmallVector<NamedAttribute> hints;
+  static constexpr llvm::StringLiteral hintAttrs[] = {
+      "tt.divisibility", "tt.contiguity", "tt.constancy"};
+  for (StringRef attrName : hintAttrs) {
+    if (Attribute attr = call->getDiscardableAttr(attrName))
+      hints.emplace_back(builder.getStringAttr(attrName), attr);
+  }
+  if (hints.empty())
+    return result;
+
+  auto annotate = AnnotateOp::create(builder, result.getLoc(), result);
+  annotate->setAttrs(builder.getDictionaryAttr(hints));
+  return annotate.getResult();
+}
+
 void TritonDialect::initialize() {
   registerTypes();
+
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+      >();
 
   addOperations<
 #define GET_OP_LIST
@@ -67,6 +116,7 @@ void TritonDialect::initialize() {
       >();
 
   // We can also add interface here.
+  addInterfaces<TritonCachePolicyInterface>();
   addInterfaces<TritonInlinerInterface>();
 }
 

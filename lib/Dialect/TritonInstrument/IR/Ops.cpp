@@ -1,3 +1,5 @@
+#include "mlir/IR/PatternMatch.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
@@ -7,220 +9,136 @@
 
 #include "triton/Dialect/TritonInstrument/IR/OpsEnums.cpp.inc"
 
-using namespace mlir;
-namespace {
-// All ConSan tensors should have encoding that ensures that all its elements
-// reside in a single thread
-bool verifySingleThreadEncoding(RankedTensorType tensorType) {
-  auto encoding =
-      cast<triton::gpu::BlockedEncodingAttr>(tensorType.getEncoding());
-  int rank = encoding.getRank();
-  if (rank != tensorType.getRank())
-    return false;
-  for (int i = 0; i < rank; ++i) {
-    if (encoding.getSizePerThread()[i] != tensorType.getShape()[i])
-      return false;
+namespace mlir {
+namespace triton {
+namespace instrument {
+
+namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
+
+LogicalResult DotI8Op::verify() {
+  auto aEnc =
+      dyn_cast<ttg::DotOperandEncodingAttr>(getA().getType().getEncoding());
+  auto bEnc =
+      dyn_cast<ttg::DotOperandEncodingAttr>(getB().getType().getEncoding());
+  if (!aEnc || !bEnc)
+    return emitError("requires dot operand encodings for A and B");
+
+  auto aMma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(aEnc.getParent());
+  auto bMma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(bEnc.getParent());
+  auto dMma =
+      dyn_cast<ttg::NvidiaMmaEncodingAttr>(getD().getType().getEncoding());
+  if (!aMma || !bMma || !dMma || aMma.getVersionMajor() != 2 ||
+      bMma.getVersionMajor() != 2 || dMma.getVersionMajor() != 2)
+    return emitError("requires NVIDIA MMAv2 operand and result layouts");
+  if (aMma != bMma || aMma != dMma)
+    return emitError("requires matching NVIDIA MMAv2 layouts");
+
+  auto layoutInterface =
+      cast<tt::DialectInferLayoutInterface>(&dMma.getDialect());
+  return layoutInterface->verifyDotOpEncodingCompatibility(getOperation(), aEnc,
+                                                           bEnc);
+}
+
+LogicalResult ExperimentalLocalGatherOp::verify() {
+  auto srcTy = getSrc().getType();
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  auto dstTy = cast<RankedTensorType>(getType());
+  unsigned axis = getAxis();
+
+  if (!isa<ttg::SharedEncodingTrait>(srcTy.getEncoding()))
+    return emitError("source must have shared memory encoding");
+
+  if (!indicesTy.getElementType().isInteger())
+    return emitError("indices must have integer element type");
+
+  if (dstTy.getShape() != indicesTy.getShape())
+    return emitError("result shape must match indices shape");
+
+  if (srcTy.getRank() != indicesTy.getRank())
+    return emitError("source and indices must have the same rank");
+
+  if (axis >= srcTy.getRank())
+    return emitError("axis ")
+           << axis << " is out of bounds for source rank " << srcTy.getRank();
+
+  if (srcTy.getElementType() != dstTy.getElementType())
+    return emitError("result element type must match source element type");
+
+  if (indicesTy.getEncoding() != dstTy.getEncoding())
+    return emitError("indices and result must have the same layout");
+
+  if (static_cast<int64_t>(getOffsets().size()) != srcTy.getRank())
+    return emitError("offset count must match source rank");
+
+  return success();
+}
+
+template <typename ViewOp, typename FPSanOp>
+struct PushFPSanThroughViewPattern : public OpRewritePattern<ViewOp> {
+  using OpRewritePattern<ViewOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ViewOp view,
+                                PatternRewriter &rewriter) const override {
+    auto fpsan = view->getOperand(0).template getDefiningOp<FPSanOp>();
+    if (!fpsan)
+      return failure();
+
+    auto resultTy = dyn_cast<RankedTensorType>(view->getResult(0).getType());
+    auto payloadTy = dyn_cast<RankedTensorType>(fpsan.getVal().getType());
+    if (!resultTy || !payloadTy)
+      return failure();
+
+    auto payloadViewTy = resultTy.clone(payloadTy.getElementType());
+    OperationState state(view.getLoc(), view->getName());
+    state.addOperands(fpsan.getVal());
+    state.addTypes(payloadViewTy);
+    state.addAttributes(view->getAttrs());
+    Operation *payloadView = rewriter.create(state);
+    auto moved = FPSanOp::create(rewriter, view.getLoc(), resultTy,
+                                 payloadView->getResult(0));
+    rewriter.replaceOp(view, moved->getResults());
+    return success();
   }
-  return true;
-}
-} // namespace
+};
 
-namespace mlir::triton::instrument {
-
-LogicalResult ExperimentalSetWriteVisibilityOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
-  if (writeVisibilityType.getShape() != buffersType.getShape() ||
-      writeVisibilityType.getEncoding() != buffersType.getEncoding())
-    return emitError() << "writeVisibility and buffers must have the same "
-                          "shape and encoding";
-  return success();
+template <typename FPSanOp>
+void addPushFPSanThroughViewPatterns(RewritePatternSet &patterns,
+                                     MLIRContext *context) {
+  patterns.add<PushFPSanThroughViewPattern<ttg::ConvertLayoutOp, FPSanOp>,
+               PushFPSanThroughViewPattern<tt::TransOp, FPSanOp>,
+               PushFPSanThroughViewPattern<tt::ReshapeOp, FPSanOp>,
+               PushFPSanThroughViewPattern<tt::BroadcastOp, FPSanOp>,
+               PushFPSanThroughViewPattern<tt::ExpandDimsOp, FPSanOp>>(context);
 }
 
-LogicalResult ExperimentalClearWriteTrackingOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
-  if (writeTrackingType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "writeTracking dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(writeTrackingType))
-    return emitError()
-           << "writeTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
+void ExperimentalFPSanEmbedOp::getCanonicalizationPatterns(
+    RewritePatternSet &patterns, MLIRContext *context) {
+  // view(embed(x)) -> embed(view(x))
+  addPushFPSanThroughViewPatterns<ExperimentalFPSanEmbedOp>(patterns, context);
 }
 
-LogicalResult ExperimentalClearReadVisibilityOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
-  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "readVisibility dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(readVisibilityType))
-    return emitError()
-           << "readVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
+OpFoldResult ExperimentalFPSanEmbedOp::fold(FoldAdaptor adaptor) {
+  if (auto unembed = getVal().getDefiningOp<ExperimentalFPSanUnembedOp>())
+    if (unembed.getVal().getType() == getType())
+      return unembed.getVal();
+  return {};
 }
 
-LogicalResult ExperimentalClearReadTrackingOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
-  if (readTrackingType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "readTracking dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(readTrackingType))
-    return emitError()
-           << "readTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
+void ExperimentalFPSanUnembedOp::getCanonicalizationPatterns(
+    RewritePatternSet &patterns, MLIRContext *context) {
+  // view(unembed(x)) -> unembed(view(x))
+  addPushFPSanThroughViewPatterns<ExperimentalFPSanUnembedOp>(patterns,
+                                                              context);
 }
 
-LogicalResult ExperimentalSetReadVisibilityOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
-  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "readVisibility dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(readVisibilityType))
-    return emitError()
-           << "readVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
+OpFoldResult ExperimentalFPSanUnembedOp::fold(FoldAdaptor adaptor) {
+  if (auto embed = getVal().getDefiningOp<ExperimentalFPSanEmbedOp>())
+    if (embed.getVal().getType() == getType())
+      return embed.getVal();
+  return {};
 }
 
-LogicalResult ExperimentalTrackVisibleWritesOp::verify() {
-  auto barriersType = getBarriers().getType();
-  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
-  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
-  if (writeVisibilityType.getShape()[0] != writeTrackingType.getShape()[0])
-    return emitError()
-           << "writeVisibility dim 0 must match number of writeTracking";
-  if (writeTrackingType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "writeTracking dim 1 must match number of barriers";
-  if (!verifySingleThreadEncoding(writeVisibilityType))
-    return emitError()
-           << "writeVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  if (!verifySingleThreadEncoding(writeTrackingType))
-    return emitError()
-           << "writeTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalTrackVisibleReadsOp::verify() {
-  auto barriersType = getBarriers().getType();
-  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
-  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
-  if (readVisibilityType.getShape()[0] != readTrackingType.getShape()[0])
-    return emitError()
-           << "readVisibility dim 0 must match number of readTracking";
-  if (readTrackingType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "readTracking dim 1 must match number of barriers";
-  if (!verifySingleThreadEncoding(readVisibilityType))
-    return emitError()
-           << "readVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  if (!verifySingleThreadEncoding(readTrackingType))
-    return emitError()
-           << "readTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalTransferVisibleWritesOp::verify() {
-  auto barriersType = getBarriers().getType();
-  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
-  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
-  if (writeVisibilityType.getShape()[0] != writeTrackingType.getShape()[0])
-    return emitError()
-           << "writeVisibility dim 0 must match number of writeTracking";
-  if (writeTrackingType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "writeTracking dim 1 must match number of barriers";
-  if (!verifySingleThreadEncoding(writeVisibilityType))
-    return emitError()
-           << "writeVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  if (!verifySingleThreadEncoding(writeTrackingType))
-    return emitError()
-           << "writeTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalTransferVisibleReadsOp::verify() {
-  auto barriersType = getBarriers().getType();
-  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
-  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
-  if (readVisibilityType.getShape()[0] != readTrackingType.getShape()[0])
-    return emitError()
-           << "readVisibility dim 0 must match number of readTracking";
-  if (readTrackingType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "readTracking dim 1 must match number of barriers";
-  if (!verifySingleThreadEncoding(readVisibilityType))
-    return emitError()
-           << "readVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  if (!verifySingleThreadEncoding(readTrackingType))
-    return emitError()
-           << "readTracking must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalVerifyWriteVisibilityOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
-  if (writeVisibilityType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "writeVisibility dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(writeVisibilityType))
-    return emitError()
-           << "writeVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalVerifyReadVisibilityOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
-  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "readVisibility dim 0 must match number of buffers";
-  if (!verifySingleThreadEncoding(readVisibilityType))
-    return emitError()
-           << "readVisibility must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalStageAccessForCommitOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto outstandingCommitsType =
-      cast<RankedTensorType>(getOutstandingCommitsType());
-  if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
-    return emitError()
-           << "buffers and outstandingCommits must have the same size";
-  if (outstandingCommitsType.getShape()[1] != NUM_THREADS)
-    return emitError()
-           << "outstandingCommits dim 1 must match number of threads";
-  if (!verifySingleThreadEncoding(outstandingCommitsType))
-    return emitError()
-           << "outstandingCommits must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalCheckOutstandingCommitsOp::verify() {
-  auto buffersType = getBuffers().getType();
-  auto outstandingCommitsType =
-      cast<RankedTensorType>(getOutstandingCommitsType());
-  if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
-    return emitError()
-           << "buffers and outstandingCommits must have the same size";
-  if (outstandingCommitsType.getShape()[1] != NUM_THREADS)
-    return emitError()
-           << "outstandingCommits dim 1 must match number of threads";
-  if (!verifySingleThreadEncoding(outstandingCommitsType))
-    return emitError()
-           << "outstandingCommits must have encoding that ensures that all "
-              "its elements reside in a single thread";
-  return success();
-}
-
-} // namespace mlir::triton::instrument
+} // namespace instrument
+} // namespace triton
+} // namespace mlir

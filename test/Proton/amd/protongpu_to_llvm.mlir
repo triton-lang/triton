@@ -1,14 +1,32 @@
-// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --verify-diagnostics | FileCheck %s --check-prefix=CHECK
-// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="arch=gfx942" --convert-builtin-func-to-llvm --verify-diagnostics | FileCheck -allow-unused-prefixes --check-prefix=CONVERT-BUILTIN %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx942" --verify-diagnostics | FileCheck %s --check-prefix=CHECK
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx942" --convert-builtin-func-to-llvm --verify-diagnostics | FileCheck -allow-unused-prefixes --check-prefix=CONVERT-BUILTIN %s
+// RUN: triton-opt %s -split-input-file -convert-proton-amd-gpu-to-llvm="gfx-arch=gfx1250" --verify-diagnostics | FileCheck %s --check-prefix=GFX1250
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: no_conversion
   llvm.func @no_conversion() {
-    //CHECK: rocdl.barrier
+    //CHECK: ttg.barrier local|global_read|global_write
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
-    gpu.barrier
+    ttg.barrier local|global_read|global_write
+    llvm.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: convert_event
+  llvm.func @convert_event(%token: i32) {
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %segment = proton_gpu.segment_alloc %buffer : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> !proton_gpu.segment<1024, #smem, warp>
+    %clock = arith.constant 123 : i32
+    proton_gpu.circular_store start %segment, %clock {eventType = 1 : i32, scopeId = 0 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
+    proton_gpu.circular_store end %segment, %clock, %token : !proton_gpu.segment<1024, #smem, warp>, i32
+    // CHECK-NOT: proton_gpu.circular_store
     llvm.return
   }
 }
@@ -19,9 +37,12 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
+  // GFX1250-LABEL: convert_read_counter
   llvm.func @convert_read_counter() -> i32 {
-    //CHECK: llvm.call_intrinsic "llvm.amdgcn.s.memtime"() : () -> i64
+    //CHECK: llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
     //CHECK: llvm.trunc %{{.*}} : i64 to i32
+    // GFX1250: llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
+    // GFX1250: llvm.trunc %{{.*}} : i64 to i32
     %1 = proton_gpu.read_counter : i32
     llvm.return %1 : i32
   }
@@ -42,8 +63,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: %[[P3:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR3:.*]] = llvm.select %[[P3]], %{{.*}}, %[[ADDR2]]
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<96xi32, #shared, #smem, mutable>
-    %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96xi32, #shared, #smem, mutable> -> !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<96x1xi32, #shared, #smem, mutable>
+    %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<96x1xi32, #shared, #smem, mutable> -> !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
     tt.return %3 : !proton_gpu.segment<384, #smem, warp, [0, 1, 2]>
   }
 }
@@ -61,31 +82,11 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
     // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
-  	// CHECK-DAG: %[[CYCLE1:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
+  	// CHECK-DAG: %[[CYCLE1:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"()
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
     %8 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i32
-    llvm.return
-  }
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
-  // CHECK-LABEL: convert_global_scratch_alloc
-  llvm.func @convert_global_scratch_alloc(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
-    // CHECK-DAG: rocdl.workgroup.id.x
-    // CHECK-DAG: rocdl.workgroup.id.y
-    // CHECK-DAG: rocdl.workgroup.id.z
-    // CHECK-DAG: rocdl.grid.dim.x
-    // CHECK-DAG: rocdl.grid.dim.y
-    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
-    // CHECK-DAG: %[[SIZE:.*]] = llvm.mlir.constant(384 : i32)
-    // CHECK-DAG: %{{.*}} = llvm.mul %[[PID]], %[[SIZE]] : i32
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
     llvm.return
   }
 }
@@ -103,14 +104,17 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: %[[PREAMBLE_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PREAMBLE_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
   // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
 
-  // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
   // CHECK-DAG: %[[PID_OFFSET:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG: %[[PID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
-  // CHECK-DAG: llvm.store %[[PID]], %[[PID_PTR]] : i32, !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %{{.*}}, %[[PID_PTR]] : i32, !llvm.ptr<1>
 
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_XCC_ID, 0, 4)", "=s"  : () -> i32
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
+  // hwreg(HW_REG_XCC_ID, 0, 4), hwreg(HW_REG_HW_ID, 8, 4), hwreg(HW_REG_HW_ID, 13, 3)
+  // CHECK-DAG: %[[XCC_REG:.*]] = llvm.mlir.constant(6164 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[XCC_REG]]) : (i32) -> i32
+  // CHECK-DAG: %[[CU_REG:.*]] = llvm.mlir.constant(6660 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[CU_REG]]) : (i32) -> i32
+  // CHECK-DAG: %[[SE_REG:.*]] = llvm.mlir.constant(4932 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[SE_REG]]) : (i32) -> i32
   // CHECK-DAG: %[[SMID_OFFSET:.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %{{.*}}, %[[SMID_PTR]] : i32, !llvm.ptr<1>
@@ -124,8 +128,23 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 
   // CHECK: ^bb2:
   // CHECK: llvm.return
+
+  // GFX1250-LABEL: convert_smem_initialize
+  // CDNA5 remapped the hwreg id space, so processorId reads wave placement
+  // from WAVE_HW_ID1 (hwreg 23) for WGP/SA and from
+  // s_sendmsg_rtn(MSG_RTN_GET_SE_AID_ID == 135) for SE/XCC, instead of the CDNA
+  // HW_REG_XCC_ID / HW_REG_HW_ID registers.
+  // GFX1250-DAG: %[[SEAID_MSG:.*]] = llvm.mlir.constant(135 : i32) : i32
+  // GFX1250-DAG: llvm.call_intrinsic "llvm.amdgcn.s.sendmsg.rtn.i32"(%[[SEAID_MSG]]) : (i32) -> i32
+  // hwreg(HW_REG_WAVE_HW_ID1, 0, 32)
+  // GFX1250-DAG: %[[HWID1_REG:.*]] = llvm.mlir.constant(63511 : i32) : i32
+  // GFX1250-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[HWID1_REG]]) : (i32) -> i32
+  // GFX1250-DAG: %[[MSG:.*]] = llvm.mlir.constant(131 : i32) : i32
+  // GFX1250-DAG: %[[INIT_TIME_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.sendmsg.rtn.i64"(%[[MSG]]) : (i32) -> i64
+  // GFX1250-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // GFX1250-DAG: %[[INIT_TIME:.*]] = llvm.mul %[[INIT_TIME_RAW]], %[[TEN]] : i64
   llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
-    %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %0 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 384 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
     proton_gpu.initialize %0 : !tt.ptr<i32>
     llvm.return
   }
@@ -139,14 +158,14 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-LABEL: convert_smem_finalize
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}(%{{.*}} : i32)
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb{{.*}}, ^bb{{.*}}
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
   // CONVERT-BUILTIN: llvm.br ^bb{{.*}}
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    %1 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 384 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
     %2 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp>
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
     llvm.return
@@ -159,11 +178,17 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: use_clock64
+  // GFX1250-LABEL: use_clock64
   llvm.func @use_clock64() {
-    // CHECK-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memtime"()
+    // CHECK-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"()
     // CHECK-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
+    // On CDNA5, llvm.readcyclecounter lowers to s_get_shader_cycles_u64.
+    // GFX1250-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
+    // GFX1250-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
+    // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]
+    // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
     %8 = proton_gpu.read_counter : i64

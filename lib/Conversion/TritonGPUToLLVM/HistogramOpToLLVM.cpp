@@ -1,3 +1,4 @@
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -7,91 +8,112 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-// Compute a histogram within a warp. This uses an algorithm by @apgoucher
-// that does the following:
-// Create a ballot for each bit of the bin index (there
-// are only log2(num_bins) of these) and then apply bitwise operations to get
-// the indicator functions for the bins owned by this particular thread, and
-// only popcount those.
-static SmallVector<Value> computeWarpLevelHistogram(
-    Location loc, RankedTensorType srcType, SmallVector<Value> &srcValues,
-    SmallVector<Value> &maskValues, int numBins, int numThreadPerWarp,
-    Value threadId, ConversionPatternRewriter &rewriter,
-    const TargetInfoBase &targetInfo) {
+static void atomicAddOne(Value ptr, Location loc,
+                         ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  assert(numBins % numThreadPerWarp == 0 &&
-         "numBins must be divisible by numThreadPerWarp");
-  Value zero = b.i32_val(0);
-  int numBits = llvm::Log2_64(numBins);
-  int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
-  unsigned numElementsPerThreads = getTotalElemsPerThread(srcType);
-  // The histogram is distributed across threads, each thread owns `numBins /
-  // numThreadPerWarp` bins.
-  SmallVector<Value> warpLevelHistogram(numBins / numThreadPerWarp, zero);
-  for (int i = 0; i < numElementsPerThreads; ++i) {
-    Value value = srcValues[i];
-    SmallVector<Value> ballotBits;
-    for (int j = 0; j < numBits; ++j) {
-      Value bitSet = b.and_(value, b.i32_val(1 << j));
-      Value cmp = b.icmp_ne(bitSet, zero);
-      Value bit =
-          targetInfo.ballot(rewriter, loc, int_ty(numThreadPerWarp), cmp);
-      ballotBits.push_back(bit);
-    }
-    uint64_t fullMaskValue =
-        numThreadPerWarp == 32 ? 0xFFFFFFFF : 0xFFFFFFFFFFFFFFFF;
-    Value fullMask = b.int_val(numThreadPerWarp, fullMaskValue);
-    Value mask = fullMask;
-    for (int i = 0; i < numBitsLaneId; i++) {
-      Value updateMask =
-          b.select(b.icmp_ne(b.and_(threadId, b.i32_val(1 << i)), zero),
-                   b.int_val(numThreadPerWarp, 0), fullMask);
-      mask = b.and_(
-          mask, b.xor_(ballotBits[i + numBits - numBitsLaneId], updateMask));
-    }
-    // save a ballot bit to capture the input mask
-    Value inputMaskBit = fullMask;
-    if (maskValues.size() > 0) {
-      inputMaskBit = targetInfo.ballot(rewriter, loc, int_ty(numThreadPerWarp),
-                                       maskValues[i]);
-    }
-    // mask out the values for which input mask is invalid
-    mask = b.and_(mask, inputMaskBit);
-    // at this point, 'mask' tells you which elements are in a bin owned by this
-    // thread.
-    for (int k = 0; k < warpLevelHistogram.size(); k++) {
-      Value binMask = mask;
-      for (int j = 0; j < numBits - numBitsLaneId; j++) {
-        Value updateMask =
-            b.int_val(numThreadPerWarp, ((k & (1 << j)) ? 0 : fullMaskValue));
-        binMask = b.and_(binMask, b.xor_(ballotBits[j], updateMask));
-      }
-      // at this point, 'bin_mask' tells you which elements are in the kth bin
-      // owned by this thread.
-      Value bitCount = rewriter.create<LLVM::CtPopOp>(
-          loc, int_ty(numThreadPerWarp), binMask);
-      if (numThreadPerWarp > 32)
-        bitCount = b.trunc(i32_ty, bitCount);
-      warpLevelHistogram[k] = b.add(warpLevelHistogram[k], bitCount);
+  LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::add, ptr,
+                            b.i32_val(1), LLVM::AtomicOrdering::monotonic);
+}
+
+static SmallVector<Value>
+computeWarpHistogram(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &srcValues,
+                     const SmallVector<Value> &maskValues, int numBins,
+                     int numThreadsPerWarp, Value threadPred,
+                     const TargetInfoBase &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> counts(numBins, b.i32_val(0));
+  auto ballotTy = int_ty(numThreadsPerWarp);
+  for (int i = 0; i < srcValues.size(); ++i) {
+    Value pred = threadPred;
+    if (!maskValues.empty())
+      pred = maybeAnd(rewriter, loc, pred, maskValues[i]);
+    for (int bin = 0; bin < numBins; ++bin) {
+      Value binPred = b.icmp_eq(srcValues[i], b.i32_val(bin));
+      binPred = maybeAnd(rewriter, loc, binPred, pred);
+      Value ballot = targetInfo.ballot(rewriter, loc, ballotTy, binPred);
+      Value count = LLVM::CtPopOp::create(rewriter, loc, ballotTy, ballot);
+      if (numThreadsPerWarp > 32)
+        count = b.trunc(i32_ty, count);
+      counts[bin] = b.add(counts[bin], count);
     }
   }
-  return warpLevelHistogram;
+
+  return counts;
 }
 
-static void atomicAdd(Value ptr, Value val, Location loc,
-                      ConversionPatternRewriter &rewriter) {
-  rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, ptr, val,
-                                     LLVM::AtomicOrdering::monotonic);
+static SmallVector<Value>
+reduceWarpHistograms(HistogramOp op, ArrayRef<Value> counts,
+                     ConversionPatternRewriter &rewriter,
+                     const LLVMTypeConverter *typeConverter) {
+  int numWarps = lookupNumWarps(op);
+  if (numWarps == 1)
+    return llvm::to_vector(counts);
+
+  auto loc = op.getLoc();
+  auto *ctx = op.getContext();
+  int numBins = counts.size();
+  int threadsPerWarp =
+      TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+  auto kWarp = str_attr("dim0");
+  auto kBin = str_attr("dim1");
+  // Each warp contributes one count per bin, including zero from redundant
+  // warps. Reducing dim0 combines those partial histograms.
+  auto layout =
+      LinearLayout::identity1D(numBins, str_attr("register"), kBin) *
+      LinearLayout::zeros1D(threadsPerWarp, str_attr("lane"), kBin) *
+      LinearLayout::identity1D(numWarps, str_attr("warp"), kWarp) *
+      LinearLayout::zeros1D(lookupNumCTAs(op), str_attr("block"), kBin);
+  auto type = RankedTensorType::get(
+      {numWarps, numBins}, rewriter.getI32Type(),
+      LinearEncodingAttr::get(ctx, layout.transposeOuts({kWarp, kBin})));
+  Value packed =
+      packUniqueTensorElements(loc, typeConverter, counts, rewriter, type);
+  Value partials =
+      UnrealizedConversionCastOp::create(rewriter, loc, type, packed)
+          .getResult(0);
+  auto reduce = ReduceOp::create(rewriter, loc, ValueRange{partials}, 0);
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    auto *body = rewriter.createBlock(
+        &reduce.getCombineOp(), {},
+        {rewriter.getI32Type(), rewriter.getI32Type()}, {loc, loc});
+    Value sum = arith::AddIOp::create(rewriter, loc, body->getArgument(0),
+                                      body->getArgument(1));
+    ReduceReturnOp::create(rewriter, loc, ValueRange{sum});
+  }
+  // The reduction reuses the histogram scratch for its inter-warp transfer.
+  reduce->setAttr("allocation.offset", op->getAttr("allocation.offset"));
+  assert(ReduceOpHelper(reduce).getScratchSizeInBytes() <=
+         defaultAllocationAnalysisScratchSizeFn(op));
+  Value result = reduce.getResult().front();
+  Value reduced =
+      UnrealizedConversionCastOp::create(
+          rewriter, loc, typeConverter->convertType(result.getType()), result)
+          .getResult(0);
+  return unpackUniqueTensorElements(loc, reduced, rewriter);
 }
 
-static SmallVector<Value> computeCrossWarpHistogram(
-    Location loc, ConversionPatternRewriter &rewriter, RankedTensorType srcType,
-    Value baseSharedMemPtr, const SmallVector<Value> &warpLevelHistogram,
-    int numBins, int numThreadPerWarp, const SmallVector<Value> &indices,
-    Value threadId, int numWarps) {
+static SmallVector<Value>
+distributeHistogram(Location loc, ConversionPatternRewriter &rewriter,
+                    ArrayRef<Value> counts, ArrayRef<Value> indices) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
-  Value laneId = b.and_(threadId, b.i32_val(numThreadPerWarp - 1));
+  for (Value index : indices) {
+    Value count = counts.back();
+    for (int bin = 0; bin + 1 < counts.size(); ++bin)
+      count = b.select(b.icmp_eq(index, b.i32_val(bin)), counts[bin], count);
+    histogramValues.push_back(count);
+  }
+  return histogramValues;
+}
+
+static void accumulateSharedHistogram(
+    Location loc, ConversionPatternRewriter &rewriter, Value baseSharedMemPtr,
+    ArrayRef<Value> srcValues, ArrayRef<Value> maskValues, int numBins,
+    int numThreadPerWarp, Value threadId, Value threadPred, int numWarps,
+    const TargetInfoBase &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Initialize the shared memory with zeros.
   int64_t numElementPerThread =
       ceil<int64_t>(numBins, numThreadPerWarp * numWarps);
@@ -101,29 +123,55 @@ static SmallVector<Value> computeCrossWarpHistogram(
     offset = b.urem(offset, b.i32_val(numBins));
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
-    b.store(b.i32_val(0), sharedMemPtr);
+    targetInfo.storeShared(rewriter, loc, sharedMemPtr, b.i32_val(0),
+                           b.true_val());
   }
-  b.barrier();
-  Block *afterAtomics = nullptr;
+  b.barrier(triton::gpu::AddrSpace::Local);
+
   // Apply atomic add to update the histogram in shared memory.
-  for (int i = 0; i < warpLevelHistogram.size(); ++i) {
-    Value warpLevelHistogramValue = warpLevelHistogram[i];
-    Value offset = b.add(b.mul(laneId, b.i32_val(warpLevelHistogram.size())),
-                         b.i32_val(i));
-    Value sharedMemPtr =
-        b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
-    atomicAdd(sharedMemPtr, warpLevelHistogramValue, loc, rewriter);
+  Value numBinsValue = b.i32_val(numBins);
+  for (int i = 0; i < srcValues.size(); ++i) {
+    Value pred = threadPred;
+    if (!maskValues.empty())
+      pred = maybeAnd(rewriter, loc, pred, maskValues[i]);
+    Value updatePred = b.icmp_ult(srcValues[i], numBinsValue);
+    updatePred = maybeAnd(rewriter, loc, updatePred, pred);
+
+    auto [prevBlock, ifBlock, thenBlock] =
+        createIfBlock(rewriter, loc, updatePred);
+    (void)prevBlock;
+    rewriter.setInsertionPointToStart(ifBlock);
+    Value sharedMemPtr = b.gep(baseSharedMemPtr.getType(), i32_ty,
+                               baseSharedMemPtr, srcValues[i]);
+    atomicAddOne(sharedMemPtr, loc, rewriter);
+    rewriter.setInsertionPointToStart(thenBlock);
   }
-  if (afterAtomics) {
-    rewriter.create<LLVM::BrOp>(loc, afterAtomics);
-    rewriter.setInsertionPointToStart(afterAtomics);
-  }
-  b.barrier();
-  // load the histogram to register with the right layout.
+}
+
+static SmallVector<Value>
+loadSharedHistogram(Location loc, ConversionPatternRewriter &rewriter,
+                    Value baseSharedMemPtr, ArrayRef<Value> indices,
+                    int numCTAsToCombine, int ctaBroadcastMask,
+                    HistogramOp sourceOp, const TargetInfoBase &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numCTAsToCombine > 1)
+    targetInfo.clusterBarrier(loc, rewriter, sourceOp);
+  else
+    b.barrier(triton::gpu::AddrSpace::Local);
+  SmallVector<Value> histogramValues;
   for (Value index : indices) {
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, index);
-    Value val = b.load(i32_ty, sharedMemPtr);
+    Value val = b.i32_val(0);
+    for (int cta = 0; cta < numCTAsToCombine; ++cta) {
+      // Replicated CTAs do not accumulate inputs and contribute only zeros.
+      if (cta & ctaBroadcastMask)
+        continue;
+      Value ctaId = numCTAsToCombine > 1 ? b.i32_val(cta) : Value();
+      Value partial = targetInfo.loadDShared(rewriter, loc, sharedMemPtr, ctaId,
+                                             i32_ty, b.true_val());
+      val = b.add(val, partial);
+    }
     histogramValues.push_back(val);
   }
   return histogramValues;
@@ -145,70 +193,64 @@ public:
   matchAndRewrite(triton::HistogramOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto *ctx = op.getContext();
     Value input = adaptor.getSrc();
     auto typeConverter = getTypeConverter();
-    SmallVector<Value> srcValues = unpackLLElements(loc, input, rewriter);
+    SmallVector<Value> srcValues =
+        unpackUniqueTensorElements(loc, input, rewriter);
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskValues;
     if (llMask)
-      maskValues = unpackLLElements(loc, llMask, rewriter);
+      maskValues = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     int numBins = op.getType().getDimSize(0);
     auto mod = op->getParentOfType<ModuleOp>();
     int numThreadsPerWarp =
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    assert(numThreadsPerWarp == 32 ||
-           numThreadsPerWarp == 64 &&
-               "Only supports 32 or 64 threads per warp");
+    assert((numThreadsPerWarp == 32 || numThreadsPerWarp == 64) &&
+           "Only supports 32 or 64 threads per warp");
     int numWarps = triton::gpu::lookupNumWarps(op);
-    // Pad out the bins so that we have at least one bin per thread within a
-    // warp.
-    numBins = std::max(numBins, numThreadsPerWarp);
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
-    // First compute a warp local histogram based on values owned by each warps.
-    SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(
-        loc, srcType, srcValues, maskValues, numBins, numThreadsPerWarp,
-        threadId, rewriter, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(srcType);
+    bool crossCTA = hasCrossCTAScratch(op);
+    // Each CTA computes its own histogram.
+    if (!crossCTA)
+      freeVarMasks[str_attr("block")] = 0;
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
-    // Then use atomic to update the histogram in shared memory.
-    // TODO: we could skip this for cases with num_warps=1 as long as we can
-    // generate the right layout. Currently the warp level histogram generates
-    // data in the default blocked layout.
-    Value baseSharedMemPtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto dstType = op.getType();
-    Attribute dstEncoding = dstType.getEncoding();
-    auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,
+    auto dstLayout =
+        toLinearLayout(dstType).removeZeroBasesAlongDim(str_attr("register"));
+    auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstLayout,
                                dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
-    SmallVector<Value> histogramValue = computeCrossWarpHistogram(
-        loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
-        numThreadsPerWarp, innerDimIndices, threadId, numWarps);
-
-    // Depending on the layout, some threads may have duplicate data. We can
-    // account for this by calculating a "replication factor" and dividing the
-    // results by it to avoid overcounting.
-    auto replicationFactor = numWarps * numThreadsPerWarp;
-    auto threadsPerWarp = getThreadsPerWarp(srcType);
-    auto warpsPerCTA =
-        getWarpsPerCTA(srcType.getEncoding(), srcType.getShape());
-    replicationFactor /= std::accumulate(
-        threadsPerWarp.begin(), threadsPerWarp.end(), 1, std::multiplies<>());
-    replicationFactor /= std::accumulate(warpsPerCTA.begin(), warpsPerCTA.end(),
-                                         1, std::multiplies<>());
-
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    for (auto i = 0; i < histogramValue.size(); ++i) {
-      histogramValue[i] =
-          b.sdiv(histogramValue[i], b.i32_val(replicationFactor));
+    SmallVector<Value> histogramValue;
+    if (canUseWarpBallotHistogram(op)) {
+      auto counts =
+          computeWarpHistogram(loc, rewriter, srcValues, maskValues, numBins,
+                               numThreadsPerWarp, threadPred, targetInfo);
+      counts = reduceWarpHistograms(op, counts, rewriter, typeConverter);
+      histogramValue =
+          distributeHistogram(loc, rewriter, counts, innerDimIndices);
+    } else {
+      Value baseSharedMemPtr =
+          LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+      accumulateSharedHistogram(loc, rewriter, baseSharedMemPtr, srcValues,
+                                maskValues, numBins, numThreadsPerWarp,
+                                threadId, threadPred, numWarps, targetInfo);
+      histogramValue = loadSharedHistogram(
+          loc, rewriter, baseSharedMemPtr, innerDimIndices,
+          crossCTA ? lookupNumCTAs(op) : 1,
+          freeVarMasks.lookup(str_attr("block")), op, targetInfo);
     }
 
-    Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
-                                   op.getType());
+    Value results = packUniqueTensorElements(loc, typeConverter, histogramValue,
+                                             rewriter, op.getType());
     rewriter.replaceOp(op, results);
     return success();
   }

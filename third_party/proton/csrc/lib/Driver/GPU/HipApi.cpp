@@ -10,12 +10,20 @@ namespace hip {
 struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
   static constexpr const char *name = "libamdhip64.so";
-  static constexpr const char *defaultDir = "";
+  static constexpr const char *pathEnv = nullptr;
+  static constexpr const char *libraryEnv = "TRITON_LIBHIP_PATH";
   static constexpr RetType success = hipSuccess;
   static void *lib;
 };
 
 void *ExternLibHip::lib = nullptr;
+
+DEFINE_DISPATCH(ExternLibHip, launchKernel, hipModuleLaunchKernel,
+                hipFunction_t, unsigned int, unsigned int, unsigned int,
+                unsigned int, unsigned int, unsigned int, unsigned int,
+                hipStream_t, void **, void **)
+
+DEFINE_DISPATCH(ExternLibHip, init, hipInit, unsigned int)
 
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 
@@ -29,7 +37,20 @@ DEFINE_DISPATCH(ExternLibHip, getDeviceProperties, hipGetDeviceProperties,
 
 DEFINE_DISPATCH(ExternLibHip, memAllocHost, hipMemAllocHost, void **, size_t)
 
+DEFINE_DISPATCH(ExternLibHip, memHostAlloc, hipHostAlloc, void **, size_t,
+                unsigned int)
+
 DEFINE_DISPATCH(ExternLibHip, memFreeHost, hipFreeHost, void *)
+
+DEFINE_DISPATCH(ExternLibHip, memHostGetDevicePointer, hipHostGetDevicePointer,
+                hipDeviceptr_t *, void *, unsigned int)
+
+DEFINE_DISPATCH(ExternLibHip, memAlloc, hipMemAlloc, hipDeviceptr_t *, size_t)
+
+DEFINE_DISPATCH(ExternLibHip, memFree, hipFree, hipDeviceptr_t)
+
+DEFINE_DISPATCH(ExternLibHip, memsetD32Async, hipMemsetD32Async, hipDeviceptr_t,
+                int, size_t, hipStream_t)
 
 DEFINE_DISPATCH(ExternLibHip, ctxGetDevice, hipCtxGetDevice, hipDevice_t *)
 
@@ -41,6 +62,14 @@ DEFINE_DISPATCH(ExternLibHip, streamCreateWithPriority,
 
 DEFINE_DISPATCH(ExternLibHip, streamSynchronize, hipStreamSynchronize,
                 hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, streamDestroy, hipStreamDestroy, hipStream_t)
+
+DEFINE_DISPATCH(ExternLibHip, graphGetNodes, hipGraphGetNodes, hipGraph_t,
+                hipGraphNode_t *, size_t *)
+
+DEFINE_DISPATCH(ExternLibHip, graphNodeGetType, hipGraphNodeGetType,
+                hipGraphNode_t, hipGraphNodeType *)
 
 DEFINE_DISPATCH(ExternLibHip, memcpyDToHAsync, hipMemcpyDtoHAsync, void *,
                 hipDeviceptr_t, size_t, hipStream_t)

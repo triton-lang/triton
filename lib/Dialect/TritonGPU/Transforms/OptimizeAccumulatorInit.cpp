@@ -21,8 +21,6 @@ public:
 
   LogicalResult matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op,
                                 PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-    Location loc = op.getLoc();
     if (op.getSrc() == nullptr)
       return failure();
     SmallVector<Operation *> users(op.getResult().getUsers().begin(),
@@ -39,7 +37,7 @@ public:
         mmaOp = mma;
       }
     }
-    if (!mmaOp)
+    if (!mmaOp || mmaOp.getAccumulator() != op.getResult())
       return failure();
     if (tmemLoad && !mmaOp->isBeforeInBlock(tmemLoad))
       return failure();
@@ -69,6 +67,29 @@ bool dotSupportsAccInitFlag(Operation *op) {
     return true;
   }
   return false;
+}
+
+// Return true if the allocation's initial contents reach the MMA unchanged.
+// Any intervening write invalidates useD=false.
+bool accumulatorInitReachesMMA(triton::nvidia_gpu::MMAv5OpInterface mma) {
+  auto alloc =
+      mma.getAccumulator().getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+  if (!alloc)
+    return false;
+  Value token = mma.getAccDep();
+  Value allocToken = alloc.getToken();
+  if (!token || !allocToken)
+    return false;
+
+  while (token != allocToken) {
+    // TMEM loads advance the token without modifying the accumulator.
+    auto load = token.getDefiningOp<triton::nvidia_gpu::TMEMLoadOp>();
+    if (!load || token != load.getToken() ||
+        load.getSrc() != alloc.getResult() || !load.getDep())
+      return false;
+    token = load.getDep();
+  }
+  return true;
 }
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
@@ -171,18 +192,6 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   return std::nullopt;
 }
 
-std::optional<bool> getBoolFromConstant(Value cst) {
-  auto constantOp = cst.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp) {
-    return std::nullopt;
-  }
-  assert(constantOp.getValue());
-  if (auto boolAttr = dyn_cast<BoolAttr>(constantOp.getValue())) {
-    return boolAttr.getValue();
-  }
-  return std::nullopt;
-}
-
 } // namespace
 
 class OptimizeAccumulatorInitPass
@@ -215,13 +224,18 @@ public:
       rewriter.setInsertionPoint(forOp);
 
       Value vTrue =
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(true));
+          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(true));
       Value vFalse =
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getBoolAttr(false));
+          arith::ConstantOp::create(rewriter, loc, rewriter.getBoolAttr(false));
 
       // Find the accumulator
       auto [accUse, accDef] = getAccumulatorUseAndDef(mmaOp);
       if (!accUse || !accDef) {
+        continue;
+      }
+      if (auto tc05MmaOp =
+              dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(mmaOp);
+          tc05MmaOp && !accumulatorInitReachesMMA(tc05MmaOp)) {
         continue;
       }
       if (isConstantZeroTensor(accUse)) {
@@ -283,8 +297,8 @@ public:
         rewriter.setInsertionPoint(zeroInitOp->first);
         bool zeroingBeforeMMA = zeroInitOp->first->isBeforeInBlock(mmaOp);
         Value prevFlagValue = zeroingBeforeMMA ? loopArgFlagValue : vTrue;
-        auto selectFlagOp = rewriter.create<arith::SelectOp>(
-            loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
+        auto selectFlagOp = arith::SelectOp::create(
+            rewriter, loc, condition, thenInitsToZero ? vFalse : prevFlagValue,
             thenInitsToZero ? prevFlagValue : vFalse);
         setUseAccFlag(mmaOp,
                       zeroingBeforeMMA ? selectFlagOp : loopArgFlagValue);

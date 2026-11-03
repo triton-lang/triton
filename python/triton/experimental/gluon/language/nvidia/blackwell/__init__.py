@@ -1,33 +1,133 @@
 from __future__ import annotations
-from typing import Optional, Tuple, List, TYPE_CHECKING
+from typing import Tuple, List, TYPE_CHECKING
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
-from triton.experimental.gluon.language._semantic import _check
+from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
-from ..hopper import fence_async_shared, mbarrier
-from ..ampere import async_copy, mma_v2
+from . import clc
+from ..hopper import async_store, cluster, fence_async_shared, mbarrier
+from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
+import triton._C.libtriton.gluon_ir as gluon_ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ..._semantic import GluonSemantic
 
 __all__ = [
+    "CachePolicy",
+    "FractionalEvictionPolicy",
+    "add2",
     "allocate_tensor_memory",
     "async_copy",
+    "async_store",
+    "clc",
+    "cluster",
     "fence_async_shared",
-    "get_tmem_32x32b_reg_layout",
+    "fma2",
     "mbarrier",
+    "max2",
+    "min2",
     "mma_v2",
+    "mul2",
+    "sub2",
     "tensor_memory_descriptor",
+    "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
+    "TensorMemoryScalesLayout",
     "tma",
+    "_TensorMemoryLinearLayout",
 ]
+
+
+def _packed_arith(operation, operands, dtype, semantic):
+    """Build packed arithmetic with inferred result types and FP4 layouts."""
+    operands = tuple(_unwrap_if_constexpr(operand) for operand in operands)
+    operand_types = tuple(operand.type if isinstance(operand, ttgl.tensor) else semantic.to_tensor_type(operand)
+                          for operand in operands)
+    _check(any(isinstance(ty, ttgl.distributed_type) for ty in operand_types),
+           lambda: "packed arithmetic requires at least one distributed tensor operand")
+    floating = [
+        operand for operand, ty in zip(operands, operand_types)
+        if isinstance(ty, ttgl.distributed_type) and ty.scalar.is_floating()
+    ]
+    reference = max(floating, key=lambda operand: operand.numel.value, default=None)
+    dtype = _unwrap_if_constexpr(dtype)
+
+    if reference is None:
+        _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
+        shape = list(operand_types[0].shape)
+        shape[-1] *= 2
+    else:
+        shape = reference.type.shape
+        if dtype is None:
+            addend_dtype = operand_types[-1].scalar
+            dtype = addend_dtype if operation in ("add", "sub", "fma") and addend_dtype.is_fp8() else reference.dtype
+            for operand, ty in zip(operands, operand_types):
+                if not ty.scalar.is_floating() or (dtype.is_fp8() and ty.scalar.is_fp8()):
+                    continue
+                dtype = semantic.computation_type_impl(dtype, False, ty.scalar, not isinstance(operand, ttgl.tensor),
+                                                       False)
+
+    _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
+    normalized = []
+    for operand in operands:
+        if not isinstance(operand, ttgl.tensor):
+            operand = semantic.scalar_constant(operand, dtype)
+        is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
+                         and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
+        if not is_packed_fp4:
+            _check(reference is not None, lambda: "packed FP4 operands require a floating-point tensor operand")
+            if not operand.type.is_block():
+                operand = semantic.cast(operand, dtype)
+            _, operand = semantic.broadcast_impl_value(reference, operand)
+        normalized.append(operand.handle)
+
+    builder = semantic.builder
+    result_type = dtype if reference is None else reference.type.with_element_ty(dtype)
+    result_ir_type = result_type.to_ir(builder)
+    handle = builder.create_packed_arith(result_ir_type, operation, normalized)
+    return semantic._wrap_handle_infer_layout(handle, dtype, shape)
+
+
+@builtin
+def add2(lhs, rhs, dtype=None, _semantic=None):
+    """Add two tensors using a native two-lane packed instruction."""
+    return _packed_arith("add", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def sub2(lhs, rhs, dtype=None, _semantic=None):
+    """Subtract two tensors using a native two-lane packed instruction."""
+    return _packed_arith("sub", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def mul2(lhs, rhs, dtype=None, _semantic=None):
+    """Multiply two tensors using a native two-lane packed instruction."""
+    return _packed_arith("mul", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def fma2(lhs, rhs, acc, dtype=None, _semantic=None):
+    """Perform a native two-lane packed fused multiply-add."""
+    return _packed_arith("fma", (lhs, rhs, acc), dtype, _semantic)
+
+
+@builtin
+def min2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the minimum with a native packed half-precision instruction."""
+    return _packed_arith("min", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def max2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the maximum with a native packed half-precision instruction."""
+    return _packed_arith("max", (lhs, rhs), dtype, _semantic)
 
 
 @dataclass(frozen=True, eq=True)
@@ -36,35 +136,58 @@ class TensorMemoryLayout:
     Describes the layout for tensor memory in Blackwell architecture.
 
     Args:
-        block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
+        block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
+            A full allocation narrower than ``block[1]`` retains the unused columns as padding.
+            For an MMA accumulator, ``block[1]`` selects the instruction N.
+            An N subslice can use a smaller instruction to fit its visible width.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
-        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+        cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
+        two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
+        fp4_padded (bool): Whether byte-backed operand A uses the padded MMAv5
+            FP4 layout. Its descriptor keeps the packed ``Mx(K/2)xi8`` shape,
+            MMAv5 treats logical K as twice descriptor K, and physical TMEM
+            reserves one byte per logical FP4 element. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int
-    cta_split_num: Optional[Tuple[int, int]] = None
+    cga_layout: List[List[int]] = field(default_factory=list)
+    two_ctas: bool = False
+    fp4_padded: bool = False
 
     def __post_init__(self):
+        super().__setattr__("block", _unwrap_if_constexpr(self.block))
+        super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
+        super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
         assert len(self.block) == 2
-        assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        assert all(len(basis) == 2 for basis in self.cga_layout)
         assert self.col_stride >= 1 and (self.col_stride &
                                          (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
 
     def _to_ir(self, builder):
-        cta_split_num = self.cta_split_num or [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
             self.col_stride,
-            cta_split_num,
+            [list(basis) for basis in self.cga_layout],
+            self.two_ctas,
+            self.fp4_padded,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
         stride_str = f"C{self.col_stride}"
-        cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
-        return f"TL{block_str}{stride_str}{cta_split_str}TL"
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
+        two_ctas_str = "2CT" if self.two_ctas else ""
+        fp4_padded_str = "FP4P" if self.fp4_padded else ""
+        return f"TL{block_str}{stride_str}{cga_layout_str}{two_ctas_str}{fp4_padded_str}TL"
+
+    def __hash__(self):
+        return hash(
+            (tuple(self.block), self.col_stride, tuple(tuple(b)
+                                                       for b in self.cga_layout), self.two_ctas, self.fp4_padded))
 
 
 @dataclass(frozen=True, eq=True)
@@ -73,76 +196,64 @@ class TensorMemoryScalesLayout:
     Describes the layout for tensor memory scales in Blackwell architecture.
 
     Args:
-        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+        cga_layout (Optional[List[List[int]]]): CGA layout bases. Defaults to [].
     """
-    cta_split_num: Optional[Tuple[int, int]] = None
+    cga_layout: List[List[int]] = field(default_factory=list)
 
     def __post_init__(self):
-        assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        assert all(len(basis) == 2 for basis in self.cga_layout)
 
     def _to_ir(self, builder):
-        cta_split_num = self.cta_split_num or [1, 1]
-        return builder.get_tensor_memory_scales_layout(cta_split_num, )
+        return builder.get_tensor_memory_scales_layout([list(basis) for basis in self.cga_layout])
 
     def mangle(self) -> str:
-        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
-        return f"TLS{cta_split_str}TLS"
+        cga_layout_str = "_".join("~".join(map(str, basis)) for basis in self.cga_layout)
+        return f"TLS{cga_layout_str}TLS"
+
+    def __hash__(self):
+        return hash(tuple(tuple(b) for b in self.cga_layout))
 
 
-@constexpr_function
-def _cdiv(x, div):
-    return (x + div - 1) // div
-
-
-@constexpr_function
-def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+@dataclass(frozen=True)
+class _TensorMemoryLinearLayout:
     """
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
+    Print-only linear layout for TMEM (row/col -> dim0/dim1).
+    """
+    rows: List[List[int]]
+    cols: List[List[int]]
+    shape: List[int]
 
-    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+    def _to_ir(self, builder):
+        raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
 
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
-        else:
-            size_per_thread = [1, _cdiv(N, 2)]
-            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
-    else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, _cdiv(N, num_warp_groups)]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-        ctas_per_cga=ctas_per_cga,
-        cta_split_num=cta_split_num,
-        cta_order=cta_order,
-    )
+    def mangle(self):
+        rows = "_".join("~".join(map(str, b)) for b in self.rows)
+        cols = "_".join("~".join(map(str, b)) for b in self.cols)
+        return f"TMLL_{rows}_{cols}_{self.shape}_TMLL"
+
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
+
+
+def _unwrap_tmem_layout_arg(x):
+    if isinstance(x, ttgl.constexpr):
+        return _unwrap_tmem_layout_arg(x.value)
+    if isinstance(x, list):
+        return [_unwrap_tmem_layout_arg(i) for i in x]
+    if isinstance(x, tuple):
+        return tuple(_unwrap_tmem_layout_arg(i) for i in x)
+    return x
 
 
 class tensor_memory_descriptor_type(base_type):
 
     def __init__(self, element_ty, shape, layout, alloc_shape):
-        self.element_ty = element_ty
-        self.shape = shape
-        self.layout = layout
-        self.alloc_shape = alloc_shape
-        assert isinstance(layout, TensorMemoryLayout) or isinstance(layout, TensorMemoryScalesLayout)
+        self.element_ty = _unwrap_if_constexpr(element_ty)
+        self.shape = _unwrap_if_constexpr(shape)
+        self.layout = _unwrap_if_constexpr(layout)
+        self.alloc_shape = _unwrap_if_constexpr(alloc_shape)
+        assert isinstance(self.layout, (TensorMemoryLayout, TensorMemoryScalesLayout))
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -173,6 +284,36 @@ class tensor_memory_descriptor_type(base_type):
         shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
+    @constexpr_function
+    def get_reg_layout(self, num_warps=None, instr_variant="32x32b"):
+        """
+        Return a DistributedLinearLayout compatible with TMEM load/store
+        instructions for this descriptor type.
+
+        Args:
+            num_warps (Optional[int]): Number of warps participating in the
+                operation. Must be provided when it cannot be inferred by the
+                caller.
+            instr_variant (str): TMEM instruction variant (e.g. ``"32x32b"``).
+        """
+        tmem_ty = _unwrap_tmem_layout_arg(self)
+        if not isinstance(tmem_ty, tensor_memory_descriptor_type):
+            raise TypeError(f"expected a tensor_memory_descriptor_type but got {type(tmem_ty)!r}")
+        num_warps = _unwrap_tmem_layout_arg(num_warps)
+        if num_warps is None:
+            raise ValueError("num_warps could not be inferred; pass a positive power of two")
+        if not isinstance(num_warps, int) or num_warps <= 0 or (num_warps & (num_warps - 1)) != 0:
+            raise ValueError(f"num_warps must be a positive power of two, got {num_warps!r}")
+
+        return _compute_tmem_reg_layout(
+            _unwrap_tmem_layout_arg(tmem_ty.element_ty),
+            _unwrap_tmem_layout_arg(tmem_ty.shape),
+            _unwrap_tmem_layout_arg(tmem_ty.alloc_shape),
+            _unwrap_tmem_layout_arg(tmem_ty.layout),
+            num_warps,
+            _unwrap_tmem_layout_arg(instr_variant),
+        )
+
 
 class tensor_memory_descriptor(base_value):
     """
@@ -182,6 +323,9 @@ class tensor_memory_descriptor(base_value):
     def __init__(self, handle, element_ty, shape, layout, alloc_shape):
         self.handle = handle
         self.type = tensor_memory_descriptor_type(element_ty, shape, layout, alloc_shape)
+
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -206,21 +350,103 @@ class tensor_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> ttgl.tensor:
+    def get_reg_layout(self, num_warps=None, instr_variant="32x32b", _semantic: GluonSemantic = None, _generator=None):
+        """
+        Return the register layout used to access this tensor memory descriptor.
+
+        Args:
+            num_warps (Optional[int]): Number of warps participating in the
+                operation. When omitted, infer it from the caller's context.
+            instr_variant (str): TMEM instruction variant. Defaults to
+                ``"32x32b"``.
+
+        Returns:
+            DistributedLayout: A register layout compatible with TMEM
+            load/store instructions for this descriptor.
+        """
+        if num_warps is None:
+            num_warps = ttgl.num_warps(_semantic=_semantic, _generator=_generator)
+        return self.type.get_reg_layout(num_warps=num_warps, instr_variant=instr_variant)
+
+    @builtin
+    def load(self, layout=None, _semantic: GluonSemantic = None, _generator=None) -> ttgl.tensor:
         """
         Load a tensor from tensor memory.
 
         Args:
-            layout (DistributedLayout): Destination layout of the tensor.
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
 
         Returns:
             tensor: A distributed tensor containing the loaded data.
         """
+        if layout is None:
+            layout = self.get_reg_layout(_semantic=_semantic, _generator=_generator)
         layout = _unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
         return ttgl.tensor(handle, ret_ty)
+
+    def _load_red(self, layout, red_op, abs, propagate_nan, _semantic: GluonSemantic, _generator=None):
+        #   red_op: MIN/MAX reduction operation
+        #   abs (bool): If True, reduce absolute values.
+        #   propagate_nan (NONE): If ALL, propagate NaN in specified reduction operation.
+        if layout is None:
+            layout = self.get_reg_layout(_semantic=_semantic, _generator=_generator)
+        layout = _unwrap_if_constexpr(layout)
+        abs_flag = _unwrap_if_constexpr(abs)
+        propagate_nan = _unwrap_if_constexpr(propagate_nan)
+
+        ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
+        builder = _semantic.builder
+
+        result, reduced, red_layout = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle, red_op, abs_flag,
+                                                               propagate_nan)
+
+        red_shape = [self.shape[0]]  # [M] for [M,N] input
+        red_ty = ttgl.distributed_type(self.dtype, red_shape, red_layout)
+
+        return (ttgl.tensor(result, ret_ty), ttgl.tensor(reduced, red_ty))
+
+    @builtin
+    def load_min(self, layout=None, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None,
+                 _generator=None):
+        """
+        Load a tensor from tensor memory with MIN reduction along the N-dimension.
+
+        Args:
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MIN reduction along the N-dimension of loaded data
+        """
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MIN, abs, propagate_nan, _semantic, _generator)
+
+    @builtin
+    def load_max(self, layout=None, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE, _semantic: GluonSemantic = None,
+                 _generator=None):
+        """
+        Load a tensor from tensor memory with MAX reduction along the N-dimension.
+
+        Args:
+            layout (Optional[DistributedLayout]): Destination layout of the tensor.
+                When omitted, infer the default TMEM register layout for this
+                descriptor type and the caller's warp count.
+            abs (bool): If True, reduce absolute values. Defaults to False.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in the reduction operation. Defaults to NONE.
+
+        Returns:
+            tuple: A tuple containing (tensor, reduced_tensor) where tensor is the loaded data
+                   and reduced_tensor is the result of MAX reduction along the N-dimension of loaded data.
+        """
+        return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic, _generator)
 
     @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
@@ -238,31 +464,30 @@ class tensor_memory_descriptor(base_value):
         _semantic.builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def slice(self, start, length, _semantic: GluonSemantic) -> None:
+    def slice(self, start, length, dim=1, _semantic: GluonSemantic = None) -> None:
         """
-        Create a slice of the tensor memory descriptor along the last dimension.
+        Create a slice of the tensor memory descriptor along a given dimension.
 
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
+            dim (int): The dimension to slice, including a leading pipeline-stage dimension (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
         """
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
+        dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        shape = self.shape[:-1] + [length]
+        _check(isinstance(dim, int) and dim in range(len(self.shape)), lambda: "invalid slice dimension")
+        shape = list(self.shape)
+        shape[dim] = length
         layout = self.type.layout
-        layout = TensorMemoryLayout(
-            (layout.block[0], min(layout.block[1], length)),
-            layout.col_stride,
-            layout.cta_split_num,
-        )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
-        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
+        ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start, dim)
         return ret
 
     @builtin
@@ -280,26 +505,27 @@ class tensor_memory_descriptor(base_value):
         builder = _semantic.builder
         shape = self.shape[1:]
         layout = self.layout
-        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, shape)
         ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 
     @builtin
-    def _reinterpret(self, dtype, shape, layout, _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         """
         Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
 
         Args:
-            dtype (dtype): The new data type.
-            shape (Sequence[int]): The new shape.
-            layout (TensorMemoryLayout): The new layout.
+            dtype (dtype): The new data type. Defaults to the descriptor dtype.
+            shape (Sequence[int]): The new shape. Defaults to the descriptor shape.
+            layout (TensorMemoryLayout): The new layout. Defaults to the descriptor layout.
 
         Returns:
             tensor_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = self.dtype if dtype is None else _unwrap_if_constexpr(dtype)
+        shape = self.shape if shape is None else [_unwrap_if_constexpr(s) for s in shape]
+        layout = self.layout if layout is None else _unwrap_if_constexpr(layout)
 
         ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
         handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
@@ -332,35 +558,39 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
-def tcgen05_copy(src, dst, _semantic=None):
+def tcgen05_copy(src, dst, pred=True, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
-
-    WARNING: The current semantics of the instruction are not well defined and
-    the API will change in the future. Use at your own risk.
 
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
+        pred (bool): Scalar predicate. The copy is skipped if False. Defaults to True.
     """
     assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
     assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
-    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle, pred.handle)
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
+                _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
 
+    For N smaller than the instruction width, the layouts must reserve the full
+    instruction tile.
+
     Args:
-        a (shared_memory_descriptor): Left hand side operand in shared memory.
-        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
+        b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
-        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
@@ -378,18 +608,112 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
+    multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast)
 
 
 @builtin
-def tcgen05_commit(barrier, _semantic=None):
+def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
+                       mbarriers=None, mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA scaled instruction.
+    acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_scale (tensor): Scale factor for operand A.
+        b_scale (tensor): Scale factor for operand B.
+        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+    assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
+    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
+    a_type = _semantic._str_to_fp_type(a_type.value)
+    b_type = _semantic._str_to_fp_type(b_type.value)
+    multicast = _unwrap_if_constexpr(multicast)
+    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                                acc.layout.two_ctas, multicast)
+
+
+@constexpr_function
+def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
+    """
+    Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
+
+    Args:
+        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
+        multicast (bool): Whether the tcgen05 instruction is multicast.
+        two_ctas (bool): Whether the tcgen05 instruction uses cta_group::2.
+
+    Returns:
+        int: The number of CTAs that will commit the tcgen05 MMA instruction.
+    """
+    assert 0 <= len(smems) <= 4, "tcgen05_mma_barrier_count supports 0 to 4 descriptors"
+    if not smems or not multicast:
+        return 1
+
+    def basis_is_zero(basis):
+        return all(b == 0 for b in basis)
+
+    num_cta_bits = len(smems[0].layout.cga_layout)
+    for desc in smems[1:]:
+        assert len(desc.layout.cga_layout) == num_cta_bits
+
+    num_cta_commits = 0
+    for cta in range(1 << num_cta_bits):
+        if two_ctas and cta & 1:
+            continue
+        for desc in smems:
+            if all(basis_is_zero(basis) or not (cta & (1 << i)) for i, basis in enumerate(desc.layout.cga_layout)):
+                num_cta_commits += 1
+                break
+    return num_cta_commits
+
+
+@builtin
+def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when all async tcgen05 MMA and copy instructions previously issued by
     the thread are complete.
 
+    If `descs` are provided, the commit will be multicast across the CTA cluster
+    based on the shared layouts of those descriptors. This should be used when
+    the inputs to the tcgen5 MMA come from TMA descriptors using multicast.
+
     Args:
         barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
+            the preceding multiplication inputs. Defaults to ().
     """
-    _semantic.builder.create_tcgen05_commit(barrier.handle)
+    pred = _semantic.to_tensor(pred)
+    descs = _unwrap_if_constexpr(descs)
+    descs = [d.handle for d in descs]
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs)

@@ -82,8 +82,7 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   //    yield undef
   // }
   // #thenBlock
-  Block *thenBlock =
-      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+  Block *thenBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
 
   auto returnOp = newCombine.getTerminator();
   auto results = SmallVector<Value>(returnOp->getOperands());
@@ -93,12 +92,12 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   thenBlockArgs.reserve(results.size());
   for (auto result : results) {
     auto ty = result.getType();
-    auto undef = rewriter.create<LLVM::UndefOp>(loc, ty);
+    auto undef = LLVM::UndefOp::create(rewriter, loc, ty);
     thenBlockArgs.push_back(undef);
     thenBlock->addArgument(ty, loc);
   }
-  rewriter.create<LLVM::CondBrOp>(loc, pred, &newCombine, combineArgs,
-                                  thenBlock, thenBlockArgs);
+  LLVM::CondBrOp::create(rewriter, loc, pred, &newCombine, combineArgs,
+                         thenBlock, thenBlockArgs);
 
   // Split a block after the call.
   rewriter.setInsertionPointToEnd(&newCombine);
@@ -138,8 +137,8 @@ public:
     std::iota(indices.begin(), indices.end(), 0);
 
     std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
-             op.getElementTypes()[j].getIntOrFloatBitWidth();
+      return getIntOrFloatOrPtrBitWidth(op.getElementTypes()[i]) >
+             getIntOrFloatOrPtrBitWidth(op.getElementTypes()[j]);
     });
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;

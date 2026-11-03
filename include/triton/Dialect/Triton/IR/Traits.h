@@ -26,12 +26,10 @@ int constexpr maxTensorNumElements = 1048576;
 LogicalResult verifyTensorSize(Operation *op);
 LogicalResult verifyTensorLayouts(Operation *op);
 
-LogicalResult verifySameOperandsEncoding(Operation *op,
-                                         bool allowTensorPointerType = false);
-LogicalResult verifyEquivalentType(Type typeA, Type typeB);
-LogicalResult
-verifySameOperandsAndResultEncoding(Operation *op,
-                                    bool allowTensorPointerType = false);
+LogicalResult verifySameOperandsEncoding(Operation *op);
+LogicalResult verifySameResultsType(Operation *op);
+LogicalResult verifyEquivalentTensorType(Type typeA, Type typeB);
+LogicalResult verifySameOperandsAndResultEncoding(Operation *op);
 
 LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 
@@ -77,6 +75,14 @@ public:
 };
 
 template <typename ConcreteType>
+class SameResultsType : public TraitBase<ConcreteType, SameResultsType> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameResultsType(op);
+  }
+};
+
+template <typename ConcreteType>
 class SameLoadStoreOperandsShape
     : public TraitBase<ConcreteType, SameLoadStoreOperandsShape> {
 public:
@@ -99,8 +105,7 @@ class SameLoadStoreOperandsEncoding
     : public TraitBase<ConcreteType, SameLoadStoreOperandsEncoding> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
-    return impl::verifySameOperandsEncoding(op,
-                                            /*allowTensorPointerType=*/true);
+    return impl::verifySameOperandsEncoding(op);
   }
 };
 
@@ -109,8 +114,7 @@ class SameLoadStoreOperandsAndResultEncoding
     : public TraitBase<ConcreteType, SameLoadStoreOperandsAndResultEncoding> {
 public:
   static LogicalResult verifyTrait(Operation *op) {
-    return impl::verifySameOperandsAndResultEncoding(
-        op, /*allowTensorPointerType=*/true);
+    return impl::verifySameOperandsAndResultEncoding(op);
   }
 };
 

@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -27,20 +28,20 @@ public:
 
   void activate();
 
-  void deactivate();
+  void deactivate(bool flushing);
 
   void finalize(const std::string &outputFormat);
 
   size_t getContextDepth();
 
-  Profiler *getProfiler() { return profiler; }
+  Profiler *getProfiler() const { return profiler; }
 
 private:
-  Session(size_t id, const std::string &path, Profiler *profiler,
+  Session(const std::string &path, Profiler *profiler,
           std::unique_ptr<ContextSource> contextSource,
           std::unique_ptr<Data> data)
-      : id(id), path(path), profiler(profiler),
-        contextSource(std::move(contextSource)), data(std::move(data)) {}
+      : path(path), profiler(profiler), contextSource(std::move(contextSource)),
+        data(std::move(data)) {}
 
   template <typename T> std::vector<T *> getInterfaces() {
     std::vector<T *> interfaces;
@@ -60,7 +61,6 @@ private:
   }
 
   const std::string path{};
-  size_t id{};
   Profiler *profiler{};
   std::unique_ptr<ContextSource> contextSource{};
   std::unique_ptr<Data> data{};
@@ -87,11 +87,21 @@ public:
 
   void activateAllSessions();
 
-  void deactivateSession(size_t sessionId);
+  void deactivateSession(size_t sessionId, bool flushing);
 
-  void deactivateAllSessions();
+  void deactivateAllSessions(bool flushing);
 
   size_t getContextDepth(size_t sessionId);
+
+  std::vector<uint8_t> getDataMsgPack(size_t sessionId, size_t phase);
+
+  std::string getData(size_t sessionId, size_t phase);
+
+  void clearData(size_t sessionId, size_t phase, bool clearUpToPhase = false);
+
+  size_t advanceDataPhase(size_t sessionId);
+
+  bool isDataPhaseComplete(size_t sessionId, size_t phase);
 
   void enterScope(const Scope &scope);
 
@@ -106,6 +116,7 @@ public:
       const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
       const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
       const std::string &metadataPath);
+  void destroyFunctionMetadata(uint64_t functionId);
 
   void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
                            uint8_t *buffer, size_t size);
@@ -114,7 +125,10 @@ public:
                           uint8_t *buffer, size_t size);
 
   void addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics);
+                  const std::map<std::string, MetricValueType> &scalarMetrics,
+                  const std::map<std::string, TensorMetric> &tensorMetrics);
+
+  void setMetricKernels(const MetricKernelLaunchState &metricKernelLaunchState);
 
   void setState(std::optional<Context> context);
 
@@ -122,25 +136,25 @@ private:
   Profiler *validateAndSetProfilerMode(Profiler *profiler,
                                        const std::string &mode);
 
-  std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
+  std::unique_ptr<Session> makeSession(const std::string &path,
                                        const std::string &profilerName,
                                        const std::string &contextSourceName,
                                        const std::string &dataName,
                                        const std::string &mode);
 
+  Session *getSessionOrThrow(size_t sessionId);
+
   void activateSessionImpl(size_t sessionId);
 
-  void deActivateSessionImpl(size_t sessionId);
+  void deactivateSessionImpl(size_t sessionId, bool flushing);
 
   size_t getSessionId(const std::string &path) { return sessionPaths[path]; }
 
   bool hasSession(const std::string &path) {
-    return sessionPaths.find(path) != sessionPaths.end();
+    return sessionPaths.contains(path);
   }
 
-  bool hasSession(size_t sessionId) {
-    return sessions.find(sessionId) != sessions.end();
-  }
+  bool hasSession(size_t sessionId) { return sessions.contains(sessionId); }
 
   void removeSession(size_t sessionId);
 
@@ -214,6 +228,8 @@ private:
   // {instrumentation, active count}
   std::vector<std::pair<InstrumentationInterface *, size_t>>
       instrumentationInterfaceCounts;
+  // {metric, active count}
+  std::vector<std::pair<MetricInterface *, size_t>> metricInterfaceCounts;
   // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

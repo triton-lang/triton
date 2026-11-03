@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import os
+
 from ..backends import backends, DriverBase
 
 
 def _create_driver() -> DriverBase:
-    active_drivers = [x.driver for x in backends.values() if x.driver.is_active()]
-    if len(active_drivers) != 1:
-        raise RuntimeError(f"{len(active_drivers)} active drivers ({active_drivers}). There should only be one.")
-    return active_drivers[0]()
+    selected = os.environ.get("TRITON_DEFAULT_BACKEND", None)
+    if selected:
+        if selected not in backends:
+            raise RuntimeError(f"Unknown backend device '{selected}'. Available backends: {list(backends.keys())}")
+        driver = backends[selected].driver
+        if not driver.is_active():
+            raise RuntimeError(f"Backend device '{selected}' is not active.")
+        return driver()
+    else:
+        active_drivers = [x.driver for x in backends.values() if x.driver.is_active()]
+        if len(active_drivers) != 1:
+            raise RuntimeError(f"{len(active_drivers)} active drivers ({active_drivers}). There should only be one.")
+        return active_drivers[0]()
 
 
 class DriverConfig:

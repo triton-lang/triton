@@ -1,7 +1,3 @@
-add_mlir_library(TritonTestProton
-  TestScopeIdAllocation.cpp
-
-  LINK_LIBS PUBLIC
-  MLIRPass
-  ProtonAnalysis
-)
+add_library(TritonTestProton TestScopeIdAllocation.cpp)
+target_link_libraries(TritonTestProton PUBLIC MLIRPass ProtonAnalysis)
+target_compile_options(TritonTestProton PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})

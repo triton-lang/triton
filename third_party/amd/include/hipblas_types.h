@@ -1,7 +1,7 @@
 #ifndef TRITON_HIPBLAS_TYPES_H
 #define TRITON_HIPBLAS_TYPES_H
 
-#include "hipblas-common/hipblas-common.h"
+#include "../backend/include/hipblas-common/hipblas-common.h"
 #include <cstddef>
 #include <cstdint>
 

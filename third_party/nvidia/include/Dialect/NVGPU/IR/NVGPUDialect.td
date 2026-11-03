@@ -25,8 +25,11 @@
 include "mlir/IR/OpBase.td"
 
 def NVGPU_Dialect : Dialect {
-  let name = "nvgpu";
+  let name = "nvg";
   let cppNamespace = "::mlir::triton::nvgpu";
+
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
 
   let description = [{
     NVGPU Dialect.

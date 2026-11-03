@@ -2,10 +2,12 @@
 #define TRITONGPU_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 
-def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
+def CastFpOpInterface : OpInterface<"CastFpOpInterface"> {
     let description = [{
-        This interface is for operations that upcast floating-point numbers.
+        This interface is for operations that cast floating-point numbers,
+        either upcasting or downcasting.
     }];
 
     let cppNamespace = "::mlir::triton::gpu";
@@ -24,6 +26,70 @@ def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
             /*args=*/(ins "unsigned":$opIdx, "mlir::Attribute":$dstEnc)
         >
     ];
+}
+
+def VerifyMemDescLayoutsTrait : NativeOpTrait<"VerifyMemDescLayoutsTrait">;
+
+// A trait equivalent to InferTypeOpAdaptor, but that checks for structural
+// equivalence of the layouts of the result rather than just layout equality.
+def InferMemDescTypeOpWithLayoutEquivalence : InferTypeOpAdaptorBase<[{
+  static bool isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+    if (lhs.size() != rhs.size())
+      return false;
+    return llvm::all_of(llvm::zip(lhs, rhs), [](auto tup) {
+      auto [lhs, rhs] = tup;
+      return succeeded(OpTrait::impl::verifyEquivalentMemDescType(lhs, rhs));
+    });
+  }
+}]>;
+
+def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
+  let description = [{
+    Interface for operations that use mbarrier synchronization primitives.
+    Returns the barrier memdesc operand (or null if absent), allowing
+    backend-agnostic barrier identification without direct dialect dependencies.
+  }];
+
+  let verify = [{
+    return ::mlir::triton::gpu::verifyMBarrierOpInterface($_op);
+  }];
+
+  let cppNamespace = "::mlir::triton::gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the barrier memdesc operand, or null if absent.",
+      /*retType=*/"::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+      /*methodName=*/"getBarrier",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        return {};
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Return all barrier memdesc operands.",
+      /*retType=*/"::llvm::SmallVector<::mlir::Value>",
+      /*methodName=*/"getBarriers",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        if (::mlir::Value barrier = $_op.getBarrier())
+          return {barrier};
+        return {};
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Whether each warp publishes its prior effects through its own arrival.",
+      /*retType=*/"bool",
+      /*methodName=*/"isPerWarp",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        return false;
+      }]
+    >
+  ];
 }
 
 #endif // TRITONGPU_OP_INTERFACES

@@ -2,6 +2,9 @@ include(FetchContent)
 
 set(GOOGLETEST_DIR "" CACHE STRING "Location of local GoogleTest repo to build against")
 
+# Triton embeds GoogleTest only for unit-test execution; do not install it.
+set(INSTALL_GTEST OFF CACHE BOOL "Disable GoogleTest/GMock install rules" FORCE)
+
 if(GOOGLETEST_DIR)
   set(FETCHCONTENT_SOURCE_DIR_GOOGLETEST ${GOOGLETEST_DIR} CACHE STRING "GoogleTest source directory override")
 endif()

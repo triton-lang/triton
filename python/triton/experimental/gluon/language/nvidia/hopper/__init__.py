@@ -1,26 +1,64 @@
 from __future__ import annotations
 from triton.compiler.code_generator import unflatten_ir_values
-from ..ampere import async_copy, mma_v2
-from . import mbarrier, tma
+from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
+from . import cluster, mbarrier, tma
 from ... import _core
 
 from typing import List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from triton._C.libtriton import ir
 
-__all__ = ["async_copy", "fence_async_shared", "mbarrier", "mma_v2", "tma", "warpgroup_mma", "warpgroup_mma_wait"]
+__all__ = [
+    "CachePolicy",
+    "FractionalEvictionPolicy",
+    "async_copy",
+    "async_store",
+    "cluster",
+    "fence_async_shared",
+    "mbarrier",
+    "mma_v2",
+    "tma",
+    "warpgroup_mma",
+    "warpgroup_mma_wait",
+]
+
+
+def _check(cond, msg_fn, category=ValueError):
+    if not cond:
+        raise category(msg_fn())
 
 
 @_core.builtin
 def fence_async_shared(cluster=False, _semantic=None):
     """
-    Issue a fence to complete asynchronous shared memory operations.
+    Order generic-proxy and asynchronous-proxy shared memory accesses.
+
+    This fence does not wait for asynchronous operations to complete.
 
     Args:
         cluster (bool): Whether to fence across cluster. Defaults to False.
     """
     cluster = _core._unwrap_if_constexpr(cluster)
     _semantic.builder.create_fence_async_shared(cluster)
+
+
+@_core.builtin
+def async_store(dst, value, mbarrier, _semantic=None):
+    """
+    Store a tensor to shared memory asynchronously and signal an mbarrier on completion.
+    Requires a CTA cluster with at least two CTAs.
+
+    Args:
+        dst (shared_memory_descriptor): Destination shared memory descriptor.
+        value (tensor): Tensor whose contents to store.
+        mbarrier (shared_memory_descriptor): Barrier signaled when the store completes.
+    """
+    _check(isinstance(value, _core.tensor), lambda: f"expected 'value' to be a tensor, but got a {type(value)}")
+    _check(isinstance(mbarrier, _core.shared_memory_descriptor),
+           lambda: f"expected 'mbarrier' to be a shared_memory_descriptor, but got a {type(mbarrier)}")
+    _check(value.shape == dst.shape, lambda: f"source shape {value.shape} and destination shape {dst.shape} must match")
+    _check(value.dtype == dst.dtype, lambda: f"source dtype {value.dtype} and destination dtype {dst.dtype} must match")
+    _semantic.builder.create_async_shared_store(dst.handle, value.handle, mbarrier.handle)
 
 
 class warpgroup_mma_accumulator_type(_core.base_type):
@@ -53,12 +91,15 @@ class warpgroup_mma_accumulator(_core.base_value):
         self.handle = handle
         self.type = warpgroup_mma_accumulator_type(tensor_type)
 
+    def _set_name(self, builder: ir.builder, name: str) -> None:
+        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
+
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
 
 
 @_core.builtin
-def warpgroup_mma_init(value, _semantic):
+def warpgroup_mma_init(value, _semantic=None):
     assert isinstance(value, _core.tensor)
     return warpgroup_mma_accumulator(value.handle, value.type)
 
@@ -86,6 +127,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     if precision is None:
         precision = _semantic.builder.options.default_dot_input_precision
+    precision = _core._unwrap_if_constexpr(precision)
 
     precision = _semantic._str_to_dot_input_precision(precision)
 

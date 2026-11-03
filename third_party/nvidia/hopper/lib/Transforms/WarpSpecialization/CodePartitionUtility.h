@@ -79,6 +79,9 @@ struct TmemDataChannel : Channel {
 } // namespace nvidia_gpu
 } // namespace triton
 
+constexpr static char kWarpSpecializeGeneratedBarrierAttrName[] =
+    "ttg.ws_generated_barrier";
+
 bool enclosing(scf::IfOp ifOp, Operation *op);
 bool enclosing(scf::ForOp forOp, Operation *op);
 
@@ -128,6 +131,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             Value phase, Operation *headProducer,
                             Operation *headConsumer);
 void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters);
+void invalidateWarpSpecializeBarriers(triton::FuncOp funcOp);
 
 } // namespace mlir
 

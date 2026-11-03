@@ -47,7 +47,6 @@ def add(x: torch.Tensor, y: torch.Tensor, path):
     return output
 
 
-torch.manual_seed(0)
 size = 98432
 x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)

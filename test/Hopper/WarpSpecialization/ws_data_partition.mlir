@@ -4,7 +4,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 0}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @matmul_persistent_ws_cooperative_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}) {
@@ -51,8 +51,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 0}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 0}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cross_dim_partition(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg7: f32, %arg8: i32, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32) {
@@ -69,16 +69,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.tensormap_create %arg6, %arg2, [%c64_i32, %c128_i32], [%arg8, %arg9], [%3], [%c1_i32, %c1_i32] {async_task_id = array<i32: 0>, elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<bf16>, i32, i32, i32, i32, i64, i32, i32) -> ()
     ttng.tensormap_create %arg6, %arg3, [%c64_i32, %c64_i32], [%arg8, %2], [%3], [%c1_i32, %c1_i32] {async_task_id = array<i32: 0>, elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<bf16>, i32, i32, i32, i32, i64, i32, i32) -> ()
     ttng.tensormap_create %arg6, %arg5, [%c64_i32, %c64_i32], [%arg8, %2], [%3], [%c1_i32, %c1_i32] {async_task_id = array<i32: 0>, elem_type = 1 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 3 : i32} : (!tt.ptr<i8>, !tt.ptr<bf16>, i32, i32, i32, i32, i64, i32, i32) -> ()
-    %4 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<tensor<128x128xbf16>>
-    %5 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<tensor<128x128xbf16>>
-    %6 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<tensor<128x128xbf16>>
-    %7 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<tensor<128x128xbf16>>
+    %4 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<128x128xbf16>
+    %5 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<128x128xbf16>
+    %6 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<128x128xbf16>
+    %7 = ttng.reinterpret_tensor_descriptor %arg6 {async_task_id = array<i32: 0>} : !tt.ptr<i8> to !tt.tensordesc<128x128xbf16>
     // CHECK: tt.descriptor_load {{.*}} -> tensor<64x128xbf16
     // CHECK: tt.descriptor_load {{.*}} -> tensor<64x128xbf16
-    %8 = tt.descriptor_load %4[%0, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<tensor<128x128xbf16>> -> tensor<128x128xbf16, #blocked1>
+    %8 = tt.descriptor_load %4[%0, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16, #blocked1>
     %9 = ttg.local_alloc %8 {async_task_id = array<i32: 1, 2>} : (tensor<128x128xbf16, #blocked1>) -> !ttg.memdesc<128x128xbf16, #shared, #smem>
     // CHECK: tt.descriptor_load {{.*}} -> tensor<128x128xbf16
-    %10 = tt.descriptor_load %5[%1, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<tensor<128x128xbf16>> -> tensor<128x128xbf16, #blocked1>
+    %10 = tt.descriptor_load %5[%1, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16, #blocked1>
     %11 = ttg.local_alloc %10 {async_task_id = array<i32: 1, 2>} : (tensor<128x128xbf16, #blocked1>) -> !ttg.memdesc<128x128xbf16, #shared, #smem>
     // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x128xbf16, {{.*}} * !ttg.memdesc<128x128xbf16, {{.*}} -> tensor<64x128xf32, {{.*}}
     // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x128xbf16, {{.*}} * !ttg.memdesc<128x128xbf16, {{.*}} -> tensor<64x128xf32, {{.*}}
@@ -87,7 +87,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = ttg.local_alloc %13 {async_task_id = array<i32: 1, 2>} : (tensor<128x128xbf16, #mma>) -> !ttg.memdesc<128x128xbf16, #shared, #smem>
     // CHECK: tt.descriptor_load {{.*}} -> tensor<64x128xbf16
     // CHECK: tt.descriptor_load {{.*}} -> tensor<64x128xbf16
-    %15 = tt.descriptor_load %6[%0, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<tensor<128x128xbf16>> -> tensor<128x128xbf16, #blocked1>
+    %15 = tt.descriptor_load %6[%0, %1] {async_task_id = array<i32: 0>} : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16, #blocked1>
     %16 = ttg.local_alloc %15 {async_task_id = array<i32: 1, 2>} : (tensor<128x128xbf16, #blocked1>) -> !ttg.memdesc<128x128xbf16, #shared, #smem>
     %17 = ttg.memdesc_trans %16 {async_task_id = array<i32: 1, 2>, order = array<i32: 1, 0>} : !ttg.memdesc<128x128xbf16, #shared, #smem> -> !ttg.memdesc<128x128xbf16, #shared1, #smem>
     // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<128x64xbf16, {{.*}} * !ttg.memdesc<64x128xbf16, {{.*}} -> tensor<128x128xf32, {{.*}}
@@ -98,6 +98,111 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %21 = tt.splat %arg4 {async_task_id = array<i32: 1, 2>} : !tt.ptr<bf16> -> tensor<1x128x!tt.ptr<bf16>, #blocked>
     %22 = tt.broadcast %21 {async_task_id = array<i32: 1, 2>} : tensor<1x128x!tt.ptr<bf16>, #blocked> -> tensor<128x128x!tt.ptr<bf16>, #blocked>
     %23 = tt.atomic_rmw fadd, relaxed, gpu, %22, %20, %cst_0 {async_task_id = array<i32: 1, 2>} : (tensor<128x128x!tt.ptr<bf16>, #blocked>, tensor<128x128xbf16, #blocked>, tensor<128x128xi1, #blocked>) -> tensor<128x128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that tt.split, tt.join, tt.reshape, and tt.trans are correctly partitioned along the M dimension.
+// CHECK-LABEL: @test_split_join_reshape_trans_partition
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blockedT = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_split_join_reshape_trans_partition(%arg0: !tt.ptr<f16>, %arg1: tensor<64x256xf16, #blocked1>, %arg2: !tt.ptr<f16>) {
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %ptr = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<64x128x!tt.ptr<f16>, #blockedT>
+    // CHECK: tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>,
+    // CHECK: tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>,
+    %ld = tt.load %ptr {async_task_id = array<i32: 0>} : tensor<64x128x!tt.ptr<f16>, #blockedT>
+    // CHECK: tt.trans {{.*}} : tensor<64x64xf16,
+    // CHECK: tt.trans {{.*}} : tensor<64x64xf16,
+    %t0 = tt.trans %ld {async_task_id = array<i32: 0>, order = array<i32: 1, 0>} : tensor<64x128xf16, #blockedT> -> tensor<128x64xf16, #blocked>
+    // CHECK: tt.reshape {{.*}} : tensor<64x64xf16,
+    // CHECK: tt.reshape {{.*}} : tensor<64x64xf16,
+    %r0 = tt.reshape %t0 {async_task_id = array<i32: 0>} : tensor<128x64xf16, #blocked> -> tensor<128x64x1xf16, #blocked2>
+    // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
+    // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
+    %r1 = tt.reshape %r0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x1xf16, #blocked2> -> tensor<128x64xf16, #blocked>
+    // CHECK: tt.join {{.*}} : tensor<64x64xf16,
+    // CHECK: tt.join {{.*}} : tensor<64x64xf16,
+    %0 = tt.join %r1, %r1 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64xf16, #blocked> -> tensor<128x64x2xf16, #blocked2>
+    // Keep the round-trip from folding away, so the partitioning of both ops
+    // stays under test.
+    %mid = arith.addf %0, %0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2>
+    // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
+    // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
+    %1:2 = tt.split %mid {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2> -> tensor<128x64xf16, #blocked>
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
+    %2 = ttg.local_alloc %1#0 {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %3 = ttg.local_alloc %arg1 {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    %4 = ttng.warp_group_dot %2, %3, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+    %5 = arith.truncf %4 {async_task_id = array<i32: 1, 2>} : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %6 = ttg.convert_layout %5 {async_task_id = array<i32: 1, 2>} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    %7 = tt.splat %arg2 {async_task_id = array<i32: 1, 2>} : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked1>
+    // CHECK: tt.store {{.*}} : tensor<64x256x!tt.ptr<f16>,
+    // CHECK: tt.store {{.*}} : tensor<64x256x!tt.ptr<f16>,
+    tt.store %7, %6 {async_task_id = array<i32: 1, 2>} : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Test that scf.if results are correctly partitioned when fed into a dot.
+// This exercises the thenYieldArg/elseYieldArg paths in getBackwardSliceToPartition.
+// CHECK-LABEL: @if_result_partition
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @if_result_partition(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %cond: i1) {
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg1 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    // Each branch loads from a different pointer, preventing fold to select.
+    // CHECK: scf.if {{.*}} -> (tensor<64x64xf16, #blocked>, tensor<64x64xf16, #blocked>)
+    // CHECK:   tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK:   tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK:   scf.yield {{.*}} : tensor<64x64xf16, #blocked>, tensor<64x64xf16, #blocked>
+    // CHECK: } else {
+    // CHECK:   tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK:   tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK:   scf.yield {{.*}} : tensor<64x64xf16, #blocked>, tensor<64x64xf16, #blocked>
+    %sel = scf.if %cond -> (tensor<128x64xf16, #blocked>) {
+      %a = tt.load %0 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+      scf.yield {async_task_id = array<i32: 0>} %a : tensor<128x64xf16, #blocked>
+    } else {
+      %b = tt.load %1 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+      scf.yield {async_task_id = array<i32: 0>} %b : tensor<128x64xf16, #blocked>
+    } {async_task_id = array<i32: 0>}
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+    %lhs = ttg.local_alloc %sel {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    // CHECK: tt.load {{.*}} : tensor<64x256x!tt.ptr<f16>, #blocked1>
+    %2 = tt.splat %arg2 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>, #blocked1>
+    %rhs_val = tt.load %2 {async_task_id = array<i32: 0>} : tensor<64x256x!tt.ptr<f16>, #blocked1>
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    %rhs = ttg.local_alloc %rhs_val {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    %dot = ttng.warp_group_dot %lhs, %rhs, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+    %trunc = arith.truncf %dot {async_task_id = array<i32: 1, 2>} : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %cvt = ttg.convert_layout %trunc {async_task_id = array<i32: 1, 2>} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    // CHECK: tt.store {{.*}} : tensor<64x256x!tt.ptr<f16>, #blocked1>
+    // CHECK: tt.store {{.*}} : tensor<64x256x!tt.ptr<f16>, #blocked1>
+    %3 = tt.splat %arg2 {async_task_id = array<i32: 1, 2>} : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.store %3, %cvt {async_task_id = array<i32: 1, 2>} : tensor<128x256x!tt.ptr<f16>, #blocked1>
     tt.return
   }
 }

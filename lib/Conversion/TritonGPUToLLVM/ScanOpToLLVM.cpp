@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -184,7 +185,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
       for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
         auto elemTy = smemTypes[j];
         Value ptr = b.gep(smemBases[j].getType(), elemTy, smemBases[j], index);
-        partialReduce[j] = b.load(elemTy, ptr);
+        partialReduce[j] =
+            targetInfo.loadShared(rewriter, loc, ptr, elemTy, b.true_val());
       }
 
       if (accumulator.acc.size() == 0) {
@@ -252,8 +254,6 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
-  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   Value maskFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
   Value maskFirstLane = b.icmp_eq(laneIdAxis, b.i32_val(0));
@@ -299,6 +299,9 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
               rewriter, loc, srcValues[srcIndex][i], laneIdLast);
       }
     } else if (numScanBlocks > 1) {
+      // The rest of the chunk needs the total of the previous blocks, not the
+      // value that already includes this chunk.
+      lastElement = accumulator;
       accumulator = srcValues[srcIndex];
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
@@ -420,14 +423,11 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
 SmallVector<SmallVector<Value>>
 unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
-             ConversionPatternRewriter &rewriter,
-             const LLVMTypeConverter &converter) {
-  auto types = op.getInputTypes();
+             ConversionPatternRewriter &rewriter, unsigned nElems) {
   auto operands = adaptor.getOperands();
-  unsigned srcElems = getTotalElemsPerThread(types[0]);
-  SmallVector<SmallVector<Value>> srcValues(srcElems);
+  SmallVector<SmallVector<Value>> srcValues(nElems);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto values = unpackLLElements(loc, operands[i], rewriter);
+    auto values = unpackUniqueTensorElements(loc, operands[i], rewriter);
 
     assert(values.size() == srcValues.size());
     for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -438,7 +438,8 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 
 // Flip the srcValues. Both reverses the chunks and reverses the lanes.
-// Lane reversal is done with a butterfly shuffle flip (divide and flip).
+// Lane reversal is done with a single butterfly shuffle: for power-of-two
+// warp sizes, `lane ^ (iWarpSize - 1)` equals `(iWarpSize - 1) - lane`.
 SmallVector<SmallVector<Value>>
 flipSrcValues(Location loc, triton::ScanOp op,
               ConversionPatternRewriter &rewriter,
@@ -448,10 +449,8 @@ flipSrcValues(Location loc, triton::ScanOp op,
   for (int i = 0; i < srcValues.size(); ++i) {
     int revIndex = srcValues.size() - i - 1;
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
-      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
-        srcValues[revIndex][j] =
-            targetInfo.shuffleXor(rewriter, loc, srcValues[revIndex][j], k);
-      }
+      srcValues[revIndex][j] = targetInfo.shuffleXor(
+          rewriter, loc, srcValues[revIndex][j], iWarpSize - 1);
       values[i].push_back(srcValues[revIndex][j]);
     }
   }
@@ -479,8 +478,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto [laneIdAxis, warpIdAxis, flatIdParallel, isRepresentative] =
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  auto srcValues =
-      unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
+  unsigned nElems = triton::gpu::getUniqueElemsPerThread(
+      cast<RankedTensorType>(op.getOperands()[0].getType()));
+  auto srcValues = unpackInputs(loc, op, adaptor, rewriter, nElems);
 
   // For the reverse option we apply flip(scan(flip()) in
   // order to avoid having a separate code path in the reverse direction.
@@ -516,7 +516,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
                          smemBases, smemTypes, flatIdParallel, isRepresentative,
                          targetInfo);
-    b.barrier();
+    b.barrier(triton::gpu::AddrSpace::Local);
     // Read back the partial reduction of each warp and accumulate them based on
     // warpId. Then update each chunk of contiguous elements by adding the
     // accumulated value from the previous lane.
@@ -530,9 +530,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
         std::get<0>(getMultiDimLaneId(rewriter, helper, laneId));
     multiDimLaneId[helper.getAxis()] = b.i32_val(scanDim - 1);
     auto linearEncoding = helper.getEncoding();
-    auto threadsPerWarp = linearEncoding.getThreadsPerWarp();
-    auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
-                                helper.getOrder());
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    Value laneIdLast =
+        linearize(rewriter, loc, multiDimLaneId, linearEncoding, kLane);
     AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
                             laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
@@ -557,9 +557,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto resultTy = dyn_cast<RankedTensorType>(op.getResult()[i].getType());
-    results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
-                                rewriter, resultTy);
+    results[i] =
+        packUniqueTensorElements(loc, getTypeConverter(), valuesTransposed[i],
+                                 rewriter, op.getResult()[i].getType());
   }
   rewriter.replaceOp(op, results);
   return success();

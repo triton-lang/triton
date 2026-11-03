@@ -21,6 +21,8 @@ struct ExternLibCupti : public ExternLibBase {
 
 template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
 
+template <bool CheckSuccess> CUptiResult getTimestamp(uint64_t *timestamp);
+
 template <bool CheckSuccess>
 CUptiResult getContextId(CUcontext context, uint32_t *pCtxId);
 
@@ -72,6 +74,8 @@ template <bool CheckSuccess>
 CUptiResult activitySetAttribute(CUpti_ActivityAttribute attr,
                                  size_t *valueSize, void *value);
 
+template <bool CheckSuccess> CUptiResult activityEnableHWTrace(uint8_t enable);
+
 template <bool CheckSuccess>
 CUptiResult unsubscribe(CUpti_SubscriberHandle subscriber);
 
@@ -82,6 +86,9 @@ CUptiResult getGraphExecId(CUgraphExec graph, uint32_t *pId);
 
 template <bool CheckSuccess>
 CUptiResult getGraphId(CUgraph graph, uint32_t *pId);
+
+template <bool CheckSuccess>
+CUptiResult getGraphNodeId(CUgraphNode node, uint64_t *pId);
 
 template <bool CheckSuccess>
 CUptiResult getCubinCrc(CUpti_GetCubinCrcParams *pParams);

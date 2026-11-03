@@ -2,136 +2,198 @@
 #define PROTON_PROFILER_GPU_PROFILER_H_
 
 #include "Context/Context.h"
+#include "Data/Metric.h"
 #include "Profiler.h"
+#include "Profiler/Graph.h"
 #include "Session/Session.h"
-#include "Utility/Atomic.h"
 #include "Utility/Map.h"
-#include "Utility/Set.h"
 
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
-#include <thread>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
 #include <unordered_map>
-#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace proton {
+
+using DataPhases = std::map<Data *, std::pair</*start_phase=*/size_t,
+                                              /*end_phase=*/size_t>>;
+
+using CorrIdToExternIdMap =
+    ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
+                  std::unordered_map<uint64_t, size_t>>;
+
+struct ExternIdState {
+  // ----non-graph launch fields----
+  DataToEntryMap dataToEntry;
+  // Sometimes the kernel name cannot be retrieved in application threads
+  // for reasons like uninitialize CUDA context.
+  bool isMissingName{true};
+  // ----graph launch fields----
+  // For graph launches, the launch correlation id fans out into multiple
+  // kernel activity records. We track the expected fanout here and keep
+  // updating it when we have processed each kernel activity record.
+  size_t numNodes{1};
+  DataToEntryMap dataToGraphEntry;
+  GraphState::NodeIdToStateMap *nodeIdToState{nullptr};
+};
+
+using ExternIdToStateMap =
+    ThreadSafeMap<size_t, ExternIdState,
+                  std::unordered_map<size_t, ExternIdState>>;
+
+class GPUCorrelation {
+public:
+  void submit(uint64_t numTasks, uint64_t correlationId = Scope::DummyScopeId);
+  void complete(uint64_t numTasks, uint64_t correlationId);
+  void complete(uint64_t correlationId);
+  void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
+                 bool isMissingName, const DataToEntryMap &dataToEntry);
+  void flush(uint64_t maxRetries, uint64_t sleepUs,
+             const std::function<void()> &flushFn);
+  void clear();
+
+  // These maps are consumed directly by backend-specific activity processors.
+  CorrIdToExternIdMap corrIdToExternId;
+  ExternIdToStateMap externIdToState;
+
+private:
+  std::atomic<uint64_t> numSubmittedTasks{0};
+  std::atomic<uint64_t> numCompletedTasks{0};
+  std::atomic<uint64_t> maxSubmittedCorrelationId{0};
+  std::atomic<uint64_t> maxCompletedCorrelationId{0};
+};
+
+namespace detail {
+
+void flushDataPhasesImpl(const bool periodicFlushEnabled,
+                         const std::string &periodicFlushingFormat,
+                         const DataPhases &dataPhases,
+                         PendingGraphPool *pendingGraphPool);
+
+void updateDataPhases(DataPhases &dataPhases, Data *data, size_t phase);
+
+void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
+                             std::string &periodicFlushingFormat,
+                             const std::vector<std::string> &modeAndOptions,
+                             const char *profilerName);
+
+int64_t
+computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
+
+size_t prepareGraphLaunch(ThreadSafeMap<uint64_t, GraphState> &graphStates,
+                          uint64_t graphExecId, size_t externId,
+                          const DataToEntryMap &dataToEntry,
+                          ExternIdToStateMap &externIdToState,
+                          PendingGraphPool *pendingGraphPool,
+                          bool flushMetricBuffer);
+} // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
 // CuptiProfiler, should be a singleton.
 template <typename ConcreteProfilerT>
 class GPUProfiler : public Profiler,
                     public OpInterface,
+                    public TimestampAlignmentInterface,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
-  virtual ~GPUProfiler() = default;
+  ~GPUProfiler() override = default;
 
-  using CorrIdToExternIdMap =
-      ThreadSafeMap<uint64_t,
-                    std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
-                    std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
-  using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
+  int64_t getTimestampOffsetNs() const override final {
+    return timestampOffsetNs.value_or(0);
+  }
 
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
-    this->correlation.pushExternId(scope.scopeId);
-    for (auto data : getDataSet())
-      data->addOp(scope.scopeId, scope.name);
+    this->threadState.scopeStack.push_back(scope);
+    for (auto *data : dataSet) {
+      auto entry = data->addOp(scope.name);
+      threadState.dataToEntry.insert_or_assign(data, entry);
+    }
   }
-  void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
+
+  void stopOp(const Scope &) override {
+    this->threadState.scopeStack.pop_back();
+    threadState.dataToEntry.clear();
+  }
+
+  void flushDataPhases(const DataPhases &dataPhases,
+                       PendingGraphPool *pendingGraphPool) {
+    detail::flushDataPhasesImpl(periodicFlushingEnabled, periodicFlushingFormat,
+                                dataPhases, pendingGraphPool);
+  }
 
   // Profiler
-  virtual void doStart() override { pImpl->doStart(); }
-  virtual void doFlush() override { pImpl->doFlush(); }
-  virtual void doStop() override { pImpl->doStop(); }
+  void doStart() override { pImpl->doStart(); }
+  void doFlush() override { pImpl->doFlush(); }
+  void doStop() override { pImpl->doStop(); }
+  void addMetrics(
+      size_t scopeId,
+      const std::map<std::string, MetricValueType> &scalarMetrics,
+      const std::map<std::string, TensorMetric> &tensorMetrics) override {
+    pImpl->doAddMetrics(scopeId, scalarMetrics, tensorMetrics);
+  }
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
     SessionManager &sessionManager = SessionManager::instance();
-    std::vector<Scope> scopeStack;
-    size_t opId{Scope::DummyScopeId};
+    std::vector<Scope> scopeStack; // Used for nvtx range or triton op tracking
+    DataToEntryMap dataToEntry;
+    bool isApiExternOp{false};
+    bool isStreamCapturing{false};
+    bool isMetricKernelLaunching{false};
+    struct MetricKernelLaunchInfo {
+      uint64_t seqId{};
+      uint64_t metricId{};
+      size_t numWords{};
+    };
+    std::deque<MetricKernelLaunchInfo> metricKernelLaunchInfoQueue;
+    explicit ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
-
-    void enterOp() {
-      if (profiler.isOpInProgress())
+    void enterOp(const Scope &scope) {
+      if (profiler.isOpInProgress()) // Already in a triton op
         return;
-      opId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(opId));
-      profiler.correlation.apiExternIds.insert(opId);
+      // Enter a new GPU API op
+      isApiExternOp = true;
+      profiler.enterOp(scope);
     }
 
     void exitOp() {
-      if (!profiler.isOpInProgress())
+      if (!profiler.isOpInProgress() || !isApiExternOp)
         return;
-      profiler.exitOp(Scope(opId));
+      profiler.exitOp(scopeStack.back());
+      isApiExternOp = false;
     }
 
     void enterScope(const std::string &name) {
-      auto scope = Scope(name);
+      Scope scope(name);
       scopeStack.push_back(scope);
       sessionManager.enterScope(scope);
     }
 
     void exitScope() {
-      if (scopeStack.empty()) {
-        return;
-      }
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
   };
 
-  struct Correlation {
-    std::atomic<uint64_t> maxSubmittedCorrelationId{0};
-    std::atomic<uint64_t> maxCompletedCorrelationId{0};
-    // Mapping from a native profiler correlation id to an external id.
-    CorrIdToExternIdMap corrIdToExternId;
-    // A set of kernels triggered by GPU runtime APIs (e.g., torch
-    // kernels) other than Triton.
-    // It stores a subset of external ids in corrIdToExternId.
-    ApiExternIdSet apiExternIds;
-    static thread_local std::deque<size_t> externIdQueue;
-
-    Correlation() = default;
-
-    void submit(const uint64_t correlationId) {
-      atomicMax(maxSubmittedCorrelationId, correlationId);
-    }
-
-    void complete(const uint64_t correlationId) {
-      atomicMax(maxCompletedCorrelationId, correlationId);
-    }
-
-    void pushExternId(size_t externId) { externIdQueue.push_back(externId); }
-
-    void popExternId() { externIdQueue.pop_front(); }
-
-    // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t numInstances = 1) {
-      if (externIdQueue.empty())
-        return;
-      corrIdToExternId[correlationId] = {externIdQueue.back(), numInstances};
-    }
-
-    template <typename FlushFnT>
-    void flush(uint64_t maxRetries, uint64_t sleepMs, FlushFnT &&flushFn) {
-      flushFn();
-      auto submittedId = maxSubmittedCorrelationId.load();
-      auto completedId = maxCompletedCorrelationId.load();
-      auto retries = maxRetries;
-      while ((completedId < submittedId) && retries > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepMs));
-        flushFn();
-        completedId = maxCompletedCorrelationId.load();
-        --retries;
-      }
-    }
-  };
-
   static thread_local ThreadState threadState;
-  Correlation correlation;
+
+  std::unique_ptr<MetricBuffer> metricBuffer;
+  std::unique_ptr<PendingGraphPool> pendingGraphPool;
+
+  GPUCorrelation correlation;
+
+  std::optional<int64_t> timestampOffsetNs;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
   // including the cupti header from this header. The cupti header and the
@@ -139,7 +201,7 @@ protected:
   // those headers only within cpp files.
   class GPUProfilerPimplInterface {
   public:
-    GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
+    explicit GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
         : profiler(profiler) {}
     virtual ~GPUProfilerPimplInterface() = default;
 
@@ -147,12 +209,53 @@ protected:
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
+    void
+    doAddMetrics(size_t scopeId,
+                 const std::map<std::string, MetricValueType> &scalarMetrics,
+                 const std::map<std::string, TensorMetric> &tensorMetrics) {
+      if (threadState.isStreamCapturing) { // Graph capture mode
+        // Launch metric kernels
+        auto &metricKernelLaunchState = profiler.metricKernelLaunchState;
+        threadState.isMetricKernelLaunching = true;
+        profiler.metricBuffer->receive(
+            tensorMetrics, scalarMetrics, metricKernelLaunchState,
+            [&](uint64_t seqId, uint64_t metricId, size_t numWords) {
+              threadState.metricKernelLaunchInfoQueue.push_back(
+                  {seqId, metricId, numWords});
+            });
+        threadState.isMetricKernelLaunching = false;
+      } else { // Eager mode, directly copy
+        // Populate tensor metrics
+        auto tensorMetricsHost = collectTensorMetrics(
+            profiler.metricBuffer->getRuntime(), tensorMetrics,
+            profiler.metricKernelLaunchState.tensor.stream);
+        auto &dataToEntry = threadState.dataToEntry;
+        if (dataToEntry.empty()) {
+          // Add metrics to a specific scope
+          for (auto *data : profiler.dataSet) {
+            data->addMetrics(scopeId, scalarMetrics);
+            data->addMetrics(scopeId, tensorMetricsHost);
+          }
+        } else {
+          // Add metrics to the current op
+          for (const auto &entryIt : dataToEntry) {
+            const auto &entry = entryIt.second;
+            entry.upsertFlexibleMetrics(scalarMetrics);
+            entry.upsertFlexibleMetrics(tensorMetricsHost);
+          }
+        }
+      }
+    }
+
   protected:
     ConcreteProfilerT &profiler;
   };
+
   std::unique_ptr<GPUProfilerPimplInterface> pImpl;
 
   bool pcSamplingEnabled{false};
+  bool periodicFlushingEnabled{false};
+  std::string periodicFlushingFormat{};
 };
 
 } // namespace proton

@@ -1,8 +1,9 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse
-from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile, print_tree
+from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
+from subprocess_utils import clean_rocprofiler_env
 
 file_path = __file__
 triton_example_file = file_path.replace("test_viewer.py", "examples/triton.json")
@@ -14,7 +15,7 @@ leaf_example_file = file_path.replace("test_viewer.py", "examples/leaf_nodes.jso
 
 def test_help():
     # Only check if the viewer can be invoked
-    subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
+    subprocess.check_call(["proton-viewer", "-h"], env=clean_rocprofiler_env(), stdout=subprocess.DEVNULL)
 
 
 def test_exclusive_metrics():
@@ -160,6 +161,15 @@ def test_util():
     }, sample_file=cuda_example_file)
 
 
+def test_print_sorted_exclusive_metric(capsys):
+    # util is NaN on ROOT, so ROOT sorts last and foo0 sorts first
+    gf, metrics = parse(["util"], cuda_example_file)
+    print_tree(gf, metrics, print_sorted=True)
+    sorted_out = capsys.readouterr().out.split("Sorted kernels by metric util")[1]
+    names = [line.split()[0] for line in sorted_out.strip().splitlines()]
+    assert names == ["foo0", "foo1", "foo2"]
+
+
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
@@ -190,3 +200,10 @@ def test_flops_derivation():
         },
         sample_file=cuda_example_file,
     )
+
+
+def test_diff_profile():
+    gf, derived_metrics = parse(["time/s"], triton_example_file)
+    gf2, _ = parse(["time/s"], cuda_example_file)
+    gf = apply_diff_profile(gf, derived_metrics, cuda_example_file, ["time/s"], None, None, 0.0)
+    assert "time/s (inc)" in gf.dataframe.columns

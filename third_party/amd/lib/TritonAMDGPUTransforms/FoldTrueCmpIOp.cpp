@@ -10,16 +10,16 @@ namespace mlir {
 #define GEN_PASS_DEF_TRITONAMDFOLDTRUECMPI
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-struct TritonAMDFoldTrueCmpIOpPass
-    : impl::TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIOpPass> {
-
+struct TritonAMDFoldTrueCmpIPass
+    : impl::TritonAMDFoldTrueCmpIBase<TritonAMDFoldTrueCmpIPass> {
   void runOnOperation() override {
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     ModuleOp mod = getOperation();
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+        solver->load<AMD::TritonIntegerRangeAnalysis>(
+            assumptions, &getAnalysis<DominanceInfo>());
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();

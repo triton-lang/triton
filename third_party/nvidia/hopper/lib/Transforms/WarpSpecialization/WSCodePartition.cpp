@@ -32,7 +32,9 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static unsigned getNumBuffersOrDefault(scf::ForOp forOp, unsigned numBuffers) {
+namespace {
+
+unsigned getNumBuffersOrDefault(scf::ForOp forOp, unsigned numBuffers) {
   // Use the attribute attached to the loop if it exists otherwise use the
   // global control.
   if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
@@ -100,10 +102,10 @@ void getTransitiveUsers(Value root,
 
 // When traversing gen5, producerOp can be either the defining op of operand
 // A or the accumulator.
-static void createChannel(Operation *producerOp, Operation *op,
-                          mlir::DominanceInfo &dom,
-                          SmallVector<std::unique_ptr<Channel>> &channels,
-                          bool opndAOfGen5, unsigned producerNumBuffers) {
+void createChannel(Operation *producerOp, Operation *op,
+                   mlir::DominanceInfo &dom,
+                   SmallVector<std::unique_ptr<Channel>> &channels,
+                   bool opndAOfGen5, unsigned producerNumBuffers) {
   // For TMEM channels, op is Gen5 op, producerOp can be either A operand
   // or accumulator.
   auto producerTaskIds = getAsyncTaskIds(opndAOfGen5 ? producerOp : op);
@@ -178,7 +180,6 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
         });
         return;
       }
-      auto producerTaskId = producerTaskIds.front();
       unsigned producerNumBuffers = numBuffers;
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
         producerNumBuffers = getNumBuffersOrDefault(forOp, numBuffers);
@@ -217,7 +218,7 @@ void collectAsyncChannels(SmallVector<std::unique_ptr<Channel>> &channels,
 // When the consumer is a local_alloc loading from shared memory to registers,
 // look ahead for the actual consumers, usually dot ops, that can directly
 // use shared memory. The local_alloc will be removed later.
-static SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
+SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
   if (isa<ttg::LocalAllocOp>(consumerOp)) {
     DenseSet<Operation *> users;
     for (auto user : consumerOp->getUsers()) {
@@ -233,7 +234,7 @@ static SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
           visited.insert(transUser);
           if (isa<tt::TransOp, ttg::MemDescTransOp>(transUser)) {
             for (auto transitiveUser : transUser->getUsers()) {
-              if (!visited.count(transitiveUser))
+              if (!visited.contains(transitiveUser))
                 transUsers.push_back(transitiveUser);
             }
           } else {
@@ -250,13 +251,12 @@ static SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
   return {consumerOp};
 }
 
-static Operation *getUniqueActualConsumer(Operation *consumerOp) {
+Operation *getUniqueActualConsumer(Operation *consumerOp) {
   auto consumers = getActualConsumers(consumerOp);
   return consumers.size() == 1 ? consumers[0] : consumerOp;
 }
 
-static Operation *getUniqueActualConsumer(Operation *consumerOp,
-                                          AsyncTaskId taskId) {
+Operation *getUniqueActualConsumer(Operation *consumerOp, AsyncTaskId taskId) {
   auto consumers = getActualConsumers(consumerOp);
   if (consumers.size() == 1)
     return consumers[0];
@@ -351,7 +351,7 @@ void groupChannels(
     }
     if (!merged) { // Create a new entry.
       auto *keyOp = c0->getDstOp();
-      if (!consumerChannels.count(keyOp))
+      if (!consumerChannels.contains(keyOp))
         orderedChannels.push_back(c0);
       consumerChannels[keyOp].push_back(c0);
     }
@@ -487,6 +487,8 @@ void reorderProducerOps(SmallVector<Channel *> &channels) {
   });
 }
 
+} // namespace
+
 // Find top-level ops which contain at least one channel. If a channel's
 // getSrcOp() and getDstOp() belong to the inner loop, the outer loop will be
 // part of asyncTaskOps.
@@ -533,31 +535,35 @@ getTaskTopRegion(triton::FuncOp funcOp,
 }
 
 // Create an allocation to hold the mbarriers.
-static Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
+namespace {
+
+Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
   OpBuilder builder(funcOp);
   builder.setInsertionPointToStart(&(funcOp.getBody().front()));
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(funcOp.getContext());
   Location loc = funcOp.getLoc();
   auto context = funcOp.getContext();
-  auto barrierCTALayout =
-      ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                              /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+  auto numCTAs = triton::gpu::lookupNumCTAs(funcOp);
+  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(context, numCTAs);
   auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-      context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType = ttg::MemDescType::get(
-      {distance, 1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
-      /*mutableMemory=*/true);
+      context, 1, 1, 1, {0}, barrierCGALayout);
+  Type barrierMemDescType =
+      ttg::MemDescType::get({distance, numCTAs}, builder.getI64Type(),
+                            barrierEncoding, sharedMemorySpace,
+                            /*mutableMemory=*/true);
   Type singleBarrierMemDescType =
-      ttg::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
+      ttg::MemDescType::get({numCTAs}, builder.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);
-  Value barrierAlloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
-      loc, barrierMemDescType, Value());
+  Value barrierAlloc = mlir::triton::gpu::LocalAllocOp::create(
+      builder, loc, barrierMemDescType, Value());
+  barrierAlloc.getDefiningOp()->setAttr(kWarpSpecializeGeneratedBarrierAttrName,
+                                        builder.getUnitAttr());
   for (unsigned i = 0; i < distance; i++) {
-    Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
-    Value barrierView = builder.create<ttg::MemDescIndexOp>(
-        loc, singleBarrierMemDescType, barrierAlloc, idx);
-    builder.create<ttng::InitBarrierOp>(funcOp->getLoc(), barrierView, 1);
+    Value idx = arith::ConstantIntOp::create(builder, loc, i, 32);
+    Value barrierView = ttg::MemDescIndexOp::create(
+        builder, loc, singleBarrierMemDescType, barrierAlloc, idx);
+    ttng::InitBarrierOp::create(builder, funcOp->getLoc(), barrierView, 1);
   }
   return barrierAlloc;
 }
@@ -618,7 +624,7 @@ void createToken(
         auto mmaOp = cast<ttng::TCGen5MMAOp>(consumerOp);
         // If the gen5 barrier for this mmaOp is already used for another
         // channel, do not use it for this channel.
-        if (gen5Barriers.count(mmaOp) && gen5Barriers[mmaOp] != channel) {
+        if (gen5Barriers.contains(mmaOp) && gen5Barriers[mmaOp] != channel) {
           useGen5Barrier = false;
           LDBG("-- mmaOp already has a channel associated");
         }
@@ -645,11 +651,11 @@ void createToken(
         }
         Value v;
         if (it->second.front()->getSrcOp()->getParentOfType<scf::ForOp>())
-          v = builder.create<ttnvws::CreateTokenOp>(
-              funcOp.getLoc(), channel->numBuffers, tokenLoadType);
+          v = ttnvws::CreateTokenOp::create(builder, funcOp.getLoc(),
+                                            channel->numBuffers, tokenLoadType);
         else
-          v = builder.create<ttnvws::CreateTokenOp>(funcOp.getLoc(), 1,
-                                                    tokenLoadType);
+          v = ttnvws::CreateTokenOp::create(builder, funcOp.getLoc(), 1,
+                                            tokenLoadType);
         commChannel.tokens[consumerAsyncTaskId] = v;
       }
 
@@ -686,10 +692,9 @@ void createToken(
   });
 }
 
-static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
-                                         ttng::TMEMAllocOp oldTMemAllocOp,
-                                         int numBuffers) {
-  Location loc = oldTMemAllocOp.getLoc();
+ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
+                                  ttng::TMEMAllocOp oldTMemAllocOp,
+                                  int numBuffers) {
   auto oldRetType = oldTMemAllocOp.getType();
   SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
                                 oldRetType.getShape().end()};
@@ -700,8 +705,8 @@ static ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
   Type accMemDescType = triton::gpu::MemDescType::get(
       shape, oldRetType.getElementType(), oldRetType.getEncoding(),
       oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
+  return ttng::TMEMAllocOp::create(builder, oldTMemAllocOp.getLoc(),
+                                   accMemDescType, nullptr);
 }
 
 // Create a buffer array for each producer op, if the producer is in a ForOp,
@@ -718,13 +723,12 @@ DenseMap<Channel *, Value> createBuffer(
   for (auto &item : channelsGroupedByProducers) {
     auto &channels = item.second;
     for (auto c : channels) {
-      assert(!visited.count(c));
+      assert(!visited.contains(c));
       visited.insert(c);
     }
   }
   for (auto *channelInOrder : orderedChannels) {
-    if (channelsGroupedByProducers.find(channelInOrder) ==
-        channelsGroupedByProducers.end())
+    if (!channelsGroupedByProducers.contains(channelInOrder))
       continue;
     auto &channels = channelsGroupedByProducers[channelInOrder];
     auto srcValue = channelInOrder->getSrcOperand();
@@ -753,7 +757,7 @@ DenseMap<Channel *, Value> createBuffer(
                    dyn_cast<RankedTensorType>(srcValue.getType())) {
       // Get basic information from tensorType
       auto order = ttg::getOrderForMemory(tensorType);
-      auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
+      auto CGALayout = ttg::getCGALayout(tensorType.getEncoding());
       auto elemType = tensorType.getElementType();
 
       // Get shape, layout and type of a slice
@@ -775,7 +779,7 @@ DenseMap<Channel *, Value> createBuffer(
       Attribute sharedLayout;
       if (requireMMASharedEncoding) {
         sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-            context, sliceShape, order, CTALayout, elemType,
+            context, sliceShape, order, CGALayout, elemType,
             /*fp4Padded*/ false);
       } else if (auto tmaLoad = dyn_cast<tt::DescriptorLoadOp>(srcOp)) {
         sharedLayout = ttng::getEncodingFromDescriptor(
@@ -784,7 +788,7 @@ DenseMap<Channel *, Value> createBuffer(
         // Create an unswizzled layout for now.
         // TODO: optimize it based on the consumer.
         sharedLayout = ttg::SwizzledSharedEncodingAttr::get(context, 1, 1, 1,
-                                                            order, CTALayout);
+                                                            order, CGALayout);
       }
 
       // Get shape, layout and type of the complete buffer
@@ -798,7 +802,7 @@ DenseMap<Channel *, Value> createBuffer(
       Type memdescType =
           ttg::MemDescType::get(bufferShape, elemType, sharedLayout,
                                 sharedMemorySpace, /*mutableMemory*/ true);
-      buffer = builder.create<ttg::LocalAllocOp>(funcOp.getLoc(), memdescType);
+      buffer = ttg::LocalAllocOp::create(builder, funcOp.getLoc(), memdescType);
     } else {
       llvm_unreachable("Unexpected result type");
     }
@@ -1014,7 +1018,7 @@ void insertAsyncComm(
     auto producerBlock = kv.second.front()->getSrcOp()->getBlock();
     Operation *headProducer = nullptr;
     for (auto &op : producerBlock->getOperations()) {
-      if (producerOps.count(&op)) {
+      if (producerOps.contains(&op)) {
         headProducer = &op;
         break;
       }
@@ -1022,7 +1026,7 @@ void insertAsyncComm(
     // Find tail producer
     Operation *tailProducer = nullptr;
     for (auto &op : reverse(producerBlock->getOperations())) {
-      if (producerOps.count(&op)) {
+      if (producerOps.contains(&op)) {
         tailProducer = &op;
         break;
       }
@@ -1032,14 +1036,14 @@ void insertAsyncComm(
     auto consumerBlock = kv.second.front()->getDstOp()->getBlock();
     Operation *headConsumer = nullptr;
     for (auto &op : consumerBlock->getOperations()) {
-      if (consumerOps.count(&op)) {
+      if (consumerOps.contains(&op)) {
         headConsumer = &op;
         break;
       }
     }
     Operation *tailConsumer = nullptr;
     for (auto &op : reverse(consumerBlock->getOperations())) {
-      if (consumerOps.count(&op)) {
+      if (consumerOps.contains(&op)) {
         tailConsumer = &op;
         break;
       }
@@ -1122,7 +1126,7 @@ void insertAsyncComm(
         SmallVector<AsyncTaskId> asyncTasksMma = getAsyncTaskIds(mmaOp);
         assert(asyncTasksMma.size() == 1 && asyncTasksMma[0] == consumerTaskId);
       }
-      if (mmaOp && commChannel.consumerBarriers.count(consumerTaskId)) {
+      if (mmaOp && commChannel.consumerBarriers.contains(consumerTaskId)) {
         LLVM_DEBUG({
           LDBG("unique actual consumer is gen5 mma ");
           mmaOp->dump();
@@ -1153,7 +1157,7 @@ void insertAsyncComm(
         if (masterChannel->channelKind == DataChannelKind::TMEM) {
           ttng::TmemDataChannel *tmemChannel =
               static_cast<ttng::TmemDataChannel *>(masterChannel);
-          assert(tmemWaitBarriers.count(tmemChannel->tmemMmaOp) &&
+          assert(tmemWaitBarriers.contains(tmemChannel->tmemMmaOp) &&
                  "Failed to find tmemWaitBarriers");
           producerCommitPoint = tmemWaitBarriers[tmemChannel->tmemMmaOp];
         } else {
@@ -1217,6 +1221,8 @@ void foldLocalLoads(triton::FuncOp funcOp) {
     mlir::triton::replaceUsesAndPropagateType(builder, kv.getFirst(),
                                               kv.getSecond());
 }
+
+} // namespace
 
 void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   // Step 1: collect all communications between producers and consumers.

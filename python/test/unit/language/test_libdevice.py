@@ -56,3 +56,60 @@ def test_libdevice_rename(device):
     out = torch.empty_like(inp)
 
     triton_copy[(1, )](inp, out, BLOCK_SIZE)
+
+
+def test_clz(device):
+
+    @triton.jit
+    def triton_clz(in_ptr, out_ptr, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        tl.store(out_ptr + offsets, libdevice.clz(tl.load(in_ptr + offsets)))
+
+    x = torch.tensor([1, 2, 3, 4, 5, 8, 9, 16], dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+
+    triton_clz[(1, )](x, y, SIZE=x.numel())
+
+    assert torch.equal(y.cpu(), torch.tensor([31, 30, 30, 29, 29, 28, 28, 27], dtype=torch.int32))
+
+
+def test_popc(device):
+
+    @triton.jit
+    def triton_popc(in_ptr, out_ptr, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        tl.store(out_ptr + offsets, libdevice.popc(tl.load(in_ptr + offsets)))
+
+    x = torch.tensor([0, 1, 2, 3, 4, 7, 8, 15], dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+
+    triton_popc[(1, )](x, y, SIZE=x.numel())
+
+    assert torch.equal(y.cpu(), torch.tensor([0, 1, 1, 2, 1, 3, 1, 4], dtype=torch.int32))
+
+
+@pytest.mark.parametrize("dtype_str", ["float32", "float64"])
+def test_isinf(device, dtype_str):
+
+    @triton.jit
+    def triton_isinf(in_ptr, out_ptr, numel, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < numel
+        in_tile = tl.load(in_ptr + offsets, mask=mask)
+        if in_ptr.dtype.element_ty == tl.float32:
+            out_tile = libdevice.finitef(in_tile)
+        else:
+            out_tile = libdevice.isfinited(in_tile)
+        tl.store(out_ptr + offsets, out_tile, mask=mask)
+
+    x = torch.tensor(
+        [float(1), -float(1),
+         float(0), -float(0),
+         float("inf"), -float("inf"),
+         float("nan"), -float("nan")], device=device, dtype=getattr(torch, dtype_str))
+    res = torch.tensor([True, True, True, True, False, False, False, False])
+    numel = x.numel()
+    y = torch.empty_like(x, dtype=torch.bool)
+    BLOCK_SIZE = 256
+    triton_isinf[(triton.cdiv(numel, BLOCK_SIZE), )](x, y, numel, BLOCK_SIZE)
+    assert torch.equal(y.cpu(), res)

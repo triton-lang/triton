@@ -1,10 +1,29 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 
-class Layout(ABC):
+@dataclass(frozen=True)
+class LayoutTransformation(ABC):
 
-    def __init__(self, shape) -> None:
-        self.initial_shape = shape
+    shape: list[int]
+    is_fp4: bool
+
+    @property
+    def storage_shape(self) -> list[int]:
+        """Physical storage shape produced by this transformation."""
+        raise NotImplementedError
+
+    def _validate_storage_shape(self, data):
+        assert list(data.shape) == self.storage_shape
+        return data
+
+    def convert_data(self, data, destination: "LayoutTransformation", *, out=None):
+        """Convert to another layout, using canonical storage by default."""
+        return destination._convert_data_from(data, self, out=out)
+
+    def _convert_data_from(self, data, source: "LayoutTransformation", *, out):
+        result = self.swizzle_data(source.unswizzle_data(data))
+        return result if out is None else out.copy_(result)
 
     @abstractmethod
     def swizzle_data(self, data):
@@ -12,6 +31,22 @@ class Layout(ABC):
 
     @abstractmethod
     def unswizzle_data(self, data):
+        pass
+
+
+@dataclass(frozen=True)
+class Layout(ABC):
+
+    def can_preserve_storage_as(self, other: "Layout", rank: int) -> bool:
+        """Whether existing storage is already valid for `other`."""
+        return self == other
+
+    def storage_shape(self, shape: list[int], is_fp4: bool) -> list[int]:
+        """Return the physical storage shape for a logical tensor shape."""
+        return self.make_transformation(shape, is_fp4).storage_shape
+
+    @abstractmethod
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
         pass
 
     @abstractmethod

@@ -1,7 +1,11 @@
+import math
+
+import triton.experimental.gluon.language as ttgl
+from triton.experimental.gluon._runtime import constexpr_function, jit
 from triton.experimental.gluon.language._layouts import SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["arrive", "init", "invalidate", "MBarrierLayout", "wait"]
+__all__ = ["allocate_mbarrier", "arrive", "init", "invalidate", "MBarrierLayout", "wait"]
 
 
 class MBarrierLayout(SwizzledSharedLayout):
@@ -9,20 +13,57 @@ class MBarrierLayout(SwizzledSharedLayout):
     Layout for mbarrier synchronization in Ampere and later architectures.
 
     Args:
-        ctas_per_cga (int): CTAs per CGA grouping. Defaults to 1.
-        cta_split_num (int): CTA split factor. Defaults to 1.
+        cga_layout (List[List[int]]): CGA layout bases. Defaults to [].
     """
 
-    def __init__(self, ctas_per_cga: int = 1, cta_split_num: int = 1):
-        super().__init__(
-            vec=1,
-            per_phase=1,
-            max_phase=1,
-            order=[0],
-            ctas_per_cga=[ctas_per_cga],
-            cta_split_num=[cta_split_num],
-            cta_order=[0],
-        )
+    def __init__(self, cga_layout=None):
+        super().__init__(vec=1, per_phase=1, max_phase=1, order=[0], cga_layout=cga_layout or [])
+
+    @staticmethod
+    @constexpr_function
+    def multicta(num_ctas: int, two_cta: bool = False):
+        """
+        Create a multi-CTA mbarrier layout.
+
+        Args:
+            num_ctas (int): Number of CTAs.
+            two_cta (bool): Whether the barrier should synchronize every other CTA
+        """
+        num_ctas = ttgl._unwrap_if_constexpr(num_ctas)
+        two_cta = ttgl._unwrap_if_constexpr(two_cta)
+        if two_cta:
+            assert num_ctas % 2 == 0, "num_ctas must be even for two-CTA mode"
+        assert num_ctas > 0, "num_ctas must be positive"
+        assert (num_ctas & (num_ctas - 1)) == 0, "num_ctas must be a power of two"
+
+        bases = []
+        if two_cta:
+            bases.append([0])
+            num_ctas //= 2
+
+        for i in range(int(math.log2(num_ctas))):
+            bases.append([2**i])
+        return MBarrierLayout(bases)
+
+
+@jit
+def allocate_mbarrier(batch: ttgl.constexpr = None, two_ctas: ttgl.constexpr = False):
+    """
+    Helper function to allocate an mbarrier
+
+    Args:
+        two_ctas (bool): Whether the barrier should synchronize every other CTA
+    """
+    num_ctas: ttgl.constexpr = ttgl.num_ctas()
+    num_elems: ttgl.constexpr = num_ctas if not two_ctas else num_ctas // 2
+    ttgl.static_assert(batch is None or isinstance(batch.value, int))
+    shape: ttgl.constexpr = [num_elems] if batch is None else [batch, num_elems]
+    bar = ttgl.allocate_shared_memory(
+        ttgl.int64,
+        shape,
+        MBarrierLayout.multicta(num_ctas=num_ctas, two_cta=two_ctas),
+    )
+    return bar
 
 
 @builtin
@@ -67,14 +108,19 @@ def wait(mbarrier, phase, pred=True, deps=(), _semantic=None):
 
 
 @builtin
-def arrive(mbarrier, *, pred=True, _semantic=None):
+def arrive(mbarrier, *, pred=True, from_cta=None, _semantic=None):
     """
     Arrive on an mbarrier, signaling that a thread has reached the barrier.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to arrive on.
         pred (bool): Predicate. Operation is skipped if predicate is False. Defaults to True.
+        from_cta (int, optional): Mask of CTA-ID bits preserved when routing the arrival, in
+            ``[0, num_ctas - 1]``. Defaults to ``num_ctas - 1``, which arrives from each CTA to itself; ``0``
+            routes from CTA 0 to every CTA.
     """
     count = 1
+    multicast_cta = 0
+    from_cta = _unwrap_if_constexpr(from_cta)
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle)
+    _semantic.builder.create_mbarrier_arrive(mbarrier.handle, count, pred.handle, from_cta, multicast_cta)

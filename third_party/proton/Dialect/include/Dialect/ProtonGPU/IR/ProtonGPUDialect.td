@@ -7,6 +7,9 @@ def ProtonGPU_Dialect : Dialect {
   let name = "proton_gpu";
   let cppNamespace = "::mlir::triton::proton::gpu";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let description = [{
     Proton GPU dialect.
   }];
@@ -22,7 +25,6 @@ def ProtonGPU_Dialect : Dialect {
 
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
-  let usePropertiesForAttributes = 1;
 }
 
 #endif  // PROTONGPU_DIALECT

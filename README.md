@@ -3,24 +3,22 @@
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
-# Triton Conference 2025
+# Triton Conference 2026
 
-![Triton Registration Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+![Triton Banner](https://github.com/user-attachments/assets/e35be818-ddd4-4cb2-81dd-461add31ab41)
 
-### Registration
+Triton Developer Conference registration is open: https://tritonconference2026.splashthat.com/
 
-The 3rd Triton conference is scheduled to take place on October 21, 2025. Click [here](https://tritonconference.eventbuilder.com/TritonDeveloperConference) to register!
+Folks, please join us at the Triton Developer Conference on October 19th at the San Jose Convention Center, just before PTC at the same venue!  We are finalizing an agenda with keynotes, technical talks, lightning talks, and posters.
 
-### Poster Submission
+Registration and attendance are free.  Breakfast, lunch, as well as a happy hour organized by our Nvidia colleagues, are included!  Learn something new, share your experience, mingle with colleagues, and make new friends!
 
-We invite members of the Triton community who are attending the Triton Developer Conference to present posters about their Triton-related technical work.
+To allow us to prepare correctly, please register and reserve your spot at your earliest convenience: https://tritonconference2026.splashthat.com/  You will see more info, including a draft agenda there soon, as well.
 
-Please submit basic information of your poster, including author information and abstract using this [form](https://forms.gle/QfgTF8o1CWNENAnA7).
-
-**Important Dates**
-- Submission: 10/1/2025
-- Author notification: 10/7/2025
-- Final version (PDF): 10/14/2025
+For previous conference materials, see:
+- [2025 Conference Materials](docs/meetups/dev_conference_2025.md)
+- [2024 Conference Materials](docs/meetups/dev_conference_2024.md)
+- [2023 Conference Materials](docs/meetups/dev-meetup-2023.md)
 
 # Triton
 
@@ -74,7 +72,9 @@ arbitrary LLVM version.
 For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
 ```shell
-make dev-install-llvm
+make dev-install-llvm                 # Core LLVM (default)
+make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
+make dev-install-llvm LLVM_BUILD=all
 ```
 
 <details>
@@ -82,9 +82,10 @@ make dev-install-llvm
 Alternatively, follow these steps to build LLVM from source manually.
 </summary>
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c.
+1. Find the version of LLVM that Triton builds against. Check the `llvm_hash`
+field in `cmake/llvm-info.json` to see the current version. For example, if it
+says:
+       "llvm_hash": "49af6502c6dcb4a7f7520178bd14df396f78240c"
 
    This means that the version of Triton you have builds against
    [LLVM](https://github.com/llvm/llvm-project) 49af6502.
@@ -97,7 +98,7 @@ Alternatively, follow these steps to build LLVM from source manually.
        $ cd $HOME/llvm-project  # your clone of LLVM.
        $ mkdir build
        $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
 4. Grab a snack, this will take a while.
@@ -227,7 +228,10 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
+- `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
+  `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
+  fused operations such as `tl.fma` are unchanged.
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,
@@ -245,6 +249,8 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
 - `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 - `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
+- `TRITON_DEFAULT_BACKEND=<backend>` optionally sets the default backend used by Triton when
+  constructing the active driver (i.e., `triton.runtime.driver.active`).
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
@@ -272,7 +278,7 @@ def inspect_stages(_self, stages, options, language, capability):
     # inspect or modify add_stages here
 triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
 ```
-
+Examples of how to use this for out of tree plugin passes is [here](examples/plugins/README.md)
 # Changelog
 
 Version 2.0 is out! New features include:

@@ -1,0 +1,227 @@
+import pytest
+import torch
+from triton.testing import do_bench
+from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
+from triton_kernels.reduce import scoped_opt_flags_constraints
+from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
+from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4
+import triton
+import triton.language as tl
+
+
+def init_mask(mask_mode, B, M, N, device):
+    if mask_mode == "none":
+        return None
+    if mask_mode == "full":
+        mask = (torch.rand((B, M, N), device=device) > 0.3).to(torch.int8)
+    if mask_mode == "broadcast_b":
+        mask = (torch.rand((1, M, N), device=device) > 0.3).to(torch.int8)
+    if mask_mode == "broadcast_m":
+        mask = (torch.rand((B, 1, N), device=device) > 0.3).to(torch.int8)
+    if mask_mode == "broadcast_n":
+        mask = (torch.rand((B, M, 1), device=device) > 0.3).to(torch.int8)
+    return mask.expand(B, M, N)
+
+
+def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
+    if dtype_str == "float4_e2m1":
+        return torch.uint8
+    if dtype_str == "float8":
+        return torch.float8_e4m3fn
+    return getattr(torch, dtype_str)
+
+
+@triton.jit
+def plus_a_reduce(x, a):
+    y = x + a
+    return tl.sum(y.reshape([x.shape[0], x.shape[1] // 2, 2]), axis=2)
+
+
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("k", [4, 16])
+@pytest.mark.parametrize("scale", [0, 1, 127, 128, 255])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
+def test_reduce_mxfp_scale_boundaries(dtype, k, scale, scale_dtype, device):
+    if dtype == torch.float8_e4m3fn and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+
+    x = torch.full((k, 3, 128), 4, dtype=dtype, device=device).requires_grad_()
+    scales = torch.full((k, 3, 4), scale, dtype=torch.uint8, device=device).view(scale_dtype)
+    y, _ = reduce(x, dim=0, x_mxscale=scales, y_has_mx=False, y_dtype=torch.float32)
+    decoded = float("nan") if scale == 255 else 2.0**(scale - 127)
+    expected = torch.full_like(y, 4 * k * decoded)
+    torch.testing.assert_close(y, expected, rtol=0, atol=0, equal_nan=True)
+
+    dy = 2.0**120 if scale < 127 else 1.0
+    y.backward(torch.full_like(y, dy))
+    expected_grad = torch.full_like(x, dy * decoded)
+    torch.testing.assert_close(x.grad.float(), expected_grad.float(), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("B, M, N, postprocess_fn", [
+    (311, 384, 384, None),
+    (384, 311, 384, None),
+    (384, 384, 311, None),
+    (512, 512, 512, None),
+    (512, 512, 512, "plus_ten"),
+    (4, 4, 4, None),
+    (3, 15, 25, None),
+    (5, 9999, 2345, None),
+    (15, 345, 789, None),
+])
+@pytest.mark.parametrize("dtype_str", [
+    "float16",
+    "float32",
+    "mxfloat8",
+    "flexfloat8",
+])
+@pytest.mark.parametrize("mask_mode", [
+    "none",  # no mask
+    "full",  # full-sized mask [B,M,N]
+    "broadcast_b",  # broadcast over B: [1,M,N]
+    "broadcast_m",  # broadcast over M: [B,1,N]
+    "broadcast_n",  # broadcast over N: [B,M,1]
+])
+@pytest.mark.parametrize("dim", [0, 1, 2])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
+    # Check float8 hardware support
+    if "float8" in dtype_str:
+        if is_cuda() and torch.cuda.get_device_capability() < (9, 0):
+            pytest.skip("float8 not supported on CUDA < 9.0")
+        if is_hip() and not (is_hip_cdna3() or is_hip_cdna4()):
+            pytest.skip("float8 not supported on AMD GPU < CDNA3")
+
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((B, M, N), device=device, dtype=torch.float32, requires_grad=True)
+    x_mscale, x_flex = None, None
+    y_flex_tri, y_flex_ref = None, None
+    if is_mx := dtype_str.startswith("mx"):
+        dtype = dtype_str_to_torch(dtype_str.removeprefix("mx"))
+        x, x_mscale = downcast_to_mxfp_torch(x.to(torch.float16), dtype, axis=-1)
+    if is_flex := dtype_str.startswith("flex"):
+        dtype = dtype_str_to_torch(dtype_str.removeprefix("flex"))
+        expected_scale = torch.tensor([4], device=device, dtype=torch.float32)
+        x_flex = InFlexData(scale=torch.tensor([2], device=device, dtype=torch.float32))
+        x = x / x_flex.scale
+        x = x.to(dtype)
+        y_flex_tri = OutFlexData(expected_scale=expected_scale, actual_scale=torch.empty_like(expected_scale))
+        y_flex_ref = OutFlexData(expected_scale=expected_scale, actual_scale=torch.empty_like(expected_scale))
+    mask = init_mask(mask_mode, B, M, N, device)
+    expected_exception = ValueError if dim == 2 and is_mx else None
+    if expected_exception is not None:
+        with pytest.raises(expected_exception):
+            reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale)
+        return
+    if postprocess_fn == "plus_ten":
+        postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a_reduce, ("a", ), reduction_n=2),
+                                           fn_args=(10, ))
+        postprocess_fn_ref = lambda x: (x + 10).reshape([x.shape[0], x.shape[1] // 2, 2]).sum(dim=2)
+    else:
+        postprocess_fn_tri = postprocess_fn_ref = None
+    # run forward pass
+    x_tri = x.clone().detach().requires_grad_(True)
+    x_ref = x.clone().detach().requires_grad_(True)
+    y_tri, y_tri_mxscale = reduce(x_tri, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
+                                  postprocess_fn1=postprocess_fn_tri)
+    y_ref, y_ref_mxscale = reduce_torch(x_ref, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_ref,
+                                        postprocess_fn1=postprocess_fn_ref)
+    if is_mx:
+        y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
+        y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    if is_flex:
+        torch.allclose(y_flex_tri.actual_scale, y_flex_ref.actual_scale, atol=1e-3, rtol=1e-3)
+    run_bwd = postprocess_fn is None and "float8" not in dtype_str
+    if run_bwd:
+        dy = torch.randn_like(y_tri)
+        y_tri.backward(dy)
+        y_ref.backward(dy)
+        assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.parametrize("B, M, N", [
+    (5, 2, 0),
+    (0, 2, 5),
+])
+@pytest.mark.parametrize("dtype", [
+    torch.float16,
+    torch.float32,
+])
+@pytest.mark.parametrize("mask_mode", [
+    "none",
+    "full",
+    "broadcast_b",
+    "broadcast_m",
+    "broadcast_n",
+])
+def test_op_empty_forward_backward(B, M, N, dtype, mask_mode):
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((B, M, N), device=device, dtype=dtype, requires_grad=True)
+    mask = init_mask(mask_mode, B, M, N, device)
+    x_tri = x.clone().detach().requires_grad_(True)
+    x_ref = x.clone().detach().requires_grad_(True)
+
+    y_tri, _ = reduce(x_tri, dim=1, mask=mask)
+    y_ref, _ = reduce_torch(x_ref, dim=1, mask=mask, x_flex=None, y_flex=None)
+    assert torch.allclose(y_tri.float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+
+    dy = torch.randn_like(y_tri)
+    y_tri.backward(dy)
+    y_ref.backward(dy)
+    assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
+def test_unpadded_batch_size_rowidxs_subtile():
+    if not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("rowidxs path requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("rowidxs path requires CUDA capability >= 9")
+
+    torch.manual_seed(0)
+    device = "cuda"
+    B, M, N = 7, 73, 257
+    unpadded = 37
+    sentinel = -1234.0
+    x = torch.randn((B, M, N), device=device, dtype=torch.float16)
+    # K=7 selects the static-loop rowidxs path with heavy-block subtiles.
+    mask = torch.ones((B, M, 1), device=device, dtype=torch.int8).expand(B, M, N)
+    y = torch.full((M, N), sentinel, device=device, dtype=torch.float16)
+    unpadded_batch_size = torch.tensor(unpadded, device=device, dtype=torch.int32)
+
+    with scoped_opt_flags_constraints({"use_rowidxs": True, "subtile_heavy_blocks": True}):
+        y_tri, _ = reduce(x, dim=0, mask=mask, y=y, unpadded_batch_size=unpadded_batch_size)
+
+    y_ref = x[:, :unpadded, :].float().sum(dim=0).to(torch.float16)
+    assert torch.allclose(y_tri[:unpadded].float(), y_ref.float(), atol=1e-3, rtol=1e-3)
+    assert torch.equal(y_tri[unpadded:], torch.full_like(y_tri[unpadded:], sentinel))
+
+
+def bench_reduce(B: int = 4, M: int = 4096, N: int = 4096, *, dim: int = 0, dtype: torch.dtype = torch.float16,
+                 iters: int = 200, mask_mode: str = "none"):
+    torch.manual_seed(0)
+    device = "cuda"
+    x = torch.randn((B, M, N), device=device, dtype=torch.float32).to(dtype)
+    mask = init_mask(mask_mode, B, M, N, device)
+    ms = do_bench(lambda: reduce(x, dim=dim, mask=mask), rep=iters)
+    nnz = x.numel() if mask is None else (mask.expand(B, M, N) != 0).sum()
+    read_bytes = nnz * x.element_size()
+    out_elems = (M * N) if dim == 0 else ((B * N) if dim == 1 else (B * M))
+    write_bytes = out_elems * x.element_size()
+    mask_bytes = 0 if mask is None else (mask.numel() * mask.element_size())
+    bytes_total = read_bytes + write_bytes + mask_bytes
+    gbps = (bytes_total) / ms / 1e6
+    desc = f"reduce: B={B}, M={M}, N={N}, dim={dim}, dtype={str(dtype).split('.')[-1]}, mask={mask_mode}"
+    print(f"{desc} -> {gbps:.2f} GB/s")
+
+
+# bench_reduce(B=4, M=8192, N=8192, dim=0, dtype=torch.float16, mask_mode="none")
+# bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=16384, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=65536, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_n")
+# bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_m")
+# bench_reduce(B=8192, M=4, N=8192, dim=1, dtype=torch.float16, mask_mode="broadcast_b")

@@ -5,6 +5,7 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -19,14 +20,13 @@ include "proton/Dialect/include/Dialect/ProtonGPU/IR/ProtonGPUTypes.td"
 //===----------------------------------------------------------------------===//
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //===----------------------------------------------------------------------===//
 // Base Class
 //===----------------------------------------------------------------------===//
 
-class PTG_Op<string mnemonic, list<Trait> traits = []> :
-    Op<ProtonGPU_Dialect, mnemonic, !listconcat(traits, [])> {
+class PTG_Op<string mnemonic, list<Trait> traits = []>
+    : Op<ProtonGPU_Dialect, mnemonic, !listconcat(traits, [])> {
 }
 
 //===----------------------------------------------------------------------===//
@@ -40,21 +40,25 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
 
   let description = [{
     Store a metric `counter` into a circular buffer backed by the internal memory `segment`.
-    automatically updated. Older metric counters are dropped if the `segment` buffer is full.
+    `scopeId` contains a compile-time scope identifier, while `dynamicScopeId`
+    contains a runtime scope identifier. Exactly one must be present. Older
+    metric counters are dropped if the `segment` buffer is full.
   }];
 
   let arguments = (ins
     PTG_SegmentType:$segment,
     AnyTypeOf<[I32, I64]>:$counter,
+    Optional<I32>:$dynamicScopeId,
     UnitAttr:$isStart,
-    I32Attr:$scopeId
+    OptionalAttr<I32Attr>:$scopeId
   );
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $segment `,` $counter attr-dict `:`
-    qualified(type($segment)) `,` type($counter)
+    (`start` $isStart^):(`end`)? $segment `,` $counter
+    (`,` $dynamicScopeId^)?
+    attr-dict `:` qualified(type($segment)) `,` type($counter)
   }];
 }
 
@@ -97,7 +101,7 @@ def PTG_InitializeOp : PTG_Op<"initialize", [
 
 
 def PTG_FinalizeOp : PTG_Op<"finalize", [
-    MemoryEffects<[MemRead<SharedMemory>]>, // FIXME: it shouldn't always have shared memory effects
+    MemoryEffects<GenericSharedRead>, // FIXME: it shouldn't always have shared memory effects
     MemoryEffects<[MemRead<GlobalMemory>]>,
     MemoryEffects<[MemWrite<GlobalMemory>]>
 ]> {
@@ -119,32 +123,6 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   }];
 }
 
-def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [
-    MemoryEffects<[MemAlloc<GlobalMemory>]>
-]> {
-  let summary = "Allocate a global memory profile buffer";
-
-  let description = [{
-    This operation allocates a profile buffer in global memory.
-    Each Triton program being profiled will hold a pointer to the buffer until profiling is finalized.
-  }];
-
-  let arguments = (ins
-    I32Attr:$nbytes,
-    I32Attr:$alignment
-  );
-
-  let results = (outs TT_Ptr:$result);
-
-  let builders = [
-    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
-              [{ build($_builder, $_state, result,
-                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
-  ];
-
-  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
-}
-
 def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   let summary = "Get the base offset of the segment of the internal buffer";
 
@@ -154,7 +132,7 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$buffer
+    AnyTypeOf<[TTG_MemDescType, TT_Ptr]>:$buffer
   );
 
   let results = (outs PTG_SegmentType:$segment);
@@ -163,7 +141,6 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
 
   let assemblyFormat = "$buffer attr-dict `:` qualified(type($buffer)) `->` type($segment)";
 }
-
 
 def PTG_InitCtxOp : PTG_Op<"init_ctx", [
     MemoryEffects<[MemWrite<GlobalMemory>]>

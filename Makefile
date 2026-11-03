@@ -2,12 +2,18 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON ?= python
-BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
+PYTHON ?= python3
+ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
-LLVM_BUILD_PATH ?= "$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/.llvm-project/build"
+LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
+LLVM_BUILD ?= core
+AMD_LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project-amd/build"
+AMD_CODEGEN_LIBRARY = $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import amd_codegen_library_name; print(amd_codegen_library_name())')
 NUM_PROCS ?= 8
+NUM_GPUS ?= 1
+WARMUP_PROCS ?= $(NUM_PROCS)
 
 # Incremental builds
 
@@ -31,34 +37,27 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -s -n $(NUM_PROCS) --ignore=language/test_line_info.py \
-		--ignore=language/test_subprocess.py --ignore=test_debug.py
-	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/language/test_subprocess.py
-	$(PYTEST) -s -n $(NUM_PROCS) python/test/unit/test_debug.py --forked
-	$(PYTEST) -s -n 6 python/triton_kernels/tests/
-	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
-	# Run attention separately to avoid out of gpu memory
-	$(PYTEST) -vs python/tutorials/06-fused-attention.py
-	$(PYTEST) -vs python/tutorials/gluon/01-intro.py python/tutorials/gluon/02-layouts.py python/tutorials/gluon/03-async-copy.py python/tutorials/gluon/04-tma.py python/tutorials/gluon/05-wgmma.py python/tutorials/gluon/06-tcgen05.py python/tutorials/gluon/07-persistence.py python/tutorials/gluon/08-warp-specialization.py
-	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
-	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
-		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
-	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
+	$(PYTHON) -m triton._test_runner suite unit --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
 
-.PHONY: test-distributed
-test-distributed: all
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install python/triton_kernels -v
-	$(PYTEST) -s python/triton_kernels/bench/distributed.py
+.PHONY: test-plugins
+test-plugins: all
+	TRITON_CI_CACHE_PHASE=plugins $(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
-	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
-	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
+	$(PYTHON) -m triton._test_runner suite gluon --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
+
+.PHONY: test-warmup
+test-warmup: all
+	$(PYTHON) -m triton._test_runner warmup --warmup-procs $(WARMUP_PROCS)
+
+.PHONY: test-gsan
+test-gsan: all
+	$(PYTHON) -m triton._test_runner suite gsan --num-gpus $(NUM_GPUS) --num-procs $(NUM_PROCS)
 
 .PHONY: test-regression
 test-regression: all
-	$(PYTEST) -s -n $(NUM_PROCS) python/test/regression
+	TRITON_CI_CACHE_PHASE=regression $(PYTEST) -p triton._compile_warmup -n $(NUM_PROCS) python/test/regression
 
 .PHONY: test-microbenchmark
 test-microbenchmark: all
@@ -66,21 +65,25 @@ test-microbenchmark: all
 
 .PHONY: test-interpret
 test-interpret: all
-	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -s -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
-		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
-		language/test_tuple.py runtime/test_autotuner.py::test_kwargs[False] \
+	cd python/test/unit && TRITON_CI_CACHE_PHASE=interpreter TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
+		language/test_random.py language/test_subprocess.py language/test_line_info.py \
+		language/test_tuple.py test_debug.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py
-	$(PYTEST) -s third_party/proton/test/test_override.py
+	TRITON_CI_CACHE_PHASE=proton $(PYTEST) -n 8 third_party/proton/test --ignore=third_party/proton/test/test_override.py -k "not test_overhead and not test_hw_trace"
+	TRITON_CI_CACHE_PHASE=proton-hw-trace $(PYTEST) third_party/proton/test/test_profile.py::test_hw_trace
+	TRITON_CI_CACHE_PHASE=proton-override $(PYTEST) third_party/proton/test/test_override.py
+	TRITON_CI_CACHE_PHASE=proton-overhead $(PYTEST) third_party/proton/test/test_instrumentation.py::test_overhead
 
 .PHONY: test-python
-test-python: test-unit test-regression test-interpret test-proton
+test-python: test-unit test-plugins test-regression test-interpret test-proton
 
 .PHONY: test-nogpu
 test-nogpu: test-lit test-cpp
+	TRITON_CI_CACHE_PHASE=gluon-frontend $(PYTEST) python/test/gluon/test_frontend.py
+	TRITON_CI_CACHE_PHASE=triton-frontend $(PYTEST) python/test/unit/language/test_frontend.py
 
 .PHONY: test
 test: test-lit test-cpp test-python
@@ -107,15 +110,40 @@ dev-install-triton:
 .NOPARALLEL: dev-install
 dev-install: dev-install-requires dev-install-triton
 
+.PHONY: build-llvm
+build-llvm:
+	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
+
+.PHONY: build-amd-llvm
+build-amd-llvm:
+	AMD_LLVM_BUILD_PATH=$(AMD_LLVM_BUILD_PATH) scripts/build-amd-llvm.sh
+
+LLVM_BUILD_TARGETS_core := build-llvm
+LLVM_BUILD_TARGETS_amd := build-amd-llvm
+LLVM_BUILD_TARGETS_all := build-llvm build-amd-llvm
+
 .PHONY: dev-install-llvm
 .NOPARALLEL: dev-install-llvm
-dev-install-llvm:
-	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
-	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
-		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+dev-install-llvm: $(LLVM_BUILD_TARGETS_$(LLVM_BUILD))
+	$(if $(filter $(LLVM_BUILD),core amd all),,$(error LLVM_BUILD must be core, amd, or all))
+ifneq ($(filter $(LLVM_BUILD),core all),)
+	LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
+	$(if $(filter all,$(LLVM_BUILD)),TRITON_AMD_CODEGEN_PATH="$(ROOT_DIR)/third_party/amd/backend/lib/$(AMD_CODEGEN_LIBRARY)") $(MAKE) dev-install
+else
+	# Reset cached core LLVM paths so installation uses the prebuilt core llvm.
+	LLVM_SYSPATH= \
+		LLVM_INCLUDE_DIRS= \
+		LLVM_LIBRARY_DIR= \
+		TRITON_AMD_CODEGEN_PATH="$(ROOT_DIR)/third_party/amd/backend/lib/$(AMD_CODEGEN_LIBRARY)" \
+		TRITON_APPEND_CMAKE_ARGS="$(TRITON_APPEND_CMAKE_ARGS) -U LLVM_DIR -U MLIR_DIR -U LLD_DIR -U LLVM_INCLUDE_DIRS -U LLVM_LIBRARY_DIR" \
 	$(MAKE) dev-install
+endif
+
+.PHONY: dev-install-amd-llvm
+dev-install-amd-llvm:
+	$(MAKE) dev-install-llvm LLVM_BUILD=amd
 
 # Updating lit tests
 

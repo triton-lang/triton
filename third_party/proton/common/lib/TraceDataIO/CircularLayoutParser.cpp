@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <list>
 #include <unordered_map>
 
 using namespace proton;
@@ -35,8 +36,10 @@ const CircularLayoutParserConfig &CircularLayoutParser::getConfig() const {
   return static_cast<const CircularLayoutParserConfig &>(config);
 }
 
-void CircularLayoutParser::parseMetadata() {
+bool CircularLayoutParser::parseMetadata() {
   uint32_t preamble = decoder.decode<I32Entry>()->value;
+  if (preamble == 0)
+    return false;
   if (preamble != kPreamble)
     throw PreambleException("Invalid preamble");
   auto &bt = result->blockTraces.emplace_back();
@@ -72,6 +75,7 @@ void CircularLayoutParser::parseMetadata() {
     trace.uid = uid;
     trace.count = count;
   }
+  return true;
 }
 
 void CircularLayoutParser::parseProfileEvents() {
@@ -86,12 +90,12 @@ void CircularLayoutParser::parseProfileEvents() {
     parseSegment(segmentByteSize, trace);
     position += segmentByteSize;
   }
+  pairAsyncEvents(bt);
 }
 
 void CircularLayoutParser::parseSegment(
     int segmentByteSize, CircularLayoutParserResult::Trace &trace) {
 
-  auto state = ParseState::INIT;
   int idealSize = trace.count * kWordSize;
   int byteSize = std::min(idealSize, segmentByteSize);
   const int maxNumEntries = byteSize / (kWordSize * kWordsPerEntry);
@@ -102,14 +106,18 @@ void CircularLayoutParser::parseSegment(
   for (int i = 0; i < maxNumEntries; i++) {
     try {
       auto entry = decoder.decode<CycleEntry>();
-      if (!activeEvent.count(entry->scopeId)) {
+      if (entry->isAsync) {
+        trace.asyncEvents.push_back(entry);
+        continue;
+      }
+      if (!activeEvent.contains(entry->scopeId)) {
         activeEvent[entry->scopeId] =
             CircularLayoutParserResult::ProfileEvent();
       }
       auto &activeProfileEvent = activeEvent[entry->scopeId];
 
       auto prevState = ParseState::INIT;
-      if (scopeState.count(entry->scopeId))
+      if (scopeState.contains(entry->scopeId))
         prevState = scopeState[entry->scopeId];
 
       if (entry->isStart) {
@@ -141,10 +149,74 @@ void CircularLayoutParser::parseSegment(
   }
 }
 
+void CircularLayoutParser::pairAsyncEvents(
+    CircularLayoutParserResult::BlockTrace &blockTrace) {
+  using AsyncEndpoint = CircularLayoutParserResult::AsyncEndpoint;
+  std::vector<AsyncEndpoint> endpoints;
+  for (auto &trace : blockTrace.traces) {
+    for (auto &entry : trace.asyncEvents)
+      endpoints.push_back({trace.uid, entry});
+  }
+  std::stable_sort(endpoints.begin(), endpoints.end(),
+                   [](const AsyncEndpoint &lhs, const AsyncEndpoint &rhs) {
+                     return lhs.entry->cycle < rhs.entry->cycle;
+                   });
+
+  using EndpointList = std::list<AsyncEndpoint>;
+  struct ActiveEndpoints {
+    EndpointList ordered;
+    std::unordered_map<uint32_t, EndpointList::iterator> byWarp;
+  };
+  std::unordered_map<int, ActiveEndpoints> active;
+  for (auto &endpoint : endpoints) {
+    const int scopeId = endpoint.entry->scopeId;
+    auto &activeEndpoints = active[scopeId];
+    if (endpoint.entry->isStart) {
+      // A warp cannot have two outstanding instances of the same static event
+      // because a later end would not identify which instance it completes.
+      if (activeEndpoints.byWarp.contains(endpoint.uid)) {
+        reportException(
+            ScopeMisMatchException("Async event mismatch: start after start"),
+            buffer.position());
+        continue;
+      }
+      auto startIt = activeEndpoints.ordered.insert(
+          activeEndpoints.ordered.end(), endpoint);
+      activeEndpoints.byWarp.emplace(endpoint.uid, startIt);
+      continue;
+    }
+    // An end without any start for this static event cannot be paired.
+    if (activeEndpoints.ordered.empty()) {
+      reportException(
+          ScopeMisMatchException("Async event mismatch: end after end"),
+          buffer.position());
+      active.erase(scopeId);
+      continue;
+    }
+
+    // Prefer a start from the ending warp so an event local to one warp is
+    // rendered as a duration slice.
+    auto sameWarp = activeEndpoints.byWarp.find(endpoint.uid);
+    auto startIt = sameWarp == activeEndpoints.byWarp.end()
+                       ? activeEndpoints.ordered.end()
+                       : sameWarp->second;
+    // Otherwise connect the end to the oldest producer in another warp.
+    if (startIt == activeEndpoints.ordered.end())
+      startIt = activeEndpoints.ordered.begin();
+
+    blockTrace.asyncLinks.emplace_back(*startIt, endpoint);
+    activeEndpoints.byWarp.erase(startIt->uid);
+    activeEndpoints.ordered.erase(startIt);
+    if (activeEndpoints.ordered.empty())
+      active.erase(scopeId);
+  }
+}
+
 void CircularLayoutParser::parseBlock() {
   try {
-    parseMetadata();
-    parseProfileEvents();
+    if (parseMetadata()) {
+      parseProfileEvents();
+    } // else skip this block since it's not profiled
   } catch (const PreambleException &e) {
     reportException(e, buffer.position());
   }
@@ -185,6 +257,10 @@ void shift(CircularLayoutParserResult::Trace &trace, const uint64_t cost,
     if (event.second->cycle >= timeBase)
       event.second->cycle -= cost;
   }
+  for (auto &record : trace.asyncEvents) {
+    if (record->cycle >= timeBase)
+      record->cycle -= cost;
+  }
 }
 } // namespace
 
@@ -196,7 +272,7 @@ proton::readCircularLayoutTrace(ByteSpan &buffer, bool applyTimeShift) {
   assert(version == 1 && "Version mismatch");
   buffer.skip(8);
   uint32_t payloadOffset = decoder.decode<I32Entry>()->value;
-  uint32_t payloadSize = decoder.decode<I32Entry>()->value;
+  [[maybe_unused]] uint32_t payloadSize = decoder.decode<I32Entry>()->value;
   uint32_t device = decoder.decode<I32Entry>()->value;
   config.device = decodeDevice(device);
   config.numBlocks = decoder.decode<I32Entry>()->value;
@@ -239,6 +315,10 @@ void proton::timeShift(const uint64_t cost,
         if (event.second->cycle < event.first->cycle) {
           event.second->cycle = event.first->cycle + cost / 2;
         }
+      }
+      for (auto &record : trace.asyncEvents) {
+        const uint64_t recordTimeBase = record->cycle;
+        shift(trace, cost, recordTimeBase);
       }
     }
   }

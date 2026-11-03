@@ -28,14 +28,12 @@ from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -50,6 +48,7 @@ else:
 # Re-use utilities from the previous tutorial.
 t3 = importlib.import_module("03-async-copy")
 t4 = importlib.import_module("04-tma")
+t7 = importlib.import_module("07-persistence")
 
 
 def is_hopper_or_newer():
@@ -104,7 +103,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # mbarrier.arrive(bar, count=1)
 #
 # mbarrier.wait(bar, phase=0)  # in partition B
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# tma.async_store(desc, [0, 0], smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory store and the TMA store.
@@ -115,7 +114,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # mbarrier.wait(bar, phase=0)
 # fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory load and the TMA load.
@@ -149,8 +148,8 @@ def load_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr):
         # signal the operand buffers as ready when they complete.
         yoff = i * YBLOCK
         mbarrier.expect(load_ready_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [xoff, yoff], load_ready_bar, a_buf)
-        tma.async_copy_global_to_shared(b_desc, [xoff, yoff], load_ready_bar, b_buf)
+        tma.async_load(a_desc, [xoff, yoff], load_ready_bar, a_buf)
+        tma.async_load(b_desc, [xoff, yoff], load_ready_bar, b_buf)
 
 
 @gluon.jit
@@ -175,7 +174,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         # Wait for the compute partition to produce c.
         mbarrier.wait(c_ready_bar, phase)
         yoff = i * YBLOCK
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
+        tma.async_store(c_desc, [xoff, yoff], c_buf)
 
         tma.store_wait(outstanding_stores)
         c_empty_bar = c_empty_bars.index((i - outstanding_stores) % num_buffers)
@@ -185,7 +184,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         mbarrier.arrive(c_empty_bar, count=1, pred=i >= outstanding_stores)
 
     # Since we waited for the last value of c, all the other partitions have
-    # exited by now. We just need to wait the stores to complete.
+    # exited by now. We just need the final stores to complete.
     tma.store_wait(0)
 
 
@@ -276,15 +275,11 @@ def elementwise_add_warp_specialized_kernel(  #
     # warps to reduce the amount of registers allocated. The default partition
     # receives whatever registers are left over, based on `maxnreg` passed to
     # the kernel.
-    gl.warp_specialize(
-        default_args=(barriers, buffers, ynumel, YBLOCK, layout),
-        default_partition=compute_partition,
-        worker_args=(descs, barriers, buffers, xoff, numel, YBLOCK),
-        worker_partitions=[load_partition, store_partition],
-        worker_num_warps=[1, 1],
-        # Registers must be allocated in multiples of 8, between [24, 256].
-        worker_num_regs=[24, 24],
-    )
+    gl.warp_specialize([
+        (compute_partition, (barriers, buffers, ynumel, YBLOCK, layout)),
+        (load_partition, (descs, barriers, buffers, xoff, numel, YBLOCK)),
+        (store_partition, (descs, barriers, buffers, xoff, numel, YBLOCK)),
+    ], [1, 1], [24, 24])
 
 
 def elementwise_add_warp_specialized(a, b, c, XBLOCK=32, YBLOCK=64,  #
@@ -389,7 +384,7 @@ if __name__ == "__main__":
 
 
 # Helper class for passing arguments around partitions.
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -404,33 +399,13 @@ class PartitionArgs:
     SUBTILE_FACTOR: gl.constexpr
     num_warps: gl.constexpr
 
-    def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
-                 acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps):
-        self.a_desc = a_desc
-        self.b_desc = b_desc
-        self.c_desc = c_desc
-        self.a_bufs = a_bufs
-        self.b_bufs = b_bufs
-        self.load_empty_bars = load_empty_bars
-        self.load_ready_bars = load_ready_bars
-        self.acc_bufs = acc_bufs
-        self.acc_empty_bars = acc_empty_bars
-        self.acc_ready_bars = acc_ready_bars
-        self.SUBTILE_FACTOR = SUBTILE_FACTOR
-        self.num_warps = num_warps
-
 
 # Counter abstraction for tracking barrier index and phase.
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
     num_barriers: gl.constexpr
-
-    def __init__(self, index, phase, num_barriers):
-        self.index = index
-        self.phase = phase
-        self.num_barriers = num_barriers
 
     @gluon.jit
     def create(phase, num_barriers: gl.constexpr):
@@ -438,8 +413,8 @@ class Counter:
 
     @gluon.must_use_result
     @gluon.jit
-    def next(self):
-        incr = self.index + 1
+    def next(self, pred=True):
+        incr = self.index + gl.where(pred, 1, 0)
         rollover = incr == self.num_barriers
         index = gl.where(rollover, 0, incr)
         phase = gl.where(rollover, self.phase ^ 1, self.phase)
@@ -448,8 +423,8 @@ class Counter:
 
 @gluon.jit
 def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -468,15 +443,15 @@ def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
             bar = ready_bars.index(state.index)
             mbarrier.wait(empty_bars.index(state.index), state.phase)
             mbarrier.expect(bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
 
 
 @gluon.jit
 def matmul_mma_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
     K = p.a_desc.shape[1]
 
@@ -526,14 +501,13 @@ def _split_n(x, SUBTILE_FACTOR: gl.constexpr):
 
 @gluon.jit
 def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
-    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = p.a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.b_desc.block_type.shape[1]
     dtype: gl.constexpr = p.c_desc.dtype
 
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], p.num_warps)
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 
@@ -546,8 +520,7 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
         # Wait for the accumulator. Since BLOCK_N=256, we need to interleave
         # the TMEM loads with the SMEM stores to avoid spilling.
         mbarrier.wait(acc_ready_bars.index(acc_state.index), acc_state.phase)
-        acc = p.acc_bufs.index(acc_state.index).load(acc_layout)
-        acc_state = acc_state.next()
+        acc = p.acc_bufs.index(acc_state.index).load()
 
         accs = _split_n(acc, p.SUBTILE_FACTOR)
         for i in gl.static_range(len(accs)):
@@ -558,7 +531,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
             if i == 0:
                 mbarrier.arrive(acc_empty_bars.index(acc_state.index), count=1)
             fence_async_shared()
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
+        acc_state = acc_state.next()
     # Overlap the last store with the wait, then wait for the last store here.
     tma.store_wait(pendings=0)
 
@@ -566,8 +540,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
 @gluon.jit
 def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.constexpr, num_buffers: gl.constexpr,
                                    SUBTILE_FACTOR: gl.constexpr, num_warps: gl.constexpr):
-    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]
-    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]
+    BLOCK_M: gl.constexpr = a_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = b_desc.block_type.shape[1]
     dtype: gl.constexpr = a_desc.dtype
 
     a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
@@ -588,14 +562,11 @@ def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.con
 
     p = PartitionArgs(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
                       acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps)
-    gl.warp_specialize(
-        default_args=(p, SchedulerImpl),
-        default_partition=matmul_epilogue_partition,
-        worker_args=(p, SchedulerImpl),
-        worker_partitions=[matmul_load_partition, matmul_mma_partition],
-        worker_num_warps=[1, 1],
-        worker_num_regs=[24, 24],
-    )
+    gl.warp_specialize([
+        (matmul_epilogue_partition, (p, SchedulerImpl)),
+        (matmul_load_partition, (p, SchedulerImpl)),
+        (matmul_mma_partition, (p, SchedulerImpl)),
+    ], [1, 1], [24, 24])
 
 
 def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUBTILE_FACTOR, num_warps, SchedulerImpl):
@@ -607,16 +578,14 @@ def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUB
 
     a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
     b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
-    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+    # Reduce the block size of the C tensor descriptor to account for the subtiled epilogue.
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N // SUBTILE_FACTOR], c_layout)
 
     num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
     num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (min(num_sms, num_pid), )
     matmul_warp_specialized_kernel[grid](a_desc, b_desc, c_desc, SchedulerImpl, num_buffers, SUBTILE_FACTOR,
                                          num_warps=num_warps)
-
-
-t7 = importlib.import_module("07-persistence")
 
 
 @pytest.mark.parametrize("M, N, K", [(208, 416, 304), (2000, 1000, 2000)])
@@ -657,19 +626,19 @@ if __name__ == "__main__" and is_blackwell():
         A = torch.randn(M, K, device="cuda", dtype=torch.float16)
         B = torch.randn(K, N, device="cuda", dtype=torch.float16)
         BT = B.T.contiguous()
-        r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: matmul_warp_specialized(A, B, C, **args)))
+        r0 = as_flops(triton.testing.do_bench(lambda: matmul_warp_specialized(A, B, C, **args)))
         r1 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
         print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
 
 # %%
 #     K  warp-specialized    cublas
-#   512           1160.28   1130.67
-#  1024           1249.69   1148.52
-#  2048           1347.18   1261.59
-#  4096           1390.95   1299.38
-#  8192           1350.01   1401.10
-# 16384           1448.14   1508.76
+#   512           1004.18   1191.77
+#  1024           1182.61   1334.85
+#  2048           1313.71   1400.35
+#  4096           1317.58   1432.32
+#  8192           1291.56   1301.11
+# 16384           1256.74   1335.24
 #
-# Much better! We are beating cublas on small K, even though there is still lots
-# of tuning we can do to improve performance. On Blackwell, warp specialization
-# is critical for achieving peak performance.
+# Much better! We are now quite competitive with cublas.
+# We will show in tutorial 14-multicta.py how we can use multicta and a few other
+# tricks to consistently beat cublas in a wide range of shapes.

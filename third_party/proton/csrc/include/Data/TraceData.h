@@ -2,27 +2,31 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include <functional>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 
 namespace proton {
 
 class TraceData : public Data {
 public:
-  TraceData(const std::string &path, ContextSource *contextSource = nullptr);
+  using TimestampOffsetProvider = std::function<int64_t()>;
+
+  TraceData(const std::string &path, ContextSource *contextSource = nullptr,
+            TimestampOffsetProvider timestampOffsetProvider = {});
   virtual ~TraceData();
 
-  size_t addOp(size_t scopeId, const std::string &name) override;
+  std::string toJsonString(size_t phase) const override;
 
-  size_t addOp(size_t scopeId, const std::vector<Context> &contexts) override;
+  std::vector<uint8_t> toMsgPack(size_t phase) const override;
 
-  void addMetric(size_t scopeId, std::shared_ptr<Metric> metric) override;
+  DataEntry addOp(size_t phase, size_t eventId,
+                  const std::vector<Context> &contexts) override;
 
   void
   addMetrics(size_t scopeId,
              const std::map<std::string, MetricValueType> &metrics) override;
-
-  void clear() override;
 
   class Trace;
 
@@ -33,16 +37,24 @@ protected:
   void exitScope(const Scope &scope) override final;
 
 private:
-  void doDump(std::ostream &os, OutputFormat outputFormat) const override;
-  void dumpChromeTrace(std::ostream &os) const;
+  // Data
+  void doDump(std::ostream &os, OutputFormat outputFormat,
+              size_t phase) const override;
 
   OutputFormat getDefaultOutputFormat() const override {
     return OutputFormat::ChromeTrace;
   }
 
-  std::unique_ptr<Trace> trace;
-  // ScopeId -> ContextId
-  std::unordered_map<size_t, size_t> scopeIdToContextId;
+  void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  size_t getCurrentThreadTraceId();
+
+  PhaseStore<Trace> tracePhases;
+  // ScopeId -> EventId
+  std::unordered_map<size_t, size_t> scopeIdToEventId;
+  // ThreadId -> TraceId
+  std::unordered_map<std::thread::id, uint64_t> threadIdToTraceId;
+  uint64_t nextThreadTraceId = 0;
+  TimestampOffsetProvider timestampOffsetProvider;
 };
 
 } // namespace proton

@@ -9,24 +9,18 @@ using namespace mlir::triton;
 
 static Value getNumPrograms(OpBuilder &rewriter, int numCTAs, Location loc,
                             ProgramIDDim axis) {
-  if (numCTAs == 1) {
-    switch (axis) {
-    case ProgramIDDim::X:
-      return rewriter.create<NVVM::GridDimXOp>(loc, i32_ty);
-    case ProgramIDDim::Y:
-      return rewriter.create<NVVM::GridDimYOp>(loc, i32_ty);
-    case ProgramIDDim::Z:
-      return rewriter.create<NVVM::GridDimZOp>(loc, i32_ty);
-    }
-  } else {
-    switch (axis) {
-    case ProgramIDDim::X:
-      return rewriter.create<NVVM::ClusterDimXOp>(loc, i32_ty);
-    case ProgramIDDim::Y:
-      return rewriter.create<NVVM::ClusterDimYOp>(loc, i32_ty);
-    case ProgramIDDim::Z:
-      return rewriter.create<NVVM::ClusterDimZOp>(loc, i32_ty);
-    }
+  switch (axis) {
+  case ProgramIDDim::X: {
+    Value gridDim = NVVM::GridDimXOp::create(rewriter, loc, i32_ty);
+    if (numCTAs == 1)
+      return gridDim;
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    return b.udiv(gridDim, b.i32_val(numCTAs));
+  }
+  case ProgramIDDim::Y:
+    return NVVM::GridDimYOp::create(rewriter, loc, i32_ty);
+  case ProgramIDDim::Z:
+    return NVVM::GridDimZOp::create(rewriter, loc, i32_ty);
   }
   llvm_unreachable("invalid axis");
 }
@@ -39,10 +33,7 @@ struct GetNumProgramsOpConversion
   LogicalResult
   matchAndRewrite(triton::GetNumProgramsOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // It is not easy to get the compute capability here, so we use numCTAs to
-    // decide the semantic of GetNumProgramsOp. If numCTAs = 1, then
-    // GetNumProgramsOp is converted to "%nctaid", otherwise it is converted to
-    // "%nclusterid".
+    // Clusters are launched with dimensions (numCTAs, 1, 1).
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
         op->getParentOfType<ModuleOp>());
 

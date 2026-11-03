@@ -27,19 +27,19 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+class ModuleOp;
+
 namespace triton {
+class BufferRegionAnalysis;
+
 namespace nvidia_gpu {
 
-// Used by Triton runtime
-struct ClusterInfo {
-  ClusterInfo() : clusterDimX(1), clusterDimY(1), clusterDimZ(1) {}
-  int clusterDimX;
-  int clusterDimY;
-  int clusterDimZ;
-};
+void registerConSanNVIDIAHooks();
 
-std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
-    mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
+// Mark provisional per-warp arrivals; finalize their counts after
+// synchronization.
+void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
+                             int computeCapability);
 
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"

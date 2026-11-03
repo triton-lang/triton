@@ -2,6 +2,7 @@
 #define PROTON_PROFILER_PROFILER_H_
 
 #include "Data/Data.h"
+#include "Data/Metric.h"
 #include "Utility/Singleton.h"
 
 #include <atomic>
@@ -16,9 +17,15 @@
 
 namespace proton {
 
+class TimestampAlignmentInterface {
+public:
+  virtual ~TimestampAlignmentInterface() = default;
+  virtual int64_t getTimestampOffsetNs() const = 0;
+};
+
 /// A profiler contains utilities provided by the profiler library to
 /// collect and analyze performance data.
-class Profiler {
+class Profiler : public MetricInterface {
 public:
   Profiler() = default;
 
@@ -38,6 +45,14 @@ public:
   /// It doesn't stop the profiler.
   Profiler *flush() {
     this->doFlush();
+    // Treat all phases up to currentPhase - 1 as flushed, even if a phase has
+    // no GPU activity records (i.e., nothing to flush from device to host).
+    for (auto *data : this->getDataSet()) {
+      const auto phaseInfo = data->getPhaseInfo();
+      if (phaseInfo.current == 0)
+        continue;
+      data->completePhase(phaseInfo.current - 1);
+    }
     return this;
   }
 
@@ -47,7 +62,7 @@ public:
     if (!this->started) {
       return this;
     }
-    if (this->getDataSet().empty()) {
+    if (this->dataSet.empty()) {
       this->started = false;
       this->doStop();
     }
@@ -57,34 +72,34 @@ public:
   /// Register a data object to the profiler.
   /// A profiler can yield metrics to multiple data objects.
   Profiler *registerData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.insert(data);
     return this;
   }
 
   /// Unregister a data object from the profiler.
   Profiler *unregisterData(Data *data) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     dataSet.erase(data);
     return this;
   }
 
   /// Get the set of data objects registered to the profiler.
-  std::set<Data *> getDataSet() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return dataSet;
-  }
+  std::set<Data *> getDataSet() const { return dataSet; }
 
   Profiler *setMode(const std::vector<std::string> &modeAndOptions) {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     this->modeAndOptions = modeAndOptions;
     this->doSetMode(modeAndOptions);
     return this;
   }
 
-  std::vector<std::string> getMode() const {
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    return modeAndOptions;
+  std::vector<std::string> getMode() const { return modeAndOptions; }
+
+  /// These fields are not persistent, function pointers will be changed
+  /// when modules and contexts are switched.
+  /// So we just set them as thread local storage before the application kernel
+  /// starts or after the application kernel ends.
+  void setMetricKernels(
+      const MetricKernelLaunchState &metricKernelLaunchState) override {
+    this->metricKernelLaunchState = metricKernelLaunchState;
   }
 
 protected:
@@ -93,10 +108,8 @@ protected:
   virtual void doStop() = 0;
   virtual void doSetMode(const std::vector<std::string> &modeAndOptions) = 0;
 
-  // `dataSet` can be accessed by both the user thread and the background
-  // threads
-  mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;
+  static thread_local MetricKernelLaunchState metricKernelLaunchState;
 
 private:
   bool started{};

@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -100,10 +101,13 @@ public:
     if (splatCond != condSelect)
       return failure();
 
-    rewriter.replaceOpWithNewOp<LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+    if (!loadOp.getResult().hasOneUse() ||
+        !DominanceInfo().properlyDominates(falseValue, loadOp))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+    rewriter.replaceOp(op, loadOp.getResult());
     return success();
   }
 };
@@ -118,6 +122,17 @@ private:
     return false;
   }
 
+  /// Return true if \p op broadcasts only along \p axis, false otherwise.
+  static bool isBroadcastAlongAxis(BroadcastOp op, unsigned axis) {
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    for (unsigned i = 0; i < srcShape.size(); ++i) {
+      if ((srcShape[i] != dstShape[i]) != (i == axis))
+        return false;
+    }
+    return true;
+  }
+
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
@@ -127,12 +142,13 @@ public:
     auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
       return failure();
+    if (cast<RankedTensorType>(reduceOp.getOperand(0).getType()).getRank() != 3)
+      return failure();
+    // We must be reducing along the middle dim.
+    if (reduceOp.getAxis() != 1)
+      return failure();
     // only support reduce with simple addition
-    Region &combineOp = reduceOp.getCombineOp();
-    bool isReduceAdd = combineOp.hasOneBlock() &&
-                       combineOp.front().getOperations().size() == 2 &&
-                       isAddF32(&*combineOp.front().getOperations().begin());
-    if (!isReduceAdd)
+    if (!isAddF32(reduceOp.getSingleCombiner()))
       return failure();
     // operand of reduce has to be mul
     auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();
@@ -145,58 +161,35 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandLhsOp)
-      return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandRhsOp)
-      return failure();
-    // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
-    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+    // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
+    // the second operand must go from (1, K, N) to (M, K, N).
+    if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
+        !isBroadcastAlongAxis(broadcastRhsOp, 0))
       return failure();
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
+        cast<ShapedType>(broadcastRhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
         {broadcastLhsShape[0], broadcastRhsShape[2]},
         cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
-    auto newAcc = rewriter.create<SplatOp>(
-        op->getLoc(), newAccType,
-        rewriter.create<arith::ConstantOp>(op->getLoc(),
-                                           rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
-                                       expandRhsOp.getSrc(), newAcc,
-                                       InputPrecision::TF32, 0);
-    return success();
-  }
-};
-
-// When reducing a 1D tensor the order of elements of the tensor doesn't matter.
-// Therefore we can relax the reshape to allow it to re-order elements.
-class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::ReshapeOp reshapeOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (reshapeOp.getAllowReorder())
-      return failure();
-    if (reshapeOp.getType().getRank() != 1)
-      return failure();
-    for (Operation *user : reshapeOp->getUsers()) {
-      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
-        return failure();
-    }
-    rewriter.modifyOpInPlace(reshapeOp,
-                             [&]() { reshapeOp.setAllowReorder(true); });
+    Value lhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastLhsOp.getSrc().getType().getShape().drop_back(),
+        broadcastLhsOp.getSrc());
+    Value rhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastRhsOp.getSrc().getType().getShape().drop_front(),
+        broadcastRhsOp.getSrc());
+    auto newAcc =
+        SplatOp::create(rewriter, op->getLoc(), newAccType,
+                        arith::ConstantOp::create(rewriter, op->getLoc(),
+                                                  rewriter.getF32FloatAttr(0)));
+    rewriter.replaceOpWithNewOp<DotOp>(op, lhs, rhs, newAcc,
+                                       InputPrecision::IEEE, 0);
     return success();
   }
 };
@@ -231,17 +224,18 @@ public:
   }
 };
 
-template <typename OpTy>
-class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+template <typename DotOpType, typename AddOpType>
+class CombineDotAddPattern : public mlir::OpRewritePattern<AddOpType> {
 public:
-  using OpRewritePattern<OpTy>::OpRewritePattern;
+  using OpRewritePattern<AddOpType>::OpRewritePattern;
 
   mlir::LogicalResult
-  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
-    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+  matchAndRewrite(AddOpType addOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOpType>();
     bool isDotLHS = false;
     if (!dotOp) {
-      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      dotOp = addOp.getLhs().template getDefiningOp<DotOpType>();
       if (!dotOp) {
         return failure();
       }
@@ -252,7 +246,8 @@ public:
     }
     if (!isZero(dotOp.getC()))
       return failure();
-    if constexpr (std::is_same_v<OpTy, arith::AddFOp>) {
+    if constexpr (std::is_same_v<DotOpType, DotOp> &&
+                  std::is_same_v<AddOpType, arith::AddFOp>) {
       if (dotOp.getMaxNumImpreciseAcc() != 0) {
         return failure();
       }
@@ -270,8 +265,10 @@ public:
 // AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
 // AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
 // AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
-using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
-using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+using CombineDotAddIPattern = CombineDotAddPattern<DotOp, arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
+using CombineDotScaledAddFPattern =
+    CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
 } // anonymous namespace
 
@@ -284,10 +281,10 @@ public:
 
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
+    patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
-    patterns.add<CombineReshapeReducePatterns>(context);
     patterns.add<RankedReduceDescriptorLoads>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())

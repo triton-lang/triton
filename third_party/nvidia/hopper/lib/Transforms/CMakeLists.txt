@@ -14,6 +14,8 @@ add_triton_library(NVHopperTransforms
 
   DEPENDS
   NVHopperTransformsIncGen
+  NVWSTableGen
+  NVWSAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   TritonIR

@@ -1,5 +1,12 @@
-import torch
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
+
+# ------ global scaling -------
 
 MAX_FINITE_FLOAT8E5 = 57344.0
 MAX_FINITE_FLOAT8E4NV = 448.0
@@ -44,3 +51,6 @@ class OutFlexData(BaseFlexData):
         yield self.expected_scale
         yield self.actual_scale
         yield self.checksum_scale
+
+
+# ------ block scaling -------

@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --dump-input-context=20 %s
 
-#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 64, 16]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #dot_op = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth=4}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: cvt_mma_to_dot_fp8
@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // As there are 64 elements per lane, we don't use variables to track them.
 
-    // CHECK-COUNT-64: ld.param.b8
+    // CHECK-COUNT-64: ld.param::entry.b8
 
     // Intra-warp layout conversions can be viewed as permutations of register
     // and lane basis vectors. This can be read off from the linear layouts:
@@ -63,7 +63,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-DAG: and.b32 [[LANEID_FIXED_BITS:%.*]], [[TID]], 28;
     // CHECK-DAG: shl.b32 [[L0_TEMP:%.*]], [[L0_VAL]], 1;
     // CHECK-DAG: or.b32  [[LANEID_PART_PERM:%.*]], [[L0_TEMP]], [[LANEID_FIXED_BITS]];
-    // CHECK-DAG: bfe.u32 [[L1_TEMP:%.*]], [[TID]], 1, 1;
+    // CHECK-DAG: and.b32 [[L1_MASKED:%.*]], [[TID]], 2;
+    // CHECK-DAG: shr.u32 [[L1_TEMP:%.*]], [[L1_MASKED]], 1;
     // CHECK-DAG: or.b32  [[LANEID_PERM:%.*]], [[LANEID_PART_PERM]], [[L1_TEMP]];
 
     // The index shuffles have source lane dependent on the value of the r2 bit.
@@ -97,8 +98,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // on, we have selectors 0x7632 and 0x3276. These are 21520, 4180, 30258,
     // and 12918 in decimal, respectively.
 
-    // CHECK-DAG: and.b32           [[L1_VAL:%.*]], [[TID]], 2;
-    // CHECK-DAG: setp.eq.b32       [[L1_OFF:%.*]], [[L1_VAL]], 0;
+    // CHECK-DAG: setp.eq.b32       [[L1_OFF:%.*]], [[L1_MASKED]], 0;
     // CHECK:     selp.b32          [[SEL1:%.*]], 21520, 4180, [[L1_OFF]];
     // CHECK:     selp.b32          [[SEL2:%.*]], 30258, 12918, [[L1_OFF]];
 

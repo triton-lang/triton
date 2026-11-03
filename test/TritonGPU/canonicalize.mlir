@@ -1,19 +1,36 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -allow-unregistered-dialect | FileCheck %s
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+// A false copy mask still fills shared memory with the other value.
+// CHECK-LABEL: @false_async_copy_keeps_fill
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %false = arith.constant dense<false> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+}
+
+// -----
+
 
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
-//   CHECK-NOT:   ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
+//       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.linear<{register = [[2048], [8], [16], [32]], lane = [[64], [128], [1], [2], [4]], warp = [[256], [512], [1024]], block = []}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -25,15 +42,15 @@ tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> 
 // CHECK-LABEL: @test_canonicalize_convert_expensive_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<256x16xf32
 //       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
-//       CHECK:   %[[V:.+]] = tt.reshape %[[C]] allow_reorder
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.linear<{register = [[1], [2], [4], [8]], lane = [[16], [32], [64], [128], [256]], warp = [[512], [1024], [2048]], block = []}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<256x16xf32, #blocked0> -> tensor<256x16xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder : tensor<256x16xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c : tensor<256x16xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -45,35 +62,33 @@ tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blo
 // CHECK-LABEL: @test_canonicalize_convert_expensive_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<2xf32
 //       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
-//       CHECK:   %[[V:.+]] = tt.reshape %[[C]] allow_reorder
-//       CHECK:   tt.return %[[V]]
+//       CHECK:   tt.return %[[C]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
   tt.func @test_canonicalize_convert_expensive_view2(%arg0: tensor<2xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> tensor<2xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<2xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<2xf32, #blocked1>
-    %r = tt.reshape %c allow_reorder : tensor<2xf32, #blocked1> -> tensor<2xf32, #blocked1>
+    %r = tt.reshape %c : tensor<2xf32, #blocked1> -> tensor<2xf32, #blocked1>
     tt.return %r : tensor<2xf32, #blocked1>
   }
 }
 
 // -----
 
-// test that the convert does get combined with the view even if the resulting operation
-// is an efficient view.
+// Retain the conversion when the reshape has an efficient layout.
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
-//   CHECK-NOT:   ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
+//       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.linear<{register = [[2048], [8], [16], [32]], lane = [[64], [128], [1], [2], [4]], warp = [[256], [512], [1024]], block = []}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder efficient_layout : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c efficient_layout : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -87,9 +102,9 @@ tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> 
 //       CHECK:   %[[V:.+]] = tt.histogram %[[SRC]], %[[M]]
 //   CHECK-NOT:   ttg.convert_layout
 //       CHECK:   tt.return %[[V]]
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>, %arg1: tensor<256xi1, #blocked2>) -> tensor<512xi32, #blocked2> {
     %0 = ttg.convert_layout %arg0 : tensor<256xi32, #blocked1> -> tensor<256xi32, #blocked>
@@ -103,9 +118,9 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>, 
 // -----
 
 // CHECK-LABEL: @test_canonicalize_convert_local_load
-// CHECK-NOT:   gpu.barrier
+// CHECK-NOT:   ttg.barrier local
 // CHECK: %[[V:.+]] = ttg.local_load {{.*}} token %arg0
-// CHECK-NEXT:  gpu.barrier
+// CHECK-NEXT:  ttg.barrier local
 // CHECK-NEXT: tt.return %[[V]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -116,7 +131,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.com
 tt.func @test_canonicalize_convert_local_load(%arg0: !ttg.async.token) -> tensor<256xi32, #blocked1> {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
     %1 = ttg.local_load %0 token %arg0: !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
-    gpu.barrier
+    ttg.barrier local
     %2 = ttg.convert_layout %1 : tensor<256xi32, #blocked> -> tensor<256xi32, #blocked1>
     tt.return %2 : tensor<256xi32, #blocked1>
 }
@@ -125,7 +140,7 @@ tt.func @test_canonicalize_convert_local_load(%arg0: !ttg.async.token) -> tensor
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [0, 32]], block = []}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 // CHECK-LABEL: test_canonicalize_convert_tmem_store
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -144,8 +159,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: local_alloc_nofold1
@@ -164,9 +179,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase=1, maxPhase=1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: local_alloc_nofold2
@@ -185,8 +200,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @local_alloc_fold(%arg0: tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem> {
@@ -202,8 +217,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_layout_gather_src
   tt.func @convert_layout_gather_src(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
@@ -358,4 +373,41 @@ tt.func @duplicate_warp_specialize_captures(%arg0: i32, %arg1: i32, %arg2: i32) 
     ttg.warp_return
   } : (i32, i32, i32, i32, i32) -> ()
   tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 16, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @fold_subslice_chain
+tt.func @fold_subslice_chain() {
+  // CHECK: %[[ALLOC:.*]] = ttg.local_alloc
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x64xf8E5M2, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.memdesc_subslice %[[ALLOC]][16, 32]
+  %subslice = ttg.memdesc_subslice %alloc[16, 32] : !ttg.memdesc<32x64xf8E5M2, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf8E5M2, #shared, #smem, mutable, 32x64>
+  // CHECK: %[[SUBSLICE:.*]] = ttg.memdesc_subslice %[[ALLOC]][24, 48]
+  %subslice2 = ttg.memdesc_subslice %subslice[8, 16] : !ttg.memdesc<16x32xf8E5M2, #shared, #smem, mutable, 32x64> -> !ttg.memdesc<8x16xf8E5M2, #shared, #smem, mutable, 32x64>
+  %dummy_value = arith.constant dense<0.000000e+00> : tensor<8x16xf8E5M2>
+  // CHECK: ttg.local_store %{{.*}}, %[[SUBSLICE]]
+  ttg.local_store %dummy_value, %subslice2 : tensor<8x16xf8E5M2> -> !ttg.memdesc<8x16xf8E5M2, #shared, #smem, mutable, 32x64>
+  tt.return
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #parent}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The broadcast source is not a slice, so expand_dims cannot move before it.
+  // CHECK-LABEL: @expand_dims_after_broadcast_layout_change
+  // CHECK: %[[B:.*]] = tt.broadcast
+  // CHECK: %[[E:.*]] = tt.expand_dims %[[B]]
+  // CHECK: tt.return %[[E]]
+  tt.func @expand_dims_after_broadcast_layout_change(%arg: tensor<1xi32, #src>) -> tensor<1x32xi32, #parent> {
+    %0 = tt.broadcast %arg : tensor<1xi32, #src> -> tensor<32xi32, #slice>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #slice> -> tensor<1x32xi32, #parent>
+    tt.return %1 : tensor<1x32xi32, #parent>
+  }
 }

@@ -1,13 +1,37 @@
 import functools
+import gc
 import math
 import os
 import statistics
 import subprocess
 import sys
+import tempfile
+import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
 from . import runtime
+
+
+@functools.lru_cache(maxsize=None)
+def _cublas_for_device(device):
+    import torch
+    from triton._C.libtriton import nvidia
+
+    workspace = torch.empty(32 * 1024 * 1024, device=device, dtype=torch.uint8)
+    return workspace, nvidia.cublas.CublasLt(workspace)
+
+
+def cublas():
+    """Return the current device's cached cuBLAS handle outside compile warmup."""
+    from triton._internal_testing import is_compile_warmup
+
+    if is_compile_warmup():
+        return None
+
+    import torch
+
+    return _cublas_for_device(torch.cuda.current_device())[1]
 
 
 def nvsmi(attrs):
@@ -36,7 +60,7 @@ def _quantile(a, q):
         t = point - lower
         return (1 - t) * a[lower] + t * a[upper]
 
-    return [get_quantile(q) for q in q]
+    return [get_quantile(qi) for qi in q]
 
 
 def _summarize_statistics(times, quantiles, return_mode):
@@ -57,6 +81,62 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.median(times)
 
 
+@contextmanager
+def cuda_graph_without_gc(*args, **kwargs):
+    # A loaded Triton CompiledKernel may be finalized by Python's cyclic GC.
+    # Its destructor unloads the CUDA module, which is illegal during CUDA
+    # stream capture and invalidates the graph. Keep GC disabled only for the
+    # capture window and restore the caller's previous GC state afterwards.
+    import torch
+
+    gc_was_enabled = gc.isenabled()
+    if gc_was_enabled:
+        gc.disable()
+    try:
+        with torch.cuda.graph(*args, **kwargs) as graph:
+            yield graph
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+@contextmanager
+def _proton_bench_session():
+    import triton.profiler as proton
+
+    with tempfile.TemporaryDirectory(prefix=f"triton-bench-proton-{uuid.uuid4().hex}") as tmpdir:
+        session = proton.start(os.path.join(tmpdir, "profile"), context="shadow", data="tree")
+        try:
+            yield proton, session
+        finally:
+            if session is not None:
+                proton.finalize(session)
+
+
+def _collect_proton_scope_times(database, prefix):
+    scope_times = []
+
+    def kernel_time_ms(node):
+        children = node.get("children", [])
+        if len(children) == 0:
+            return node.get("metrics", {}).get("time (ns)", 0) / 1e6
+        return sum(kernel_time_ms(child) for child in children)
+
+    def visit(node):
+        name = node.get("frame", {}).get("name", "")
+        if name.startswith(prefix):
+            time_ms = kernel_time_ms(node)
+            if time_ms > 0:
+                scope_times.append((name, time_ms))
+            return
+        for child in node.get("children", []):
+            visit(child)
+
+    for node in database:
+        visit(node)
+    return [time for _, time in sorted(scope_times)]
+
+
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function.
@@ -69,8 +149,11 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     import torch
+
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
     with torch.cuda.stream(torch.cuda.Stream()):
@@ -103,7 +186,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         # step 2 - construct a cuda graph with `n_repeat` unrolled function calls to minimize
         # host overhead
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             for _ in range(n_repeat):
                 if grad_to_none is not None:
                     for x in grad_to_none:
@@ -124,23 +207,108 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench_cudagraph_proton(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
-    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-    the 20-th and 80-th performance percentile.
+    Benchmark the runtime of kernels invoked by the provided function using the Proton profiler and CUDA graphs.
+    This function is similar to `do_bench_cudagraph` that avoids CPU overhead by replaying a CUDA graph with multiple iterations of the provided function,
+    but it uses the Proton profiler to measure the runtime of each kernel in the graph instead of using CUDA events to measure the total runtime of the graph.
+    This allows us to get more fine-grained measurements of the kernel runtimes and to exclude cache flushes from the measurement.
+    Note that this function has several constraints compared to `do_bench_cudagraph`:
+    - It does not measure GPU operations other than kernels (e.g., memory copies, synchronization, etc.).
+    - It supports only the NVIDIA GPU. AMD GPU is a TODO.
 
     :param fn: Function to benchmark
     :type fn: Callable
-    :param warmup: Warmup time (in ms)
-    :type warmup: int
     :param rep: Repetition time (in ms)
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param quantiles: Performance percentile to return in addition to the median.
-    :type quantiles: list[float], optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
+    """
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    target = runtime.driver.active.get_current_target()
+    if target.backend != "cuda":
+        raise RuntimeError("do_bench_cudagraph_proton requires the NVIDIA backend because Proton does not reliably "
+                           "attribute CUDA graph replay launches to scopes on HIP.")
+
+    import torch
+
+    with torch.cuda.stream(torch.cuda.Stream()):
+        fn()
+        if grad_to_none is not None:
+            for x in grad_to_none:
+                x.detach_()
+                x.requires_grad_(True)
+                x.grad = None
+
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+        for _ in range(5):
+            fn()
+        end_event.record()
+        torch.cuda.synchronize()
+        estimate_ms = start_event.elapsed_time(end_event) / 5
+        n_repeat = 1000 if estimate_ms == 0 else max(1, int(rep / estimate_ms))
+
+        with _proton_bench_session() as (proton, session):
+            if session is None:
+                raise RuntimeError(
+                    "Proton profiler session could not be created. Make sure you are running on a supported GPU and "
+                    "that the Proton profiler is properly installed.")
+            cache = runtime.driver.active.get_empty_cache_for_benchmark()
+            g = torch.cuda.CUDAGraph()
+            scope_prefix = f"proton.{uuid.uuid4().hex}."
+            with cuda_graph_without_gc(g):
+                for i in range(n_repeat):
+                    if grad_to_none is not None:
+                        for x in grad_to_none:
+                            x.grad = None
+                    runtime.driver.active.clear_cache(cache)
+                    with proton.scope(f"{scope_prefix}{i:08d}"):
+                        fn()
+            torch.cuda.synchronize()
+            n_retries = 10
+            try:
+                for i in range(n_retries):
+                    g.replay()
+                torch.cuda.synchronize()
+            finally:
+                proton.deactivate(session, flushing=True)
+
+            times = [t / n_retries for t in _collect_proton_scope_times(proton.data.get(session), scope_prefix)]
+
+        return _summarize_statistics(times, quantiles, return_mode)
+
+
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+    """
+    Benchmark the runtime of the provided function. By default, returns the mean runtime (in milliseconds) of :code:`fn` as a single float.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms). Controls how long the function is run before timing begins.
+    :type warmup: int
+    :param rep: Repetition time (in ms). Controls the total duration of the timed runs.
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensors to None before each run,
+        to avoid gradient accumulation affecting timing.
+    :type grad_to_none: list[torch.Tensor], optional
+    :param quantiles: If provided, return these quantiles of the runtime distribution instead
+        of a summary statistic. For example, ``[0.2, 0.5, 0.8]`` returns the 20th, 50th, and
+        80th percentile runtimes in ms. When set, ``return_mode`` is ignored.
+    :type quantiles: list[float], optional
+    :param return_mode: The summary statistic to return when ``quantiles`` is not set.
+        ``"mean"`` and ``"median"`` return a single float. ``"min"`` and ``"max"`` return
+        the fastest and slowest run respectively. ``"all"`` returns the raw list of
+        per-run timings in ms. Default is ``"mean"``.
+    :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
@@ -190,6 +358,83 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     return _summarize_statistics(times, quantiles, return_mode)
 
 
+def do_bench_proton(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+    """
+    Benchmark the runtime of kernels invoked by the provided function using the Proton profiler.
+
+    The measured runtime is generally more accurate than `do_bench` for short kernels that are affected by CPU overhead.
+    Note that this function has several constraints compared to `do_bench`:
+    - It does not measure GPU operations other than kernels (e.g., memory copies, synchronization, etc.).
+    - It supports only AMD and NVIDIA GPUs.
+
+    :param fn: Function to benchmark.
+    :type fn: Callable
+    :param warmup: Warmup time (in ms).
+    :type warmup: int
+    :param rep: Repetition time (in ms).
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor(s) to `None`.
+    :type grad_to_none: torch.Tensor, optional
+    :param quantiles: Performance percentiles to return in addition to the median.
+    :type quantiles: list[float], optional
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :type return_mode: str
+    :return: The runtime(s) in milliseconds: a single float for a scalar ``return_mode``, or a list of floats if ``quantiles`` is set or ``return_mode="all"``.
+    :rtype: float | list[float]
+    """
+    assert return_mode in ["min", "max", "mean", "median", "all"]
+
+    di = runtime.driver.active.get_device_interface()
+
+    fn()
+    di.synchronize()
+
+    cache = runtime.driver.active.get_empty_cache_for_benchmark()
+
+    start_event = di.Event(enable_timing=True)
+    end_event = di.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        runtime.driver.active.clear_cache(cache)
+        fn()
+    end_event.record()
+    di.synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
+
+    if estimate_ms == 0:
+        n_warmup = 1000
+        n_repeat = 1000
+    else:
+        n_warmup = max(1, int(warmup / estimate_ms))
+        n_repeat = max(1, int(rep / estimate_ms))
+
+    for _ in range(n_warmup):
+        fn()
+    di.synchronize()
+
+    scope_prefix = f"proton.{uuid.uuid4().hex}."
+    with _proton_bench_session() as (proton, session):
+        if session is None:
+            raise RuntimeError(
+                "Proton profiler session could not be created. Make sure you are running on a supported GPU and "
+                "that the Proton profiler is properly installed.")
+        try:
+            for i in range(n_repeat):
+                if grad_to_none is not None:
+                    for x in grad_to_none:
+                        x.grad = None
+                runtime.driver.active.clear_cache(cache)
+                with proton.scope(f"{scope_prefix}{i:08d}"):
+                    fn()
+            di.synchronize()
+        finally:
+            proton.deactivate(session, flushing=True)
+
+        times = _collect_proton_scope_times(proton.data.get(session), scope_prefix)
+
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
 def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     """
     Asserts that two inputs are close within a certain tolerance.
@@ -235,7 +480,7 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     # we handle size==1 case separately as we can
     # provide better error message there
     if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
+        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True, err_msg=err_msg)
         return
     if not np.allclose(x, y, atol=atol, rtol=rtol):
         raise AssertionError(f'{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})')
@@ -315,16 +560,16 @@ class Mark:
         self.benchmarks = benchmarks
 
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
-             save_precision=6, **kwrags):
+             save_precision=6, **kwargs):
         import os
 
         import matplotlib.pyplot as plt
         import pandas as pd
-        y_mean = bench.line_names
-        y_min = [f'{x}-min' for x in bench.line_names]
-        y_max = [f'{x}-max' for x in bench.line_names]
+        y_mean_labels = [f'{x} ({bench.ylabel})' for x in bench.line_names]
+        y_min_labels = [f'{x}-min ({bench.ylabel})' for x in bench.line_names]
+        y_max_labels = [f'{x}-max ({bench.ylabel})' for x in bench.line_names]
         x_names = list(bench.x_names)
-        df = pd.DataFrame(columns=x_names + y_mean + y_min + y_max)
+        df = pd.DataFrame(columns=x_names + y_mean_labels + y_min_labels + y_max_labels)
         for x in bench.x_vals:
             # x can be a single value or a sequence of values.
             if not isinstance(x, (list, tuple)):
@@ -336,7 +581,7 @@ class Mark:
 
             row_mean, row_min, row_max = [], [], []
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
+                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 try:
                     y_mean, y_min, y_max = ret
                 except TypeError:
@@ -351,11 +596,11 @@ class Mark:
             ax = plt.subplot()
             # Plot first x value on x axis if there are multiple.
             first_x = x_names[0]
-            for i, y in enumerate(bench.line_names):
-                y_min, y_max = df[y + '-min'], df[y + '-max']
+            for i, (mean_label, min_label, max_label) in enumerate(zip(y_mean_labels, y_min_labels, y_max_labels)):
+                y_min, y_max = df[min_label], df[max_label]
                 col = bench.styles[i][0] if bench.styles else None
                 sty = bench.styles[i][1] if bench.styles else None
-                ax.plot(df[first_x], df[y], label=y, color=col, ls=sty)
+                ax.plot(df[first_x], df[mean_label], label=mean_label, color=col, ls=sty)
                 if not y_min.isnull().all() and not y_max.isnull().all():
                     y_min = y_min.astype(float)
                     y_max = y_max.astype(float)
@@ -370,7 +615,7 @@ class Mark:
                 plt.show()
             if save_path:
                 plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
-        df = df[x_names + bench.line_names]
+        df = df[x_names + y_mean_labels]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
             df['Diff'] = df[col1] - df[col0]
@@ -387,13 +632,13 @@ class Mark:
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
+        if save_path:
+            os.makedirs(save_path, exist_ok=True)
         try:
             for bench in benchmarks:
                 result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
         finally:
             if save_path:
-                # Create directory if it doesn't exist
-                os.makedirs(save_path, exist_ok=True)
                 with open(os.path.join(save_path, "results.html"), "w") as html:
                     html.write("<html><body>\n")
                     for bench in benchmarks[:len(result_dfs)]:
@@ -418,16 +663,31 @@ def perf_report(benchmarks):
     return wrapper
 
 
+# HIP reports the DRAM clock rather than the effective memory data rate.
+_AMD_MEMORY_TRANSFERS_PER_CLOCK = {
+    "gfx1100": 16,  # GDDR6
+    "gfx1101": 16,  # GDDR6
+    "gfx1102": 16,  # GDDR6
+    "gfx1151": 8,  # LPDDR5X
+    "gfx1200": 16,  # GDDR6
+    "gfx1201": 16,  # GDDR6
+}
+
+
 def get_dram_gbps(device=None):
     ''' return DRAM bandwidth in GB/s '''
-    import torch
 
     from .runtime import driver
-    if not device:
-        device = torch.cuda.current_device()
-    mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
-    bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
-    bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s
+    if device is None:
+        device = driver.active.get_device_interface().current_device()
+    properties = driver.active.utils.get_device_properties(device)
+    mem_clock_khz = properties["mem_clock_rate"]  # in kHz
+    bus_width = properties["mem_bus_width"]
+    target = driver.active.get_current_target()
+    transfers_per_clock = 2
+    if target.backend == "hip":
+        transfers_per_clock = _AMD_MEMORY_TRANSFERS_PER_CLOCK.get(target.arch, transfers_per_clock)
+    bw_gbps = mem_clock_khz * bus_width * transfers_per_clock / 1e6 / 8  # In GB/s
     return bw_gbps
 
 
@@ -524,7 +784,7 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
         device = torch.cuda.current_device()
 
     num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    capability = torch.cuda.get_device_capability()
+    capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         if dtype == torch.float32:
             ops_per_sub_core = 32  # 2*16

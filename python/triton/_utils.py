@@ -23,9 +23,23 @@ def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
     prev._setitem(path[-1], val)
 
 
-def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
+def is_iterable(x):
     from .language import core
-    is_iterable: Callable[[Any], bool] = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+    return isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+
+
+def apply_with_path(value: Any, fn: Callable[[ObjPath, Any], None], _path=None) -> None:
+    if _path is None:
+        _path = ()
+
+    if is_iterable(value):
+        for idx, item in enumerate(value):
+            apply_with_path(item, fn, _path=(*_path, idx))
+    else:
+        fn(_path, value)
+
+
+def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:
     # We need to use dict so that ordering is maintained, while set doesn't guarantee order
     ret: dict[ObjPath, None] = {}
 
@@ -42,7 +56,8 @@ def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, A
 
 
 def is_power_of_two(x):
-    return (x & (x - 1)) == 0
+    # x & (x - 1) is also 0 for x == 0, but 0 is not a power of two, so guard it.
+    return x > 0 and (x & (x - 1)) == 0
 
 
 def validate_block_shape(shape: List[int]):
@@ -75,6 +90,10 @@ type_canonicalisation_dict = {
     "float8_e5m2": "fp8e5",
     "float8e5b16": "fp8e5b16",
     "float8_e5m2fnuz": "fp8e5b16",
+    "float4e2m1x2": "fp4e2m1x2",
+    "float4_e2m1fn_x2": "fp4e2m1x2",
+    "float8e8m0fnu": "fp8e8m0fnu",
+    "float8_e8m0fnu": "fp8e8m0fnu",
     "half": "fp16",
     "float16": "fp16",
     "bfloat16": "bf16",
@@ -118,6 +137,8 @@ BITWIDTH_DICT: Dict[str, int] = {
        for n in (16, 32, 64)},
     **{f"fp8{suffix}": 8
        for suffix in ("e4nv", "e4b15", "e4b8", "e5", "e5b16")},
+    "fp4e2m1x2": 8,
+    "fp8e8m0fnu": 8,
     "bf16": 16,
     "void": 0,
 }
@@ -128,3 +149,16 @@ for k, v in type_canonicalisation_dict.items():
 
 def get_primitive_bitwidth(dtype: str) -> int:
     return BITWIDTH_DICT[dtype]
+
+
+def is_namedtuple(val):
+    return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
+
+
+def _tuple_create(arg, contents):
+    # NamedTuples and tuples have different construction semantics. NamedTuple
+    # has a constructor that takes individual arguments, while tuple takes an
+    # iterable. Both have type "tuple" making it difficult to distinguish
+    # between them, but only NamedTuple has "_fields" and apparently this is how
+    # everyone does the check.
+    return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)

@@ -62,15 +62,16 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
     if (tensorType) {
       Type newType = replaceEncoding(tensorType, encoding);
       newArgs.push_back(
-          rewriter.create<ttg::ConvertLayoutOp>(loc, newType, operand));
+          ttg::ConvertLayoutOp::create(rewriter, loc, newType, operand));
     } else {
       newArgs.push_back(operand);
     }
   }
 
   // Construct new load with the new encoding
-  auto attrs = load->getAttrs();
-  auto newLoad = rewriter.create<tt::LoadOp>(loc, newArgs, attrs);
+  auto newLoad =
+      tt::LoadOp::create(rewriter, loc, newArgs, load.getProperties(),
+                         load->getDiscardableAttrDictionary().getValue());
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -90,17 +91,17 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
 
   auto transposedLayout =
       ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
-  auto transposedEncoding =
-      ttg::LinearEncodingAttr::get(memStoreOp->getContext(), transposedLayout);
+  auto transposedEncoding = ttg::LinearEncodingAttr::get(
+      memStoreOp->getContext(), std::move(transposedLayout));
 
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);
   auto nonTransposed =
-      rewriter.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
+      ttg::ConvertLayoutOp::create(rewriter, loc, newLoadType, data);
 
   auto transposedType = replaceEncoding(data.getType(), transposedEncoding);
-  auto inThreadTransposed = rewriter.create<ttag::InThreadTransposeOp>(
-      loc, transposedType, nonTransposed);
+  auto inThreadTransposed = ttag::InThreadTransposeOp::create(
+      rewriter, loc, transposedType, nonTransposed);
   rewriter.startOpModification(memStoreOp);
   memStoreOp->setOperand(0, inThreadTransposed);
   rewriter.finalizeOpModification(memStoreOp);
@@ -110,14 +111,14 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
-  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
-  auto bitWidth = operandType.getElementTypeBitWidth();
+  auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(operandType.getElementType());
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
   auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      ctx, dotOperandEnc, operandType.getShape(), order, cgaLayout, bitWidth,
       /*needTrans=*/false);
 
   auto sharedVec = tempAttr.getVec();
@@ -125,7 +126,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto maxPhase = tempAttr.getMaxPhase();
 
   auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
-      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+      ctx, sharedVec, perPhase, maxPhase, order, cgaLayout);
 
   return newSharedEnc;
 }
@@ -485,7 +486,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
   // because we can visit one value in two directions
   SetVector<Value> visitedValsForward;
   SetVector<Value> visitedValsBackward;
-  // breadth-first search for reachable opeations
+  // breadth-first search for reachable operations
   GlobalToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
   while (!traversalStep.empty()) {
@@ -513,17 +514,16 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
-      } else if (isa<ttg::AsyncCopyGlobalToLocalOp,
-                     tt::amdgpu::BufferLoadToLocalOp>(candidate)) {
-        // InTheadTranspose cannot be used with direct-to-lds loads
+      } else if (candidate->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>()) {
+        // InThreadTranspose cannot be used with direct-to-lds loads
         LDBG(" skip because of direct-to-lds load");
         return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
-        LDBG("  catched operation unrelated to shared memory" << *candidate);
+        LDBG("  caught operation unrelated to shared memory" << *candidate);
         // this is critical error, assert in debug mode.
-        assert(false && "  catched operation unrelated to shared memory");
+        assert(false && "  caught operation unrelated to shared memory");
         return failure();
       }
 
@@ -590,10 +590,9 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
 
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
-  // TODO: support wmma
   if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr>(
           opDotOpEnc.getParent())) {
-    LDBG("Operand's parent encoding is not MFMA");
+    LDBG("Operand's parent encoding is not MFMA or WMMA");
     return failure();
   }
 
@@ -601,7 +600,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
-    LDBG("Failed to traverse shared memmory operation network");
+    LDBG("Failed to traverse shared memory operation network");
     return failure();
   }
   auto pattern = sharedMemSearch.value();
@@ -712,7 +711,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto blockedEnc = cast<ttg::BlockedEncodingAttr>(loadEnc);
 
   auto maxkDimSizePerThread = getMaxSizePerThread(loadType, kDimNum);
-  auto elemBitwidth = loadType.getElementType().getIntOrFloatBitWidth();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(loadType.getElementType());
   // Current the widest is set to ds_write_b64
   // In some cases b64 works best, in others 128
   // TODO introduce a heuristic
@@ -728,7 +727,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto ctx = blockedEnc.getContext();
   auto numWarps = product(blockedEnc.getWarpsPerCTA());
   auto threadsPerWarp = product(blockedEnc.getThreadsPerWarp());
-  auto numCTAs = product(blockedEnc.getCTALayout().getCTAsPerCGA());
+  auto numCTAs = product(blockedEnc.getCGALayout().getCTAsPerCGA());
   return ttg::BlockedEncodingAttr::get(ctx, shape, newSizePerThread, order,
                                        numWarps, threadsPerWarp, numCTAs);
 }
@@ -781,11 +780,9 @@ public:
 
 } // anonymous namespace
 
-class TritonAMDGPUInThreadTransposePass
-    : public impl::TritonAMDGPUInThreadTransposeBase<
+struct TritonAMDGPUInThreadTransposePass
+    : impl::TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
-
-public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 

@@ -8,11 +8,12 @@ from triton._C.libtriton import nvidia as triton_nvidia
 from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
+from triton._instrumentation import register_instrumentation, unregister_instrumentation
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
-from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
+from ..state import metadata_state
 from .. import mode
 
 # TODO(fywkevin): add support for major.minor
@@ -37,28 +38,10 @@ class CudaAllocator:
 
         # Create the buffer
         import torch
-        buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
+        with metadata_state():
+            buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
-
-
-class Instrumentation:
-
-    def __init__(self, ir_map: Dict[str, Any]):
-        self.manager = ir_map
-
-    def register(self, ir: str, func):
-        if ir in self.manager:
-            raise RuntimeError(f"IR already registered: {ir}")
-        self.manager[ir] = func
-
-    def patch(self, ir: str, pm, context):
-        self.load_dialects(context)
-        if ir in self.manager:
-            self.manager[ir](pm)
-
-    def load_dialects(self, ctx):
-        triton_proton.load_dialects(ctx)
 
 
 def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
@@ -142,14 +125,11 @@ class InstrumentationHook(Hook):
         self.allocator = CudaAllocator(self)
         self.buffer = None
         self.metadata_path: Dict[Any, Optional[str]] = {}
+        self._instrumentation_backend: Optional[str] = None
 
     def activate(self):
         if InstrumentationHook.active_count > 0:
             raise RuntimeError("Only one instance of the instrumentation hook can be active at a time.")
-
-        InstrumentationHook.active_count += 1
-
-        flags.instrumentation_on = True
 
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
@@ -174,19 +154,19 @@ class InstrumentationHook(Hook):
                 triton_proton.add_sched_barriers(pm)
 
         def to_llvm_passes(pm):
-            triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             if backend_name == "nvidia":
                 triton_proton.add_convert_proton_nvidia_gpu_to_llvm(pm)
             elif backend_name == "amd":
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
-        backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttgpuir_to_llvmir":
-            lambda pm: to_llvmir_passes(pm),
-            "llvmir_to_llvm":
-            lambda pm: to_llvm_passes(pm),
-        })
+        register_instrumentation(point="load-dialects", backend=backend_name, callback=triton_proton.load_dialects)
+        register_instrumentation(point="ttgpuir-to-llvmir", backend=backend_name, callback=to_llvmir_passes)
+        register_instrumentation(point="llvmir-to-llvm", backend=backend_name, callback=to_llvm_passes)
+        self._instrumentation_backend = backend_name
+
+        InstrumentationHook.active_count += 1
+        flags.instrumentation_on = True
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -200,10 +180,12 @@ class InstrumentationHook(Hook):
 
         InstrumentationHook.active_count -= 1
 
-        backend_name = _get_backend_name()
-
-        # No instrumentation passes are registered anymore
-        backends[backend_name].compiler.instrumentation = {}
+        backend_name = self._instrumentation_backend
+        if backend_name is not None:
+            unregister_instrumentation(point="load-dialects", backend=backend_name)
+            unregister_instrumentation(point="ttgpuir-to-llvmir", backend=backend_name)
+            unregister_instrumentation(point="llvmir-to-llvm", backend=backend_name)
+            self._instrumentation_backend = None
 
         # No runtime instrumentation hook is active anymore
         flags.instrumentation_on = False
@@ -246,6 +228,12 @@ class InstrumentationHook(Hook):
             libproton.init_function_metadata(function, name, scope_id_names, scope_id_parents, metadata_path)
         else:
             raise RuntimeError(f"IR path not found in metadata for function {function}")
+
+    def destroy_handle(self, module: Any, function: Any, name: str, metadata_group: Dict[str, str], hash: str) -> None:
+        if not function:
+            return
+        self.metadata_path.pop(function, None)
+        libproton.destroy_function_metadata(function)
 
     def _data_ptr(self) -> int:
         return 0 if self.buffer is None else self.buffer.data_ptr()
@@ -292,7 +280,7 @@ class InstrumentationHook(Hook):
             total_unit = data["num_warps"]
             uid_num = total_unit if self.mode.sampling_strategy == triton_proton.SAMPLING_STRATEGY.NONE else len(
                 sampled_warps)
-            block_num = int(alloc_size / scratch_mem_size)
+            block_num = alloc_size // scratch_mem_size if scratch_mem_size else 0
 
             # Binary trace layout:
             # +------------------+
@@ -344,5 +332,6 @@ class InstrumentationHook(Hook):
             InstrumentationHook.host_buffer = torch.empty(header_size + alloc_size, dtype=torch.uint8, device="cpu")
             config_portion = InstrumentationHook.host_buffer[:header_size]
             config_portion.copy_(torch.tensor(list(header_bytes), dtype=torch.uint8))
-            data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
-            data_portion.copy_(self.buffer.cpu())
+            if self.buffer is not None:
+                data_portion = InstrumentationHook.host_buffer[header_size:].view_as(self.buffer)
+                data_portion.copy_(self.buffer.cpu())

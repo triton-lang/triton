@@ -3,27 +3,14 @@
 
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
-
-// Concurrency Sanitizer data structures:
-// ConSan keeps auxilary data requied for tracking memory accesses in tensors.
-// These tensors are stored as a distributed tensor or in global scratch memory.
-//
-// Name              | Storage | Rank/Type       | Description
-// ------------------|---------|-----------------|------------
-// buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
-// barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..8] init, [9..16] current)
-// waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
-// writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
-// readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
-// writeTracking     | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
-// readTracking      | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
-// outstandingCommits
-//   (async/wgmma)   | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
 
 //
 // Interfaces
@@ -34,32 +21,406 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 // Ops
 //
 
-class TTI_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonInstrument_Dialect, mnemonic, traits> {
+class TTI_Op<string mnemonic, list<Trait> traits = []>
+    : Op<TritonInstrument_Dialect, mnemonic, traits> {
 }
 
-def TTI_ExperimentalAssertInThreadOp : TTI_Op<"experimental_assert_in_thread", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "assert the condition within the current thread";
+def TTI_ExperimentalAssertUniformOp : TTI_Op<"experimental_assert_uniform", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "assert the uniform condition";
   let description = [{
-    Assert that the condition is true given all the values are available in the current thread.
-    If the condition is false, the message is printed, and the program is aborted.
-    If check_any is true, any of the values in the condition must be true. Otherwise, all the
-    values in the condition must be true.
+    Assert that the condition is true given all threads in the warp group have
+    the same value, so only one thread needs to evaluate the assert and print
+    the message.
   }];
-  let arguments = (ins I1Tensor:$condition, StrAttr:$message, BoolAttr:$check_any);
-  let assemblyFormat = "$condition `,` $message attr-dict `:` type($condition)";
+  let arguments = (ins I1:$condition, StrAttr:$message);
+  let assemblyFormat = "$condition `,` $message attr-dict-with-keyword";
 }
 
-
-def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [Pure]> {
-  let summary = "definte an array of pointers to shared memory buffers";
+def TTI_ExperimentalBufferDescriptorsOp
+    : TTI_Op<"experimental_buffer_descriptors", [Pure]> {
+  let summary = "define an array of buffer descriptors";
   let description = [{
-    Create a tensor of pointers to shared memory buffers.
+    Create a tensor of buffer descriptors packing 32-bit pointer offsets and
+    32-bit lengths into 64-bit elements.
   }];
-  let arguments = (ins DenseI32ArrayAttr:$offsets, TT_MemTypeAttr:$memType);
+  let arguments = (ins DenseI32ArrayAttr:$offsets, DenseI32ArrayAttr:$lengths,
+                   TT_MemTypeAttr:$memType);
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $offsets `,` $memType attr-dict `:` type($result)
+    $offsets `,` $lengths `,` $memType attr-dict `:` type($result)
+  }];
+}
+
+def TTI_ExperimentalMemDescToI32Op : TTI_Op<"experimental_memdesc_to_i32", [Pure]> {
+  let summary = "Convert a memdesc into its base pointer as i32";
+  let description = [{
+    Extract the base pointer from the given memdesc and return it as a 32-bit
+    integer. This can be used to compare the memdesc against tensors of barrier
+    pointers maintained by the concurrency sanitizer.
+  }];
+  let arguments = (ins TTG_MemDescType:$memdesc);
+  let results = (outs I32:$result);
+  let assemblyFormat = "$memdesc attr-dict `:` type($memdesc)";
+}
+
+def TTI_ExperimentalMemoryOffsetToI32Op
+    : TTI_Op<"experimental_memory_offset_to_i32", [Pure]> {
+  let summary = "Materialize a memory-space offset as an i32 address";
+  let description = [{
+    Add a static byte or encoded tensor-memory offset to the current
+    function's memory-space base and return the 32-bit address used by ConSan.
+    This provides the runtime identity corresponding to a compile-time
+    BufferRegion key without materializing a descriptor table.
+  }];
+  let arguments = (ins I32Attr:$offset, TT_MemTypeAttr:$memType);
+  let results = (outs I32:$result);
+  let assemblyFormat = "$offset `,` $memType attr-dict";
+}
+
+def TTI_ExperimentalClusterCTAIdOp
+    : TTI_Op<"experimental_cluster_cta_id", [Pure]> {
+  let summary = "Get the CTA id within the current cluster";
+  let description = [{
+    Return the cluster-local CTA id used to index ConSan's multi-CTA scratch
+    slabs. For single-CTA kernels this is always zero.
+  }];
+  let results = (outs I32:$result);
+  let builders = [
+    OpBuilder<(ins), [{
+      build($_builder, $_state, $_builder.getI32Type());
+    }]>
+  ];
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def TTI_ExperimentalLocalGatherOp
+    : TTI_Op<"experimental_local_gather"> {
+  let summary = "Gather elements from shared memory with logical base offsets";
+  let description = [{
+    Gather elements from a shared memory descriptor using an index tensor along
+    one axis, after shifting the logical source coordinates by rank-sized scalar
+    offsets. This is intentionally private to instrumentation passes.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
+    TT_IntTensor:$indices,
+    Variadic<I32>:$offsets,
+    I32Attr:$axis
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` `offsets` `=` `[` $offsets `]`
+    attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTI_ExperimentalGSanInitOp
+    : TTI_Op<"experimental_gsan_init"> {
+  let summary = "Initialize GSan thread";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def TTI_ExperimentalGSanKernelExitOp
+    : TTI_Op<"experimental_gsan_kernel_exit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Publish a completed GSan thread clock to its launch";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def TTI_ExperimentalGSanGridDependencyWaitOp
+    : TTI_Op<"experimental_gsan_grid_dependency_wait", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire completed predecessor clocks after a grid dependency wait";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
+}
+
+def TTI_ExperimentalGSanClusterBarrierInitOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_init",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize a GSan cluster-barrier rendezvous";
+  let description = [{
+    Initializes cluster-shared profile scratch used to synchronize GSan vector
+    clocks. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanClusterBarrierSyncOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_sync",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Synchronize GSan clocks at a cluster barrier";
+  let description = [{
+    Joins the vector clocks of all CTAs participating in a non-relaxed cluster
+    barrier. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanMBarrierTableInitOp
+    : TTI_Op<"experimental_gsan_mbarrier_table_init",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize GSan mbarrier release state";
+  let description = [{
+    Initializes GSan's internal mbarrier table, used to sequence memory accesses
+    through cluster mbarriers. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
+  let assemblyFormat = "$scratch `,` $capacity attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanMBarrierInitOp
+    : TTI_Op<"experimental_gsan_mbarrier_init",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize an mbarrier in GSan";
+  let description = [{
+    Associates an mbarrier with its expected arrival count.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
+                       I32Attr:$expectedCount);
+  let assemblyFormat = [{
+    $scratch `,` $barrier `,` $expectedCount attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanMBarrierArriveOp
+    : TTI_Op<"experimental_gsan_mbarrier_arrive",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Record an mbarrier arrival in GSan";
+  let description = [{
+    Records an arrival for every mbarrier targeted by the corresponding
+    hardware operation. When `publishClock` is true, the issuing CTA's vector
+    clock is also published without advancing its local epoch. Waiters acquire
+    the issuing CTA's completed epochs and its imported clocks, but not its
+    current epoch. A false value records only phase
+    progress for asynchronous completion signals that provide no generic
+    memory ordering. `multicastMasks` contains CTA-id broadcast masks whose
+    recipient bitsets are unioned. When `multicast` is false, the arrival
+    targets the leader selected by the barrier's CGA layout.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier, I1:$pred,
+                       I32Attr:$count, DenseI32ArrayAttr:$multicastMasks,
+                       BoolAttr:$multicast,
+                       I32Attr:$sourceBroadcastMask,
+                       DefaultValuedAttr<BoolAttr, "true">:$publishClock);
+  let assemblyFormat = [{
+    $scratch `,` $barrier `,` $pred `,` $count attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanMBarrierWaitOp
+    : TTI_Op<"experimental_gsan_mbarrier_wait",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire GSan clocks after an mbarrier wait";
+  let description = [{
+    Acquires the clocks published to the completed mbarrier phase, excluding
+    each publisher's current epoch. Global-memory handoffs that rely solely on
+    an mbarrier may therefore be conservatively reported as races.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
+                       I32:$phase, I1:$pred);
+  let assemblyFormat = [{
+    $scratch `,` $barrier `,` $phase `,` $pred attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_tensordesc_access",
+             [AttrSizedOperandSegments]> {
+  let summary = "Instrument a TMA tensor descriptor access for GSan";
+  let description = [{
+    Passes the native tensor descriptor and its coordinates directly to the
+    GSan runtime, which decodes the descriptor and iterates over the tile.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $desc `[` $coords `]` `,` $isStore (`,` $pred^)? attr-dict `:`
+    qualified(type($desc))
+  }];
+}
+
+def TTI_ExperimentalGSanIndexedTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_indexed_tensordesc_access"> {
+  let summary = "Instrument an indexed TMA gather or scatter for GSan";
+  let description = [{
+    Passes a native tensor descriptor and its row indices directly to the GSan
+    runtime, which checks row and column bounds before updating shadow memory.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc,
+                   RankedTensorOf<[I32]>:$indices, I32:$offset,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $desc `[` $indices `,` $offset `]` `,` $isStore (`,` $pred^)? attr-dict
+    `:` qualified(type($desc)) `,` type($indices)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_atomic_tensordesc_access"> {
+  let summary = "Instrument an atomic TMA descriptor access for GSan";
+  let description = [{
+    Passes a native tensor descriptor and coordinates to the GSan runtime for
+    atomic instrumentation with the specified memory semantics and scope.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let assemblyFormat = [{
+    $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
+    qualified(type($desc))
+  }];
+}
+
+def TTI_ExperimentalGSanTensorAccessOp
+    : TTI_Op<"experimental_gsan_tensor_access",
+             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                             "getI1SameShape(getPointeeType($_self))",
+                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
+  let summary = "Instrument a tensor load/store access for GSan";
+  let description = [{
+    Emits runtime instrumentation for a tensor pointer access. The pointer and
+    optional mask are consumed by the GSan runtime.
+  }];
+  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+                   Optional<TT_BoolLike>:$mask, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicLoadOp
+    : TTI_Op<"experimental_gsan_atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic load";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicStoreOp
+    : TTI_Op<"experimental_gsan_atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic store";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+    type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicPollOp
+    : TTI_Op<"experimental_gsan_atomic_poll", [
+        SameOperandsEncoding,
+        TypesMatchWith<"matched type matches pointer shape", "ptr", "matched",
+                       "getI1SameShape($_self)">
+      ]> {
+  let summary = "Instrument a completed atomic poll for GSan";
+  let description = [{
+    Records the successful read performed by an atomic poll after the hardware
+    polling loop has completed.
+  }];
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_BoolLike:$matched,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $matched attr-dict `:` qualified(type($ptr))
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
+  AtomicOpInterface,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic rmw";
+  let arguments = (ins
+    TT_AtomicRMWAttr:$atomic_rmw_op,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$val,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
+  AtomicOpInterface,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
+  TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">
+]> {
+  let summary = "Lower a GSan-instrumented atomic cas";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$cmp,
+    TT_Type:$val,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+    functional-type(operands, $result)
   }];
 }
 
@@ -91,484 +452,67 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
 }
 
 
-// ===== Barrier based synchronization ops =====
+// ===== FPSan ops =====
 
 
-def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "set the write visibility for a buffer";
+def TTI_DotI8Op : TTI_Op<"dot_i8", [
+  Pure,
+  DeclareOpInterfaceMethods<DotOpInterface>,
+  TypesMatchWith<"result's type matches accumulator's type",
+                 "d", "c", "$_self">
+]> {
+  let summary = "non-saturating NVIDIA MMAv2 i8 dot";
   let description = [{
-    Set the write visibility for a buffer. Marks the buffer as visible to the threads set in threadMask.
-    Clears out any other threads from the visibility bitmask. We know
-    this is safe because there cannot be outstanding writes to this buffer at this point.
+    Performs a wrapping i8 matrix multiplication into an i32 accumulator using
+    NVIDIA MMAv2. The A and B operands have independent signedness.
   }];
   let arguments = (ins
-    TTG_MemDescType:$buf,
-    I64Attr:$threadMask,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    Optional<I1>:$pred
+    RankedTensorOf<[I8]>:$a,
+    RankedTensorOf<[I8]>:$b,
+    RankedTensorOf<[I32]>:$c,
+    BoolAttr:$aSigned,
+    BoolAttr:$bSigned
   );
+  let results = (outs RankedTensorOf<[I32]>:$d);
   let assemblyFormat = [{
-    $buf `,` $threadMask `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+    $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
+    attr-dict `:` type($a) `*` type($b) `->` type($d)
   }];
   let hasVerifier = 1;
 }
 
-
-def TTI_ExperimentalClearWriteTrackingOp : TTI_Op<"experimental_clear_write_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the write tracking for a buffer";
-  let description = [{
-    Clear all the information about threads writing to a buffer.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$writeTracking,
-    TypeAttr:$writeTrackingType,
-    Optional<I1>:$pred
-  );
+def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Embed float value in the fpsan integer ring";
+  let arguments = (ins TT_FloatLike:$val);
+  let results = (outs TT_IntLike:$result);
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeTracking)
+    $val attr-dict `:` functional-type(operands, $result)
   }];
-  let hasVerifier = 1;
+
+  let hasCanonicalizer = true;
+  let hasFolder = true;
 }
 
-
-def TTI_ExperimentalClearReadVisibilityOp : TTI_Op<"experimental_clear_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the read visibility for a buffer";
-  let description = [{
-    Clear the read visibility for a buffer.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    Optional<I1>:$pred
-  );
+def TTI_ExperimentalFPSanUnembedOp : TTI_Op<"experimental_fpsan_unembed", [
+  Pure,
+  Elementwise,
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding
+]> {
+  let summary = "Unembed fpsan integer payload as a float value";
+  let arguments = (ins TT_IntLike:$val);
+  let results = (outs TT_FloatLike:$result);
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+    $val attr-dict `:` functional-type(operands, $result)
   }];
-  let hasVerifier = 1;
-}
 
-
-def TTI_ExperimentalClearReadTrackingOp : TTI_Op<"experimental_clear_read_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the read tracking for a buffer";
-  let description = [{
-    Clear the read tracking for a buffer.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$readTracking,
-    TypeAttr:$readTrackingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `{` $buffers `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readTracking)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalSetReadVisibilityOp : TTI_Op<"experimental_set_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "set the read visibility for a buffer";
-  let description = [{
-    Add the threads set in threadMask to the read visibility bitmask for the buffer.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    I64Attr:$threadMask,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `,` $threadMask `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalTrackVisibleWritesOp : TTI_Op<"experimental_track_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "start tracking visible writes to a buffer";
-  let description = [{
-    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$thread,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    TT_PtrLike:$writeTracking,
-    TypeAttr:$writeTrackingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalTrackVisibleReadsOp : TTI_Op<"experimental_track_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "start tracking visible reads from a buffer";
-  let description = [{
-    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$thread,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    TT_PtrLike:$readTracking,
-    TypeAttr:$readTrackingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "transfer all the writes tracked by a barrier to visible by thread";
-  let description = [{
-    Transfer all the writes tracked by a barrier to visible by threads set in threadMask.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I64Attr:$threadMask,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    TT_PtrLike:$writeTracking,
-    TypeAttr:$writeTrackingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $threadMask `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "transfer all the reads tracked by a barrier to visible by thread";
-  let description = [{
-    Transfer all the reads tracked by a barrier to visible by threads set in threadMask.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I64Attr:$threadMask,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    TT_PtrLike:$readTracking,
-    TypeAttr:$readTrackingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $threadMask `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_verify_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "verify that the buffer write is visible to the thread";
-  let description = [{
-    Verify that the buffer write is visible to the thread, or no threads are writing to the buffer.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    I32Attr:$thread,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    StrAttr:$operandName,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "verify that all the reads from a buffer are visible to the thread";
-  let description = [{
-    Verify that all the reads from a buffer are visible to the thread.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    I32Attr:$thread,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    StrAttr:$operandName,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
-  }];
-  let hasVerifier = 1;
-}
-
-
-// ===== Commit-count–based synchronization ops =====
-
-
-def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "";
-  let description = [{
-    For operations that use `outstanding` to track the number of outstanding commits (rather than mbarriers),
-    mark the buffer as being accessed, but not commited yet, by marking it with `-1`.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    I32Attr:$thread,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$outstandingCommits,
-    TypeAttr:$outstandingCommitsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
-  }];
-  let hasVerifier = 1;
-}
-
-def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Commit all the staged accesses for all the buffers.";
-  let description = [{
-    Increment the value in outstandingCommits tensor for each entry greater than 0.
-    Change all the `-1` entries in outstandingCommits tensor to 1, signifying 1 outstanding commit.
-  }];
-  let arguments = (ins
-    I32Attr:$thread,
-    TT_PtrLike:$outstandingCommits,
-    TypeAttr:$outstandingCommitsType,
-    Optional<I1>:$pred);
-  let assemblyFormat = [{
-    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
-  }];
-}
-
-def TTI_ExperimentalClearOutstandingCommitsTransferWritesOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear distant outstanding commits and set write visibility for current thread.";
-  let description = [{
-    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
-    clear those entries and mark the corresponding buffer as visible in the write visibility table for the threads set in threadMask.
-  }];
-  let arguments = (ins
-    I32Attr:$thread,
-    I64Attr:$transferThreadMask,
-    I32Attr:$outstandingNum,
-    TT_PtrLike:$outstandingCommits,
-    TypeAttr:$outstandingCommitsType,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    Optional<I1>:$pred);
-  let assemblyFormat = [{
-    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $writeVisibility `(` $writeVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($writeVisibility)
-  }];
-}
-
-def TTI_ExperimentalClearOutstandingCommitsTransferReadsOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear distant outstanding commits and set read visibility for current thread.";
-  let description = [{
-    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
-    clear those entries and mark the corresponding buffer as visible in the read visibility table for the threads set in threadMask.
-  }];
-  let arguments = (ins
-    I32Attr:$thread,
-    I64Attr:$transferThreadMask,
-    I32Attr:$outstandingNum,
-    TT_PtrLike:$outstandingCommits,
-    TypeAttr:$outstandingCommitsType,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    Optional<I1>:$pred);
-  let assemblyFormat = [{
-    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $readVisibility `(` $readVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($readVisibility)
-  }];
-}
-
-def TTI_ExperimentalCheckOutstandingCommitsOp : TTI_Op<"experimental_check_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Check if the buffer has an outstanding commit.";
-  let description = [{
-    Verify that the entry corresponding to the buffer in outstandingCommits tensor is 0.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$outstandingCommits,
-    TypeAttr:$outstandingCommitsType,
-    StrAttr:$pendingAccessType,
-    Optional<I1>:$pred);
-  let assemblyFormat = [{
-    $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $pendingAccessType (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
-  }];
-  let hasVerifier = 1;
-}
-
-
-// ===== Barrier state ops =====
-
-def TTI_ExperimentalInitBarrierStateOp : TTI_Op<"experimental_init_barrier_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "initialize the auxiliary barrier state";
-  let description = [{
-    Initialize the tracked barrier state to phase 0 and set both the initial and current arrival counts.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$count,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$states,
-    TypeAttr:$statesType
-  );
-  let assemblyFormat = [{
-    $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
-  }];
-}
-
-def TTI_ExperimentalVerifyBarrierArriveOp : TTI_Op<"experimental_verify_barrier_arrive", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "verify an arrive count against the tracked barrier state";
-  let description = [{
-    Check that applying the arrive count would not drive the tracked current count negative. Triggers an assertion on failure.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$count,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$states,
-    TypeAttr:$statesType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
-  }];
-}
-
-def TTI_ExperimentalUpdateBarrierStateOp : TTI_Op<"experimental_update_barrier_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "update the auxiliary barrier state after a verified arrive";
-  let description = [{
-    Apply an arrive count to the tracked barrier state, toggling the phase when the count reaches zero and reloading the current count from the initial count.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$count,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$states,
-    TypeAttr:$statesType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
-  }];
-}
-
-// ===== Deadlock detection ops =====
-
-def TTI_ExperimentalSetWaitingOp : TTI_Op<"experimental_set_waiting", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Mark the base thread as waiting on the given barrier phase";
-  let description = [{
-    For the barrier row matching mbar, set the waiting flag for baseThread and record the barrier phase being waited on.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$baseThread,
-    I32:$phase,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$waiting,
-    TypeAttr:$waitingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $baseThread `,` $phase `{` $barriers `,` $waiting `(` $waitingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting)
-  }];
-}
-
-def TTI_ExperimentalCheckAllActiveWaitingOp : TTI_Op<"experimental_check_all_active_waiting", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Assert that not all active threads are waiting on matching phases";
-  let description = [{
-    Filter waiting threads to those whose recorded phase matches the current barrier phase, OR-reduce across barriers, and assert that (waitingMask & activeMask) != activeMask.
-  }];
-  let arguments = (ins
-    I32Attr:$activeMask,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$waiting,
-    TypeAttr:$waitingType,
-    TT_PtrLike:$barrierStates,
-    TypeAttr:$barrierStatesType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $activeMask `,` $barriers `,` $waiting `(` $waitingType `)` `,` $barrierStates `(` $barrierStatesType `)` (`,` $pred^)? attr-dict `:` type($barriers) `,` type($waiting) `,` type($barrierStates)
-  }];
-}
-
-def TTI_ExperimentalClearWaitingOp : TTI_Op<"experimental_clear_waiting", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear the waiting state for the given base thread";
-  let description = [{
-    For the barrier row matching mbar, clear both the waiting flag and stored phase for baseThread.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    I32Attr:$baseThread,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$waiting,
-    TypeAttr:$waitingType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `,` $baseThread `{` $barriers `,` $waiting `(` $waitingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting)
-  }];
-}
-
-
-// ===== Visibility replication ops =====
-
-def TTI_ExperimentalCopyWriteVisibilityOp : TTI_Op<"experimental_copy_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "replicate write visibility from one thread to others";
-  let description = [{
-    Copy the write-visibility bit of sourceThread to every thread listed in destMask for all buffers. Destination bits are overwritten.
-  }];
-  let arguments = (ins
-    I32Attr:$sourceThread,
-    I64Attr:$destMask,
-    TT_PtrLike:$writeVisibility,
-    TypeAttr:$writeVisibilityType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $sourceThread `,` $destMask `{` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($writeVisibility)
-  }];
-}
-
-def TTI_ExperimentalCopyReadVisibilityOp : TTI_Op<"experimental_copy_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "replicate read visibility rows from one thread to others";
-  let description = [{
-    Copy the read-visibility row of sourceThread to every thread listed in destMask for all buffers. Destination rows are overwritten.
-  }];
-  let arguments = (ins
-    I32Attr:$sourceThread,
-    I64Attr:$destMask,
-    TT_PtrLike:$readVisibility,
-    TypeAttr:$readVisibilityType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $sourceThread `,` $destMask `{` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($readVisibility)
-  }];
+  let hasCanonicalizer = true;
+  let hasFolder = true;
 }
 
 #endif // TRITONINSTRUMENT_OPS

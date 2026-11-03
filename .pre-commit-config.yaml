@@ -68,6 +68,7 @@ exclude: |
   (?x)(
     ^include/triton/external/|
     ^third_party/amd/backend/include/hip/|
+    ^third_party/amd/backend/include/hipblas-common/|
     ^third_party/amd/backend/include/hsa/|
     ^third_party/amd/backend/include/roctracer/|
     ^third_party/amd/backend/lib/|

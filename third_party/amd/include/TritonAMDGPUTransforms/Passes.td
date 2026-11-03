@@ -1,5 +1,5 @@
-#ifndef TRITONGPU_PASSES
-#define TRITONGPU_PASSES
+#ifndef TRITONAMDGPU_PASSES
+#define TRITONAMDGPU_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -46,12 +46,13 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
     (e.g., AMD matrix cores)
   }];
 
-  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::math::MathDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     Option<"matrixInstructionSize", "matrix-instruction-size",
            "int32_t", /*default*/"0",
            "enforce matrix instruction MN size">,
@@ -62,13 +63,18 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
 }
 
 def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir::ModuleOp"> {
-  let summary = "Optimize epilogue: (1) Store accumulators directly without going thorough SMEM in epilogue.";
+  let summary = "Store MMA accumulators directly, avoiding shared memory";
 
   let description = [{
+    For a tt.store whose value is converted from an MFMA/WMMA layout to a
+    blocked layout, optionally followed by single-operand elementwise ops, this
+    pass moves the layout conversion to the pointer and mask operands so that
+    the value is stored directly from the MMA layout. This avoids the shared
+    memory round trip of the layout conversion. When possible, the store layout
+    is further adjusted to enable wide 128-bit global stores.
   }];
 
   let dependentDialects = [];
-
 }
 
 def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::triton::FuncOp"> {
@@ -77,7 +83,7 @@ def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-convers
   let description = [{
   This pass tries to hoist a convert_layout op out of the loop if 1) its dst is a tensor
   of dotOperand layout, and 2) its src is defined out of the loop.
-  The rational is as follows:
+  The rationale is as follows:
   1. When the defining op of the src is out of the loop, it means the src is loop-invariant.
      Then we can potentially hoist this convert_layout op, since it's also loop-invariant.
   2. The drawback of this LICM is higher register pressure. However, on AMD GPUs, we have
@@ -85,6 +91,30 @@ def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-convers
      variables in registers rather than loading them from shared memory in the loop.
   }];
 
+}
+
+def TritonAMDGPUSinkLayoutConversions
+    : Pass<"tritonamdgpu-sink-layout-conversions", "mlir::triton::FuncOp"> {
+  let summary = "Sink layout conversions to reduce shared memory allocation";
+
+  let description = [{
+    This pass sinks layout conversions after the last dealloc but before the first use in their block.
+    This helps to avoid unnecessary shared memory allocation.
+  }];
+
+  let dependentDialects = [];
+}
+
+def TritonAMDGPUPrepareIfCombining
+    : Pass<"tritonamdgpu-prepare-if-combining", "mlir::triton::FuncOp"> {
+  let summary = "Move ops between scf.if pairs to enable combining";
+
+  let description = [{
+    Moves operations out from between scf.if pairs that share the same
+    condition, enabling canonicalization to combine them.
+  }];
+
+  let dependentDialects = [];
 }
 
 def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::triton::FuncOp"> {
@@ -130,12 +160,14 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   ];
 }
 
-def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
-  let summary = "Reorder instructions";
+def TritonAMDGPUMoveUpPrologueLoads
+    : Pass<"tritonamdgpu-move-up-prologue-loads", "mlir::triton::FuncOp"> {
+  let summary = "Move up global loads in prologue for better GEMM performance";
 
-  let description = "This pass reorder instructions so as to (1) decrease register pressure (e.g., by moving "
-                    "conversions from shared memory before their first use) and (2) promote LLVM instruction "
-                    "order more friendly to `ptxas`.";
+  let description =
+      "This pass moves global load ops early to prefetch in the prologue. "
+      "This may increase register pressure but it enables issuing global loads "
+      "early.";
 
   let dependentDialects = [];
 }
@@ -143,34 +175,50 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
 def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
   let summary = "Convert memory operations to buffer operations";
 
-  let description = "This pass converts memory and atomic operations (e.g., tt.load/tt.store/tt.atomic_rmw) to  amdgpu buffer operations, if possible";
+  let description = [{
+    This pass converts memory and atomic operations (e.g., tt.load/tt.store/
+    tt.atomic_rmw) to amdgpu buffer operations, if possible.
+  }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
     Option<"allowBufferAtomics", "allow-buffer-atomics",
            "bool", /*default*/"true",
            "Allow buffer atomic operations when the hardware supports it.">,
     Option<"analyzeSmallTensorOfst", "analyze-small-tensor-ofst",
           "bool", /*default=*/"false",
-           "Whether to still analyze index range for tensors whose base has tt.pointer_range = 32 specialization. If false load/store from such tensors will go down buffer ops without analzying index range.">
+           "Whether to still analyze index range for tensors whose base has "
+           "tt.pointer_range = 32 specialization. If false load/store from "
+           "such tensors will go down buffer ops without analyzing index "
+           "range.">
   ];
+}
+
+def TritonAMDGPUOptimizeBufferOpPtr : Pass<"tritonamdgpu-optimize-buffer-op-ptr", "mlir::triton::FuncOp"> {
+  let summary = "Optimize address operands of buffer operations";
+
+  let description = "This pass optimizes address computation for buffer operations";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::ModuleOp"> {
   let summary = "Interleaving instructions from two warps on the same SIMD to better utilize matrix core";
 
   let description = [{
-    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
-    We call this a ping-pong scheduling pattern, where two warps run concurrently in the synchronized fashion
+    This pass reorders instructions to interleave instructions from two warps
+    on the same SIMD unit. We call this a ping-pong scheduling pattern, where
+    two warps run concurrently in the synchronized fashion.
     This block ping-pong pattern could be beneficial under few conditions including
     occupancy and number of warps.
   }];
 
-  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num-stages",
@@ -185,7 +233,7 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
   let description = [{
     Pass looks for inefficient load->local_store->local_load chains.
     In particular, this pass optimizes dot operand loading from shared memory
-    in cases when operand is stored in global memory in non-K-continous way.
+    in cases when operand is stored in global memory in non-K-contiguous way.
 
     ```
       #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
@@ -213,13 +261,14 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
       %loaded_data = tt.load ... : tensor<#transposable_layout>
       %tmp1 = ttg.convert_layout %loaded_data : tensor<#transposable_layout> -> tensor<#blocked>
       %tmp2 = ttg.convert_layout %tmp1 : tensor<#blocked> -> tensor<#transposable_layout>
-      %transposed = amdgpu.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
+      %transposed = amdg.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
       %local_data = ttg.local_alloc %transposed : tensor<#linear> -> !ttg.memdesc<#shared>
       %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     ```
 
     After transformation tt.load stays coalesced, because optimization do not change anything across fastest dimension.
-    local_alloc is vectorized and uses swizzled memory, number of bank conflics reduced
+    local_alloc is vectorized and uses swizzled memory, number of bank
+    conflicts reduced.
     local_load is vectorized, because shared memory order matches destination layout register order.
 
     This pass introduces two ttg.convert_layouts to properly cover cases when between ttg.load and ttg.local_alloc/ttg.local_store
@@ -242,9 +291,9 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
   let dependentDialects = [];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
 }
 
@@ -257,12 +306,12 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
       compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
   }];
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
   ];
 }
 
@@ -285,10 +334,58 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
                            "mlir::triton::amdgpu::TritonAMDGPUDialect",
                            "mlir::triton::TritonDialect"];
   let options = [
-    Option<"archGenerationName", "arch-generation-name",
+    Option<"gfxArch", "gfx-arch",
            "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">
+           "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">
   ];
+}
+
+def TritonAMDGPUOptimizeDescriptorEncoding
+    : Pass<"tritonamdgpu-optimize-descriptor-encoding", "mlir::ModuleOp"> {
+  let summary = "Set encodings on tensor descriptor types";
+
+  let description = [{
+    Set shared memory encoding on tensor descriptors which determines the shared
+    memory encodings for descriptor ops (e.g, load, store).
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "mlir::ModuleOp"> {
+  let summary = "Lower descriptor load/store to TDM load/stores";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+  let description = [{
+    This pass converts descriptor load/store into TDM load/stores; it also allocates LDS space;
+    descriptor-load is converted to TDM-load into LDS, and descriptor-store is converted to
+    TDM-store from LDS.
+  }];
+}
+
+def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
+  let summary = "Partition loops into warp-pipeline stages";
+
+  let description = [{
+    This pass groups the operations between warp-pipeline border markers into
+    pipeline stage clusters, each materialized as an scf.execute_region. The
+    clusters are later lowered by the convert-warp-pipeline pass, which staggers
+    warps across the stages with conditional barriers.
+  }];
+
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
+def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"> {
+  let summary = "AMD-specific FP sanitizer patterns";
+  let description = [{
+    Extends the main FP sanitizer with patterns for AMD-specific ops.
+  }];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

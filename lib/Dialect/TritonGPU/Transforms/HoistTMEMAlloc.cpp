@@ -1,3 +1,6 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -65,12 +68,18 @@ public:
     if (valueFromTMEM == kUnknown) {
       return failure();
     }
+    // The store predicate is a scalar i1, so only a uniform condition can be
+    // folded into it. A splatted condition is uniform; use its scalar source.
     Value pred = select.getCondition();
+    if (auto splat = pred.getDefiningOp<tt::SplatOp>())
+      pred = splat.getSrc();
+    if (!pred.getType().isInteger(1))
+      return failure();
     // In case the false operand is overwriting, we need to negate the predicate
     // (owerwrite when select would be false)
     if (valueFromTMEM == kTrue) {
-      Value one = rewriter.create<arith::ConstantIntOp>(select.getLoc(), 1, 1);
-      pred = rewriter.create<arith::XOrIOp>(select.getLoc(), pred, one);
+      Value one = arith::ConstantIntOp::create(rewriter, select.getLoc(), 1, 1);
+      pred = arith::XOrIOp::create(rewriter, select.getLoc(), pred, one);
     }
     // Store the selected value with the updated predicate
     Value overwritingValue = valueFromTMEM == kTrue ? falseSrc : trueSrc;
@@ -271,6 +280,11 @@ public:
     Value init = alloc.getSrc();
     if (!init)
       return failure();
+    while (auto cvt = init.getDefiningOp<ConvertLayoutOp>()) {
+      if (!init.hasOneUse())
+        return failure();
+      init = cvt.getSrc();
+    }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
     if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
       return failure();
@@ -323,9 +337,9 @@ public:
     Value initVal = forOp.getInitArgs()[argNo];
     rewriter.setInsertionPoint(forOp);
     auto tokType = rewriter.getType<AsyncTokenType>();
-    auto initStore = rewriter.create<ttng::TMEMStoreOp>(
-        store.getLoc(), tokType, store.getDst(), forOp.getInitArgs()[tokArgNo],
-        initVal, store.getPred());
+    auto initStore = ttng::TMEMStoreOp::create(
+        rewriter, store.getLoc(), tokType, store.getDst(),
+        forOp.getInitArgs()[tokArgNo], initVal, store.getPred());
     forOp.getInitArgsMutable()[tokArgNo].assign(initStore.getToken());
 
     auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
@@ -338,9 +352,9 @@ public:
     // Load from the tmem after the loop, and use it instead of the loop carried
     // value.
     rewriter.setInsertionPointAfter(forOp);
-    auto load = rewriter.create<ttng::TMEMLoadOp>(
-        store.getLoc(), store.getSrc().getType(), tokType, store.getDst(),
-        forOp.getResult(tokArgNo));
+    auto load = ttng::TMEMLoadOp::create(
+        rewriter, store.getLoc(), store.getSrc().getType(), tokType,
+        store.getDst(), forOp.getResult(tokArgNo));
     forOp->getResult(argNo).replaceAllUsesWith(load.getResult());
     // Loop carried value is no longer used, short-circuit it.
     yield.setOperand(argNo, forOp.getRegionIterArg(argNo));
@@ -390,11 +404,11 @@ public:
     int argNo = use.getOperandNumber();
     Value initVal = forOp.getInitArgs()[argNo];
     rewriter.setInsertionPoint(forOp);
-    auto vTrue = rewriter.create<arith::ConstantIntOp>(load.getLoc(), 1, 1);
+    auto vTrue = arith::ConstantIntOp::create(rewriter, load.getLoc(), 1, 1);
     auto tokType = rewriter.getType<AsyncTokenType>();
-    auto initStore = rewriter.create<ttng::TMEMStoreOp>(
-        load.getLoc(), tokType, load.getSrc(), initAlloc.getToken(), initVal,
-        vTrue);
+    auto initStore = ttng::TMEMStoreOp::create(
+        rewriter, load.getLoc(), tokType, load.getSrc(), initAlloc.getToken(),
+        initVal, vTrue);
     forOp.getInitArgsMutable()[tokArgNo].assign(initStore.getToken());
 
     // Move the load to the beginning of the loop to load the tensor value.
@@ -408,12 +422,113 @@ public:
     // Load from the tmem after the loop, and use it instead of the loop carried
     // value.
     rewriter.setInsertionPointAfter(forOp);
-    auto loadAfterLoop = rewriter.create<ttng::TMEMLoadOp>(
-        load.getLoc(), load.getResult().getType(), tokType, load.getSrc(),
-        forOp.getResult(tokArgNo));
+    auto loadAfterLoop = ttng::TMEMLoadOp::create(
+        rewriter, load.getLoc(), load.getResult().getType(), tokType,
+        load.getSrc(), forOp.getResult(tokArgNo));
     forOp->getResult(argNo).replaceAllUsesWith(loadAfterLoop.getResult());
     // Loop carried value is no longer used, short-circuit it.
     yield.setOperand(argNo, forOp.getRegionIterArg(argNo));
+    return success();
+  }
+};
+
+// Helper: return true if the value is a constant boolean with the expected
+// value.
+static bool isConstBool(Value v, bool expected) {
+  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto attr = dyn_cast<BoolAttr>(cst.getValueAttr()))
+      return attr.getValue() == expected;
+  }
+  return false;
+}
+
+// Helper to detect if the use of an alloc fully overwrites it.
+struct AllocUse {
+  Operation *useOp;
+  MutableOperandRange dep;
+};
+
+static FailureOr<AllocUse> useOverwritesAlloc(ttng::TMEMAllocOp alloc,
+                                              BlockArgument tokArg) {
+  if (!tokArg.hasOneUse())
+    return failure();
+  OpOperand &onlyUse = *tokArg.use_begin();
+  Operation *useOp = onlyUse.getOwner();
+  if (auto store = dyn_cast<ttng::TMEMStoreOp>(useOp)) {
+    if (store.getDst() != alloc.getResult() ||
+        !isConstBool(store.getPred(), true))
+      return failure();
+    return AllocUse{useOp, store.getDepMutable()};
+  }
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(useOp)) {
+    if (onlyUse.get() == mma.getAccDep() &&
+        mma.getAccumulator() == alloc.getResult() &&
+        isConstBool(mma.useAccumulator(), false) &&
+        isConstBool(mma.getPredicate(), true))
+      return AllocUse{useOp, mma.getAccDepMutable()};
+  }
+  return failure();
+}
+
+class SinkTMemAlloc : public OpRewritePattern<ttng::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
+                                PatternRewriter &rewriter) const override {
+    // Only handle allocs that produce a token.
+    if (!alloc.getToken())
+      return failure();
+
+    // Find a forOp that takes the alloc token as an init arg.
+    // Limit to the simple case where the token has exactly one use.
+    if (!alloc.getToken().hasOneUse())
+      return failure();
+    OpOperand &tokUse = *alloc.getToken().use_begin();
+    auto userFor = dyn_cast<scf::ForOp>(tokUse.getOwner());
+    if (!userFor)
+      return failure();
+    scf::ForOp forOp = userFor;
+    if (forOp.getInitArgs().empty())
+      return failure();
+    auto firstInitIt = forOp.getInitArgsMutable().begin();
+    int baseOpNo = firstInitIt->getOperandNumber();
+    int tokIdx = tokUse.getOperandNumber() - baseOpNo;
+    assert(tokIdx >= 0 && tokIdx < (int)forOp.getInitArgs().size());
+
+    // Ensure the memory descriptor result of the alloc is only used inside the
+    // loop. Otherwise sinking would break users after the loop.
+    for (Operation *user : alloc.getResult().getUsers()) {
+      if (!forOp->isProperAncestor(user))
+        return failure();
+    }
+
+    BlockArgument tokArg = forOp.getRegionIterArg(tokIdx);
+
+    // Check if the op consuming the tocken fully overwrites the alloc. This
+    // means there is no loop carried values.
+    auto sinkable = useOverwritesAlloc(alloc, tokArg);
+    if (failed(sinkable))
+      return failure();
+    Operation *useOp = sinkable->useOp;
+
+    // Since the alloc is not used outside the loop its token should not be
+    // used.
+    assert(forOp.getResult(tokIdx).use_empty());
+
+    // Move the alloc just before the store to minimize live range inside the
+    // loop.
+    rewriter.moveOpBefore(alloc, useOp);
+    sinkable->dep.assign(alloc.getToken());
+
+    // Leave the token loop arguments to dead code.
+    auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    yield.setOperand(tokIdx, forOp.getRegionIterArg(tokIdx));
+    rewriter.setInsertionPoint(forOp);
+    auto poisonTok = ub::PoisonOp::create(
+        rewriter, forOp.getLoc(), forOp.getInitArgs()[tokIdx].getType());
+    forOp.getInitArgsMutable()[tokIdx].assign(poisonTok);
+
     return success();
   }
 };
@@ -466,7 +581,7 @@ static Value joinLastMemoryUses(OpBuilder &b, Value token) {
 ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   OpBuilder builder(alloc);
   builder.setInsertionPoint(forOp);
-  Value vTrue = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1);
+  Value vTrue = arith::ConstantIntOp::create(builder, alloc.getLoc(), 1, 1);
   auto src = alloc.getSrc();
   auto newAlloc = cast<ttng::TMEMAllocOp>(builder.clone(*alloc));
   newAlloc.getSrcMutable().clear();
@@ -481,8 +596,9 @@ ttng::TMEMAllocOp hoistTMEMAlloc(TMEMTokenAllocOp alloc, scf::ForOp &forOp) {
   if (src != nullptr) {
     builder.setInsertionPoint(alloc);
     // Write the initial value of the allocation and replace the token.
-    auto initStoreOp = builder.create<ttng::TMEMStoreOp>(
-        alloc.getLoc(), tokType, newAlloc.getResult(), newTok, src, vTrue);
+    auto initStoreOp =
+        ttng::TMEMStoreOp::create(builder, alloc.getLoc(), tokType,
+                                  newAlloc.getResult(), newTok, src, vTrue);
     newTok = initStoreOp.getToken();
   }
   alloc.replaceAllUsesWith(ValueRange{newAlloc.getResult(), newTok});
@@ -528,7 +644,17 @@ struct HoistTMEMAlloc
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    if (!hoistOutOfIf) {
+    if (!postPipeline) {
+      // Forward TMEM loads before hoisting turns allocation initializers into
+      // explicit stores.
+      mlir::RewritePatternSet forwardingPatterns(&getContext());
+      forwardingPatterns.add<TMEMLoadForwarding>(&getContext());
+      if (failed(applyPatternsGreedily(getOperation(),
+                                       std::move(forwardingPatterns)))) {
+        signalPassFailure();
+        return;
+      }
+
       SmallVector<ttng::MMAv5OpInterface> mmaOps;
       m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
       for (auto mmaOp : mmaOps) {
@@ -552,13 +678,23 @@ struct HoistTMEMAlloc
     patterns.add<RotateTMEMStoreInLoop, RotateTMEMLoadInLoop,
                  CombineTMEMLoadAndStore, CombineTMEMStoreAndSelect,
                  SinkTMEMLoad, RemoveUnusedTMEMLoad>(&getContext());
-    if (hoistOutOfIf) {
+    if (postPipeline) {
       patterns.add<CombineTMEMStoreAndAlloc, HoistTMEMAllocOutOfIf,
                    TMEMLoadForwarding>(&getContext());
     }
     scf::ForOp::getCanonicalizationPatterns(patterns, &getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       llvm_unreachable("Failed to hoist tmem_store");
+    }
+
+    // Finally try to sink the alloc that can be to reduce tmem liveranges.
+    if (postPipeline) {
+      mlir::RewritePatternSet postPatterns(&getContext());
+      postPatterns.add<SinkTMemAlloc>(&getContext());
+      if (failed(
+              applyPatternsGreedily(getOperation(), std::move(postPatterns)))) {
+        signalPassFailure();
+      }
     }
 
     // TODO: currently some code assumes that a mutable tmem alloc doesn't have
@@ -569,10 +705,10 @@ struct HoistTMEMAlloc
       if (alloc.getType().getMutableMemory() && alloc.getSrc()) {
         OpBuilder builder(alloc);
         builder.setInsertionPointAfter(alloc);
-        auto store = builder.create<ttng::TMEMStoreOp>(
-            alloc.getLoc(), builder.getType<AsyncTokenType>(),
+        auto store = ttng::TMEMStoreOp::create(
+            builder, alloc.getLoc(), builder.getType<AsyncTokenType>(),
             alloc.getResult(), alloc.getToken(), alloc.getSrc(),
-            builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1));
+            arith::ConstantIntOp::create(builder, alloc.getLoc(), 1, 1));
         alloc.getToken().replaceAllUsesExcept(store.getToken(), store);
         alloc.getSrcMutable().clear();
       }

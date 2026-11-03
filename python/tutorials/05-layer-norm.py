@@ -116,10 +116,10 @@ def _layer_norm_fwd_fused(
 #
 # Since the same weights :math:`w` and biases :math:`b` are used for all rows in the same batch, their gradients need to sum up.
 # To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates
-# partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP_SIZE_M}` independent buffers.
+# partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP\_SIZE\_M}` independent buffers.
 # These buffers stay in the L2 cache and then are further reduced by another function to compute the actual :math:`\nabla_{w}` and :math:`\nabla_{b}`.
 #
-# Let the number of input rows :math:`M = 4` and :math:`\text{GROUP_SIZE_M} = 2`,
+# Let the number of input rows :math:`M = 4` and :math:`\text{GROUP\_SIZE\_M} = 2`,
 # here's a diagram of the parallel reduction strategy for :math:`\nabla_{w}` (:math:`\nabla_{b}` is omitted for brevity):
 #
 #   .. image:: parallel_reduction.png

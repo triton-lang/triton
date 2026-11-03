@@ -18,6 +18,22 @@ void eraseResult(Operation *op, unsigned resultIdx, Value replacement) {
                        op->getResultTypes(), op->getAttrs());
   state.types.erase(std::next(state.types.begin(), resultIdx));
   OpBuilder b(op);
+
+  if (auto segmentSizes =
+          op->getAttrOfType<DenseI32ArrayAttr>("resultSegmentSizes")) {
+    // Update resultSegmentSizes attribute if it exists
+    SmallVector<int32_t> newSegmentSizes(segmentSizes.asArrayRef());
+    int pos = 0;
+    for (auto &segmentSize : newSegmentSizes) {
+      if (pos == resultIdx) {
+        segmentSize = 0;
+        break;
+      }
+      pos += segmentSize;
+    }
+    state.attributes.set("resultSegmentSizes",
+                         b.getDenseI32ArrayAttr(newSegmentSizes));
+  }
   Operation *newOp = b.create(state);
   SmallVector<Value> replacements = newOp->getResults();
   replacements.insert(std::next(replacements.begin(), resultIdx), replacement);
@@ -57,8 +73,8 @@ public:
     for (auto func : getOperation().getOps<FuncOp>()) {
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
       // Placeholder value that will get DCE'd by the canonicalizer.
-      Value dummy = b.create<ub::PoisonOp>(
-          func.getLoc(), b.getType<triton::gpu::AsyncTokenType>());
+      Value dummy = ub::PoisonOp::create(
+          b, func.getLoc(), b.getType<triton::gpu::AsyncTokenType>());
       func.walk([&](Operation *op) { removeTMEMToken(op, dummy); });
     }
   }

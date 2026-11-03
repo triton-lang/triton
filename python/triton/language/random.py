@@ -2,7 +2,7 @@ from ..runtime.jit import jit
 from . import core as tl
 from . import math
 
-N_ROUNDS_DEFAULT = 10  # Default number of rounds for philox
+N_ROUNDS_DEFAULT = tl.constexpr(10)  # Default number of rounds for philox
 
 # -------------------
 # randint
@@ -139,7 +139,7 @@ def uint_to_uniform_float(x):
         tl.static_assert(tl.constexpr(x.dtype == tl.uint64) or tl.constexpr(x.dtype == tl.int64))
         x = x.to(tl.int64, bitcast=True)
         scale = 1.0842020432385337e-19
-    x = tl.where(x < 0, -x - 1, x)
+    x = tl.where(x < 0, ~x, x)
     return x * scale
 
 

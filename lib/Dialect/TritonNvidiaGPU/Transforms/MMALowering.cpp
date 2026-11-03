@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -29,25 +30,25 @@ public:
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
     Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-    auto barrierCTALayout = ttg::CTALayoutAttr::get(
-        /*context=*/ctx, /*CTAsPerCGA=*/{1},
-        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+    auto numCTAs = gpu::lookupNumCTAs(op);
+    auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
     auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
-        ctx, 1, 1, 1, {0}, barrierCTALayout);
+        ctx, 1, 1, 1, {0}, barrierCGALayout);
     ttg::MemDescType barrierMemDescType =
-        ttg::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+        ttg::MemDescType::get({numCTAs}, rewriter.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
-        rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
-    rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
+        ttg::LocalAllocOp::create(rewriter, loc, barrierMemDescType, Value());
+    InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
     op.addCompletionBarrier(barrierAlloc,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
+                            arith::ConstantIntOp::create(rewriter, loc, 1, 1));
     op.setIsAsync(true);
 
     rewriter.setInsertionPointAfter(op);
-    Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPredicate());
-    rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
+    Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
+                          op.getPredicate());
+    InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
 };
@@ -58,44 +59,56 @@ struct TCGen5MMAScaleSharedToTmemConversion
 
   // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
   // N of the MMA operation (for LHS or RHS respectively).
-  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter,
-                        int rows) const {
+  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter, int rows,
+                        TensorMemoryScalesBlockRepOrder blockRepOrder,
+                        Value pred) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
     auto oldType = cast<ttg::MemDescType>(operand.get().getType());
     auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
-    ttg::CTALayoutAttr CTALayout = ttg::getCTALayout(oldType.getEncoding());
-    ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
+    ttg::CGAEncodingAttr CGALayout = ttg::getCGALayout(oldType.getEncoding());
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
-    Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
-        context, CTASplitNum[0], CTASplitNum[1]);
+    Attribute scaleEncoding =
+        TensorMemoryScalesEncodingAttr::get(context, CGALayout, blockRepOrder);
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
-    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc, pred);
     operand.set(tmemAlloc);
     return true;
   }
 
   LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
+    if (aScaleType.getShape() != aScaleType.getAllocShape() ||
+        bScaleType.getShape() != bScaleType.getAllocShape()) {
+      op.emitError("subviews NYI");
+      return failure();
+    }
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
+    auto aScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/true, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
+    auto bScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/false, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
     bool anyChanged = false;
     if (isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
+      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM,
+                                    aScaleBlockRepOrder, op.getPred()) ||
+                   anyChanged;
     }
     if (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN);
+      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN,
+                                    bScaleBlockRepOrder, op.getPred()) ||
+                   anyChanged;
     }
     return LogicalResult::success(anyChanged);
   }
@@ -116,15 +129,19 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   SmallVector<Value> commitPredicates;
   auto mmaPred = mmaOp.getPredicate();
   Operation *nextOp = mmaOp->getNextNode();
+  SmallVector<Value> mmaDescs = mmaOp.getCompletionDescs();
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
       // If the mma predicate is true, or mma and commit ops use the same
-      // predicate, it is safe to merge them
-      if (isConstTrue(mmaPred) || mmaPred == commit.getPred()) {
-        commitOps.push_back(commit);
-        commitPredicates.push_back(commit.getPred());
-      }
+      // predicate, it is safe to merge them. Otherwise, keep commit order by
+      // not merging later commits across this one.
+      if (!isConstTrue(mmaPred) && mmaPred != commit.getPred())
+        break;
+      if (!llvm::equal(mmaDescs, commit.getDescs()))
+        break;
+      commitOps.push_back(commit);
+      commitPredicates.push_back(commit.getPred());
     } else if (!isPure(nextOp)) {
       // Only move commits across pure ops. We also bail here when encountering
       // another MMAv5 op.
@@ -178,20 +195,21 @@ public:
   LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     auto [commitOps, predicates] = collectCommitOpsAfter(op);
-    if (commitOps.size() == 0) {
+    if (commitOps.empty()) {
       return llvm::failure();
     }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
       if (!pred) {
-        pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
+        pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
-      if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
+      Value barrier = commit.getBarrier();
+      if (!moveDefiningOpsBefore(barrier, op) ||
           !moveDefiningOpsBefore(pred, op)) {
         // Give up merging a commit if its defining ops cannot be moved above
         // the mma op.
-        continue;
+        break;
       }
-      op.addCompletionBarrier(commit.getBarrier(), pred);
+      op.addCompletionBarrier(barrier, pred);
       rewriter.eraseOp(commit);
     }
     return success();

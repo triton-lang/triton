@@ -144,11 +144,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %72 = ttg.local_alloc %70 : (tensor<32x64xf32, #blocked1>) -> !ttg.memdesc<32x64xf32, #shared, #smem>
       %73 = ttg.memdesc_trans %72 {order=array<i32: 1,0>} : !ttg.memdesc<32x64xf32, #shared, #smem> -> !ttg.memdesc<64x32xf32, #shared1, #smem>
       %74 = ttg.local_load %73 : !ttg.memdesc<64x32xf32, #shared1, #smem> -> tensor<64x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-      %75 = tt.dot %71, %74, %cst : tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x32xf32, #mma>
+      %75 = tt.dot %71, %74, %cst, inputPrecision = tf32 : tensor<64x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x32xf32, #mma>
       %76 = tt.load %61 : tensor<32x32x!tt.ptr<f32>, #blocked1>
       %77 = ttg.convert_layout %75 : tensor<64x32xf32, #mma> -> tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %78 = ttg.convert_layout %76 : tensor<32x32xf32, #blocked1> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
-      %79 = tt.dot %77, %78, %arg7 : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x32xf32, #mma>
+      %79 = tt.dot %77, %78, %arg7, inputPrecision = tf32 : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x32xf32, #mma>
       scf.yield %79 : tensor<64x32xf32, #mma>
     }
     %64 = tt.broadcast %17 : tensor<64x1xi64, #blocked> -> tensor<64x32xi64, #blocked>
@@ -181,16 +181,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //     CHECK-NOT:     ttng.wait_barrier
 // CHECK-COUNT-2:     ttng.async_tma_copy_global_to_local
 //         CHECK:     scf.yield
-  tt.func public @matmul_tma(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: !tt.tensordesc<tensor<64x256xf16, #shared>>) -> tensor<128x256xf32, #mma> {
+  tt.func public @matmul_tma(%arg0: !tt.tensordesc<128x64xf16, #shared>, %arg1: !tt.tensordesc<64x256xf16, #shared>) -> tensor<128x256xf32, #mma> {
     %c256_i32 = arith.constant 256 : i32
     %c0_i32 = arith.constant 0 : i32
     %c64_i32 = arith.constant 64 : i32
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
     %0:2 = scf.for %arg3 = %c0_i32 to %c256_i32 step %c1_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<128x256xf32, #mma>, i32)  : i32 {
-      %1 = tt.descriptor_load %arg0[%c0_i32, %arg5] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
+      %1 = tt.descriptor_load %arg0[%c0_i32, %arg5] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
       %2 = ttg.local_alloc %1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-      %3 = tt.descriptor_load %arg1[%arg5, %c0_i32] : !tt.tensordesc<tensor<64x256xf16, #shared>> -> tensor<64x256xf16, #blocked1>
+      %3 = tt.descriptor_load %arg1[%arg5, %c0_i32] : !tt.tensordesc<64x256xf16, #shared> -> tensor<64x256xf16, #blocked1>
       %4 = ttg.local_alloc %3 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
       %5 = ttng.warp_group_dot %2, %4, %arg4 { inputPrecision = 0 : i32 } : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
       %6 = arith.addi %arg5, %c64_i32 : i32

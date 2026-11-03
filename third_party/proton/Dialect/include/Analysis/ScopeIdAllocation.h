@@ -3,7 +3,8 @@
 
 #include "mlir/IR/Operation.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Analysis/CallGraph.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include <cstddef>
@@ -23,13 +24,12 @@ public:
   using ScopeIdParent = std::vector<std::pair<ScopeId, ScopeId>>;
 
   ScopeIdAllocation() = default;
-  explicit ScopeIdAllocation(Operation *op) : funcOp(op) { run(); }
+  explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
-    if (auto recordOp = dyn_cast<RecordOp>(op)) {
-      return opToIdMap.lookup(recordOp);
-    }
-    llvm_unreachable("unexpected operation type");
+    assert((isa<RecordOp, AllocateEventOp>(op)) &&
+           "operation does not have a static scope id");
+    return opToIdMap.lookup(op);
   }
 
   ScopeIdName getScopeIdNames() const {
@@ -45,15 +45,21 @@ public:
   size_t getNumScopes() const { return idToNameMap.size(); }
 
 private:
-  void run();
+  using VirtualBlock = std::pair<Block *, Block::iterator>;
 
-  Operation *funcOp;
+  void run();
+  void reachability();
+  void liveness();
+  void dominance();
+  void visitTerminator(Operation *op, SmallVector<VirtualBlock> &successors);
+
+  FunctionOpInterface funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
   llvm::DenseMap<Operation *, ScopeId> opToIdMap;
   ScopeIdParent scopeParentIds;
 };
 
-class ModuleScopeIdAllocation : public CallGraph<ScopeIdAllocation> {
+class ModuleScopeIdAllocation : public triton::CallGraph<ScopeIdAllocation> {
 public:
   using FuncOffsetMapT =
       llvm::DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeId>;

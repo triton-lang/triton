@@ -1,9 +1,10 @@
-#ifndef TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
-#define TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir::triton {
@@ -32,10 +33,17 @@ namespace mlir::triton::AMD {
 /// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
+  using Base = dataflow::IntegerRangeAnalysis;
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
-      const DenseMap<Value, SetVector<Operation *>> &assumptions)
-      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
+      const DenseMap<Value, SetVector<Operation *>> &assumptions,
+      DominanceInfo *dominanceInfo)
+      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
+        domInfo(dominanceInfo) {}
+
+  /// Set the maximum PID value for a given axis. When set, GetProgramIdOp
+  /// for that axis will use [0, maxPID] instead of the default range.
+  void setPidBound(int axis, int64_t maxPID) { pidBounds[axis] = maxPID; }
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
@@ -69,8 +77,10 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// have to actually visit the loop N times for each iter_arg (each argument
   /// lattice) so we actually track visit count for (loop, arg) not just (loop).
   ///
-  /// 2. Before propagating, we check if we have propagated for (loop, arg) >= N
-  /// times. If so, we do not propagate (and thus the traversal converges/ends).
+  /// 2. Before propagating along a backedge, we check if we have propagated for
+  /// (loop, arg) >= N - 1 times. Propagation from the loop op itself (the init
+  /// args) is never blocked: it seeds the first iteration and, for loops which
+  /// may run zero times.
   ///
   /// Note, for loops where the trip count cannot be inferred *and* loops with a
   /// total trip count larger than `kDefaultMaxTripCount`, fallback to
@@ -78,7 +88,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// the loop operands and all users and all users of the results of the loop.
   void visitRegionSuccessors(
       ProgramPoint *point, RegionBranchOpInterface branch,
-      RegionBranchPoint successor,
+      RegionSuccessor successor,
       ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override;
 
   /// Collect all operands that participate in assumptions (see description of
@@ -95,22 +105,27 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   llvm.intr.assume %assumesltlhs : i1
   /// for %K, will produce a final range
   ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
-  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
+  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor,
+                                                        Block *useBlock) const;
 
   int64_t getTotalLoopTripCount(LoopLikeOpInterface loop);
 
-  /// Trip counts of all loops with static loop bounds contained under the root
-  /// operation being analyzed. Note, nested loops have trip counts computed as
-  /// a product of enclosing loops; i.e. for
+  /// The number of times the lattices of `loop` may have to be updated while
+  /// simulating it.
+  int64_t getLoopSimulationSteps(LoopLikeOpInterface loop);
+
+  /// Simulation steps (see getLoopSimulationSteps) of all loops contained under
+  /// the root operation being analyzed. Note, nested loops have trip counts
+  /// computed as a product of enclosing loops; i.e. for
   ///   scf.for i = 1 to 10
   ///     scf.for j = 1 to 10
   /// the trip count of the outer loop (on i) is 10 but the trip count of the
   /// inner loop (on j) is 100.
-  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopSimulationSteps;
 
   /// Visit counts tabulating how many times each lattice has been propagated
   /// through each loop. This is used in visitRegionSuccessors to end
-  /// propagation when loopVisits[loop, lattice] reaches loopTripCounts[loop].
+  /// propagation when loopVisits[loop, ...] reaches loopSimulationSteps[loop].
   llvm::SmallDenseMap<
       std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
       int64_t>
@@ -125,12 +140,40 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// If one uses collectAssumptions below then `assumptions` will look like
   /// %K -> {arith.cmpi slt..., arith.cmpi sge}.
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
+
+  /// The defaultTransferFunc is the default transfer function for this dataflow
+  /// problem.
+  /// @param[in] op: the Operation in question
+  /// @param[in] result: a particular value defined by this op. Note that op
+  ///            may define multiple values.
+  /// @param[in] srcLattices: lattices of all source operands
+  /// @param[in] destLattices: lattices all all result values
+  /// @param[in] incomingRange: the value-range inffered for result
+  void defaultTransferFunc(
+      Operation *op, Value result,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> destLattices,
+      const IntegerValueRange &incomingRange);
+
+private:
+  LogicalResult visitOperationHelper(
+      Operation *op,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
+
+  llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
+  DominanceInfo *domInfo = nullptr;
+
+  /// Optional per-axis PID bounds. When set via setPidBound(), these override
+  /// the default kDefaultMaxPrograms for GetProgramIdOp on the given axis.
+  llvm::SmallDenseMap<int, int64_t> pidBounds;
 };
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
-bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
+std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
+                                 arith::CmpIOp cmpOp);
 
 bool isEmptyInitializedRange(ConstantIntRanges rv);
 
@@ -142,4 +185,4 @@ void initializeFuncOps(Operation *op,
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_

@@ -32,7 +32,7 @@ static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
 
   auto b = OpBuilder::atBlockBegin(containerBlock);
   FunctionType funcType = b.getFunctionType(partition->getArgumentTypes(), {});
-  auto containerFunc = b.create<FuncOp>(mod.getLoc(), "container", funcType);
+  auto containerFunc = FuncOp::create(b, mod.getLoc(), "container", funcType);
   containerFunc.getBody().takeBody(*partition);
   container.get()->setAttrs(mod->getAttrs());
   container.get()->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
@@ -40,7 +40,7 @@ static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
   // Replace `ttg.warp_return` with `tt.return` to make the IR valid.
   containerFunc.walk([&](WarpReturnOp op) {
     b.setInsertionPoint(op);
-    b.create<ReturnOp>(op.getLoc());
+    ReturnOp::create(b, op.getLoc());
     op.erase();
   });
 
@@ -53,7 +53,8 @@ static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
   auto *funcInfo =
       axisInfo.getFuncData(wsOp->getParentOfType<FunctionOpInterface>());
   assert(funcInfo && "expected to find function axis info");
-  for (auto [i, capture] : llvm::enumerate(wsOp.getExplicitCaptures())) {
+  for (auto [i, capture] :
+       llvm::enumerate(wsOp.getPartitionOp().getExplicitCaptures())) {
     AxisInfo info = funcInfo->lookup(capture);
     containerFunc.setArgAttr(i, "tt.contiguity",
                              b.getI64IntegerAttr(info.getContiguity(0)));
@@ -74,7 +75,7 @@ static void extractPartitionBody(OwningOpRef<ModuleOp> container,
   // Rewrite the returns.
   containerFunc.walk([](ReturnOp op) {
     OpBuilder b(op);
-    b.create<WarpReturnOp>(op.getLoc());
+    WarpReturnOp::create(b, op.getLoc());
     op.erase();
   });
 
@@ -144,8 +145,7 @@ static unsigned getTensorNumI32Regs(RankedTensorType ty) {
   unsigned numElems = getTotalElemsPerThread(ty) *
                       product(getThreadsPerWarp(ty)) *
                       product(getWarpsPerCTA(ty));
-  unsigned elSize =
-      isa<PointerType>(ty.getElementType()) ? 64 : ty.getElementTypeBitWidth();
+  unsigned elSize = getIntOrFloatOrPtrBitWidth(ty.getElementType());
   return numElems * elSize / 32;
 }
 
@@ -199,8 +199,9 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
     region->walk([minWarps = &minWarps](Operation *op) {
       // Some instructions have critical throughput if have low register usage.
       // Make sure there are enough warps for these ops to execute quickly.
-      if (isa<ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp,
-              ttng::AsyncTMACopyGlobalToLocalOp>(op))
+      // TMAStoreLikeOps stay in the main partition, so they should not appear
+      // in partition regions here.
+      if (isa<ttng::TMALoadLikeOpInterface>(op))
         *minWarps = 2;
       // TMEM ops require at least 4 warps to be able to read all lanes.
       else if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp, ttng::TMEMAllocOp>(op))
@@ -293,19 +294,25 @@ struct OptimizePartitionWarps
 } // namespace
 
 void OptimizePartitionWarps::runOnOperation() {
+  SmallVector<WarpSpecializeOp> wsOps;
+  getOperation().walk([&](WarpSpecializeOp wsOp) { wsOps.push_back(wsOp); });
+
+  if (wsOps.empty()) {
+    return;
+  }
+
   ModuleAxisInfoAnalysis axisInfo(getOperation());
   auto runPipelineFn = [&](OpPassManager &pm, ModuleOp container) {
     // The module must be directly nested under the current op for `runPipeline`
     // to work.
     getOperation().push_back(container);
-    auto remove = llvm::make_scope_exit([&] { container->remove(); });
+    llvm::scope_exit remove([&] { container->remove(); });
     return runPipeline(pm, container);
   };
-  WalkResult result = getOperation().walk([&](WarpSpecializeOp wsOp) {
-    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, runPipelineFn)))
-      return WalkResult::interrupt();
-    return WalkResult::skip();
-  });
-  if (result.wasInterrupted())
-    return signalPassFailure();
+
+  for (auto wsOp : wsOps) {
+    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, runPipelineFn))) {
+      return signalPassFailure();
+    }
+  }
 }

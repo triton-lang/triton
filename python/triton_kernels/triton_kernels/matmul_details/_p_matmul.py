@@ -1,0 +1,911 @@
+# isort: off
+# fmt: off
+import collections
+import torch
+import triton
+import triton.language as tl
+from triton.tools.ragged_tma import load_ragged, store_ragged
+from triton_kernels import target_info
+from triton_kernels.tensor_details.layout_details.blackwell_scale import (
+    unswizzle_mx_scale_bw,
+    unswizzle_act_mx_scale_bw,
+)
+from triton_kernels.numerics_details.flexpoint import (
+    float_to_flex,
+    load_scale,
+    nan_propagating_absmax_reduce,
+    compute_scale,
+)
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_tile, nvfp4_to_mxfp8_tile
+from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
+from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from ._common import (
+    compute_offsets,
+    get_scaled_dot_format_string,
+    matmul_dot,
+    make_matmul_repr,
+    matmul_launch_metadata,
+    compute_pids,
+    output_mx_scale_store_ptr,
+    round_f32_to_tf32,
+)
+
+
+@triton.constexpr_function
+def cuda_capability_geq(major, minor):
+    return target_info.cuda_capability_geq(major, minor)
+
+@triton.constexpr_function
+def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
+    if isinstance(tensor_or_desc, tl.tensor):
+        return tensor_or_desc.dtype.element_ty
+    elif isinstance(tensor_or_desc, tl.tensor_descriptor):
+        return tensor_or_desc.dtype
+    else:
+        raise ValueError(f"Invalid type: {type(tensor_or_desc)}")
+
+@triton.jit
+def _load_matrix(desc, batch, row, column):
+    if len(desc.shape) == 5:
+        tile_m: tl.constexpr = desc.block_shape[-2]
+        tile_n: tl.constexpr = desc.block_shape[-1]
+        values = desc.load([batch, row // tile_m, column // tile_n, 0, 0])
+        tl.static_assert(desc.block_shape[2] == 1)
+        return values.reshape(desc.block_shape[1] * tile_m, desc.block_shape[2] * tile_n)
+    else:
+        return desc.load([batch, row, column]).reshape(desc.block_shape[1:])
+
+
+@triton.jit
+def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
+    mask = mask & (offs < writeback_size)
+    offs = tl.load(WriteBackIndx + offs, mask=mask, other=-1)
+    mask = offs != -1
+    return (offs, mask)
+
+
+@triton.jit
+def _scaled_add(a, a_scale, b, b_scale=1):
+    a_scaled = a * a_scale
+    b_scaled = b * b_scale
+    result = a_scaled + b_scaled
+    # Preserve narrower products' rounding before the addition widens them.
+    if a_scaled.dtype == result.dtype:
+        result = tl.fma(a, a_scale, b_scaled)
+    elif b_scaled.dtype == result.dtype:
+        result = tl.fma(b, b_scale, a_scaled)
+    return result
+
+
+_matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
+@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
+            repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
+def _p_matmul(
+             Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             YExpectedScale, YActualScale, YChecksumScale,
+             stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
+             X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
+             XScale,
+             XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
+             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
+             W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
+             WScale,
+             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
+             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
+             OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
+             OutAccScale, Y_ACC_IS_Y: tl.constexpr,
+             B, stride_b_e, # Bias
+             M, N, K, K_W, # shapes
+             # expt data
+             Betas, Gammas,
+             GatherIndx,
+             WriteBackIndx, writeback_size,
+             RAGGED_DIMENSION: tl.constexpr,
+             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             XOutputScaleBlockOffs,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             # true grid size
+             batch_size, grid_m, grid_n,
+             # Out scale
+             out_alpha,
+             # fused activation function
+             ACTIVATION_FN: tl.constexpr, activation_fn_args, ACTIVATION_REDUCTION_N: tl.constexpr,
+             # epilogue transform
+             EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
+             # MoE config
+             N_SLICES: tl.constexpr,
+             # precision config
+             MAX_NUM_IMPRECISE_ACC: tl.constexpr, ALLOW_TF32: tl.constexpr,
+             FLEXPOINT_SATURATE_INF: tl.constexpr,
+             PER_BATCH_W_SCALE: tl.constexpr,
+             PER_BATCH_OUT_SCALE: tl.constexpr,
+             PER_BATCH_ACC_SCALE: tl.constexpr,
+             # optimization config
+             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+             GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             # NYI: Must be None
+             SWIZZLE_MX_VALUE: tl.constexpr,
+             # One of ["BLACKWELL", None]
+             SWIZZLE_MX_SCALE: tl.constexpr,
+             MX_BLOCK_SIZE: tl.constexpr,
+             X_MX_BLOCK_SIZE: tl.constexpr,
+             EPILOGUE_SUBTILE: tl.constexpr,
+             EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
+             W_CACHE_MODIFIER: tl.constexpr,
+             NUM_SMS: tl.constexpr,
+             X_TMA_MODE: tl.constexpr,
+             Y_TMA_MODE: tl.constexpr,
+             Y_MX_SCALE_LAYOUT: tl.constexpr = None,
+             OUT_N_TILE_ALIGNED: tl.constexpr = False,
+             TOKENS_PER_EXPT_FOR_ANNOTATION=None,
+             UPCAST_INDICES: tl.constexpr=False,
+             SWAP_XW: tl.constexpr = False,
+             IS_EPILOGUE_QUANT_MX: tl.constexpr = False,
+             Y_VALUE_PACK_FACTOR: tl.constexpr = 1,
+             CLC: tl.constexpr = False,
+             FLATTEN_LOOPS: tl.constexpr = True,
+             W_SHUFFLED: tl.constexpr = False,
+             pYPtrs=None,
+             map_dst_coord=None,
+             all_writes_issued=None,
+             reduce_rank=0,
+             n_reduce_shards: tl.constexpr = 1,
+             MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
+             ):
+    # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
+
+    # why is this faster than using host-side tensor descriptor?!
+    if Y_TMA_MODE is not None:
+        Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
+
+    x_type: tl.constexpr = get_dtype(X)
+    w_type: tl.constexpr = get_dtype(W)
+    is_w_microscaled: tl.constexpr = WMxScale is not None
+    is_x_microscaled: tl.constexpr = XMxScale is not None
+    is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
+    tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
+    REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
+    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
+    MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
+    if is_x_microscaled or is_w_microscaled:
+        MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
+    if is_w_microscaled:
+        tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
+                         "Unsupported microscale factor")
+        tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
+                         "mx_weight_ptr must be uint8 or fp8")
+        # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
+        tl.static_assert(
+            get_dtype(WMxScale) == tl.uint8
+            or get_dtype(WMxScale) == tl.float8e4nv,
+            "mx_scale_ptr must be uint8 or float8e4nv",
+        )
+        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+
+        # We have pack 2 fp4 values in a byte
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            tl.static_assert(is_w_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
+            # We have pack 2 fp4 values in a byte but we divide the dimension by 2
+            # when swizzling
+            W_K_DIVISOR: tl.constexpr = 1
+            W_K_MULTIPLIER: tl.constexpr = 2
+            W_N_DIVISOR: tl.constexpr = 4
+        else:
+            # We have pack 2 fp4 values in a byte
+            W_K_DIVISOR: tl.constexpr = 2 if is_w_mxfp4 else 1
+            W_K_MULTIPLIER: tl.constexpr = 1
+            W_N_DIVISOR: tl.constexpr = 1
+
+        if W_TRANSPOSE:
+            # When weight is transposed, 2 fp4 values are packed per Byte along
+            # the contiguous dimension, K.
+            PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        else:
+            # When weight is not transposed, fp4 values are *not* packed along
+            # the contiguous dimension, N.
+            PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
+    else:
+        W_K_DIVISOR: tl.constexpr = 1
+        W_K_MULTIPLIER: tl.constexpr = 1
+        W_N_DIVISOR: tl.constexpr = 1
+        PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
+        tl.static_assert(SWIZZLE_MX_SCALE == "STRIDED")
+    if is_x_microscaled:
+        is_x_fp4: tl.constexpr = x_type == tl.uint8
+        tl.static_assert(x_type == tl.float8e4nv or x_type == tl.uint8, "mx_act_ptr must be float8e4nv or uint8")
+        # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8e4nv.
+        tl.static_assert(
+            get_dtype(XMxScale) == tl.uint8
+            or get_dtype(XMxScale) == tl.float8e4nv,
+            "mx_scale_ptr must be uint8 or float8e4nv",
+        )
+        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+    else:
+        is_x_fp4: tl.constexpr = False
+    is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
+    is_out_fp4: tl.constexpr = is_out_microscaled and Y_VALUE_PACK_FACTOR == 2
+
+    if RAGGED_DIMENSION == "M":
+        useful_grid_m = tl.load(XBlockOffs + N_SLICES)
+    else:
+        useful_grid_m = grid_m
+
+    index_type: tl.constexpr = tl.int64
+
+    USE_FLEXPOINT_SCALE: tl.constexpr = YActualScale is not None or YChecksumScale is not None
+    HAS_SCATTER: tl.constexpr = WriteBackIndx is not None
+    HAS_GATHER: tl.constexpr = GatherIndx is not None
+    USE_GATHER_TMA: tl.constexpr = HAS_GATHER and X_TMA_MODE == "dense"
+    USE_SCATTER_TMA: tl.constexpr = HAS_SCATTER and Y_TMA_MODE == "dense"
+
+    if RAGGED_DIMENSION == "K":
+        tl.static_assert((OutAcc is None) or Y_ACC_IS_Y, "Using differernt y_acc is not supported with TMA kernel.")
+        tl.static_assert(not (HAS_SCATTER or USE_GATHER_TMA or USE_SCATTER_TMA), "Cannot be used with RAGGED_DIMENSION == 'K'")
+
+    if EPILOGUE_SUBTILE is None:
+        SUBTILE_FACTOR: tl.constexpr = 1
+    else:
+        SUBTILE_FACTOR: tl.constexpr = EPILOGUE_SUBTILE
+    EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
+    OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
+    # Fuse alpha with the residual when activation and gamma are absent.
+    FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
+    # Preserve separate scale/bias rounding for dense sub-tiles.
+    FUSE_TENSOR_SCALE: tl.constexpr = (
+        (HAS_X_EPILOGUE_SCALE or WTensorScale is not None)
+        and XScale is None and WScale is None and B is not None and Betas is None
+        and (is_out_microscaled or SUBTILE_FACTOR == 1)
+    )
+    yN = N // ACTIVATION_REDUCTION_N
+
+    num_blocks = batch_size * useful_grid_m * grid_n * SPLIT_K
+
+    # If true, do not share loop-carried variables between the prologue and the
+    # epilogue to enable better pipelining with mmav5
+    INDEPENDENT_EPILOGUE: tl.constexpr = cuda_capability_geq(10, 0)
+
+    # start negative; will be incremented at the top of the loop
+    if INDEPENDENT_EPILOGUE:
+        tile_id1 = tl.program_id(0) - NUM_SMS
+
+    # Keep track of local max for updating flexpoint scales.
+    USE_LOCAL_ABSMAX: tl.constexpr = (YActualScale is not None) and (not PER_BATCH_OUT_SCALE) and (not is_out_microscaled) and (pYPtrs is None)
+    if USE_LOCAL_ABSMAX:
+        THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
+        local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
+
+    # A widened FP8 lhs needs tensor memory alongside the accumulator.
+    dot_lhs_type: tl.constexpr = w_type if SWAP_XW else x_type
+    dot_rhs_type: tl.constexpr = x_type if SWAP_XW else w_type
+    upcast_lhs: tl.constexpr = (not is_x_microscaled and not is_w_microscaled
+                              and dot_lhs_type == tl.float8e4nv
+                              and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16))
+    dot_m: tl.constexpr = BLOCK_N if SWAP_XW else BLOCK_M
+    dot_n: tl.constexpr = BLOCK_M if SWAP_XW else BLOCK_N
+    acc_columns: tl.constexpr = tl.cdiv(dot_m, 128) * dot_n
+    DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = (
+        is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
+        or upcast_lhs and acc_columns >= 256
+    )
+
+    loop_start = 0 if CLC else tl.program_id(0)
+    loop_end = 1 if CLC else num_blocks
+    loop_step = 1 if CLC else NUM_SMS
+    for block_id in tl.range(
+        loop_start, loop_end, loop_step,
+        flatten=FLATTEN_LOOPS and not CLC,
+        disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+        # Workaround for compile error in hopper warp specialization
+        warp_specialize=FLATTEN_LOOPS and not CLC,
+    ):
+        if CLC:
+            block_id = tl.program_id(0)
+
+        pid_z, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+
+        # ------------------------------------------------------------
+        # prologue
+        # ------------------------------------------------------------
+        off_w_z, off_x_z, off_y_z, slice_off_m, slice_block_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
+            pid_z, pid_m, pid_k,
+            XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
+            WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+            RAGGED_DIMENSION,
+            BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+        )
+
+        # TODO: if RAGGED_DIMENSION == "M"
+        if RAGGED_DIMENSION == "M":
+            shape_m = tl.load(XSliceSizes + off_w_z)
+        else:
+            shape_m = M
+        off_n = BLOCK_N * pid_n
+        off_w_n = PACKED_BLOCK_N_W * pid_n
+        block_div: tl.constexpr = 2 if is_x_fp4 else 1
+
+        # ---- offset x ------
+        tile_offs_m = off_m + tl.arange(0, BLOCK_M)
+        mask_m = tile_offs_m < shape_m
+        if USE_GATHER_TMA:
+            offs_m = tile_offs_m
+            if XBlockSchedule is None:
+                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m)
+                # Bump rows to account for the Z offset.
+                offs_x_m += off_x_z * (stride_x_z // stride_x_m)
+                offs_x_m = tl.where(mask_m, offs_x_m, -1)
+            else:
+                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m, other=-1)
+        if X_TMA_MODE is None:
+            offs_m = off_m + tl.arange(0, BLOCK_M)
+            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
+            # Wrapping bounds the gather-array position, not the gathered row index.
+            if GatherIndx is not None:
+                tl.static_assert(HAS_GATHER)
+                offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
+            offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
+
+        XMxScalePtrs = None
+        if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
+            if X_TMA_MODE is not None:
+                offs_m = off_m + tl.arange(0, BLOCK_M)
+            XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
+            if GatherIndx is None:
+                XMxScalePtrs += slice_off_m * stride_x_mx_m
+            offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
+            mx_scale_offs_m = offs_x_m if USE_GATHER_TMA else offs_m
+            XMxScalePtrs += mx_scale_offs_m.to(index_type)[:, None] * stride_x_mx_m
+            XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
+        XTensorScalePtrs = None
+        if XTensorScale is not None:
+            XTensorScalePtrs = XTensorScale + off_x_z.to(index_type) * stride_x_tensor_scale_z
+            if USE_GATHER_TMA:
+                scale_offs_m = offs_x_m
+            elif X_TMA_MODE is None:
+                scale_offs_m = offs_m
+            else:
+                scale_offs_m = tile_offs_m
+            if GatherIndx is None:
+                XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
+            XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
+
+        # Inactive rows have no source scales; neutral scales preserve their zero values.
+        if REQUANTIZE_X and XTensorScale is not None:
+            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
+        else:
+            x_conversion_scale: tl.constexpr = None
+
+        acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+        acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
+
+        # ------------------------------------------------------------
+        # inner loop
+        # ------------------------------------------------------------
+        loop_k = tl.load(XSliceSizes + pid_z) if RAGGED_DIMENSION == "K" else K - off_k_x0
+        k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
+        loop_bound = tl.maximum(k_tiles, 1)
+        tl.assume(loop_bound > 0)  # Currently necessary for the compiler to flatten the loop properly.
+        for ki in tl.range(
+            loop_bound,
+            disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+            # CLC needs warp specialization enabled on the inner loop.
+            warp_specialize=CLC,
+        ):
+            if RAGGED_DIMENSION == "K" and ki >= k_tiles:
+                # Tile #ki does not exist: use out-of-bound indices to mask all loads.
+                off_k_x = K
+                off_k_w = K_W
+            else:
+                off_k_x = off_k_x0 + ki * BLOCK_K * SPLIT_K
+                off_k_w = off_k_w0 + ki * PACKED_BLOCK_K_W * SPLIT_K
+
+            # --- load x ---
+            if USE_GATHER_TMA:
+                x = X.gather(offs_x_m, off_k_x // block_div)
+            elif X_TMA_MODE == "dense":
+                if X_TRANSPOSE:
+                    x = _load_matrix(X, off_x_z, off_k_x // block_div, slice_off_m + off_m)
+                    x = x.reshape(BLOCK_K // block_div, BLOCK_M).T
+                else:
+                    x = _load_matrix(X, off_x_z, slice_off_m + off_m, off_k_x // block_div)
+                    x = x.reshape(BLOCK_M, BLOCK_K // block_div)
+            elif X_TMA_MODE == "ragged":
+                x = load_ragged(X, slice_off_m, shape_m, [off_x_z, off_m, off_k_x // block_div], ragged_dim=1)
+                x = x.reshape(BLOCK_M, BLOCK_K // block_div)
+            else:
+                tl.static_assert(X_TMA_MODE is None)
+                offs_x_k = (off_k_x0.to(index_type) // block_div
+                            + ki.to(index_type) * (BLOCK_K // block_div) * SPLIT_K
+                            + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
+                # Keep the aligned base pointer outside the flattened loop's conditional prologue.
+                XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
+                mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
+                # Without a gather, row offsets are nonnegative by construction.
+                # Negative gather indices (including -1) mark inactive input rows.
+                # Do not dereference them: zero-fill X before matmul. This does not
+                # suppress output stores or epilogue operations such as bias.
+                if EVEN_K:
+                    if SPLIT_K > 1:
+                        x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k[None, :], other=0.0)
+                    else:
+                        x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True), other=0.0)
+                else:
+                    x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k[None, :], other=0.0)
+                if x.dtype == tl.float32 and ALLOW_TF32:
+                    # since data are not loaded from TMA we need to explicitly round to tf32.
+                    x = round_f32_to_tf32(x)
+            # --- load x_scale ---
+            x_format: tl.constexpr = "e4m3" if REQUANTIZE_X else get_scaled_dot_format_string(x.dtype)
+            if is_x_microscaled:
+                if XMxScalePtrs is not None: # not using TMA for x scale load
+                    off_k_mx = off_k_x // X_MX_BLOCK_SIZE
+                    if EVEN_K and SPLIT_K == 1:
+                        mask_k_scale = tl.full([X_SCALE_BLOCK_K], True, dtype=tl.int1)
+                    else:
+                        mask_k_scale = off_k_mx + tl.arange(0, X_SCALE_BLOCK_K) < tl.cdiv(K, X_MX_BLOCK_SIZE)
+                    mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
+                    # TMA may mask activation gathers, but pointer-based scales
+                    # still need their own source-row check. A zero scale byte
+                    # preserves zero activations and permits async-copy zero filling.
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & (mask_m & (mx_scale_offs_m >= 0 if GatherIndx is not None else True))[:, None], other=0.0)
+                else: # use TMA for x scale load
+                    # Gathered values can use a dense descriptor while their
+                    # scales are already padded and ordered by ragged slice.
+                    if RAGGED_DIMENSION == "M":
+                        # slice_block_off_m points to the start of the current slice in the padded version
+                        # + off_m points to the current block in the slice
+                        off_m_scale = slice_block_off_m + off_m // 128
+                    else:
+                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
+                    x_scales = XMxScale.load([0, off_m_scale, off_k_x // X_MX_BLOCK_SIZE // 4, 0, 0])
+                    x_scales = unswizzle_act_mx_scale_bw(x_scales)
+            elif x_format == "fp16" or x_format == "bf16":
+                x_scales: tl.constexpr = None
+            else:
+                if not is_w_microscaled:
+                    x_scales: tl.constexpr = None
+                elif get_dtype(WMxScale) == tl.uint8:
+                    x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
+                else:
+                    x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 1.0, dtype=tl.float8e4nv)
+
+            # --- load w ---
+            if W_SHUFFLED:
+                tile_k_idx = off_k_w // PACKED_BLOCK_K_W
+                tile_n_idx = off_n // BLOCK_N
+                w = tl.reshape(
+                    W.load([off_w_z.to(tl.int32), tile_k_idx.to(tl.int32), tile_n_idx.to(tl.int32), 0, 0]),
+                    (BLOCK_N, PACKED_BLOCK_K_W),
+                ).T
+            elif W_TRANSPOSE:
+                w = _load_matrix(W, off_w_z, off_w_n, off_k_w).T
+            else:
+                w = _load_matrix(W, off_w_z, off_k_w, off_w_n)
+
+            # --- load w_scale ---
+            w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
+            if is_w_microscaled:
+                off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_K_DIVISOR)
+                tl.static_assert(MX_PACK_DIVISOR % W_K_DIVISOR == 0)
+                if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+                    flattened_expt_n_idx = off_w_z * ((N + 127) // 128) + (off_n // 128)
+                    w_scales = WMxScale.load([0, flattened_expt_n_idx, off_k_mx // 4, 0, 0])
+                    w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
+                    w_scales = unswizzle_mx_scale_bw(w_scales)
+                elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
+                    # NYI: Hopper swizzling with non-transposed W
+                    tl.static_assert(W_TRANSPOSE)
+                    off_n_scale = pid_n * (BLOCK_N // 32)
+                    off_k_scale = (off_k_w // PACKED_BLOCK_K_W) * MX_SCALE_BLOCK_K * 32
+                    w_scales = WMxScale.load([off_w_z, off_n_scale, off_k_scale])
+                    w_scales = tl.reshape(w_scales, *w_scales.shape[1:])
+                    num_warps: tl.constexpr = tl.extra.cuda.num_warps()
+                    w_scales = unswizzle_mxfp4_scale_hopper(w_scales, mx_axis=1, num_warps=num_warps)
+                    mask_k_scale = off_k_x + tl.arange(0, MX_SCALE_BLOCK_K) * MX_PACK_DIVISOR < off_k_x0 + loop_k
+                    scale_zero = tl.full(w_scales.shape, 0, dtype=w_scales.dtype)
+                    w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
+                else:
+                    w_scales = WMxScale.load([off_w_z, off_k_mx, off_n])
+                    w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
+            else:
+                w_scales: tl.constexpr = None
+
+            if REQUANTIZE_X:
+                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales, x_conversion_scale)
+
+            # --- update accumulator ---
+            if is_x_microscaled or is_w_microscaled:
+                if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
+                    tl.static_assert(w_format == "fp16" or w_format == "bf16")
+                    x_dense = upcast_mxfp4_tile(x, x_scales, w.dtype)
+                    if SWAP_XW:
+                        acc = tl.dot(w.T, x_dense.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    else:
+                        acc = tl.dot(x_dense, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                elif SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+                    tl.static_assert(w_format == "e2m1")
+                    tl.static_assert(SWAP_XW)
+                    wT = mxfp4_to_bf16_triton(w.T, w_scales, mx_axis=1)
+                    tl.static_assert(wT.dtype == tl.bfloat16)
+                    if is_x_microscaled:
+                        acc = tl.dot_scaled(wT, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        tl.static_assert(x_format == "bf16")
+                        acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                elif (is_w_mxfp4 and get_dtype(WMxScale) == tl.float8e4nv and not is_x_microscaled
+                      and x_format != "fp16" and x_format != "bf16"):
+                    # This fallback upcasts only local values and block scales.
+                    # Row/fiber scales are applied once after the K loop.
+                    w_dense = upcast_nvfp4_tile(w.T, w_scales, tl.bfloat16).T
+                    if SWAP_XW:
+                        acc = tl.dot_scaled(w_dense.T, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        acc = tl.dot_scaled(x, x_scales, x_format, w_dense, None, "bf16", acc=acc, fast_math=True)
+                else:
+                    if SWAP_XW:
+                        acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
+                    else:
+                        acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
+            else:
+                acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
+
+            if is_x_microscaled and XMxScalePtrs is not None:
+                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
+
+        if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
+            x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
+            w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+            if HAS_X_EPILOGUE_SCALE:
+                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
+            if WTensorScale is not None:
+                offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
+                w_tensor_scales = tl.load(
+                    WTensorScale
+                    + off_w_z.to(index_type) * stride_w_tensor_scale_e
+                    + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
+                    mask=offs_w_tensor_scale_n < N,
+                    other=0.0,
+                )
+            if not FUSE_TENSOR_SCALE:
+                if SWAP_XW:
+                    acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
+                else:
+                    acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+
+        # ------------------------------------------------------------
+        # epilogue
+        # ------------------------------------------------------------
+        if INDEPENDENT_EPILOGUE:
+            tile_id1 += NUM_SMS
+            pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+            expt_id1, _, start_z1, start_m1, slice_block_off_m1, off_m1, _, _ = compute_offsets(
+                pid_s1, pid_m1, pid_k1,
+                XBlockSchedule, XSliceOffs, XBlockOffs, X_SLICE_SIZES_DIVISIBILITY,
+                WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+                RAGGED_DIMENSION,
+                BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+            )
+            off_n1 = pid_n1 * BLOCK_N
+            if RAGGED_DIMENSION == "M":
+                eM1 = tl.load(XSliceSizes + expt_id1)
+            else:
+                eM1 = M
+        else:
+            tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
+            _, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
+
+        offs_m = off_m1 + tl.arange(0, BLOCK_M)
+        mask_m = offs_m < eM1
+        if USE_SCATTER_TMA:
+            offs_y_m, mask_m = _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, start_m1 + offs_m, mask_m)
+            MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
+            if SPLIT_K > 1:
+                # Compute the split k offset in number of rows, and add it to offs_y_m.
+                # This allows us to write to the correct slice in the output tensor while using
+                # a 2D TMA scatter.
+                tl.device_assert(stride_y_k // stride_y_m == tl.cdiv(stride_y_k, stride_y_m))
+                split_k_row_offs = pid_k1 * (stride_y_k // stride_y_m)
+                offs_y_m = tl.where(mask_m, offs_y_m + split_k_row_offs, offs_y_m)
+        elif Y_TMA_MODE is None and HAS_SCATTER:
+            offs_y_m, mask_m = _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, start_m1 + offs_m, mask_m)
+            MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
+        else:
+            offs_y_m = start_m1 + offs_m
+            MASK_ACC = False if USE_GATHER_TMA else USE_FLEXPOINT_SCALE
+
+        # bias + scale
+        offs_y_n = off_n1 + tl.arange(0, BLOCK_N)
+        mask_n = offs_y_n < N
+        if B is not None:
+            BPtrs = B + expt_id1 * stride_b_e + offs_y_n
+            if pid_k1 == 0:
+                bias = tl.load(BPtrs, mask=mask_n, other=0)
+            else:
+                bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
+        else:
+            bias = tl.full([BLOCK_N], 0, dtype=tl.float32)
+        if Betas is not None:
+            betas = tl.load(Betas + start_m1 + offs_m, mask=mask_m, other=0.0)
+        else:
+            betas = tl.full([BLOCK_M], 1, dtype=tl.float32)
+        if Gammas is not None:
+            gammas = tl.load(Gammas + start_m1 + offs_m, mask=mask_m, other=0.0)
+        else:
+            gammas = tl.full([BLOCK_M], 1, dtype=tl.float32)
+        x_scale = load_scale(XScale)
+        if PER_BATCH_W_SCALE:
+            w_scale = load_scale(WScale + expt_id1)
+        else:
+            w_scale = load_scale(WScale)
+
+        if FUSE_TENSOR_SCALE:
+            if SWAP_XW:
+                acc = _scaled_add(acc, w_tensor_scales[:, None] * x_tensor_scales[None, :], bias[:, None])
+            else:
+                acc = _scaled_add(acc, x_tensor_scales[:, None] * w_tensor_scales[None, :], bias[None, :])
+
+        accs = (acc,)
+        biases = (bias,)
+
+        if SUBTILE_FACTOR >= 2:
+            if SWAP_XW:
+                acc = acc.reshape(2, BLOCK_N // 2, BLOCK_M).permute(1, 2, 0)
+            else:
+                acc = acc.reshape(BLOCK_M, 2, BLOCK_N // 2).permute(0, 2, 1)
+            acc0, acc1 = acc.split()
+            accs = (acc0, acc1)
+            bias0, bias1 = bias.reshape(2, BLOCK_N // 2).permute(1, 0).split()
+            biases = (bias0, bias1)
+
+        if SUBTILE_FACTOR >= 4:
+            if SWAP_XW:
+                acc0 = acc0.reshape(2, BLOCK_N // 4, BLOCK_M).permute(1, 2, 0)
+                acc1 = acc1.reshape(2, BLOCK_N // 4, BLOCK_M).permute(1, 2, 0)
+            else:
+                acc0 = acc0.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1)
+                acc1 = acc1.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1)
+            acc00, acc01 = acc0.split()
+            acc10, acc11 = acc1.split()
+            accs = (acc00, acc01, acc10, acc11)
+            bias00, bias01 = bias0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            bias10, bias11 = bias1.reshape(2, BLOCK_N // 4).permute(1, 0).split()
+            biases = (bias00, bias01, bias10, bias11)
+
+        tl.static_assert(EPILOGUE_BLOCK_N == BLOCK_N // SUBTILE_FACTOR)
+        tl.static_assert(len(accs) == SUBTILE_FACTOR)
+
+        if is_out_microscaled:
+            MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+
+        for a_i in tl.static_range(len(accs)):
+            acc_tile = accs[a_i]
+
+            if SWAP_XW:
+                acc_tile = acc_tile.T
+
+            if not FUSE_TENSOR_SCALE:
+                if Betas is None:
+                    # Preserve the scale-plus-bias rounding when beta is implicit.
+                    acc_tile = _scaled_add(acc_tile, x_scale * w_scale, biases[a_i][None, :])
+                else:
+                    acc_tile *= x_scale * w_scale
+                    acc_tile = tl.fma(biases[a_i][None, :], betas[:, None], acc_tile)
+            if out_alpha is not None and not FUSE_ALPHA:
+                acc_tile *= out_alpha
+
+            if ACTIVATION_FN is not None:
+                out = ACTIVATION_FN(acc_tile, *activation_fn_args)
+                tl.static_assert(out.shape[1] == OUT_BLOCK_N, f"Activation fn out.shape[1] ({out.shape[1]}) doesn't match computed OUT_BLOCK_N ({OUT_BLOCK_N})")
+            else:
+                tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
+                out = acc_tile
+
+            if OutAcc is not None:
+                tl.static_assert(not USE_SCATTER_TMA)
+                out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
+                if PER_BATCH_ACC_SCALE:
+                    ScalePtr = OutAccScale + start_z1
+                else:
+                    ScalePtr = OutAccScale
+
+                tl.static_assert(Y_TMA_MODE == "dense" or Y_TMA_MODE is None)
+                if Y_TMA_MODE == "dense":
+                    off_kz = pid_k * batch_size + start_z1
+                    acc = Y.load([off_kz, off_m1, out_off_n])
+                    acc = acc.reshape(out.shape)
+                else:
+                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
+                    mask_n = offs_y_n < yN
+
+                    AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+                    acc = tl.load(AccPtrs, mask=mask, other=0.0)
+                if Gammas is not None:
+                    out = _scaled_add(out, gammas[:, None], acc, load_scale(ScalePtr))
+                elif FUSE_ALPHA:
+                    out = _scaled_add(out, out_alpha, acc, load_scale(ScalePtr))
+                else:
+                    # Preserve FP32 promotion for low-precision activations.
+                    out *= gammas[:, None]
+                    out = _scaled_add(acc, load_scale(ScalePtr), out)
+            else:
+                out *= gammas[:, None]
+
+            if MASK_ACC:
+                out = tl.where(mask_m[:, None], out, 0.0)
+
+            out_off_n = off_n1 // ACTIVATION_REDUCTION_N + a_i * OUT_BLOCK_N
+            if is_out_microscaled:
+                tl.static_assert(EPILOGUE_FN is not None)
+                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
+                mask_n = offs_y_n < yN
+                out_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+                if PER_BATCH_OUT_SCALE:
+                    ExpectedScale = YExpectedScale + start_z1
+                else:
+                    ExpectedScale = YExpectedScale
+                # OCP MX outputs leave YExpectedScale unset, so this is an
+                # identity there. NVFP4 uses YExpectedScale to precondition the
+                # dense output before the microscaling epilogue writes direct
+                # e4m3 block scales.
+                out = float_to_flex(
+                    out,
+                    ExpectedScale,
+                    None,
+                    None,
+                    out_mask,
+                    YPtr,
+                    False,
+                )
+                out, out_scale = EPILOGUE_FN(out, out_mask, *epilogue_fn_args)
+                tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
+                offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MX_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
+                n_mx_blocks = tl.cdiv(yN, MX_BLOCK_SIZE)
+                YActualScalePtrs = output_mx_scale_store_ptr(
+                    YActualScale,
+                    offs_m,
+                    offs_y_m,
+                    offs_y_n_scale,
+                    start_z1,
+                    start_m1,
+                    M,
+                    n_mx_blocks,
+                    XOutputScaleBlockOffs,
+                    expt_id1,
+                    pid_k,
+                    pid_k1,
+                    batch_size,
+                    stride_y_mx_k,
+                    stride_y_mx_z,
+                    stride_y_mx_m,
+                    stride_y_mx_n,
+                    HAS_SCATTER,
+                    USE_SCATTER_TMA,
+                    Y_TMA_MODE,
+                    RAGGED_DIMENSION,
+                    Y_MX_SCALE_LAYOUT,
+                    INDEX_TYPE=index_type,
+                )
+                mask_n_scale = offs_y_n_scale < n_mx_blocks
+                if Y_MX_SCALE_LAYOUT == "BLACKWELL_ACT_SCALE" and not OUT_N_TILE_ALIGNED:
+                    out_scale = tl.where(mask_n_scale[None, :], out_scale, 0)
+                    mask_n_scale = offs_y_n_scale < tl.cdiv(n_mx_blocks, 4) * 4
+                scale_store_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n_scale[None, :]
+                tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
+            else:
+                # Flexpoint
+                if USE_LOCAL_ABSMAX:
+                    out_view = out
+                    if MAXABS_PERMUTE_SEQUENCE is not None:
+                        NDIMS: tl.constexpr = len(MAXABS_PERMUTE_SEQUENCE)
+                        tl.static_assert(NDIMS > 0)
+                        NBITS: tl.constexpr = out.numel.value.bit_length() - 1
+                        tl.static_assert(NBITS % NDIMS == 0, "Permutation requires equally sized dimensions")
+                        CHUNK_SIZE: tl.constexpr = 1 << (NBITS // NDIMS)
+                        out_view = out_view.reshape((CHUNK_SIZE,) * NDIMS).permute(MAXABS_PERMUTE_SEQUENCE)
+                    out_view = tl.reshape(out_view, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK])
+                    local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
+
+                if PER_BATCH_OUT_SCALE:
+                    ExpectedScale = YExpectedScale + start_z1
+                    ActualScale = YActualScale + start_z1
+                else:
+                    ExpectedScale = YExpectedScale
+                    ActualScale = None  # local absmax is tracked and updated after the loop
+
+                out = float_to_flex(
+                    out, ExpectedScale, ActualScale, YChecksumScale,
+                    None, # mask: out is manually masked to 0
+                    YPtr, FLEXPOINT_SATURATE_INF
+                )
+                if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
+                    out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
+
+            out = out.to(YPtr.dtype.element_ty)
+            if is_out_fp4:
+                out_off_n = out_off_n // 2
+                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
+                mask_n = offs_y_n < tl.cdiv(yN, 2)
+
+            if pYPtrs is None:
+                if USE_SCATTER_TMA:
+                    # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
+                    # there shouldn't be any other negative values.
+                    offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+                    Y.scatter(out, offs_y_m, out_off_n)
+                elif Y_TMA_MODE == "dense":
+                    out = tl.reshape(out, [1] + out.shape)
+                    off_kz = pid_k * batch_size + start_z1
+                    Y.store([off_kz, off_m1, out_off_n], out)
+                elif Y_TMA_MODE == "ragged":
+                    out = tl.reshape(out, [1] + out.shape)
+                    store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
+                else:
+                    tl.static_assert(Y_TMA_MODE is None)
+                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
+                    mask_n = offs_y_n < yN
+                    if is_out_fp4:
+                        offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
+                        mask_n = offs_y_n < tl.cdiv(yN, 2)
+                    mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+                    offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                    tl.store(YPtr + offs_kzmn, out, mask=mask)
+            else:
+                tl.static_assert(not is_out_fp4, "FP4 outputs are not supported with fused comms")
+                tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
+                offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
+                mask_n = offs_y_n < yN
+                mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
+
+                dst_shard_idx, dst_y_m, dst_y_n = map_dst_coord.fn(
+                    start_m1 + off_m1 if WriteBackIndx is None else None, offs_y_m,
+                    out_off_n, offs_y_n,
+                    *map_dst_coord.captured)
+                offs_kzmn = (
+                    pid_k1.to(index_type) * stride_y_k +
+                    start_z1.to(index_type) * stride_y_z +
+                    dst_y_n[None, :] * stride_y_n +
+                    dst_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
+                )
+                for i in tl.static_range(n_reduce_shards):
+                    if dst_shard_idx is not None:
+                        peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
+                    else:
+                        peer = (reduce_rank + i) % n_reduce_shards
+                    peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+                    if len(peer_Y_ptr.shape) == 0:
+                        tl.multiple_of(peer_Y_ptr, 16)
+                    else:
+                        tl.multiple_of(peer_Y_ptr, [16, 16])
+                    tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
+
+
+    # Update the flexpoint scales
+    if USE_LOCAL_ABSMAX:
+        tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
+
+    if pYPtrs is not None:
+        all_writes_issued.fn(*all_writes_issued.captured)
+
+
+_per_device_alloc_fns = {}
+
+
+def get_per_device_per_stream_alloc_fn(device):
+    if device not in _per_device_alloc_fns:
+        _per_stream_tensors = collections.defaultdict(list)
+
+        def alloc_fn(size: int, alignment: int, stream: int):
+            assert alignment == 128
+            tensors = _per_stream_tensors[stream]
+            if not tensors or tensors[-1].numel() < size:
+                tensors.append(torch.empty(size, device=device, dtype=torch.int8))
+                tensors[-1].__hibernate__ = {"type": "ignore"}
+            return tensors[-1]
+
+        _per_device_alloc_fns[device] = alloc_fn
+    return _per_device_alloc_fns[device]

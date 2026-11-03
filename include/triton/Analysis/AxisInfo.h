@@ -2,12 +2,16 @@
 #define TRITON_ANALYSIS_AXISINFO_H
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
 
+#include <algorithm>
 #include <optional>
+#include <utility>
 
 namespace mlir::triton {
 
@@ -28,11 +32,14 @@ public:
       : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
 
   AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
-           ArrayRef<int64_t> constancy, std::optional<int64_t> constantValue)
+           ArrayRef<int64_t> constancy, std::optional<APInt> constantValue)
       : contiguity(contiguity), divisibility(divisibility),
-        constancy(constancy), constantValue(constantValue) {
+        constancy(constancy), constantValue(std::move(constantValue)) {
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
+    int64_t globalDivisibility = getGlobalDivisibility();
+    for (int64_t &dimDivisibility : this->divisibility)
+      dimDivisibility = std::max(dimDivisibility, globalDivisibility);
   }
 
   // contiguity[d] is the length of the shortest sequence of contiguous integers
@@ -85,6 +92,16 @@ public:
   int64_t getDivisibility(size_t dim) const { return divisibility[dim]; }
   const DimVectorT &getDivisibility() const { return divisibility; }
 
+  // Unit contiguity makes every element a group base, so divisibility from
+  // such a dimension applies globally.
+  int64_t getGlobalDivisibility() const {
+    int64_t globalDivisibility = 1;
+    for (int dim = 0; dim < getRank(); ++dim)
+      if (getContiguity(dim) == 1)
+        globalDivisibility = std::max(globalDivisibility, getDivisibility(dim));
+    return globalDivisibility;
+  }
+
   // constancy[d] is the length of the shortest sequence of repeating integers
   // along dimension d.
   //
@@ -106,7 +123,7 @@ public:
 
   int getRank() const { return contiguity.size(); }
 
-  std::optional<int64_t> getConstantValue() const { return constantValue; }
+  const std::optional<APInt> &getConstantValue() const { return constantValue; }
 
   static void initPessimisticStateFromFunc(int argNumber,
                                            FunctionOpInterface funcOp,
@@ -119,10 +136,15 @@ public:
   bool operator==(const AxisInfo &other) const {
     return contiguity == other.contiguity &&
            divisibility == other.divisibility && constancy == other.constancy &&
-           constantValue == other.constantValue;
+           ((!constantValue && !other.constantValue) ||
+            (constantValue && other.constantValue &&
+             constantValue->getBitWidth() ==
+                 other.constantValue->getBitWidth() &&
+             *constantValue == *other.constantValue));
   }
 
   static AxisInfo getPessimisticValueState(Value value);
+  static AxisInfo getConstantValueState(Type type, APInt value);
 
   // The gcd of both arguments for each dimension
   static AxisInfo join(const AxisInfo &lhs, const AxisInfo &rhs);
@@ -148,8 +170,8 @@ private:
   DimVectorT divisibility;
   DimVectorT constancy;
 
-  // The constant value of the lattice if we can infer it.
-  std::optional<int64_t> constantValue;
+  // Exact fixed-width integer scalar or splat bits, if known.
+  std::optional<APInt> constantValue;
 };
 
 class AxisInfoVisitor {
@@ -191,9 +213,35 @@ private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
 };
 
-namespace axisinfo {
-using CallbackType = std::function<void(AxisInfoVisitorList &)>;
-} // namespace axisinfo
+class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
+                             dataflow::Lattice<AxisInfo>> {
+protected:
+  AxisInfoVisitorList visitors;
+
+  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override;
+
+  void visitNonControlFlowArguments(
+      Operation *op, const RegionSuccessor & /*successor*/,
+      ValueRange /*nonSuccessorInputs*/,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) override;
+
+  void
+  visitForOpInductionVar(scf::ForOp op,
+                         ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+
+public:
+  AxisInfoAnalysis(DataFlowSolver &solver);
+  using dataflow::SparseForwardDataFlowAnalysis<
+      dataflow::Lattice<AxisInfo>>::getLatticeElement;
+
+  LogicalResult
+  visitOperation(Operation *op,
+                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
+                 ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
+
+  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver);
+  using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
+};
 
 // Module level axis info analysis based on the call graph, assuming that we do
 // not have recursive functions.
@@ -205,24 +253,26 @@ using CallbackType = std::function<void(AxisInfoVisitorList &)>;
 using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public CallGraph<AxisInfoMapT> {
 public:
+  // AxisInfoAnalysis::LoadCallback loads the per-function analysis pass into
+  // the DataFlowSolver. This allows passes derived from AxisInfoAnalysis to
+  // re-use the module level analysis framework.
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp,
-                                  axisinfo::CallbackType callback = nullptr)
+                                  AxisInfoAnalysis::LoadCallback loadAnalysis =
+                                      AxisInfoAnalysis::loadDefaultAnalysis)
       : CallGraph<AxisInfoMapT>(moduleOp) {
     SmallVector<FunctionOpInterface> funcs;
-    for (auto root : getRoots()) {
-      walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-          // Pre-order edge walk callback
-          [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-          // Post-order node walk callback
-          [&](FunctionOpInterface funcOp) {
-            funcs.push_back(funcOp);
-            funcMap.try_emplace(funcOp, AxisInfoMapT{});
-          });
-    }
+    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        // Pre-order edge walk callback
+        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
+        // Post-order node walk callback
+        [&](FunctionOpInterface funcOp) {
+          funcs.push_back(funcOp);
+          funcMap.try_emplace(funcOp, AxisInfoMapT{});
+        });
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      initialize(funcOp, callback);
+      initialize(funcOp, loadAnalysis);
       funcOp.walk([&](CallOpInterface callOp) {
         auto callee = dyn_cast<FunctionOpInterface>(
             callOp.resolveCallableInTable(&symbolTable));
@@ -264,8 +314,7 @@ public:
   unsigned getMaskAlignment(Value mask);
 
 private:
-  void initialize(FunctionOpInterface funcOp,
-                  axisinfo::CallbackType callback = nullptr);
+  void initialize(FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 } // namespace mlir::triton

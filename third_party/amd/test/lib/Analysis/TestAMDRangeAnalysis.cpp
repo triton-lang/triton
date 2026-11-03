@@ -31,7 +31,18 @@ struct TestAMDRangeAnalysisPass
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+        solver->load<AMD::TritonIntegerRangeAnalysis>(
+            assumptions, &getAnalysis<DominanceInfo>());
+
+    // Apply PID bounds from module attributes (e.g. "test.pid-bound-x"=127).
+    for (auto [axis, name] : llvm::zip(
+             SmallVector<int>{0, 1, 2},
+             SmallVector<StringRef>{"test.pid-bound-x", "test.pid-bound-y",
+                                    "test.pid-bound-z"})) {
+      if (auto attr = mod->getAttrOfType<IntegerAttr>(name))
+        rangeAnalysis->setPidBound(axis, attr.getInt());
+    }
+
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
@@ -85,8 +96,9 @@ struct TestAMDRangeAnalysisPass
         }
 
         if (auto cmpOp = llvm::dyn_cast<arith::CmpIOp>(op)) {
-          if (AMD::cmpIIsStaticallyTrue(*solver, cmpOp))
-            emitRemark(op->getLoc(), "result is true");
+          if (auto result = AMD::evaluateCmpI(*solver, cmpOp))
+            emitRemark(op->getLoc(),
+                       *result ? "result is true" : "result is false");
         }
       }
 

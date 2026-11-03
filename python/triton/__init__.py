@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.5.0'
+__version__ = '3.9.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -28,9 +28,11 @@ from . import testing
 from . import tools
 
 must_use_result = language.core.must_use_result
+aggregate = language.core._aggregate
 
 __all__ = [
     "AsyncCompileMode",
+    "aggregate",
     "autotune",
     "cdiv",
     "CompilationError",
@@ -65,7 +67,7 @@ __all__ = [
 
 @constexpr_function
 def cdiv(x: int, y: int):
-    return (x + y - 1) // y
+    return (x + (y - 1)) // y
 
 
 @constexpr_function

@@ -10,12 +10,15 @@ using namespace mlir::triton::nvidia_gpu;
 namespace mlir::triton::nvws {
 
 Operation *createAlloc(OpBuilder &builder, Location loc,
-                       MemDescType memDescType, Value src) {
+                       MemDescType memDescType, Value src,
+                       std::optional<int32_t> alignment) {
   if (isa<SharedMemorySpaceAttr>(memDescType.getMemorySpace())) {
-    return builder.create<LocalAllocOp>(loc, memDescType, src);
+    if (alignment)
+      return LocalAllocOp::create(builder, loc, memDescType, src, *alignment);
+    return LocalAllocOp::create(builder, loc, memDescType, src);
   } else {
     assert(isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace()));
-    return builder.create<TMEMAllocOp>(loc, memDescType, src);
+    return TMEMAllocOp::create(builder, loc, memDescType, src);
   }
 }
 
@@ -23,7 +26,7 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
                                 ValueRange allocOps, Location loc) {
   auto ctx = builder.getContext();
   auto arefTy = ArefType::get(ctx, TypeArrayAttr::get(ctx, arefTypes));
-  return builder.create<ArefCreateOp>(loc, arefTy, allocOps);
+  return ArefCreateOp::create(builder, loc, arefTy, allocOps);
 }
 
 int getArefDepth(MemDescType bufTy) {
@@ -52,6 +55,14 @@ MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
   return gpu::MemDescType::get(bufferShape, bufTy.getElementType(),
                                bufTy.getEncoding(), bufTy.getMemorySpace(),
                                /*mutableMemory*/ true);
+}
+
+LoopLikeOpInterface getOuterWSLoop(LoopLikeOpInterface loop) {
+  auto wsLoop = loop;
+  while (wsLoop && !wsLoop->hasAttr(triton::kWarpSpecializeAttrName)) {
+    wsLoop = wsLoop->getParentOfType<LoopLikeOpInterface>();
+  }
+  return wsLoop;
 }
 
 } // namespace mlir::triton::nvws

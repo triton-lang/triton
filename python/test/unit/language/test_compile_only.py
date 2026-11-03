@@ -1,8 +1,58 @@
+import pytest
+import re
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-import re
 from triton.compiler import ASTSource
+from triton.compiler.errors import CompileTimeAssertionFailure
+from triton.runtime.driver import driver
+
+
+@triton.jit
+def topk_kernel(K: tl.constexpr):
+    x = tl.arange(0, 8)
+    tl.topk(x, K)
+
+
+@pytest.mark.parametrize(
+    "k, error",
+    [
+        (0, "topk: k must be greater than 0"),
+        (-1, "topk: k must be greater than 0"),
+        (3, "topk: k must be a power of two"),
+        (16, "topk: k must not exceed the size of the selected dimension"),
+    ],
+)
+def test_topk_invalid_k(k, error):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    with pytest.raises(triton.CompilationError) as exc_info:
+        triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    cause = exc_info.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert isinstance(cause, CompileTimeAssertionFailure)
+    assert cause.error_message == error
+
+
+@pytest.mark.parametrize("k", [1, 8])
+def test_topk_valid_k(k):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+
+
+def test_compile_only_sort_keeps_comparisons_boolean() -> None:
+
+    @triton.jit
+    def sort_kernel(values, result):
+        offsets = tl.arange(0, 128)
+        loaded = tl.load(values + offsets)
+        sorted_values = tl.sort(loaded, descending=False)
+        tl.store(result + offsets, sorted_values)
+
+    source = ASTSource(fn=sort_kernel, signature={"values": "*i32", "result": "*i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert "arith.extui" not in compiled.asm["ttgir"]
 
 
 def test_compile_only_sm100() -> None:
@@ -19,6 +69,287 @@ def test_compile_only_sm100() -> None:
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
     assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
+def test_umulhi_truncated_input(seed_type, dtype):
+    from triton._C.libtriton import ir
+    from triton.compiler.compiler import make_backend
+
+    @triton.jit
+    def kernel(seed, out, DTYPE: tl.constexpr):
+        x = seed.to(DTYPE)
+        tl.store(out, tl.umulhi(x, x))
+
+    target = GPUTarget("cuda", 100, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({"num_warps": 1, "ptx_version": 94})
+    bits = dtype.primitive_bitwidth
+    source = ASTSource(kernel, signature={"seed": seed_type, "out": f"*u{bits}", "DTYPE": "constexpr"},
+                       constexprs={"DTYPE": dtype})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
+                            context)
+    metadata = {"target": target, **vars(options)}
+    stages = {}
+    backend.add_stages(stages, options, source.language)
+    # Stop at PTX so this regression test needs neither a GPU nor ptxas.
+    for kind, stage in stages.items():
+        module = stage(module, metadata)
+        if kind == "llir":
+            assert f"@llvm.umulh.i{bits}" in str(module)
+        if kind == "ptx":
+            assert f"mul.hi.u{bits}" in module
+            assert "mul.lo." not in module
+            break
+    else:
+        pytest.fail("PTX stage not found")
+
+
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_fabs_preserves_nan_payload(instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    source = """
+target triple = "nvptx64-nvidia-cuda"
+declare <4 x float> @llvm.fabs.v4f32(<4 x float>)
+define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %output) {
+  %value = load <4 x float>, ptr addrspace(1) %input, align 16
+  %absolute = call <4 x float> @llvm.fabs.v4f32(<4 x float> %value)
+  store <4 x float> %absolute, ptr addrspace(1) %output, align 16
+  ret void
+}
+"""
+    ptx = backend.make_ptx(source, {}, options, 90)
+    if instrumentation_mode == "fpsan":
+        assert "abs.f32" not in ptx
+        masks = re.findall(r"\band\.b32\s+[^;]+,\s*(0x[0-9a-fA-F]+|\d+)\s*;", ptx)
+        assert len(masks) == 4
+        assert all(int(mask, 0) == 0x7FFFFFFF for mask in masks)
+    else:
+        assert len(re.findall(r"\babs\.f32\b", ptx)) == 4
+        assert "and.b32" not in ptx
+
+
+@pytest.mark.parametrize("dtype, suffix", [("half", "f16"), ("bfloat", "bf16")])
+@pytest.mark.parametrize("lanes", [1, 4])
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_copysign_preserves_nan_payload(dtype, suffix, lanes, instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 100, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    ty = dtype if lanes == 1 else f"<{lanes} x {dtype}>"
+    intrinsic = suffix if lanes == 1 else f"v{lanes}{suffix}"
+    source = f'''
+target triple = "nvptx64-nvidia-cuda"
+declare {ty} @llvm.copysign.{intrinsic}({ty}, {ty})
+define ptx_kernel void @copysign_kernel(ptr addrspace(1) %input,
+                                      ptr addrspace(1) %signs,
+                                      ptr addrspace(1) %output) {{
+  %value = load {ty}, ptr addrspace(1) %input, align 8
+  %sign = load {ty}, ptr addrspace(1) %signs, align 8
+  %signed = call {ty} @llvm.copysign.{intrinsic}({ty} %value, {ty} %sign)
+  store {ty} %signed, ptr addrspace(1) %output, align 8
+  ret void
+}}
+'''
+    ptx = backend.make_ptx(source, {}, options, 100)
+    if instrumentation_mode == "fpsan":
+        assert not re.search(r"\b(?:abs|neg)\.(?:f16|bf16)(?:x2)?\b", ptx)
+        assert ptx.count("xor.b16 diff,") == lanes
+        assert ptx.count("and.b16 diff, diff, 0x8000;") == lanes
+        assert len(re.findall(r"xor\.b16 [^,]+, [^,]+, diff;", ptx)) == lanes
+    else:
+        assert "xor.b16 diff," not in ptx
+
+
+@pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
+def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
+    packed_type = f"{element_type}x2"
+    tensor_type = f"tensor<256x{element_type}, #blocked>"
+    pointer_type = f"!tt.ptr<{element_type}>"
+    operations = [
+        ("add", "%av, %bv", 2),
+        ("sub", "%add, %bv", 2),
+        ("mul", "%sub, %bv", 2),
+        ("fma", "%mul, %bv, %cv", 3),
+    ]
+    if element_type != "f32":
+        operations.extend([("min", "%fma, %bv", 2), ("max", "%min, %cv", 2)])
+
+    instructions = []
+    for name, operands, operand_count in operations:
+        tensor_types = ", ".join([tensor_type] * operand_count)
+        instructions.append(f"    %{name} = ttng.packed_arith {name} "
+                            f"{operands} : ({tensor_types}) -> {tensor_type}")
+    packed_operations = "\n".join(instructions)
+    result = operations[-1][0]
+    src = f"""
+#blocked = #ttg.blocked<{{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @packed_chain_{element_type}(%a: {pointer_type} {{tt.divisibility = 16 : i32}}, %b: {pointer_type} {{tt.divisibility = 16 : i32}}, %c: {pointer_type} {{tt.divisibility = 16 : i32}}, %out: {pointer_type} {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %offsets = tt.make_range {{start = 0 : i32, end = 256 : i32}} : tensor<256xi32, #blocked>
+    %ap = tt.splat %a : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %bp = tt.splat %b : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %cp = tt.splat %c : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %op = tt.splat %out : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %aa = tt.addptr %ap, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ba = tt.addptr %bp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ca = tt.addptr %cp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %oa = tt.addptr %op, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %av = tt.load %aa : tensor<256x{pointer_type}, #blocked>
+    %bv = tt.load %ba : tensor<256x{pointer_type}, #blocked>
+    %cv = tt.load %ca : tensor<256x{pointer_type}, #blocked>
+{packed_operations}
+    tt.store %oa, %{result} : tensor<256x{pointer_type}, #blocked>
+    tt.return
+  }}
+}}
+"""
+    source_file = tmp_path / f"packed_chain_{element_type}.ttgir"
+    source_file.write_text(src)
+    ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
+    pattern = re.compile(
+        rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
+        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+    emitted_operations = list(pattern.finditer(ptx))
+    assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
+    for previous, current in zip(emitted_operations, emitted_operations[1:]):
+        assert current.group("input") == previous.group("output")
+    assert "prmt.b32" not in ptx
+
+
+def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:
+    src = """
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @ws_cluster_barrier() {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<5x1xi8, #shared, #ttg.shared_memory, mutable>
+    ttg.warp_specialize()
+    default {
+      ttng.cluster_barrier
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+"""
+    temp_file = tmp_path / "ws_cluster_barrier.ttgir"
+    temp_file.write_text(src)
+    k = triton.compile(str(temp_file), target=GPUTarget("cuda", 90, 32))
+    ptx = k.asm["ptx"]
+    assert "mbarrier.arrive.release.cluster.shared::cluster.b64" in ptx
+    assert "mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64" in ptx
+    assert "mapa" not in ptx
+    assert k.metadata.shared == 40
+    assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "gsan", "iisan", "fpsan", "gsan,consan"])
+def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch, fresh_triton_cache):
+
+    class UnavailableDriver:
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Compilation accessed the driver: {name}")
+
+    monkeypatch.setattr(driver, "_active", UnavailableDriver())
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
+                              options={"maxnreg": 42, "max_occupancy": 4, "instrumentation_mode": instrumentation_mode})
+    assert compiled.module is None
+    assert compiled.metadata.max_occupancy == (1 if "gsan" in instrumentation_mode else 4)
+    if instrumentation_mode:
+        assert compiled.metadata.maxnreg is None
+        assert ".maxnreg" not in compiled.asm["ptx"]
+    else:
+        assert compiled.metadata.maxnreg == 42
+        assert ".maxnreg 42" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("max_occupancy", [None, 1, 4])
+def test_max_occupancy_compile_only(max_occupancy, monkeypatch, fresh_triton_cache):
+
+    class UnavailableDriver:
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Compilation accessed the driver: {name}")
+
+    monkeypatch.setattr(driver, "_active", UnavailableDriver())
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32), options={"max_occupancy": max_occupancy})
+    assert compiled.module is None
+    assert compiled.metadata.max_occupancy == max_occupancy
+    assert compiled.metadata.shared == 0
+
+
+@pytest.mark.parametrize("max_occupancy", [0, -1, 1.5, True, "2"])
+def test_max_occupancy_invalid(max_occupancy):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(ValueError, match="max_occupancy must be a positive integer or None"):
+        backend.parse_options({"max_occupancy": max_occupancy})
+
+
+@pytest.mark.parametrize("num_ctas", [0, -2, 3])
+def test_num_ctas_invalid(num_ctas):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(AssertionError, match="num_ctas must be a power of 2"):
+        backend.parse_options({"num_ctas": num_ctas})
+
+
+def test_compile_only_expect_zero() -> None:
+
+    @triton.jit
+    def expect_zero_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + offsets)
+        y = tl.expect_zero(x, offsets < 8)
+        tl.store(out_ptr + offsets, y)
+
+    src = triton.compiler.ASTSource(
+        fn=expect_zero_kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK_SIZE": "constexpr"},
+        constexprs={"BLOCK_SIZE": 16},
+    )
+    target = GPUTarget("cuda", 100, 32)
+
+    regular = triton.compile(src, target=target)
+    assert "arith.select" not in regular.asm["ttir"]
+    assert "tt.assert" not in regular.asm["ttir"]
+
+    debug = triton.compile(src, target=target, options={"debug": True})
+    assert "arith.select" not in debug.asm["ttir"]
+    assert "tt.assert" in debug.asm["ttir"]
+
+    fpsan = triton.compile(src, target=target, options={"instrumentation_mode": "fpsan"})
+    assert "arith.select" in fpsan.asm["ttir"]
+    assert "tt.assert" not in fpsan.asm["ttir"]
 
 
 def test_compile_only_dot() -> None:
@@ -65,9 +396,9 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*"
                r"tcgen05\.mma\.cta_group::1.kind::f16"
                r"(.|\n)*"
-               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64"
+               r"tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64"
                r"(.|\n)*"
-               r"mbarrier.try_wait.parity.shared.b64"
+               r"mbarrier.try_wait.parity.shared::cta.b64"
                r"(.|\n)*"
                r"tcgen05.ld.sync.aligned.16x32bx2.x32.b32"
                r"(.|\n)*"
@@ -154,7 +485,7 @@ def test_compile_only_dot_mxfp() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X")
+    pattern = (r"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
     assert k.asm["cubin"] != b""
 
@@ -182,3 +513,41 @@ def test_signature_ordering():
     )
     target = triton.runtime.driver.active.get_current_target()
     triton.compile(src=src, target=target)
+
+
+def test_fp8_compiles_for_multiple_architectures_hip():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    gfx950 has native FP8 instructions; gfx942 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("hip", "gfx950", 64))
+    triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
+
+
+def test_fp8_compiles_for_multiple_architectures_cuda():
+    """
+    Validate FP8 compilation succeeds for architectures with different
+    hardware support.
+
+    SM90 has native FP8 instructions; SM80 does not and requires software
+    conversion. Compiling for both in sequence must succeed for each target.
+    """
+
+    @triton.jit
+    def fp8_convert(src, dst):
+        idx = tl.arange(0, 64)
+        tl.store(dst + idx, tl.load(src + idx).to(tl.float8e5))
+
+    src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    triton.compile(src, target=GPUTarget("cuda", 80, 32))

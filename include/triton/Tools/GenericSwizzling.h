@@ -26,6 +26,14 @@ struct LocalMemOpTile {
   // If laneAddr.size() < 3, we assume that the first
   // 3 - laneAddr.size() bases are registers
   llvm::SmallVector<int32_t> laneAddr;
+  // A set of bitmasks representing the basis vectors whose span defines the
+  // phase 0 lane ID subspace. This is used to track which parallel lane
+  // addresses are processed together in the same hardware execution phase for
+  // shared memory bank conflict accounting.
+  llvm::SmallVector<int32_t> laneMask;
+
+  llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
+  llvm::SmallVector<int32_t> getLaneMask(llvm::ArrayRef<int32_t> lane) const;
 };
 
 // Given a set of possible instructions given by
@@ -37,16 +45,25 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
                  llvm::ArrayRef<LocalMemOpTile> srcTiles,
                  llvm::ArrayRef<LocalMemOpTile> dstTiles, int32_t bitwidth);
 
+int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
+                           int32_t bitwidth);
+
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
-                                  const LinearLayout &dst, int32_t bitwidth);
+                                  const LinearLayout &dst, int32_t bitwidth,
+                                  int32_t numBanks = 32,
+                                  LocalMemOpTile srcTile = {},
+                                  LocalMemOpTile dstTile = {});
 
 std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       const LinearLayout &dst,
                                       const LinearLayout &smem,
-                                      int32_t bitwidth);
+                                      int32_t bitwidth, int32_t numBanks = 32,
+                                      LocalMemOpTile srcTile = {},
+                                      LocalMemOpTile dstTile = {});
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                         int32_t bitwidth);
+                         int32_t bitwidth, int32_t numBanks = 32,
+                         LocalMemOpTile laneTile = {});
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,

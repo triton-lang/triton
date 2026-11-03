@@ -8,6 +8,8 @@ namespace cupti {
 
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 
+DEFINE_DISPATCH(ExternLibCupti, getTimestamp, cuptiGetTimestamp, uint64_t *);
+
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
                 uint32_t *);
 
@@ -55,6 +57,9 @@ DEFINE_DISPATCH(ExternLibCupti, activityPopExternalCorrelationId,
 DEFINE_DISPATCH(ExternLibCupti, activitySetAttribute, cuptiActivitySetAttribute,
                 CUpti_ActivityAttribute, size_t *, void *)
 
+DEFINE_DISPATCH(ExternLibCupti, activityEnableHWTrace,
+                cuptiActivityEnableHWTrace, uint8_t)
+
 DEFINE_DISPATCH(ExternLibCupti, unsubscribe, cuptiUnsubscribe,
                 CUpti_SubscriberHandle)
 
@@ -65,6 +70,9 @@ DEFINE_DISPATCH(ExternLibCupti, getGraphExecId, cuptiGetGraphExecId,
 
 DEFINE_DISPATCH(ExternLibCupti, getGraphId, cuptiGetGraphId, CUgraph,
                 uint32_t *);
+
+DEFINE_DISPATCH(ExternLibCupti, getGraphNodeId, cuptiGetGraphNodeId,
+                CUgraphNode, uint64_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getCubinCrc, cuptiGetCubinCrc,
                 CUpti_GetCubinCrcParams *);

@@ -1,6 +1,7 @@
 import numpy
 import pytest
 import torch
+import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
 from triton.runtime.jit import MockTensor, JITCallable
@@ -8,6 +9,7 @@ from triton._utils import canonicalize_dtype
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
+from triton.language import target_info
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
@@ -38,7 +40,7 @@ class MockInt(int):
         return super().__new__(cls, value)
 
 
-def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
+def reference_specialize_impl(backend, arg, is_const, specialize_value, align, *, nested=False):
     if arg is None:
         return ("constexpr", None)
     elif isinstance(arg, bool):
@@ -65,7 +67,12 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, constexpr):
         return ("constexpr", arg)
     elif isinstance(arg, tuple):
-        spec = [reference_specialize_impl(backend, x, False, True, True) for x in arg]
+        fields = getattr(arg, "_fields", ())
+        skip = getattr(type(arg), "__triton_do_not_specialize__", ())
+        spec = []
+        for i, x in enumerate(arg):
+            specialize = (not nested or specialize_value) and not (fields and fields[i] in skip)
+            spec.append(reference_specialize_impl(backend, x, False, specialize, True, nested=True))
         make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
         tys = make_tuple([x[0] for x in spec])
         keys = make_tuple([x[1] for x in spec])
@@ -77,7 +84,11 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, GluonTensorDescriptor):
         assert hasattr(arg.base, "data_ptr")
         inner = canonicalize_dtype(arg.base.dtype)
-        return (f"tensordesc<{inner}{list(arg.block_shape)},{arg.layout!r}>", None)
+        is_im2col = arg.__class__.__name__ == "TensorDescriptorIm2Col"
+        type_name = "tensordesc_im2col" if is_im2col else "tensordesc"
+        # For im2col mode, include the original tensor rank in the signature
+        rank_suffix = f",input_rank={len(arg.shape)}" if is_im2col else ""
+        return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))
 
@@ -146,12 +157,51 @@ def gluon_tensordescriptors_to_specialize():
             tensor,
             block_shape=tensor.shape,
             layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)),
-        ) for tensor in tensors_to_specialize() if tensor.shape[-1] % 16 == 0
+        ) for tensor in tensors_to_specialize() if tensor.shape[-1] % 16 == 0 and tensor.dtype.itemsize <= 4
     ]
+
+
+def test_specialize_gluon_fp4_descriptor_without_active_target(monkeypatch):
+    monkeypatch.setattr(target_info, "current_target", lambda: None)
+    tensor = torch.empty((128, 128), dtype=torch.uint8)
+    layout = NVMMASharedLayout(128, 8, fp4_padded=True)
+
+    descriptor = GluonTensorDescriptor.from_tensor(tensor, [128, 64], layout)
+
+    assert native_specialize_impl(CUDABackend, descriptor, False, True,
+                                  True) == reference_specialize_impl(CUDABackend, descriptor, False, True, True)
 
 
 def mock_tensors_to_specialize():
     return [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize()]
+
+
+@pytest.mark.parametrize("handle", [1, 7, 16])
+def test_namedtuple_do_not_specialize(handle):
+
+    class Arguments(namedtuple("Arguments", "handle dynamic default")):
+        __triton_do_not_specialize__ = ("handle", "dynamic")
+
+    pointer = torch.empty(1, device="cpu", dtype=torch.float32)
+    constant = constexpr(3)
+    arg = Arguments(handle, (pointer, constant), (pointer, 1))
+    (types, ), (keys, ) = native_specialize_impl(CUDABackend, (arg, ), False, True, True)
+    assert types == Arguments("i32", ("*fp32", "constexpr"), ("*fp32", "constexpr"))
+    assert keys == Arguments(None, (None, constant), ("D", 1))
+    assert ((types, ), (keys, )) == reference_specialize_impl(CUDABackend, (arg, ), False, True, True)
+
+
+@pytest.mark.parametrize("names,exc,message", [
+    ("handle", TypeError, "must be a tuple of field names"),
+    (("unknown", ), ValueError, "unknown field 'unknown'"),
+])
+def test_namedtuple_do_not_specialize_invalid_fields(names, exc, message):
+
+    class Arguments(namedtuple("Arguments", "handle")):
+        __triton_do_not_specialize__ = names
+
+    with pytest.raises(exc, match=message):
+        native_specialize_impl(CUDABackend, Arguments(1), False, True, True)
 
 
 @pytest.mark.parametrize("input_generator", [
@@ -171,3 +221,21 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+@pytest.mark.parametrize("torch_name,dtype,canonical", [
+    ("float4_e2m1fn_x2", tl.float4e2m1x2, "fp4e2m1x2"),
+    ("float8_e8m0fnu", tl.float8e8m0fnu, "fp8e8m0fnu"),
+])
+def test_native_dtype_torch_contract(torch_name, dtype, canonical):
+    torch_dtype = getattr(torch, torch_name, None)
+    if torch_dtype is None:
+        pytest.skip(f"Torch does not expose {torch_name}")
+    storage = torch.arange(32, dtype=torch.uint8)
+    native = storage.view(torch_dtype)
+    assert canonicalize_dtype(torch_dtype) == canonicalize_dtype(dtype) == canonical
+    assert dtype.itemsize == torch_dtype.itemsize == 1
+    for backend in (CUDABackend, HIPBackend):
+        for value, name in ((storage, "u8"), (native, canonical), (storage, "u8"), (native, canonical)):
+            signature, _ = native_specialize_impl(backend, value, False, True, True)
+            assert signature == "*" + name
