@@ -4578,6 +4578,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 //--- scalar-atomics.mlir
 #atomic_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#atomic_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @scalar_atomic_integer_ops
   // CHECK-NOT: llvm.cond_br
@@ -4649,20 +4650,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
 
   // CHECK-LABEL: @scalar_atomic_float_ops
   // CHECK-NOT: llvm.cond_br
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f16
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, bf16
+  // CHECK: atom.global.gpu.relaxed.add.noftz.f16
   // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
   // CHECK: llvm.bitcast {{.*}} : f32 to i32
   // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, i32
   // CHECK: llvm.bitcast {{.*}} : i32 to f32
   // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // PTX-LABEL: .visible .entry scalar_atomic_float_ops(
-  // PTX: atom.relaxed.gpu.global.add.noftz.f16
-  // PTX: atom.relaxed.gpu.global.add.noftz.bf16
+  // PTX: atom.global.gpu.relaxed.add.noftz.f16
+  // PTX: atom.global.gpu.relaxed.add.noftz.bf16
   // PTX: atom.relaxed.gpu.global.add.f32
   // PTX: atom.relaxed.gpu.global.exch.b32
   // PTX: atom.relaxed.gpu.global.add.f64
-  tt.func public @scalar_atomic_float_ops(%p16: tensor<32x!tt.ptr<f16>, #atomic_blocked>, %pb16: tensor<32x!tt.ptr<bf16>, #atomic_blocked>, %p32: tensor<32x!tt.ptr<f32>, #atomic_blocked>, %p64: tensor<32x!tt.ptr<f64>, #atomic_blocked>, %v16: tensor<32xf16, #atomic_blocked>, %vb16: tensor<32xbf16, #atomic_blocked>, %v32: tensor<32xf32, #atomic_blocked>, %v64: tensor<32xf64, #atomic_blocked>) {
+  tt.func public @scalar_atomic_float_ops(%p16: tensor<32x!tt.ptr<f16>, #atomic_blocked>, %pb16: tensor<32x!tt.ptr<bf16>, #atomic_blocked>, %p32: tensor<32x!tt.ptr<f32>, #atomic_blocked>, %p64: tensor<32x!tt.ptr<f64>, #atomic_blocked>, %v32: tensor<32xf32, #atomic_blocked>, %v64: tensor<32xf64, #atomic_blocked>) {
+    %v16 = arith.constant dense<0x7E00> : tensor<32xf16, #atomic_blocked>
+    %vb16 = arith.constant dense<0x7FC0> : tensor<32xbf16, #atomic_blocked>
     %a = tt.atomic_rmw fadd, relaxed, gpu, %p16, %v16 : (tensor<32x!tt.ptr<f16>, #atomic_blocked>, tensor<32xf16, #atomic_blocked>) -> tensor<32xf16, #atomic_blocked>
     tt.store %p16, %a : tensor<32x!tt.ptr<f16>, #atomic_blocked>
     %b = tt.atomic_rmw fadd, relaxed, gpu, %pb16, %vb16 : (tensor<32x!tt.ptr<bf16>, #atomic_blocked>, tensor<32xbf16, #atomic_blocked>) -> tensor<32xbf16, #atomic_blocked>
@@ -4672,6 +4674,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     tt.store %p32, %d : tensor<32x!tt.ptr<f32>, #atomic_blocked>
     %e = tt.atomic_rmw fadd, relaxed, gpu, %p64, %v64 : (tensor<32x!tt.ptr<f64>, #atomic_blocked>, tensor<32xf64, #atomic_blocked>) -> tensor<32xf64, #atomic_blocked>
     tt.store %p64, %e : tensor<32x!tt.ptr<f64>, #atomic_blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @shared_atomic_fadd_nan
+  // CHECK: atom.shared.cta.relaxed.add.noftz.f16
+  // PTX-LABEL: .visible .entry shared_atomic_fadd_nan(
+  // PTX: atom.shared.cta.relaxed.add.noftz.f16
+  tt.func public @shared_atomic_fadd_nan(%out: tensor<32x!tt.ptr<f16>, #atomic_blocked>) {
+    %init = arith.constant dense<0.0> : tensor<1xf16, #atomic_blocked>
+    %smem = ttg.local_alloc %init : (tensor<1xf16, #atomic_blocked>) -> !ttg.memdesc<1xf16, #atomic_shared, #ttg.shared_memory, mutable>
+    %idx = arith.constant dense<0> : tensor<32xi32, #atomic_blocked>
+    %nan = arith.constant dense<0x7E00> : tensor<32xf16, #atomic_blocked>
+    %old = ttg.local_atomic_scatter_rmw fadd, %smem[%idx], %nan {axis = 0 : i32} : (!ttg.memdesc<1xf16, #atomic_shared, #ttg.shared_memory, mutable>, tensor<32xf16, #atomic_blocked>, tensor<32xi32, #atomic_blocked>) -> tensor<32xf16, #atomic_blocked>
+    tt.store %out, %old : tensor<32x!tt.ptr<f16>, #atomic_blocked>
     tt.return
   }
 

@@ -177,13 +177,22 @@ inline Value emitLLVMAtomicRMW(ConversionPatternRewriter &rewriter,
   return bitcast ? b.bitcast(old, valueTy) : old;
 }
 
+inline bool usePtxForHalfAdd(RMWOp op, Type type,
+                             const TargetInfoBase &targetInfo) {
+  // NVPTX can widen a 16-bit add of NaN to a 32-bit CAS.
+  return op == RMWOp::FADD &&
+         (type.isF16() ||
+          (type.isBF16() && targetInfo.supportNativeBF16AtomicAdd()));
+}
+
 inline FailureOr<Value>
 emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
               Type valueElemTy, Value ptr, ArrayRef<Value> vals,
               RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
               const TargetInfoBase &targetInfo, unsigned vec = 1,
               unsigned packed = 1, bool returnOld = true) {
-  if (pred || vec != 1 || packed != 1)
+  if (pred || vec != 1 || packed != 1 ||
+      usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
     return emitPtxAtomicRMWImpl(
         rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr, sem,
         stringifyMemSyncScope(scope).str(), pred, vec, packed,
@@ -201,8 +210,8 @@ inline FailureOr<Value>
 emitPtxSharedAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
                        Type valueElemTy, Value ptr, ArrayRef<Value> vals,
                        RMWOp rmwOpAttr, Value pred, bool isCluster,
-                       PtxAtomicInstr instr) {
-  if (!pred) {
+                       PtxAtomicInstr instr, const TargetInfoBase &targetInfo) {
+  if (!pred && !usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo)) {
     auto binOp = matchAtomicOp(rmwOpAttr);
     if (!binOp || (instr == PtxAtomicInstr::Red && rmwOpAttr == RMWOp::XCHG))
       return failure();

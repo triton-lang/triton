@@ -65,18 +65,20 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
 FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
                                      Location loc, Type valueElemTy, Value ptr,
                                      Value value, RMWOp rmwOp, bool returnOld,
-                                     bool isCluster, Value pred) {
+                                     bool isCluster, Value pred,
+                                     const NVIDIA::TargetInfo &targetInfo) {
   SmallVector<Value> vals{value};
   if (!returnOld) {
-    auto result =
-        emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                               pred, isCluster, PtxAtomicInstr::Red);
+    auto result = emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals,
+                                         rmwOp, pred, isCluster,
+                                         PtxAtomicInstr::Red, targetInfo);
     if (succeeded(result))
       return result;
   }
 
   return emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                                pred, isCluster, PtxAtomicInstr::Atom);
+                                pred, isCluster, PtxAtomicInstr::Atom,
+                                targetInfo);
 }
 
 LogicalResult lowerLdStMatrix(
@@ -396,8 +398,9 @@ public:
           results.push_back(result);
         continue;
       }
-      auto old = emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value,
-                                     rmwOp, returnOld, isCluster, pred);
+      auto old =
+          emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value, rmwOp,
+                              returnOld, isCluster, pred, targetInfo);
       if (failed(old))
         return failure();
       if (returnOld)
