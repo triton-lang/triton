@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Any
+from typing import List, Any, Callable
 from triton._utils import validate_block_shape, canonicalize_dtype
 
 
@@ -11,6 +11,8 @@ class TensorDescriptor:
     block_shape: List[int]
     padding: str = "zero"
     round_f32_to_tf32: bool = False
+    # On NVIDIA TMA launches, encode_tma(descriptor, metadata) can supply the 128 tensor-map bytes.
+    encode_tma: Callable[["TensorDescriptor", dict], bytes] | None = None
 
     def __post_init__(self):
         rank = len(self.shape)

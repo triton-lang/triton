@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -1201,13 +1202,16 @@ bool extractTmaDesc(void *ptr, PyObject *obj) {
                     "getTmaDesc() requires 64-bit compilation");
     return false;
   }
-  if (Py_TYPE(obj) != &PyCUtensorMapType) {
+  if (PyBytes_Check(obj) && PyBytes_GET_SIZE(obj) == sizeof(CUtensorMap)) {
+    memcpy(ptr, PyBytes_AS_STRING(obj), sizeof(CUtensorMap));
+  } else if (Py_TYPE(obj) == &PyCUtensorMapType) {
+    *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
+  } else {
     PyErr_Format(PyExc_TypeError,
-                 "object must be of type PyCUtensorMap, got %s",
+                 "expected PyCUtensorMap or 128 descriptor bytes, got %s",
                  Py_TYPE(obj)->tp_name);
     return false;
   }
-  *((CUtensorMap *)ptr) = ((PyCUtensorMapObject *)obj)->tensorMap;
   // Depending on the cuda version, alignof(CUtensorMap) may be 64 or 128.
   size_t alignment = alignof(CUtensorMap);
   uintptr_t remainder = (uintptr_t)ptr & (alignment - 1);

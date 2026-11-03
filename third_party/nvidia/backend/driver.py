@@ -203,6 +203,9 @@ def make_tensordesc_arg(arg, metadata, _):
     if metadata is None:
         return decompose_descriptor(arg)
 
+    if getattr(arg, "encode_tma", None) is not None:
+        return [arg.encode_tma(arg, metadata), *arg.shape, *arg.strides]
+
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
