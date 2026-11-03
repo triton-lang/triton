@@ -6,5 +6,14 @@ AMD RDNA 4
 .. autosummary::
     :toctree: generated
     :nosignatures:
+    :template: autosummary/gluon-module.rst
+
+    buffer
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
 
     wmma
+    CachePolicy

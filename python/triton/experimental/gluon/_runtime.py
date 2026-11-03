@@ -7,10 +7,16 @@ from triton._C.libtriton import ir
 
 T = TypeVar("T")
 
-__all__ = ["GluonJITFunction", "constexpr_function", "jit"]
+__all__ = ["GluonASTSource", "GluonJITFunction", "constexpr_function", "jit"]
 
 
 class GluonASTSource(ASTSource):
+    """An AST source for compiling a Gluon kernel with ``triton.compile``.
+
+    Pass an explicit target to ``triton.compile`` to compile without an active
+    GPU driver. As with ``triton.compiler.ASTSource``, callers supply the
+    signature, constexpr values, and specialization attributes.
+    """
 
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         super().__init__(fn, signature, constexprs, attrs)
@@ -89,6 +95,9 @@ def jit(
     :note: When a jit'd function is called, arguments are
         implicitly converted to pointers if they have a :code:`.data_ptr()` method
         and a `.dtype` attribute.
+
+    :note: Namedtuple argument classes support ``__triton_do_not_specialize__``
+        as documented in :func:`triton.jit`.
 
     :note: This function will be compiled and run on the GPU. It will only have access to:
 

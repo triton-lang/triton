@@ -260,6 +260,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// The tmem_store predicate is a scalar i1: a splatted select condition folds
+// into it as its scalar source, and a per-element condition must not fold.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!acc = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @select_splat_cond(
+  // CHECK: %[[NEG:.*]] = arith.xori %arg2, %true
+  // CHECK-NEXT: ttng.tmem_store %arg3, %arg0[%arg1], %[[NEG]] :
+  tt.func @select_splat_cond(%tm: !acc, %tok: !ttg.async.token, %cnd: i1, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
+    %true = arith.constant true
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %c = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
+    %s = arith.select %c, %v, %x : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
+  }
+
+  // CHECK-LABEL: @select_splat_cond_inverted(
+  // CHECK-NOT: arith.select
+  // CHECK: ttng.tmem_store %arg3, %arg0[%arg1], %arg2 :
+  tt.func @select_splat_cond_inverted(%tm: !acc, %tok: !ttg.async.token, %cnd: i1, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
+    %true = arith.constant true
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %c = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
+    %s = arith.select %c, %x, %v : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
+  }
+
+  // CHECK-LABEL: @select_tensor_cond(
+  // CHECK: %[[SEL:.*]] = arith.select %arg2
+  // CHECK: ttng.tmem_store %[[SEL]], {{.*}}, %true :
+  tt.func @select_tensor_cond(%tm: !acc, %tok: !ttg.async.token, %c: tensor<128x128xi1, #blocked>, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
+    %true = arith.constant true
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %s = arith.select %c, %v, %x : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>

@@ -1,12 +1,17 @@
-from typing import Sequence, List, TypeVar, Tuple, Callable
+from __future__ import annotations
+
+from typing import Sequence, List, TypeVar, Tuple, Callable, TYPE_CHECKING
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
-from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
+from triton._C.libtriton.gluon_ir import compute_tmem_reg_layout
 from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 from triton.runtime.jit import BoundConstexprFunction, ConstexprFunction
+
+if TYPE_CHECKING:
+    from triton._C.libtriton.gluon_ir import GluonOpBuilder
 
 TensorTy = TypeVar("TensorTy")
 
@@ -270,9 +275,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
-    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
-        _check(not can_reorder, lambda: "can_reorder is not supported in gluon")
-        value = super().reshape(input, dst_shape, can_reorder)
+    def reshape(self, input: TensorTy, dst_shape: List[int]):
+        value = super().reshape(input, dst_shape)
         return self._wrap_tensor_infer_layout(value)
 
     def splat(self, value, shape, layout):
@@ -573,7 +577,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
-            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=False) for t in inputs)
+            inputs = tuple(self.reshape(t, [t.numel.value]) for t in inputs)
             axis = 0
         # get result shape
         shape = inputs[0].type.shape

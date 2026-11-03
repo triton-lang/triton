@@ -349,7 +349,6 @@ public:
   matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto lowering = prepareLocalAtomicScatterRMW(
         op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
         op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
@@ -396,8 +395,8 @@ public:
       return success();
     }
 
-    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
-                          info.threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -408,7 +407,8 @@ private:
 
 void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   // Backend optimized memory ops get higher benefit
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
@@ -420,6 +420,6 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                                   benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
                                       benefit.getBenefit() + 1);
-  mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, benefit);
+  mlir::triton::populateMemoryOpToLLVMPatterns(
+      typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
 }

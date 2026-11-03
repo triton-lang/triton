@@ -23,6 +23,8 @@ DEFINE_DISPATCH(ExternLibHip, launchKernel, hipModuleLaunchKernel,
                 unsigned int, unsigned int, unsigned int, unsigned int,
                 hipStream_t, void **, void **)
 
+DEFINE_DISPATCH(ExternLibHip, init, hipInit, unsigned int)
+
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 
 DEFINE_DISPATCH(ExternLibHip, deviceGetAttribute, hipDeviceGetAttribute, int *,

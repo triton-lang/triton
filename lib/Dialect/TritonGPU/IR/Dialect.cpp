@@ -487,24 +487,6 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTASplitNum");
 }
 
-SmallVector<unsigned> getCTAOrder(Attribute layout) {
-  auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
-    return linearEnc.orderPerDim(kBlock, linearEnc.getOrder());
-  } else if (auto sharedLinearLayout =
-                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinearLayout.orderPerDim(kBlock,
-                                          sharedLinearLayout.getOrder());
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.orderPerDim(kBlock, slicedLinear.getOrder());
-    return cast<LayoutEncodingTrait>(sliceLayout).getCGALayout().getCTAOrder();
-  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTAOrder();
-  }
-  llvm_unreachable("Unimplemented usage of getCTAOrder");
-}
-
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
@@ -562,8 +544,14 @@ int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
 
 SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
                                           int numWarps) {
-  if (shape.size() == 3)
-    return {static_cast<unsigned>(numWarps), 1, 1};
+  if (shape.size() == 3) {
+    // Avoid replicating batches across warps when the per-CTA batch extent is
+    // small. Distribute the remaining warps across M/N using the 2D heuristic.
+    unsigned batchWarps = std::min<int64_t>(shape[0], numWarps);
+    auto warps = getMmaV2WarpsPerCTA(shape.drop_front(), numWarps / batchWarps);
+    warps.insert(warps.begin(), batchWarps);
+    return warps;
+  }
 
   assert(shape.size() == 2);
   SmallVector<int64_t> reps = {ceil(shape[0], int64_t{16}),
@@ -1423,16 +1411,15 @@ LinearLayout LinearEncodingTrait::toLinearLayout(const LinearLayout &ll,
                                                  ArrayRef<unsigned> repOrder,
                                                  ArrayRef<int64_t> shape) {
   auto result = ll;
+  auto kRegister = StringAttr::get(getContextFromLL(ll), "register");
   auto canonicalDims = llvm::to_vector(ll.getOutDimNames());
-  llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
   llvm::SmallVector<StringAttr> permutedDims;
   for (auto dim : repOrder) {
     permutedDims.push_back(canonicalDims[dim]);
-    namedShape[canonicalDims[dim]] = shape[dim];
   }
   result = result.transposeOuts(permutedDims);
-  result = ensureLayoutNotSmallerThan(result, namedShape);
-  result = ensureLayoutNotLargerThan(result, namedShape,
+  result = ensureLayoutNotSmallerThan(result, canonicalDims, shape, kRegister);
+  result = ensureLayoutNotLargerThan(result, canonicalDims, shape,
                                      /*broadcastRegisters=*/false);
   result = result.transposeOuts(canonicalDims);
   return result;
@@ -1444,9 +1431,8 @@ LinearEncodingTrait::getElemsPerThread(const LinearLayout &ll,
                                        ArrayRef<int64_t> shape) {
   // When broadcasting the layout the shape changes, otherwise the shape is
   // the same as the shape of the tensor
-  // We can either have BroadcastOp with SameOperandsAndResultEncoding, or keep
-  // the invariant that the shape of the LL is that of the tensor
-  // We choose the former for BC
+  // BroadcastOp may keep the same encoding as its source, so the layout's
+  // shape need not match the tensor's shape.
   auto scaledLL = toLinearLayout(ll, repOrder, shape);
   auto kRegister = StringAttr::get(getContextFromLL(ll), "register");
   return basesPerDimImpl(scaledLL.getBases(), kRegister,
@@ -1581,6 +1567,21 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
       instrShape);
 }
 
+LogicalResult NvidiaMmaEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned versionMajor,
+    unsigned versionMinor, ArrayRef<unsigned> warpsPerCTA,
+    CGAEncodingAttr CGALayout, ArrayRef<unsigned> instrShape) {
+  if (versionMajor == 1) {
+    return emitError()
+           << "Volta (versionMajor = 1) is deprecated and no longer supported";
+  }
+  if (versionMajor != 2 && versionMajor != 3) {
+    return emitError() << "versionMajor must be 2 (Ampere) or 3 (Hopper), got "
+                       << versionMajor;
+  }
+  return success();
+}
+
 void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "versionMajor = " << getVersionMajor()
@@ -1608,7 +1609,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> instrShape;
-  bool isTransposed;
+  bool isTransposed = false;
   SmallVector<unsigned> tilesPerWarp = {};
   unsigned elementBitWidth = 32;
   Attribute cgaAttr = nullptr;
@@ -1684,8 +1685,8 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     llvm::ArrayRef<unsigned int> instrShape, bool isTransposed,
     mlir::triton::gpu::CGAEncodingAttr,
     llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned elementBitWidth) {
-  if (!(version >= 0 && version <= 4)) {
-    return emitError() << "version must be in the [0, 4] range";
+  if (!(version == 0 || (version >= 2 && version <= 4))) {
+    return emitError() << "version must be 0 or in the [2, 4] range";
   }
 
   auto mDim = instrShape[0];
@@ -2439,6 +2440,10 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     }
   }
 
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (!ll.removeZeroBasesAlongDim(kBlock).isInjective())
+    return emitError() << "Broadcasting across CTAs requires zero block bases.";
+
   return success();
 }
 
@@ -2517,6 +2522,26 @@ CGAEncodingAttr PaddedSharedEncodingAttr::getCGALayout() const {
 //===----------------------------------------------------------------------===//
 // NVMMAShared encoding
 //===----------------------------------------------------------------------===//
+
+unsigned NVMMASharedEncodingAttr::getDefaultSwizzlingByteWidth(
+    ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+    CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded) {
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  int flattenOuterDim = 1;
+  for (int i = 1; i < shapePerCTA.size(); i++)
+    flattenOuterDim *= shapePerCTA[order[i]];
+  if (shapePerCTA.size() < 2 || flattenOuterDim < 8)
+    return 0;
+
+  int packingFactor = fp4Padded ? 2 : 1;
+  auto contigDimSizeInBytes =
+      shapePerCTA[order[0]] * packingFactor * elementBitWidth / 8;
+  for (unsigned swizzle : {128u, 64u, 32u}) {
+    if (contigDimSizeInBytes >= swizzle && contigDimSizeInBytes % swizzle == 0)
+      return swizzle;
+  }
+  return 0;
+}
 
 Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -3269,13 +3294,29 @@ struct TritonGPUInferLayoutInterface
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
 
+    auto dotOp = cast<DotOpInterface>(op);
+
+    // With WMMA v2+, each instruction takes K from 2 lanes per row. If a lane's
+    // kWidth contiguous K elements exceed its share of one instruction, the
+    // chunk is split across consecutive instructions, so K must cover it.
+    if (auto wmmaEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
+        wmmaEnc && wmmaEnc.getVersion() >= 2) {
+      constexpr int64_t kLanesPerInstrK = 2;
+      int64_t chunkK = aEncoding.getKWidth() * kLanesPerInstrK;
+      int64_t kDim =
+          cast<RankedTensorType>(dotOp.getA().getType()).getShape().back();
+      if (chunkK > wmmaEnc.getInstrShape()[2] && kDim < chunkK)
+        return op->emitError("WMMA dot operand kWidth = ")
+               << aEncoding.getKWidth() << " requires K >= " << chunkK
+               << ", but K = " << kDim;
+    }
+
     // Check if we have already selected an MMA version for Nvidia. If so,
     // validate that the encodings are correct and compatible.
     auto mmaAEncoding =
         dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
     auto mmaBEncoding =
         dyn_cast_or_null<NvidiaMmaEncodingAttr>(bEncoding.getParent());
-    auto dotOp = cast<DotOpInterface>(op);
     auto resEnc = cast<RankedTensorType>(dotOp.getD().getType()).getEncoding();
     auto mmaResEncoding = dyn_cast<NvidiaMmaEncodingAttr>(resEnc);
     if (mmaAEncoding || mmaBEncoding || mmaResEncoding) {
@@ -3389,6 +3430,36 @@ struct TritonGPUInferLayoutInterface
                                              Attribute srcEnc,
                                              ArrayRef<int64_t> dstShape,
                                              Attribute &dstEnc) const {
+    if (isa<LinearEncodingTrait>(srcEnc))
+      return failure();
+
+    // If this reshape just introduces a new size 1 dimension, and the source is
+    // a slice along that dimension, use the slice parent as the result
+    // encoding.
+    if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc)) {
+      if (sliceEnc.paddedShape(srcShape) == dstShape &&
+          !isExpensiveView(srcShape, srcEnc, dstShape, sliceEnc.getParent())) {
+        dstEnc = sliceEnc.getParent();
+        return success();
+      }
+    }
+    // Inverse of the above. If the reshape removes a size 1 dimension, the
+    // destination can just be a slice of the source.
+    // TODO: Consider extending this and the case above to support chained
+    // slices for cases where multiple size 1 dimensions are removed or added.
+    if (isa<DistributedEncodingTrait>(srcEnc) &&
+        srcShape.size() == dstShape.size() + 1) {
+      for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
+        if (srcShape[dim] == 1 &&
+            srcShape.take_front(dim) == dstShape.take_front(dim) &&
+            srcShape.drop_front(dim + 1) == dstShape.drop_front(dim)) {
+          dstEnc = SliceEncodingAttr::get(
+              srcEnc.getContext(), dim, cast<DistributedEncodingTrait>(srcEnc));
+          if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
+            return success();
+        }
+      }
+    }
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
       return failure();
@@ -3604,6 +3675,22 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
+  LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const override {
+    if (!isa<DistributedEncodingTrait>(dstType.getEncoding()))
+      return failure();
+    auto src = toLinearLayout(srcType);
+    auto dst = toLinearLayout(dstType);
+    // Ignore coordinates along the dimensions being broadcast.
+    for (auto [dim, size] : src.getOutDims())
+      dst = dst.resizeOutDim(dim, size);
+
+    auto kRegister = StringAttr::get(srcType.getContext(), "register");
+    return success(src.removeZeroBasesAlongDim(kRegister) ==
+                   dst.removeZeroBasesAlongDim(kRegister));
+  }
+
   LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
                                       Attribute expected, Attribute got,
                                       std::optional<Location> loc,
@@ -3631,17 +3718,11 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
                          std::optional<Location> loc) const override {
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
     }
-    // If allowReorder is true, there are multiple valid encodings. Prefer the
-    // hint if it is set and valid.
-    if (allowReorder && dstEnc)
-      if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
-        return success();
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
@@ -4381,7 +4462,8 @@ struct TensorModel
     return cast<RankedTensorType>(pointer).getRank();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
+    return getIntOrFloatOrPtrBitWidth(
+        cast<RankedTensorType>(pointer).getElementType());
   }
 };
 
@@ -4401,7 +4483,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getShape().size();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
+    return cast<MemDescType>(pointer).getElementTypeBitWidth();
   }
 };
 } // namespace
@@ -4442,6 +4524,13 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << attr.getName()
            << " which is expected only on `module` or `tt.func` ops";
   }
+  if (attr.getName() == AttrNumWarpsName || attr.getName() == AttrNumCTAsName) {
+    auto count = dyn_cast<IntegerAttr>(attr.getValue());
+    if (!count || !count.getValue().isStrictlyPositive() ||
+        !count.getValue().isPowerOf2())
+      return op->emitOpError("requires ")
+             << attr.getName() << " to be a positive power of two";
+  }
 
   return success();
 }
@@ -4467,6 +4556,10 @@ std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
     unsigned idx = op->getParentRegion()->getRegionNumber();
     return partitions.getParentOp().getPartitionNumWarps()[idx];
   }
+  // Function conversion preserves an outlined helper's warp count here.
+  if (isa<FunctionOpInterface>(op))
+    if (auto attr = op->getAttrOfType<IntegerAttr>("ws_num_warps"))
+      return attr.getInt();
   if (Operation *parent = op->getParentOp())
     return maybeLookupNumWarps(parent);
   return {};

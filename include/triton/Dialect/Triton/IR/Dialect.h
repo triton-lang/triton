@@ -89,6 +89,10 @@ public:
                             Attribute &resultEncoding,
                             std::optional<Location> loc) const = 0;
 
+  virtual LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const = 0;
+
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
   virtual LogicalResult
@@ -100,13 +104,10 @@ public:
   // makes the reshape a "nop", i.e. the same GPU threads contain the same
   // elements as before the reshape using legacy layouts.  This is not always
   // possible (in which case we fallback to using LinearLayouts)
-  // If allowReorder is set, an existing value in dstEnc is preferred when it
-  // still yields a non-expensive view.
   // In the future we'll always use LinearLayouts
   virtual LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are

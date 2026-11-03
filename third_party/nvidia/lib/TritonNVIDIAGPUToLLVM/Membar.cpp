@@ -5,10 +5,14 @@
 #include "TargetInfo.h"
 
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONNVIDIAGPUMEMBAR
@@ -29,36 +33,101 @@ struct TritonNvidiaGPUMembar
     NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
     ModuleAllocation allocation(
         mod, ttng::getNvidiaAllocationAnalysisScratchSizeFn(targetInfo));
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<triton::BufferRegionAnalysis>(
+        triton::BufferRegionAnalysis::Mode::AllMemory, &allocation);
+    if (failed(solver->initializeAndRun(mod))) {
+      signalPassFailure();
+      return;
+    }
 
-    ttng::runClusterBarrierInsertion(allocation, computeCapability);
+    // Synchronization insertion and arrival attributes preserve this geometry.
+    ttng::runClusterBarrierInsertion(allocation, computeCapability, *regions);
     if (failed(ttng::runCrossCTAMBarrierInitSyncInsertion(allocation,
                                                           computeCapability))) {
       signalPassFailure();
       return;
     }
+    ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
 
     ModuleMembarAnalysis membarPass(allocation, NVIDIA::canSkipBarSync);
-    membarPass.run();
+    membarPass.runAnalysis<MembarAnalysis>(*regions);
   }
 };
+
+// Preserve aliases introduced by allocator reuse. Multiple possible origins
+// are safe when every physical overlap has the same allocation origin.
+bool hasOnlySourceAliases(const AllocationSlice &lhs,
+                          const AllocationSlice &rhs) {
+  auto *before = lhs.physicalFootprint;
+  auto *after = rhs.physicalFootprint;
+  if (!before || !after)
+    return false;
+  for (const auto &a : before->regionInfo.views) {
+    assert(isa_and_nonnull<gpu::LocalAllocOp>(a.allocation) &&
+           "shared descriptor footprints must have allocation origins");
+    for (const auto &b : after->regionInfo.views) {
+      assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
+             "shared accesses must use the current function frame");
+      if (a.allocation != b.allocation && a.region.intersects(b.region))
+        return false;
+    }
+  }
+  return true;
+}
 
 } // namespace
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
-                            Allocation * /*allocation*/) {
-  // These mbarrier ops are single threaded, so are always synchronized wrt.
-  // each other.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          after))
+                            Allocation * /*allocation*/,
+                            const AllocationSlice &beforeSlice,
+                            const AllocationSlice &afterSlice) {
+  auto completesTransactions = [](Operation *op) {
+    return isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
+               ttng::AsyncSharedStoreOp>(op);
+  };
+  // Accessing these live destinations requires completion, which makes their
+  // writes visible to the generic proxy.
+  if (completesTransactions(before) &&
+      beforeSlice.sharedKind != gpu::SharedKind::Barrier &&
+      hasOnlySourceAliases(beforeSlice, afterSlice))
     return true;
 
-  // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
-      isa<ttng::WaitBarrierOp>(after))
-    return true;
+  // If before and after are mbarriers
+  if (beforeSlice.sharedKind == gpu::SharedKind::Barrier &&
+      afterSlice.sharedKind == gpu::SharedKind::Barrier) {
+    auto signalsCompletion = [&](Operation *op) {
+      if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
+        return arrive.getNoIncrement();
+      return completesTransactions(op) ||
+             isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp,
+                 ttng::TCGen5CommitOp, ttng::MMAv5OpInterface>(op);
+    };
+    // Signaling completion via incrementing or decrementing
+    // expect / arrive counters commutes with each other
+    // Note that this is just for mbarriers
+    // Data accessed by these ops may still add barriers
+    if (signalsCompletion(before) && signalsCompletion(after))
+      return true;
+
+    // A wait can observe a live counter concurrently with signals or waits.
+    if (isa<ttng::WaitBarrierOp>(after))
+      return true;
+
+    auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
+    auto contribution = dyn_cast<gpu::MBarrierOpInterface>(after);
+    // Each CTA must wait and contribute before the next phase can complete.
+    // Broadcast waits and nonidentity fromCTA routing omit participating CTAs.
+    if (wait && contribution && contribution.isPerWarp() &&
+        wait.getAlloc() == contribution.getBarrier() &&
+        !ttng::hasCGABroadcast(wait.getAlloc().getType())) {
+      auto expect = dyn_cast<ttng::BarrierExpectOp>(after);
+      auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);
+      if ((expect && !expect.getFromCTA()) || (arrive && !arrive.getFromCTA()))
+        return true;
+    }
+  }
 
   // Identical same-width commutative atomics can be freely reordered.
   auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);

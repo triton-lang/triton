@@ -1,6 +1,6 @@
+// RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx90a" | FileCheck %s --check-prefixes=NO-F16,NO-BF16,NO-F32,NO-F64
 // RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942" | FileCheck %s --check-prefixes=BUF-F16,NO-BF16,BUF-F32,BUF-F64
 // RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950" | FileCheck %s --check-prefixes=BUF-F16,BUF-BF16,BUF-F32,BUF-F64
-// RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1030" | FileCheck %s --check-prefixes=NO-F16,NO-BF16,NO-F32,NO-F64
 // RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100" | FileCheck %s --check-prefixes=NO-F16,NO-BF16,BUF-F32,NO-F64
 // RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1170" | FileCheck %s --check-prefixes=NO-F16,NO-BF16,BUF-F32,NO-F64
 // RUN: triton-opt %s --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1200" | FileCheck %s --check-prefixes=BUF-F16,BUF-BF16,BUF-F32,NO-F64

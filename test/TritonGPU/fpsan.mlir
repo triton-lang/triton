@@ -33,7 +33,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @dot_emulation() -> tensor<16x16xf32, #blocked> {
     // CHECK: scf.for
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
     %cst = arith.constant 1.000000e+00 : f16
     %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
     %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_operand_a>
@@ -336,7 +337,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: ttg.dot_scaled
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
      %cst = arith.constant 1.000000e+00 : f16
      %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
      %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_A>
@@ -560,6 +562,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The mask maps INT_MIN (negative zero) to zero after integer abs.
+  // CHECK-LABEL: @absf
+  tt.func public @absf(%x: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[MASK:.*]] = arith.constant dense<2147483647> : tensor<4xi32>
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[ABS:.*]] = math.absi %[[X]] : tensor<4xi32>
+    // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: math.absf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = math.absf %x : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @chained_ops
   tt.func public @chained_ops(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
@@ -588,6 +608,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %rem = arith.remf %a, %b : tensor<4xf32>
     %out = arith.addf %div, %rem : tensor<4xf32>
     tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: @approx_div
+  tt.func public @approx_div(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_unembed
+    // CHECK-NOT: tt.approx_divf
+    // CHECK: tt.return
+    %result = tt.approx_divf %a, %b : tensor<4xf32>
+    tt.return %result : tensor<4xf32>
   }
 }
 
@@ -827,6 +862,20 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
 
 // -----
 
+// CHECK-LABEL: @extern_tf32_rna
+tt.func public @extern_tf32_rna(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK: tti.experimental_fpsan_unembed
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tt.return
+  %result = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rna"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %result : tensor<4xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @inline_asm_unary
 tt.func public @inline_asm_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: arith.constant dense<-2010648817> : tensor<4xi32>
@@ -853,13 +902,12 @@ tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf3
 
 // CHECK-LABEL: @inline_asm_ue8m0_to_bf16
 tt.func public @inline_asm_ue8m0_to_bf16(%scale: tensor<4xi8>) -> tensor<4xbf16> {
-  // CHECK-DAG: arith.constant dense<7> : tensor<4xi16>
-  // CHECK-DAG: arith.constant dense<64> : tensor<4xi16>
-  // CHECK: arith.extui
-  // CHECK: arith.shli
-  // CHECK: arith.maxui
-  // CHECK: tt.bitcast
+  // CHECK: %[[TAG:.*]] = arith.constant dense<-23530> : tensor<4xi16>
+  // CHECK: %[[SCALE:.*]] = arith.extsi %arg0 : tensor<4xi8> to tensor<4xi16>
+  // CHECK: %[[PAYLOAD:.*]] = arith.xori %[[SCALE]], %[[TAG]] : tensor<4xi16>
+  // CHECK: %[[RESULT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]]
   // CHECK-NOT: tt.elementwise_inline_asm
+  // CHECK: tt.return %[[RESULT]]
   %decoded = tt.elementwise_inline_asm "cvt.rn.bf16x2.ue8m0x2 $0, $1;" {constraints = "=r,h", packed_element = 2 : i32, pure = true} %scale : tensor<4xi8> -> tensor<4xbf16>
   tt.return %decoded : tensor<4xbf16>
 }

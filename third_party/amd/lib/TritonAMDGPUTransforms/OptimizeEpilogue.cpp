@@ -257,11 +257,8 @@ public:
 
 } // anonymous namespace
 
-class TritonAMDGPUOptimizeEpiloguePass
-    : public impl::TritonAMDGPUOptimizeEpilogueBase<
-          TritonAMDGPUOptimizeEpiloguePass> {
-
-public:
+struct TritonAMDGPUOptimizeEpiloguePass
+    : impl::TritonAMDGPUOptimizeEpilogueBase<TritonAMDGPUOptimizeEpiloguePass> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
