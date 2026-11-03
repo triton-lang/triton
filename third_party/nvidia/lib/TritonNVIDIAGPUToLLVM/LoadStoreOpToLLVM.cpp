@@ -21,7 +21,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -1462,10 +1461,6 @@ struct AsyncTMACopyLocalToGlobalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // The box width is in the tensor map, so ptxas cannot check it.
-    if (computeCapability != 103 &&
-        ttng::isNarrowFP6Map(op.getDesc().getType()))
-      return op.emitOpError("64-value FP6 TMA stores require SM103");
     auto l2Policy = createTMACachePolicy(op, op.getCachePolicyAttr(), rewriter,
                                          computeCapability, 90);
     if (failed(l2Policy))

@@ -2281,3 +2281,15 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
   tt.return
 }
 }
+
+// -----
+
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, fp6Type = f6E2M3FN}>
+#bytes = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+!desc = !tt.tensordesc<1x64xui8, #fp6>
+!src = !ttg.memdesc<1x64xi8, #bytes, #ttg.shared_memory>
+tt.func @fp6_tma_store_box_width(%desc: !desc, %coord: i32, %src: !src) {
+  // expected-error @below {{FP6 TMA requires a 128-value box}}
+  ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %src : !desc, !src
+  tt.return
+}

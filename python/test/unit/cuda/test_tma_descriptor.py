@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import fp6_values, pack_fp6, is_cuda, is_blackwell_ultra
+from triton._internal_testing import fp6_values, pack_fp6, is_cuda
 from triton.language.extra.cuda import to_fp6
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -116,56 +116,37 @@ def test_ragged_tma(dtype):
 
 
 @triton.jit
-def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr, WIDTH: tl.constexpr, ROW: tl.constexpr):
-    codes = to_fp6(tl.load(src + tl.arange(0, WIDTH)), FORMAT)
+def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr):
+    codes = to_fp6(tl.load(src + tl.arange(0, 128)), FORMAT)
     tl.static_assert(codes.dtype == tl.uint8)
-    tl.store(raw + tl.arange(0, WIDTH), codes)
+    tl.store(raw + tl.arange(0, 128), codes)
     if desc is None:
-        desc = tl.make_tensor_descriptor(dst, [3, ROW], [ROW * 3 // 4, 1], [1, WIDTH], fp6_format=FORMAT)
-    desc.store([1, ROW - WIDTH], codes[None, :])
+        desc = tl.make_tensor_descriptor(dst, [3, 256], [192, 1], [1, 128], fp6_format=FORMAT)
+    desc.store([1, 128], codes[None, :])
 
 
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("width,row,host", [(64, 64, False), (64, 128, False), (128, 128, False), (128, 128, True)])
-def test_fp6_tma_store_padded_bytes(fmt, dtype, width, row, host, with_allocator):
+@pytest.mark.parametrize("host", [False, True], ids=["device", "host"])
+def test_fp6_tma_store_padded_bytes(fmt, dtype, host, with_allocator):
     if not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
         pytest.skip("FP6 stores require SM100 or SM103")
-    if width == 64 and not is_blackwell_ultra():
-        pytest.skip("64-value FP6 stores require SM103")
-    codes = torch.arange(width, device="cuda", dtype=torch.int32) % 64
+    codes = torch.arange(128, device="cuda", dtype=torch.int32) % 64
     x = fp6_values(fmt, codes).to(dtype)
     # Check the halfway tie and the next representable input above it.
     midpoint = x[1] / 2
     x[0], x[2] = midpoint, torch.nextafter(midpoint, x[1])
     x[1], x[32] = 100, -0.0
     codes[1], codes[2] = 31, 1
-    initial = torch.randint(0, 64, (3, row), device="cuda", dtype=torch.int32)
+    initial = torch.randint(0, 64, (3, 256), device="cuda", dtype=torch.int32)
     buf = pack_fp6(initial)
-    initial[1, row - width:] = codes
-    desc = TensorDescriptor.from_tensor(buf, [1, width], fp6_format=fmt) if host else None
-    raw = torch.empty(width, device="cuda", dtype=torch.uint8)
-    kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt, width, row)
+    initial[1, 128:] = codes
+    desc = TensorDescriptor.from_tensor(buf, [1, 128], fp6_format=fmt) if host else None
+    raw = torch.empty(128, device="cuda", dtype=torch.uint8)
+    kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt)
     torch.testing.assert_close(raw, codes.byte())
     torch.testing.assert_close(buf, pack_fp6(initial))
     assert f"cvt.rn.satfinite.{fmt}x2.f32" in kernel.asm["ptx"]
     assert "cp.async.bulk.tensor.2d.global.shared" in kernel.asm["ptx"]
     if host:
         assert kernel.metadata.global_scratch_size == 0
-
-
-@pytest.mark.parametrize("host", [True, False], ids=["host", "device"])
-def test_fp6_tma_store_64_rejects_sm100(host, capfd):
-    from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource
-
-    sig = {
-        "src": "*fp32", "dst": "*u8", "raw": "*u8", "desc": "tensordesc<fp6e2m3[1,64]>" if host else "constexpr",
-        "FORMAT": "constexpr", "WIDTH": "constexpr", "ROW": "constexpr"
-    }
-    constants = {"FORMAT": "e2m3", "WIDTH": 64, "ROW": 64}
-    if not host:
-        constants["desc"] = None
-    with pytest.raises(RuntimeError):
-        triton.compile(ASTSource(_fp6_desc_store, sig, constants), target=GPUTarget("cuda", 100, 32))
-    assert "64-value FP6 TMA stores require SM103" in capfd.readouterr().err

@@ -696,16 +696,14 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     return op->emitOpError("FP6 loads require a matching opaque tile and "
                            "stores require byte lanes");
   if (fp6) {
-    if (nvmma.getSwizzlingByteWidth() == 32)
-      return op->emitOpError("FP6 TMA does not support 32-byte swizzling");
     if (!memDesc.getElementType().isInteger(8) || !isa<TensorDescType>(desc) ||
         (!store && !isa<AsyncTMACopyGlobalToLocalOp>(op)))
       return op->emitOpError(
           "FP6 only supports tiled TMA loads and stores with byte storage");
-    auto box = getTMABlockShape(desc, false, gpu::TMAMode::Tiled).back();
-    if (box != 128 && !(box == 64 && store))
-      return op->emitOpError(
-          "FP6 requires a 128-value load or a 64/128-value store");
+    auto swizzle = descEnc.getSwizzlingByteWidth();
+    auto width = gpu::getShapePerCTA(descEnc, desc.getShape()).back();
+    if (width < 128 || (swizzle ? swizzle : width) != 128)
+      return op->emitOpError("FP6 TMA requires a 128-value box");
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");

@@ -158,14 +158,6 @@ class tensor_descriptor(_tensor_descriptor_value_base):
                  layout: NVMMASharedLayout):
         super().__init__(handle, shape, strides, block_type, layout, tensor_descriptor_type)
 
-    @builtin
-    def with_base(self, base, _semantic=None):
-        """Return a copy of this tiled descriptor at a new, equally aligned base address."""
-        if not base.dtype.is_ptr() or base.dtype.element_ty != self.dtype:
-            raise ValueError("replacement base must point to the descriptor element type")
-        handle = _semantic.builder.create_tensormap_with_base(self.handle, base.handle)
-        return tensor_descriptor(handle, self.shape, self.strides, self.block_type, self.layout)
-
 
 class tensor_descriptor_im2col(_tensor_descriptor_value_base):
 
@@ -181,7 +173,7 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
         align_bytes = 64
     if desc.layout.fp6_format is not None:
         # FP6 tensor coordinates count logical values.
-        align_bytes = 64 if fn_name == "async_store" and desc.block_shape[-1] == 64 else 128
+        align_bytes = 128
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8
