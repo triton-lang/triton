@@ -1295,7 +1295,7 @@ def test_compute_cache_key_distinguishes_constexpr_scalar_types():
 
 def test_compute_cache_key_distinguishes_signed_zero_floats():
     # 0.0 == -0.0 but the two launch different kernels; key floats on their
-    # bit pattern instead of the value.
+    # repr instead of the value.
     from triton.runtime.jit import compute_cache_key
 
     cache = {}
@@ -1309,13 +1309,27 @@ def test_compute_cache_key_distinguishes_signed_zero_floats():
 
 def test_compute_cache_key_does_not_grow_for_nan_constexprs():
     # NaN never compares equal, so keying floats on their value would miss on
-    # every launch and grow the cache without bound. The bit-pattern key is
-    # what keeps the struct.pack cost on the float path worthwhile: repeated
-    # NaN constexprs collapse onto one entry instead of one per launch.
+    # every launch and grow the cache without bound. The repr key is what
+    # collapses repeated NaN constexprs onto one entry.
     from triton.runtime.jit import compute_cache_key
 
     cache = {}
     first = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
     second = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
     assert first == second
+    assert len(cache) == 1
+
+
+def test_compute_cache_key_skips_constexpr_folding_without_constexprs(monkeypatch):
+    from triton.runtime import jit
+
+    def unexpected_fold(_):
+        raise AssertionError("no-constexpr launches must not scan and fold the specialization")
+
+    monkeypatch.setattr(jit, "_constexpr_specialization_key", unexpected_fold)
+    cache = {}
+    specialization = [("f32", 1), ("i32", 2)]
+    assert jit.compute_cache_key(cache, specialization, _ConstexprKeyOptions(), has_constexpr=False) == (
+        "[('f32', 1), ('i32', 2)]opts"
+    )
     assert len(cache) == 1
