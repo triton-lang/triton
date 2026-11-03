@@ -56,7 +56,7 @@ namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
     PipelineTuningOptions tuningOptions;
-    PassBuilder pb(nullptr, tuningOptions);
+    PassBuilder pb(m->getContext(), nullptr, tuningOptions);
 
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
