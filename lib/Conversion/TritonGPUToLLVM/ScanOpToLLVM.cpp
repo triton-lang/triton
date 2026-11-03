@@ -274,7 +274,8 @@ private:
                             b.i32_val(reverse ? 0 : segmentLaneMask));
     // 1. Register efficient path: Load totals incrementally and accumulate
     // within each thread with a short register lifetime
-    if (helper.useGroupedInterWarpScan()) {
+    if (helper.getInterWarpScanType() ==
+        ScanLoweringHelper::InterWarpScanType::Grouped) {
       scanInterWarpGroups(op, helper, totals, values, laneId, warpId, rewriter);
       return {};
     }
