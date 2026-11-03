@@ -645,6 +645,7 @@ class InterpreterBuilder:
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_approx_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_atan2 = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.arctan2)
     create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     create_udiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
@@ -778,6 +779,9 @@ class InterpreterBuilder:
     create_precise_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_sqrt = lambda self, arg: self.unary_op(arg, np.sqrt)
     create_sin = lambda self, arg: self.unary_op(arg, np.sin)
+    create_asin = lambda self, arg: self.unary_op(arg, np.arcsin)
+    create_acos = lambda self, arg: self.unary_op(arg, np.arccos)
+    create_atan = lambda self, arg: self.unary_op(arg, np.arctan)
 
     def create_erf(self, arg):
         ret = np_erf_fp32(arg.data) if arg.data.dtype == np.float32 else np_erf_fp64(arg.data)

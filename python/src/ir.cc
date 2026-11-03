@@ -1810,6 +1810,22 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::SinOp>(val);
            })
+      .def("create_asin",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AsinOp>(val);
+           })
+      .def("create_acos",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AcosOp>(val);
+           })
+      .def("create_atan",
+           [](TritonOpBuilder &self, Value &val) -> Value {
+             return self.create<math::AtanOp>(val);
+           })
+      .def("create_atan2",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<math::Atan2Op>(lhs, rhs);
+           })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::LogOp>(val);

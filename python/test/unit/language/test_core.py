@@ -1124,23 +1124,37 @@ def test_neg_preserves_signed_zero(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_x, expr, x",
-                         [(dtype_x, expr, x)
-                          for dtype_x in ["float32", "float64"]
-                          for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'rsqrt', 'floor', 'ceil']
-                          for x in ['x', '3.0']])
+@pytest.mark.parametrize(
+    "dtype_x, expr, x",
+    [(dtype_x, expr, x)
+     for dtype_x in ["float32", "float64"]
+     for expr in ['exp', 'log', 'cos', 'sin', 'exp2', 'log2', 'sqrt', 'rsqrt', 'floor', 'ceil', 'asin', 'acos', 'atan']
+     for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
-    np_expr = f"1.0 / np.sqrt({x})" if expr == "rsqrt" else f"np.{expr}({x})"
+    np_expr = {
+        "rsqrt": f"1.0 / np.sqrt({x})",
+        "asin": f"np.arcsin({x})",
+        "acos": f"np.arccos({x})",
+        "atan": f"np.arctan({x})",
+    }.get(expr, f"np.{expr}({x})")
     _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
 
 
 # Interpreter only patches tensor members marked as builtins.
 # Use float32 because `sqrt_rn` only accepts fp32 tensors.
 @pytest.mark.interpreter
-@pytest.mark.parametrize(
-    "expr", ['abs', 'exp', 'exp2', 'log', 'log2', 'cos', 'sin', 'sqrt', 'sqrt_rn', 'rsqrt', 'floor', 'ceil'])
+@pytest.mark.parametrize("expr", [
+    'abs', 'exp', 'exp2', 'log', 'log2', 'cos', 'sin', 'sqrt', 'sqrt_rn', 'rsqrt', 'floor', 'ceil', 'asin', 'acos',
+    'atan'
+])
 def test_math_member_fn(expr, device):
-    np_expr = {'rsqrt': "1.0 / np.sqrt(x)", 'sqrt_rn': "np.sqrt(x)"}.get(expr, f"np.{expr}(x)")
+    np_expr = {
+        'rsqrt': "1.0 / np.sqrt(x)",
+        'sqrt_rn': "np.sqrt(x)",
+        'asin': "np.arcsin(x)",
+        'acos': "np.arccos(x)",
+        'atan': "np.arctan(x)",
+    }.get(expr, f"np.{expr}(x)")
     _test_unary('float32', f'x.{expr}()', np_expr, device=device)
 
 
@@ -1291,6 +1305,12 @@ def test_math_divide_op(expr, num_ctas, device):
     numpy_expr = "x / y"
     dtype = "float32"
     _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+def test_math_atan2_op(num_ctas, device):
+    _test_binary("float32", "float32", "tl.math.atan2(x, y)", "np.arctan2(x, y)", device=device, num_ctas=num_ctas)
 
 
 @pytest.mark.interpreter

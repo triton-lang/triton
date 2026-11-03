@@ -131,7 +131,7 @@ from .core import (
     where,
 )
 from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
-                   ceil)
+                   ceil, asin, acos, atan, atan2)
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -154,6 +154,10 @@ __all__ = [
     "make_tensor_descriptor",
     "tensor_descriptor",
     "abs",
+    "acos",
+    "asin",
+    "atan",
+    "atan2",
     "add",
     "all",
     "any",

@@ -259,3 +259,40 @@ def fma(x, y, z, _semantic=None):
     z = core._unwrap_if_constexpr(z)
     x, y, z = _semantic.ternary_op_type_checking_impl(x, y, z)
     return core.tensor(_semantic.builder.create_fma(x.handle, y.handle, z.handle), x.type)
+
+
+@core._tensor_member_fn
+@core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("inverse sine")
+def asin(x, _semantic=None):
+    x = _semantic.to_tensor(x)
+    return core.tensor(_semantic.builder.create_asin(x.handle), x.type)
+
+
+@core._tensor_member_fn
+@core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("inverse cosine")
+def acos(x, _semantic=None):
+    x = _semantic.to_tensor(x)
+    return core.tensor(_semantic.builder.create_acos(x.handle), x.type)
+
+
+@core._tensor_member_fn
+@core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_1arg_docstr("inverse tangent")
+def atan(x, _semantic=None):
+    x = _semantic.to_tensor(x)
+    return core.tensor(_semantic.builder.create_atan(x.handle), x.type)
+
+
+@core.builtin
+@_check_dtype(dtypes=["fp32", "fp64"])
+@_add_math_2arg_docstr("four-quadrant inverse tangent")
+def atan2(x, y, _semantic=None):
+    x = _semantic.to_tensor(x)
+    y = _semantic.to_tensor(y)
+    x, y = core.binary_op_type_legalization(x, y, _semantic)
+    return core.tensor(_semantic.builder.create_atan2(x.handle, y.handle), x.type)

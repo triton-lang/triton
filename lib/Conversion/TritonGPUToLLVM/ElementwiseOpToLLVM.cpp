@@ -723,6 +723,9 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
+  POPULATE_UNARY_OP(math::AsinOp, math::AsinOp)
+  POPULATE_UNARY_OP(math::AcosOp, math::AcosOp)
+  POPULATE_UNARY_OP(math::AtanOp, math::AtanOp)
   POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
   POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
@@ -760,6 +763,9 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
   POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
 #undef POPULATE_BINARY_OP
+
+  patterns.add<ElementwiseOpConversion<math::Atan2Op, math::Atan2Op>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
       typeConverter, axisInfoAnalysis, benefit);
