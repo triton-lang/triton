@@ -198,7 +198,7 @@ def compute_num_stages(
         # 4-bit e2m1 operands are padded 2x
         # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
         if precision_config.a_mx_scale is not None and lhs_dtype == FP4 and rhs_dtype != FP4:
-            stage_size += block_k * block_n * act_size
+            stage_size += block_k * block_m * act_size
         if precision_config.b_mx_scale is not None and rhs_dtype == FP4 and lhs_dtype != FP4:
             stage_size += block_k * block_n * weight_size
 
