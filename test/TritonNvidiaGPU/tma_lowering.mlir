@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --verify-diagnostics | FileCheck %s
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -243,5 +243,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @tma_cache_fractional(%desc: !tma_cache_desc, %coord: i32) -> tensor<16x64xf16, #cache_blocked> {
     %v = tt.descriptor_load %desc[%coord, %coord] {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tma_cache_desc -> tensor<16x64xf16, #cache_blocked>
     tt.return %v : tensor<16x64xf16, #cache_blocked>
+  }
+}
+
+// -----
+
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6p2x16"}>
+!desc = !tt.tensordesc<1x64xui8, #fp6>
+!src = !ttg.memdesc<1x64xi8, #fp6, #ttg.shared_memory>
+module attributes {ttg.target = "cuda:103"} {
+  tt.func private @other_use(%desc: !desc) { tt.return }
+  // expected-error @below {{64-value FP6 host descriptors must be used only by tiled TMA stores}}
+  tt.func public @fp6_store_with_escape(%desc: !desc, %coord: i32, %src: !src) {
+    ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %src : !desc, !src
+    tt.call @other_use(%desc) : (!desc) -> ()
+    tt.return
   }
 }

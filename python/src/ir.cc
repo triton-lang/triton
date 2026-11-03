@@ -211,6 +211,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.isPaddedFp4();
       metadata["is_im2col"] = isIm2Col;
+      if (kernelFunc.getArgAttr(i, "ttng.fp6_store_box64"))
+        metadata["fp6_store_box64"] = true;
     } else {
       auto blockShape = descTy.getShape();
       metadata["block_size"] =
