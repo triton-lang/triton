@@ -2465,6 +2465,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def generic_linear_layout_kernel():
+    # Warp basis 17 = 16 ^ 1 requires a generic linear layout.
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=[[2], [1], [8], [32], [64]],
+                                                      warp_bases=[[17], [4]], block_bases=[], shape=[128])
+    ttgl.arange(0, 128, layout=ll)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_generic_linear_layout(target, capfd):
+    if target.backend != "hip":
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            run_parser(generic_linear_layout_kernel, target=target)
+        assert "should be permutation matrices with zero columns" in "".join(capfd.readouterr())
+    else:
+        mod = run_parser(generic_linear_layout_kernel, target=target)
+        assert "#ttg.generic_linear" in mod.str_nodebug()
+
+
 @filecheck_test
 @gluon.jit
 def test_dot_operand_layout():
