@@ -494,7 +494,7 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   if (registerWords <= maxRegisterWords)
     interWarpScanType = InterWarpScanType::Registers;
   else if (laneWords <= maxLaneWords)
-    interWarpScanType = InterWarpScanType::Warp;
+    interWarpScanType = InterWarpScanType::Warp; // Scan totals across lanes.
   else if (sourceLaneMask == totalsLaneMask)
     interWarpScanType = InterWarpScanType::Grouped;
   else
