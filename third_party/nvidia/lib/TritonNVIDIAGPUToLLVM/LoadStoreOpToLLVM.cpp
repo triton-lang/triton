@@ -840,8 +840,6 @@ public:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
     auto atomicRmwAttr = op.getAtomicRmwOp();
     const bool useRed = op.getResult().use_empty() &&
                         atomicRmwAttr != RMWOp::XCHG &&
@@ -942,8 +940,10 @@ public:
         return success();
       }
 
-      // Let LLVM handle compare+swap loop; branch-based pred should be fine
-      if (valueElemTy.isBF16() && getNVIDIAComputeCapability(moduleOp) < 90) {
+      // LLVM's atomicrmw is unconditional. Branch so only active lanes enter
+      // the CAS loop for BF16 add.
+      if (pred && valueElemTy.isBF16() &&
+          !targetInfo.supportNativeBF16AtomicAdd()) {
         assert(vec == 1 && packed == 1);
         // Lower atomic bin-op and sem to LLVM
         auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
