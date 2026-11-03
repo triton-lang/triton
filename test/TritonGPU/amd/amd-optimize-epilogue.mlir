@@ -167,3 +167,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+// -----
+// gfx1250 WMMA keeps the blocked store, so the tile goes out as whole lines.
+// CHECK-LABEL: wmma_v3_keeps_blocked_store
+// CHECK: ttg.convert_layout %{{.*}} : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked>
+// CHECK: tt.store %{{.*}}, %{{.*}} : tensor<128x128x!tt.ptr<bf16>, #blocked>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_v3_keeps_blocked_store(%arg0: !tt.ptr<bf16>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %0 = ttg.convert_layout %cst : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked>
+    %1 = arith.truncf %0 : tensor<128x128xf32, #blocked> to tensor<128x128xbf16, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.store %2, %1 : tensor<128x128x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}
