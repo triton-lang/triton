@@ -204,6 +204,8 @@ private:
 //
 class ScanLoweringHelper {
 public:
+  enum class InterWarpScanType { Registers, Warp, Grouped };
+
   explicit ScanLoweringHelper(triton::ScanOp op);
   ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
   bool isSupported();
@@ -232,7 +234,7 @@ public:
     return interWarpScanLayout;
   }
 
-  bool useGroupedInterWarpScan() const;
+  InterWarpScanType getInterWarpScanType() const { return interWarpScanType; }
   LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
 
   unsigned
@@ -241,13 +243,12 @@ public:
 private:
   ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
                      triton::ScanOp op);
-  bool canGroupInterWarpScan() const;
 
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpTotalsLayout() const;
   triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpTotalsLayout() const;
-  triton::LinearLayout buildInterWarpScanLayout() const;
+  triton::LinearLayout buildInterWarpScanLayout();
 
   triton::ScanOp op;
   unsigned axis;
@@ -261,6 +262,7 @@ private:
   std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpTotalsLayout;
   std::optional<triton::LinearLayout> interWarpScanLayout;
+  InterWarpScanType interWarpScanType = InterWarpScanType::Registers;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering

@@ -463,19 +463,7 @@ LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
   return getScanTotalsLayout(sourceLayout, axis, valuesPerSegment);
 }
 
-bool ScanLoweringHelper::canGroupInterWarpScan() const {
-  const auto &source =
-      intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
-  auto *ctx = source.getInDimNames().begin()->getContext();
-  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  unsigned segmentSize =
-      warpSegmentSize / (intraWarpScanLayout ? threadSegmentSize : 1);
-  // Grouped loading requires complete warp-local totals in registers.
-  return source.resizeOutDim(axisDim, segmentSize)
-      .sublayoutIsZero({StringAttr::get(ctx, "lane")}, {axisDim});
-}
-
-LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
+LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   constexpr unsigned smallScanTableWords = 8;
   constexpr unsigned maxScanTableWords = 128;
 
@@ -489,29 +477,41 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   auto bases = independentLayout.getBases();
   unsigned independentRegs =
       independentLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+  unsigned independentLanes =
+      independentLayout.removeZeroBasesAlongDim(kLane).getInDimSize(kLane);
+  // Lanes not needed for independent scans can split one scan's segments.
   unsigned scanLanes = std::min<unsigned>(
-      numSegments,
-      independentLayout.getInDimSize(kLane) /
-          independentLayout.removeZeroBasesAlongDim(kLane).getInDimSize(kLane));
-  auto scanOp = op;
+      numSegments, independentLayout.getInDimSize(kLane) / independentLanes);
   unsigned words = 0;
-  for (Type type : scanOp.getElementTypes())
+  for (Type type : op.getElementTypes())
     words += llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 32u);
   unsigned registerWords = numSegments * independentRegs * words;
-  unsigned scanWordsPerLane = numSegments * words / scanLanes;
-  bool canUseWarp = scanLanes > 1;
+  unsigned laneWords = numSegments * words / scanLanes;
 
-  // Stream large tables when each scan's per-lane state exceeds the budget.
-  bool useGroup = canGroupInterWarpScan() &&
-                  registerWords > maxScanTableWords &&
-                  (!canUseWarp || scanWordsPerLane > maxScanTableWords);
-  // Replicate small tables, or tables with no available scan lanes.
-  bool useRegisters =
-      !useGroup && (registerWords <= smallScanTableWords || !canUseWarp);
-  // Distribute the remaining tables across lanes.
-  bool useWarp = !useRegisters && !useGroup;
+  interWarpScanType = [&] {
+    // Small tables avoid the cost of distributing segments across lanes.
+    if (registerWords <= smallScanTableWords)
+      return InterWarpScanType::Registers;
+    // Use lanes when they can hold the scan within the per-lane budget.
+    if (scanLanes > 1 && laneWords <= maxScanTableWords)
+      return InterWarpScanType::Warp;
+
+    // Stream oversized tables if complete warp-local totals are in registers.
+    const auto &source =
+        intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
+    unsigned segmentSize =
+        warpSegmentSize / (intraWarpScanLayout ? threadSegmentSize : 1);
+    if (registerWords > maxScanTableWords &&
+        source.resizeOutDim(axisDim, segmentSize)
+            .sublayoutIsZero({kLane}, {axisDim}))
+      return InterWarpScanType::Grouped;
+
+    // Without grouped loading, use the available lanes or stay in registers.
+    return scanLanes > 1 ? InterWarpScanType::Warp
+                        : InterWarpScanType::Registers;
+  }();
   unsigned next = 1;
-  if (useWarp)
+  if (interWarpScanType == InterWarpScanType::Warp)
     for (auto &basis : bases[kLane])
       if (next < numSegments &&
           llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
@@ -538,28 +538,6 @@ bool ScanLoweringHelper::isSupported() {
                                         {axisDim});
 }
 
-bool ScanLoweringHelper::useGroupedInterWarpScan() const {
-  auto scanOp = op;
-  auto *ctx = scanOp.getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  const auto &layout = *interWarpScanLayout;
-  // TODO(Keren): support non-zero block bases, which requires a more complex
-  // inter-CTA scan to complete the prefixes
-  if (!canGroupInterWarpScan() || !layout.sublayoutIsZero({kLane}, {axisDim}))
-    return false;
-  unsigned words = 0;
-  for (Type type : scanOp.getElementTypes())
-    words += llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 32u);
-  // Group long register-only scans when their replicated totals exceed 128
-  // logical 32-bit words per thread
-  if (layout.getInDimSize(kReg) * words <= 128)
-    return false;
-  return true;
-}
-
 LayoutConversionScratchConfig
 ScanLoweringHelper::getGroupedInterWarpScratchConfig() const {
   auto scanOp = op;
@@ -575,7 +553,7 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes(
   if (!interWarpTotalsLayout)
     return 0;
   assert(op && "scratch sizing requires a scan operation");
-  if (useGroupedInterWarpScan())
+  if (interWarpScanType == InterWarpScanType::Grouped)
     return getGroupedInterWarpScratchConfig().sizeInBytes;
   return getLayoutConversionScratchConfig(
              *interWarpTotalsLayout, *interWarpScanLayout, op.getElementTypes(),
