@@ -2646,14 +2646,14 @@ struct AtomicRMWOpConversion
 // commit or wait can only over-wait, never omit a stage. Internally the full
 // stage set is kept as a bitmask; it is emitted as `all` (mask 0).
 //===----------------------------------------------------------------------===//
-constexpr uint32_t kAllAsyncStageBits = (1u << 0) | (1u << 1) | (1u << 2) |
-                                        (1u << 3) | (1u << 5);
+constexpr uint32_t kAllAsyncStageBits =
+    (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 5);
 
 uint32_t classifyAsyncProducer(Operation *op,
                                const AMD::TargetInfo &targetInfo) {
   if (isa<AsyncCopyGlobalToLocalOp>(op)) {
-    uint32_t mask = static_cast<uint32_t>(
-        ROCDL::AsyncStages::global_load_async_to_lds);
+    uint32_t mask =
+        static_cast<uint32_t>(ROCDL::AsyncStages::global_load_async_to_lds);
     // The plain-vs-cluster (multicast) choice is made by the load lowering
     // itself; include the multicast stage whenever cluster loads are possible
     // so a cluster load can never be omitted from its commit.

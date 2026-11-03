@@ -590,8 +590,8 @@ def _run_staged_matmul(device, num_stages):
     # caller's TRITON_HIP_USE_STAGED_ASYNC_MARKS setting instead of reusing a
     # cached compilation from a previous setting.
     @triton.jit
-    def staged_matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
-                             stride_cn, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    def staged_matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+                             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
                              NUM_STAGES: tl.constexpr):
         pid_m = tl.program_id(axis=0)
         pid_n = tl.program_id(axis=1)
