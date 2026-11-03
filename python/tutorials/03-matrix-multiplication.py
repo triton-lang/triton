@@ -408,7 +408,7 @@ ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:
-    if fp8_inputs and (not TORCH_HAS_FP8 or (not is_cuda() and not is_hip_cdna4_above())):
+    if fp8_inputs and (not TORCH_HAS_FP8 or not (is_cuda() or is_hip_cdna4_above())):
         continue
     configs.append(
         triton.testing.Benchmark(
