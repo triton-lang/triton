@@ -2266,12 +2266,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   // CHECK-LABEL: @atomic_rmw_bf16_single_warp
   tt.func private @atomic_rmw_bf16_single_warp(%ptr: !tt.ptr<bf16>, %val: bf16, %mask: i1) -> bf16 {
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
-    // CHECK: llvm.atomicrmw fadd
+    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("block") monotonic
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
     // CHECK: llvm.return
-    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<bf16>, bf16, i1) -> bf16
+    %old = tt.atomic_rmw fadd, relaxed, cta, %ptr, %val, %mask : (!tt.ptr<bf16>, bf16, i1) -> bf16
     tt.return %old : bf16
   }
 }
