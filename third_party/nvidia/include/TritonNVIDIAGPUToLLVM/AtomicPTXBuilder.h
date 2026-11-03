@@ -166,15 +166,8 @@ inline Value emitLLVMAtomicRMW(ConversionPatternRewriter &rewriter,
                                LLVM::AtomicBinOp binOp,
                                LLVM::AtomicOrdering ordering,
                                StringRef syncScope) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Type valueTy = val.getType();
-  // Exchange uses the bit pattern even when the source value is floating point.
-  bool bitcast = binOp == LLVM::AtomicBinOp::xchg && isa<FloatType>(valueTy);
-  if (bitcast)
-    val = b.bitcast(val, int_ty(valueTy.getIntOrFloatBitWidth()));
-  Value old = LLVM::AtomicRMWOp::create(rewriter, loc, binOp, ptr, val,
-                                        ordering, syncScope);
-  return bitcast ? b.bitcast(old, valueTy) : old;
+  return LLVM::AtomicRMWOp::create(rewriter, loc, binOp, ptr, val, ordering,
+                                   syncScope);
 }
 
 inline bool usePtxForHalfAdd(RMWOp op, Type type,
@@ -213,7 +206,7 @@ emitPtxSharedAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
                        PtxAtomicInstr instr, const TargetInfoBase &targetInfo) {
   if (!pred && !usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo)) {
     auto binOp = matchAtomicOp(rmwOpAttr);
-    if (!binOp || (instr == PtxAtomicInstr::Red && rmwOpAttr == RMWOp::XCHG))
+    if (!binOp)
       return failure();
     return emitLLVMAtomicRMW(rewriter, loc, ptr, vals.front(), *binOp,
                              LLVM::AtomicOrdering::monotonic,

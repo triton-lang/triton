@@ -573,11 +573,7 @@ struct PackedArithOpConversion
     auto spec = nvidia_gpu::getPackedArithInstructionSpec(op);
     const auto &resultInfo = *spec.result;
     unsigned packWidth = resultInfo.lanes;
-    bool isHomogeneousFloat =
-        (resultInfo.suffix == "f32x2" || resultInfo.suffix == "f16x2" ||
-         resultInfo.suffix == "bf16x2") &&
-        llvm::all_of(spec.operands,
-                     [&](const auto *info) { return info == spec.result; });
+    bool isHomogeneousFloat = spec.operandSuffixes == 0;
     SmallVector<SmallVector<Value>> operandValues;
     for (Value operand : adaptor.getOperands())
       operandValues.push_back(

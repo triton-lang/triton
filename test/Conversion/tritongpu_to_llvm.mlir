@@ -4652,16 +4652,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   // CHECK-NOT: llvm.cond_br
   // CHECK: atom.global.gpu.relaxed.add.noftz.f16
   // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
-  // CHECK: llvm.bitcast {{.*}} : f32 to i32
-  // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, i32
-  // CHECK: llvm.bitcast {{.*}} : i32 to f32
+  // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
   // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
+  // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // PTX-LABEL: .visible .entry scalar_atomic_float_ops(
   // PTX: atom.global.gpu.relaxed.add.noftz.f16
   // PTX: atom.global.gpu.relaxed.add.noftz.bf16
   // PTX: atom.relaxed.gpu.global.add.f32
   // PTX: atom.relaxed.gpu.global.exch.b32
   // PTX: atom.relaxed.gpu.global.add.f64
+  // PTX: atom.relaxed.gpu.global.exch.b64
   tt.func public @scalar_atomic_float_ops(%p16: tensor<32x!tt.ptr<f16>, #atomic_blocked>, %pb16: tensor<32x!tt.ptr<bf16>, #atomic_blocked>, %p32: tensor<32x!tt.ptr<f32>, #atomic_blocked>, %p64: tensor<32x!tt.ptr<f64>, #atomic_blocked>, %v32: tensor<32xf32, #atomic_blocked>, %v64: tensor<32xf64, #atomic_blocked>) {
     %v16 = arith.constant dense<0x7E00> : tensor<32xf16, #atomic_blocked>
     %vb16 = arith.constant dense<0x7FC0> : tensor<32xbf16, #atomic_blocked>
@@ -4673,7 +4673,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     %d = tt.atomic_rmw exch, relaxed, gpu, %p32, %c : (tensor<32x!tt.ptr<f32>, #atomic_blocked>, tensor<32xf32, #atomic_blocked>) -> tensor<32xf32, #atomic_blocked>
     tt.store %p32, %d : tensor<32x!tt.ptr<f32>, #atomic_blocked>
     %e = tt.atomic_rmw fadd, relaxed, gpu, %p64, %v64 : (tensor<32x!tt.ptr<f64>, #atomic_blocked>, tensor<32xf64, #atomic_blocked>) -> tensor<32xf64, #atomic_blocked>
-    tt.store %p64, %e : tensor<32x!tt.ptr<f64>, #atomic_blocked>
+    %f = tt.atomic_rmw exch, relaxed, gpu, %p64, %e : (tensor<32x!tt.ptr<f64>, #atomic_blocked>, tensor<32xf64, #atomic_blocked>) -> tensor<32xf64, #atomic_blocked>
+    tt.store %p64, %f : tensor<32x!tt.ptr<f64>, #atomic_blocked>
     tt.return
   }
 
