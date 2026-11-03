@@ -133,7 +133,9 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
       auto cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
 
       auto order = getOrderForMemory(srcTy);
-      if (useAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
+      bool asyncCopyConstrainsOrder =
+          useAsyncCopy && !targetInfo.supportsDirectToLdsScatter();
+      if (asyncCopyConstrainsOrder) {
         // For architectures that don't support scattering into LDS we must
         // ensure that each warp writes a contiguous memory chunk. This requires
         // the shared memory order to follow the thread order, while preserving
@@ -186,7 +188,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // A or B is transposed), the dot reads from LDS strided, serializing
         // the loads. Re-orient the shared buffer to operand-major so those
         // reads are coalesced.
-        if (rank == 2 && isa<ttg::BlockedEncodingAttr>(dotOpEnc.getParent())) {
+        if (rank == 2 && !asyncCopyConstrainsOrder &&
+            isa<ttg::BlockedEncodingAttr>(dotOpEnc.getParent())) {
           SmallVector<unsigned> operandMajorOrder = ttg::getOrderForDotOperand(
               dotOpEnc.getOpIdx(), /*rank=*/2, /*kContig=*/false);
           if (sharedOrder != operandMajorOrder) {

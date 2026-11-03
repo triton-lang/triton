@@ -55,6 +55,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
+// Positive case (CDNA): FMA dot, B operand (opIdx = 1) whose global load is
+// K-contiguous (order = [0, 1]). Flip to operand-major (order = [1, 0]), since
+// without async copy the flip is not constrained by direct-to-LDS writes.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [0, 1]}>
+#fma = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK: #shared = {{.*}}order = [1, 0]
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: fma_operand_b_kcontig_is_flipped_cdna
+  tt.func @fma_operand_b_kcontig_is_flipped_cdna(
+                %argB: tensor<32x32x!tt.ptr<f32>, #blocked>,
+                %argA: tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #fma}>>,
+                %lb: i32, %ub: i32, %step: i32) -> tensor<32x32xf32, #fma> {
+    // CHECK: ttg.local_alloc {{.*}} #shared
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #fma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x32xf32, #fma>) : i32 {
+      %b = tt.load %argB : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %b_dot = ttg.convert_layout %b : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #fma}>>
+      %c = tt.dot %argA, %b_dot, %acc : tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #fma}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #fma}>> -> tensor<32x32xf32, #fma>
+      scf.yield %c : tensor<32x32xf32, #fma>
+    }
+    tt.return %result : tensor<32x32xf32, #fma>
+  }
+}
+
+// -----
+
 // Negative case: MFMA dot, the layout must be left untouched.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [0, 1]}>
