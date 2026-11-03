@@ -951,6 +951,41 @@ tt.func public @inline_asm_multi_result(%a: tensor<4xi64>) -> (tensor<4xf32>, te
   tt.return %0#0, %0#1 : tensor<4xf32>, tensor<4xf32>
 }
 
+// -----
+
+// CHECK-LABEL: @atomic_payload
+tt.func public @atomic_payload(%ptr: !tt.ptr<f32>, %value: f32, %mask: i1, %wide: !tt.ptr<f64>, %wide_value: f64, %iptr: !tt.ptr<i32>, %ivalue: i32) {
+  // Floating-point arithmetic atomics are tagged for payload lowering.
+  // CHECK: tt.atomic_rmw fadd, acq_rel, gpu, {{.*}} {tti.fpsan}
+  // CHECK: tt.atomic_rmw min, acquire, sys, {{.*}} {tti.fpsan}
+  // CHECK: tt.atomic_rmw max, release, cta, {{.*}} {tti.fpsan}
+
+  // Exchange and integer atomics remain untagged.
+  // CHECK: tt.atomic_rmw exch, relaxed, gpu, %arg0, %arg1 : (!tt.ptr<f32>, f32) -> f32
+  // CHECK: tt.atomic_rmw min, relaxed, gpu, %arg5, %arg6 : (!tt.ptr<i32>, i32) -> i32
+
+  %add = tt.atomic_rmw fadd, acq_rel, gpu, %ptr, %value, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+  %min = tt.atomic_rmw min, acquire, sys, %wide, %wide_value, %mask : (!tt.ptr<f64>, f64, i1) -> f64
+  %max = tt.atomic_rmw max, release, cta, %ptr, %value : (!tt.ptr<f32>, f32) -> f32
+  %xchg = tt.atomic_rmw exch, relaxed, gpu, %ptr, %value : (!tt.ptr<f32>, f32) -> f32
+  %imin = tt.atomic_rmw min, relaxed, gpu, %iptr, %ivalue : (!tt.ptr<i32>, i32) -> i32
+  tt.return
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_shared_payload
+  tt.func public @atomic_shared_payload(%indices: tensor<128xi32, #blocked>, %value: tensor<128xf32, #blocked>, %mask: tensor<128xi1, #blocked>) {
+    %dst = ttg.local_alloc %value : (tensor<128xf32, #blocked>) -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_atomic_scatter_rmw fadd, {{.*}} {axis = 0 : i32, tti.fpsan}
+    %old = ttg.local_atomic_scatter_rmw fadd, %dst[%indices], %value, %mask {axis = 0 : i32} : (!ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>, tensor<128xf32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}
+
 //--- canonicalize.mlir
 
 module {
@@ -1007,10 +1042,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 //--- unsupported.mlir
 
-module {
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @dot_no_encoding(%a: tensor<16x16xf32>, %b: tensor<16x16xf32>, %c: tensor<16x16xf32>) -> tensor<16x16xf32> {
-    // FPSANERR: error: 'tt.dot' op unsupported by fpsan
+    // FPSANERR-DAG: error: 'tt.dot' op unsupported by fpsan
     %out = tt.dot %a, %b, %c : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
     tt.return %out : tensor<16x16xf32>
+  }
+
+  tt.func public @atomic_fp16(%ptr: !tt.ptr<f16>, %value: f16) {
+    // FPSANERR-DAG: error: 'tt.atomic_rmw' op unsupported by fpsan
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %value : (!tt.ptr<f16>, f16) -> f16
+    tt.return
+  }
+
+  tt.func public @atomic_shared_bf16_subview(%initial: tensor<2xbf16, #blocked>, %value: tensor<1xbf16, #blocked>) {
+    %dst = ttg.local_alloc %initial : (tensor<2xbf16, #blocked>) -> !ttg.memdesc<2xbf16, #shared, #ttg.shared_memory, mutable>
+    %view = ttg.memdesc_subslice %dst[1] : !ttg.memdesc<2xbf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1xbf16, #shared, #ttg.shared_memory, mutable, 2>
+    %index = arith.constant dense<0> : tensor<1xi32, #blocked>
+    // A widened CAS would access the excluded first element of %dst.
+    // FPSANERR-DAG: error: 'ttg.local_atomic_scatter_rmw' op unsupported by fpsan
+    %old = ttg.local_atomic_scatter_rmw fadd, %view[%index], %value {axis = 0 : i32} : (!ttg.memdesc<1xbf16, #shared, #ttg.shared_memory, mutable, 2>, tensor<1xbf16, #blocked>, tensor<1xi32, #blocked>) -> tensor<1xbf16, #blocked>
+    tt.return
   }
 }

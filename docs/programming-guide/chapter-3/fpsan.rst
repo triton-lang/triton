@@ -436,6 +436,39 @@ Important caveat:
 - The same raw-payload interpretation is reused by scaled-dot paths for
   ``e2m1``.
 
+-----------------
+Atomic Operations
+-----------------
+
+Supported operations:
+
+- FP32/FP64 ``atomic_add``, ``atomic_min``, and ``atomic_max``
+- FP32/FP64 shared-memory ``atomic_scatter_add``
+
+Rewrite:
+
+- apply the same payload operations as the elementwise counterparts: addition
+  modulo ``2^w`` and signed integer minimum/maximum
+- commit the update to the floating carrier storage with a compare-and-swap
+  loop
+
+Exact preserved properties:
+
+- masks, memory ordering, and scope
+- the returned old values are the stored carrier bit patterns
+- the final stored value does not depend on the order of concurrent updates
+
+Important caveats:
+
+- Floating-point arithmetic atomics narrower than 32 bits are rejected. The
+  current LLVM backends widen FP16/BF16 compare-and-swap accesses to the
+  containing 32-bit word, which can cross allocation or true shared-memory
+  subview boundaries.
+- ``atomic_xchg``, ``atomic_cas``, ``atomic_load``, and ``atomic_store``
+  transfer carrier bit patterns without applying payload arithmetic.
+- ``atomic_cas`` compares the complete stored bit pattern with ``cmp``:
+  identical NaN bit patterns match, and positive and negative zero differ.
+
 ------------------------------------------
 Pure Extern and Inline-Asm Elementwise Ops
 ------------------------------------------

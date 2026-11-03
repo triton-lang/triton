@@ -194,3 +194,66 @@ tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
   tt.return
 }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @fpsan_atomic_rmw
+// CHECK: llvm.cond_br
+// CHECK: ^[[LOOP:bb[0-9]+]](%[[EXPECTED:[^:]+]]: i32):
+// CHECK: llvm.add {{.*}} : i32
+// CHECK: %[[CAS:.*]] = llvm.cmpxchg {{.*}}, %[[EXPECTED]], {{.*}} syncscope("device") acq_rel monotonic
+// CHECK: %[[OLD:.*]] = llvm.extractvalue %[[CAS]][0]
+// CHECK: %[[SUCCESS:.*]] = llvm.extractvalue %[[CAS]][1]
+// CHECK: llvm.cond_br %[[SUCCESS]], ^{{.*}}(%[[OLD]] : i32), ^[[LOOP]](%[[OLD]] : i32)
+// CHECK: llvm.intr.smin({{.*}}) : (i64, i64) -> i64
+// CHECK: llvm.cmpxchg %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} acquire monotonic
+// CHECK: llvm.intr.smax({{.*}}) : (i32, i32) -> i32
+// CHECK: llvm.cmpxchg {{.*}} syncscope("block") release monotonic
+tt.func private @fpsan_atomic_rmw(%ptr: !tt.ptr<f32>, %value: f32, %mask: i1, %wide: !tt.ptr<f64>, %wide_value: f64, %out: !tt.ptr<f32>) {
+  %add = tt.atomic_rmw fadd, acq_rel, gpu, %ptr, %value, %mask {tti.fpsan} : (!tt.ptr<f32>, f32, i1) -> f32
+  tt.store %out, %add, %mask : !tt.ptr<f32>
+  %min = tt.atomic_rmw min, acquire, sys, %wide, %wide_value, %mask {tti.fpsan} : (!tt.ptr<f64>, f64, i1) -> f64
+  %max = tt.atomic_rmw max, release, cta, %ptr, %value {tti.fpsan} : (!tt.ptr<f32>, f32) -> f32
+  tt.return
+}
+}
+
+// -----
+
+#fpsan_atomic_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#fpsan_atomic_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @fpsan_local_atomic_scatter_rmw
+// CHECK: llvm.cond_br
+// CHECK: llvm.add {{.*}} : i32
+// CHECK: llvm.cmpxchg {{.*}} syncscope("block") monotonic monotonic{{.*}} : !llvm.ptr<3>, i32
+// CHECK: llvm.cond_br
+tt.func private @fpsan_local_atomic_scatter_rmw(%indices: tensor<128xi32, #fpsan_atomic_blocked>, %value: tensor<128xf32, #fpsan_atomic_blocked>, %mask: tensor<128xi1, #fpsan_atomic_blocked>) {
+  %dst = ttg.local_alloc %value : (tensor<128xf32, #fpsan_atomic_blocked>) -> !ttg.memdesc<128xf32, #fpsan_atomic_shared, #ttg.shared_memory, mutable>
+  %old = ttg.local_atomic_scatter_rmw fadd, %dst[%indices], %value, %mask {axis = 0 : i32, tti.fpsan} : (!ttg.memdesc<128xf32, #fpsan_atomic_shared, #ttg.shared_memory, mutable>, tensor<128xf32, #fpsan_atomic_blocked>, tensor<128xi32, #fpsan_atomic_blocked>, tensor<128xi1, #fpsan_atomic_blocked>) -> tensor<128xf32, #fpsan_atomic_blocked>
+  tt.return
+}
+}
+
+// -----
+
+#fpsan_cluster_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#fpsan_cluster_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @fpsan_local_atomic_scatter_rmw_cluster
+// CHECK: %[[PEER_PTR:.*]] = nvvm.mapa {{.*}} : !llvm.ptr<3> -> !llvm.ptr<7>
+// CHECK: llvm.cmpxchg %[[PEER_PTR]], {{.*}} syncscope("cluster") monotonic monotonic{{.*}} : !llvm.ptr<7>, i32
+tt.func private @fpsan_local_atomic_scatter_rmw_cluster(%value: tensor<256xf32, #fpsan_cluster_blocked>, %mask: tensor<256xi1, #fpsan_cluster_blocked>) {
+  %dst = ttg.local_alloc %value : (tensor<256xf32, #fpsan_cluster_blocked>) -> !ttg.memdesc<256xf32, #fpsan_cluster_shared, #ttg.shared_memory, mutable>
+  ttng.cluster_barrier
+  %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #fpsan_cluster_blocked>
+  %peer_bit = arith.constant dense<128> : tensor<256xi32, #fpsan_cluster_blocked>
+  %indices = arith.xori %offsets, %peer_bit : tensor<256xi32, #fpsan_cluster_blocked>
+  %old = ttg.local_atomic_scatter_rmw fadd, %dst[%indices], %value, %mask {axis = 0 : i32, tti.fpsan} : (!ttg.memdesc<256xf32, #fpsan_cluster_shared, #ttg.shared_memory, mutable>, tensor<256xf32, #fpsan_cluster_blocked>, tensor<256xi32, #fpsan_cluster_blocked>, tensor<256xi1, #fpsan_cluster_blocked>) -> tensor<256xf32, #fpsan_cluster_blocked>
+  ttng.cluster_barrier
+  tt.return
+}
+}

@@ -107,7 +107,9 @@ void populateInstrumentationToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfoBase &targetInfo);
 
 void populateFpSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns);
+                                 RewritePatternSet &patterns,
+                                 const TargetInfoBase &targetInfo,
+                                 PatternBenefit benefit);
 
 void populateGSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                 RewritePatternSet &patterns,
