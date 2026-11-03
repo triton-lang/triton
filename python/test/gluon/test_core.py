@@ -4875,14 +4875,22 @@ def test_fp6_tma_store_contiguous(width, source, with_allocator):
     base = dst.clone() if source == "host_rebased" else dst
     desc = None if source == "device" else TensorDescriptor.from_tensor(base, [1, width],
                                                                         ttgl.NVMMASharedLayout(0, 8, fp6_format="e2m3"))
-    kernel = _fp6_store_tile[(2, )](src, dst, 128 - width, desc, width, source == "host_rebased")
+    args = (src, dst, 128 - width, desc, width, source == "host_rebased")
+    if desc is not None and width == 64:
+        # Inspect narrow host-argument lowering independently of CUDA's host encoder.
+        kernel = _fp6_store_tile.warmup(*args, grid=(2, ))
+    else:
+        kernel = _fp6_store_tile[(2, )](*args)
+        torch.testing.assert_close(dst, expected)
     if source == "host_rebased":
         assert (base == 0xa5).all()
     if source != "device":
         assert "tensormap.replace.tile.box_dim" not in kernel.asm["ptx"]
-        assert ("tensormap.replace.tile.elemtype" in kernel.asm["ptx"]) == (width == 64)
+        assert "tensormap.replace.tile.elemtype" not in kernel.asm["ptx"]
+        assert ("tensormap.replace.tile.global_address" in kernel.asm["ptx"]) == (source == "host_rebased")
+        if source == "host":
+            assert kernel.metadata.global_scratch_size == 0
     assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
-    torch.testing.assert_close(dst, expected)
 
 
 @gluon.jit

@@ -179,6 +179,11 @@ def test_fp6_tma_roundtrip(fmt, width, host, row, with_allocator):
         # Exercise the SM103 16-byte base alignment with a 48-byte row stride.
         buf = torch.empty(buf.numel() + 16, dtype=buf.dtype, device=buf.device)[16:].view_as(buf).copy_(buf)
     desc = TensorDescriptor.from_tensor(buf, [1, width], dtype=dtype) if host else None
+    if host and width == 64:
+        # CUDA's tiled host encoder requires a 128-value FP6 box.
+        with pytest.raises(RuntimeError, match="Failed to create tensor map descriptor: invalid argument"):
+            _fp6_desc_store[(1, )](x, buf, desc, dtype, width, host, row)
+        return
     store = _fp6_desc_store[(1, )](x, buf, desc, dtype, width, host, row)
     assert "cp.async.bulk.tensor.2d.global.shared" in store.asm["ptx"]
     torch.testing.assert_close(buf, pack_fp6(initial))

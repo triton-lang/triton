@@ -228,15 +228,9 @@ struct TensormapUpdateOpConversion
     auto [prev, leader, cont] = createIfBlock(
         rewriter, loc, b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0)));
     rewriter.setInsertionPointToStart(leader);
-    if (adaptor.getBase())
-      tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::GLOBAL_ADDRESS, smem,
-                                adaptor.getBase());
-    if (isNarrowFP6Map(op.getSrc().getType()))
-      tensormap_replace_attr(loc, ctx, rewriter, NVVM::TensormapField::ELEMTYPE,
-                             smem,
-                             NVVM::TensormapElemtypeAttr::get(
-                                 ctx, NVVM::TensormapElemtype::B6x16P32));
+    tensormap_replace_generic(loc, ctx, rewriter,
+                              NVVM::TensormapField::GLOBAL_ADDRESS, smem,
+                              adaptor.getBase());
     rewriter.setInsertionPointToStart(cont);
     LLVM::NVIDIA::createSyncWarp(loc, rewriter);
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDst(), smem);

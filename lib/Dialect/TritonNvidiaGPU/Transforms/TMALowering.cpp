@@ -199,25 +199,6 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    // Host arguments are grid-constant. Finish each 64-wide FP6 template
-    // once per CTA; an explicit address update can set both fields at once.
-    for (auto func : m.getOps<triton::FuncOp>()) {
-      if (!triton::isKernel(func) || func.isExternal())
-        continue;
-      OpBuilder b = OpBuilder::atBlockBegin(&func.getBody().front());
-      for (auto arg : func.getArguments()) {
-        auto type = dyn_cast<TensorDescType>(arg.getType());
-        if (!type || !isNarrowFP6Map(type))
-          continue;
-        auto needsUpdate = [](OpOperand &use) {
-          return !isa<TensormapUpdateOp>(use.getOwner());
-        };
-        if (llvm::any_of(arg.getUses(), needsUpdate)) {
-          Value updated = updateTMADesc(b, arg.getLoc(), arg);
-          arg.replaceUsesWithIf(updated, needsUpdate);
-        }
-      }
-    }
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
                  TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(

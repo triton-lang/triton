@@ -29,7 +29,7 @@ FailureOr<int> getTMAElementType(Location loc, triton::TensorDescInterface ty);
 
 bool isNarrowFP6Map(TensorDescType type);
 Value updateTMADesc(OpBuilder &builder, Location loc, Value src,
-                    Value base = {});
+                    Value base);
 
 LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
                             OpBuilder &builder);
