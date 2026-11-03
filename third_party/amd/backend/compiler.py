@@ -332,6 +332,11 @@ def get_llvm_flags(options):
     per-function LLVM attributes (see make_llir) whenever LLVM offers one.
     """
     flags = []
+    # InstCombine folds an extractelement/insertelement chain into a single
+    # shufflevector only if SimplifyDemandedVectorElts can walk the whole
+    # chain, and its depth limit defaults to 10. 32 covers the chain without
+    # deepening the recursion further than needed.
+    flags.append("instcombine-simplify-vector-elts-depth=32")
     # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
     # s_wait_alu va_vdst waits in expert scheduling mode.
     if options.arch == "gfx1250" and is_expert_scheduling_enabled(options.arch):

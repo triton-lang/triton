@@ -236,10 +236,10 @@ def test_amd_llvm_options_concurrent():
 
 
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
-    ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", [], True),
-    ("gfx950", True, "disable-lsr", [], False),
-    ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
+    ("gfx90a", True, None, ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx942", False, "1", ["instcombine-simplify-vector-elts-depth=32"], True),
+    ("gfx950", True, "disable-lsr", ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx1250", True, "0", ["instcombine-simplify-vector-elts-depth=32", "amdgpu-anti-hints-for-va-vdst"], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
                              monkeypatch):

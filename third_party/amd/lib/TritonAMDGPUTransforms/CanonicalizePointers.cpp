@@ -24,6 +24,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -1942,12 +1943,20 @@ struct TritonAMDGPUCanonicalizePointersPass
 /// TODO(max): this is still just a heuristic approximation to a "dataflow
 /// analysis" that "understands" the relationship between each operands and
 /// results for each op (i.e., whether fat ptrs are actually propagated).
-static void getForwardSliceImpl(OpOperand *use, Operation *op,
-                                SetVector<Operation *> *forwardSlice) {
+static void
+getForwardSliceImpl(OpOperand *use, Operation *op,
+                    SetVector<Operation *> *forwardSlice,
+                    llvm::SmallPtrSetImpl<OpOperand *> &visitedUses) {
   assert(use && op && "expected both use and op to be valid pointers");
   assert(use->getOwner() == op && "expected use's owner to be op");
 
   if (!llvm::isa<tt::PointerType>(getElementTypeOrSelf(use->get().getType())))
+    return;
+
+  // Merged pointer paths can reach the same use exponentially many times.
+  // Track uses rather than operations: different operands of a loop or branch
+  // lead to different block arguments whose uses must all be visited.
+  if (!visitedUses.insert(use).second)
     return;
 
   // verbose because you can't construct <OpOperand*> from <OpOperand&>
@@ -1993,7 +2002,7 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
 
   for (OpOperand *nextUse : nextUses) {
     auto owner = nextUse->getOwner();
-    getForwardSliceImpl(nextUse, owner, forwardSlice);
+    getForwardSliceImpl(nextUse, owner, forwardSlice, visitedUses);
   }
 
   forwardSlice->insert(op);
@@ -2022,6 +2031,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
+  llvm::SmallPtrSet<OpOperand *, 32> visitedUses;
   for (auto [idx, arg] : llvm::enumerate(func.getArguments())) {
     if (!llvm::isa<tt::PointerType>(arg.getType()))
       continue;
@@ -2039,7 +2049,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     // NB: reusing the same SetVector invalidates the topo order implied by
     // getForwardSlice
     for (auto &use : arg.getUses())
-      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
+      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite, visitedUses);
   }
 
   ConversionConfig config;
