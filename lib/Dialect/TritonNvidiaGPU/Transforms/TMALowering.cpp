@@ -205,8 +205,7 @@ public:
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       return signalPassFailure();
 
-    // The SM103 host encoder is specialized to a single store box. Prove
-    // eligibility before allowing the launcher to construct its opaque bytes.
+    // Only tiled stores may use the SM103 narrow FP6 host encoder.
     for (auto func : m.getOps<triton::FuncOp>()) {
       if (!triton::isKernel(func))
         continue;

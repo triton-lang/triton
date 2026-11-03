@@ -564,17 +564,17 @@ static PyTypeObject PyCUtensorMapType = {
 
 // SM103's b6p2x16 store accepts a 48-byte box, which cuTensorMapEncodeTiled
 // rejects. This opaque encoding is specific to SM103, tiled 2D, no swizzle,
-// unit element strides, zero fill and a single row of 64 logical values.
+// unit element strides, zero fill and boxes of 64 logical values per row.
 static PyObject *fillSM103FP6StoreDescriptor(PyObject *self, PyObject *args) {
-  unsigned long long address, rows, columns, stride;
-  if (!PyArg_ParseTuple(args, "KKKK", &address, &rows, &columns, &stride))
+  unsigned long long address, rows, columns, stride, boxRows;
+  if (!PyArg_ParseTuple(args, "KKKKK", &address, &rows, &columns, &stride,
+                        &boxRows))
     return NULL;
   if (!address || address % 16 || !rows || rows > (1ULL << 32) || !columns ||
       columns > (1ULL << 32) || columns % 64 || !stride || stride % 16 ||
-      stride / 16 > UINT32_MAX) {
-    PyErr_SetString(
-        PyExc_ValueError,
-        "invalid shape, address or byte stride for SM103 FP6 store");
+      stride / 16 > UINT32_MAX || !boxRows || boxRows > 256) {
+    PyErr_SetString(PyExc_ValueError, "invalid shape, address, byte stride or "
+                                      "box height for SM103 FP6 store");
     return NULL;
   }
   PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject(
@@ -588,7 +588,8 @@ static PyObject *fillSM103FP6StoreDescriptor(PyObject *self, PyObject *args) {
   words[3] = stride >> 4;
   words[8] = columns - 1;
   words[9] = rows - 1;
-  words[13] = 63U << 24; // Innermost box dimension minus one.
+  words[13] = 63U << 24;   // Innermost box dimension minus one.
+  words[14] = boxRows - 1; // Outermost box dimension minus one.
   _Static_assert(sizeof(words) == sizeof(CUtensorMap),
                  "unexpected tensor map size");
   memcpy(&desc->tensorMap, words, sizeof(words));

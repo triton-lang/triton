@@ -706,12 +706,13 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
       return op->emitOpError(
           "FP6 only supports tiled TMA loads and stores with byte storage");
     auto swizzle = descEnc.getSwizzlingByteWidth();
-    auto width = gpu::getShapePerCTA(descEnc, desc.getShape()).back();
+    auto shape = desc.getShape();
+    auto width = gpu::getShapePerCTA(descEnc, shape).back();
     if (width == 64) {
-      if (!store || swizzle || desc.getShape() != ArrayRef<int64_t>({1, 64}) ||
-          memDesc.getShape() != desc.getShape())
+      if (!store || swizzle || shape.size() != 2 || shape.back() != 64 ||
+          memDesc.getShape() != shape || nvmma != descEnc)
         return op->emitOpError(
-            "64-value FP6 TMA requires an unswizzled [1, 64] store");
+            "64-value FP6 TMA requires a matching unswizzled [M, 64] store");
       auto target = op->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
           gpu::AttrTargetName);
       if (!target || target.getValue() != "cuda:103")

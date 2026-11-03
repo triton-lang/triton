@@ -4928,32 +4928,34 @@ def test_split_auto_layout_execution():
 
 
 @gluon.jit
-def _fp6_store_tile(src, dst, desc, WIDTH: ttgl.constexpr = 128):
+def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr):
+    fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
     if desc is None:
-        fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
-        desc = tma.make_tensor_descriptor(dst, [5, 128], [96, 1], [1, 128], fmt)
+        desc = tma.make_tensor_descriptor(dst, [2 * ROWS + 3, WIDTH], [WIDTH * 3 // 4, 1], [ROWS, WIDTH], fmt)
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-    i = ttgl.arange(0, WIDTH, layout=ttgl.SliceLayout(0, layout))
-    lanes = ttgl.load(src + i).expand_dims(0)
-    stage = ttgl.allocate_shared_memory(ttgl.uint8, [1, WIDTH], ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16"), lanes)
+    pid = ttgl.program_id(0)
+    row = ttgl.arange(0, ROWS, layout=ttgl.SliceLayout(1, layout))
+    col = ttgl.arange(0, WIDTH, layout=ttgl.SliceLayout(0, layout))
+    lanes = ttgl.load(src + (pid * ROWS + row[:, None]) * WIDTH + col[None, :])
+    stage = ttgl.allocate_shared_memory(ttgl.uint8, [ROWS, WIDTH], fmt, lanes)
     fence_async_shared()
-    tma.async_store(desc, [2 * ttgl.program_id(0) + 1, 0], stage)
+    tma.async_store(desc, [pid * (ROWS + 1) + 1, 0], stage)
     tma.store_wait(0)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
                     reason="Requires SM100 or SM103")
-@pytest.mark.parametrize("host,width", [(False, 128), (True, 128), (True, 64)])
-def test_fp6_tma_store_contiguous(host, width, with_allocator):
+@pytest.mark.parametrize("host,rows,width", [(False, 1, 128), (True, 1, 128), (True, 1, 64), (True, 2, 64)])
+def test_fp6_tma_store_contiguous(host, rows, width, with_allocator):
     if width == 64 and torch.cuda.get_device_capability() != (10, 3):
         pytest.skip("64-value FP6 stores require SM103")
-    src = torch.randint(0, 256, (width, ), device="cuda", dtype=torch.uint8)
-    dst = torch.full((5, width * 6 // 8), 0xa5, device="cuda", dtype=torch.uint8)
+    src = torch.randint(0, 256, (2, rows, width), device="cuda", dtype=torch.uint8)
+    dst = torch.full((2 * rows + 3, width * 3 // 4), 0xa5, device="cuda", dtype=torch.uint8)
     expected = dst.clone()
-    expected[1::2] = pack_fp6(src.int() & 63)
-    desc = TensorDescriptor.from_tensor(dst, [1, width], ttgl.NVMMASharedLayout(0, 8,
-                                                                              padding="b6p2x16")) if host else None
-    kernel = _fp6_store_tile[(2, )](src, dst, desc, width)
+    expected[1:rows + 1], expected[rows + 2:-1] = pack_fp6(src.int() & 63)
+    layout = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
+    desc = TensorDescriptor.from_tensor(dst, [rows, width], layout) if host else None
+    kernel = _fp6_store_tile[(2, )](src, dst, desc, rows, width)
     torch.testing.assert_close(dst, expected)
     assert "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group" in kernel.asm["ptx"]
     if host:

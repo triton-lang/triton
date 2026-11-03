@@ -229,9 +229,10 @@ def make_tensordesc_arg(arg, metadata, _):
         driver = triton.runtime.driver.active
         if driver.get_current_target().arch != 103:
             raise ValueError("64-value FP6 TMA stores require SM103")
-        if block_size != [1, 64] or elem_type != 15 or swizzle or padding or strides[-1] != 1:
-            raise ValueError("expected an unswizzled [1, 64] FP6 store descriptor")
-        cu_tensor_map = driver.utils.fill_sm103_fp6_store_descriptor(arg.base.data_ptr(), *shape, strides[0])
+        if len(block_size) != 2 or block_size[1] != 64 or elem_type != 15 or swizzle or padding or strides[-1] != 1:
+            raise ValueError("expected an unswizzled [M, 64] FP6 store descriptor")
+        cu_tensor_map = driver.utils.fill_sm103_fp6_store_descriptor(arg.base.data_ptr(), *shape, strides[0],
+                                                                     block_size[0])
     elif is_im2col:
         # Im2col mode - use im2col descriptor fill function
         # block_size from metadata is [pixelsPerColumn, channelsPerPixel] (possibly clamped)
