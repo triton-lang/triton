@@ -901,7 +901,7 @@ for
         remainingCTAs /= CTAsPerCGA[i];
       }
 
-      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
+      CTAsPerCGA[CTAOrder.back()] *= remainingCTAs; // wrap at CTA level
 
       CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);
