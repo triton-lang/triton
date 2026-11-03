@@ -14,8 +14,8 @@ def is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype):
 
 
 def is_fp8_nvfp4(precision_config, lhs_dtype, rhs_dtype):
-    return (lhs_dtype.bitwidth == 8 and rhs_dtype == FP4
-            and precision_config.a_mx_scale is None and precision_config.b_mx_scale is not None
+    return (lhs_dtype.bitwidth == 8 and rhs_dtype == FP4 and precision_config.a_mx_scale is None
+            and precision_config.b_mx_scale is not None
             and precision_config.b_mx_scale.dtype in (FP8_E4M3FN, torch.float8_e4m3fn))
 
 
