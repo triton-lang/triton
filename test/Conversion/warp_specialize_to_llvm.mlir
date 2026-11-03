@@ -63,7 +63,6 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   // AMD-NEXT: rocdl.barrier
 
   // Check that named barriers are used and that we have the correct counts.
-  // A 1-warp partition only needs a wave barrier:
   // AMD-DAG-COUNT-5: rocdl.s.barrier.join {{.*}} : !llvm.ptr<15>
   // AMD-DAG-COUNT-4: rocdl.s.barrier.signal.var {{.*}} member_cnt = 4
   // AMD-DAG-COUNT-1: rocdl.s.barrier.signal.var {{.*}} member_cnt = 2
