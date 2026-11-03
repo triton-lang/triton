@@ -17,6 +17,9 @@
 // RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
+// RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
+// RUN: triton-opt %t/small-lanes.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SMALL-LANES --implicit-check-not="nvvm.shfl.sync idx" --implicit-check-not="nvvm.barrier"
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -609,5 +612,43 @@ tt.func private @test_scan_wave64_interleaved_reverse(%a: tensor<64x8xi8, #inter
     tt.scan.return %a12, %b_sum : i8, i64
   }) : (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>) -> (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>)
   tt.return %a_out, %b_out : tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>
+}
+}
+
+//--- tiny-totals.mlir
+
+#tiny_totals = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Four warp totals are loaded together into registers, avoiding a lane scan.
+// TINY-TOTALS-LABEL: llvm.func {{.*}}@test_scan_tiny_totals(
+// TINY-TOTALS: nvvm.barrier
+// TINY-TOTALS: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xi32>
+// TINY-TOTALS: llvm.return
+tt.func private @test_scan_tiny_totals(%arg: tensor<512xi32, #tiny_totals>) -> tensor<512xi32, #tiny_totals> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<512xi32, #tiny_totals>) -> tensor<512xi32, #tiny_totals>
+  tt.return %result : tensor<512xi32, #tiny_totals>
+}
+}
+
+//--- small-lanes.mlir
+
+#layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Keep the four independent lane scans in place, without layout conversions.
+// SMALL-LANES-LABEL: llvm.func {{.*}}@test_small_independent_lane_scans(
+// SMALL-LANES-COUNT-12: nvvm.shfl.sync up
+// SMALL-LANES-NOT: nvvm.shfl
+// SMALL-LANES: llvm.return
+tt.func private @test_small_independent_lane_scans(%arg: tensor<64x8xi32, #layout>) -> tensor<64x8xi32, #layout> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<64x8xi32, #layout>) -> tensor<64x8xi32, #layout>
+  tt.return %result : tensor<64x8xi32, #layout>
 }
 }

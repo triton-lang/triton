@@ -307,14 +307,16 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
 
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
     : ScanLoweringHelper(
-          triton::gpu::toLinearLayout(op.getInputTypes().front()),
-          op.getAxis()) {
-  this->op = op;
-}
+          triton::gpu::toLinearLayout(op.getInputTypes().front()), op.getAxis(),
+          op) {}
 
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis)
-    : axis(axis), originalLayout(inputLayout) {
+    : ScanLoweringHelper(inputLayout, axis, {}) {}
+
+ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
+                                       unsigned axis, triton::ScanOp op)
+    : op(op), axis(axis), originalLayout(inputLayout) {
   permutedLayout = buildPermutedLayout();
   if (!isSupported())
     return;
@@ -388,6 +390,25 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto inSegment = [&](const auto &basis) {
     return basis[axis] && basis[axis] < numSegments;
   };
+  // Small, ordered source scans need not move single values into registers
+  // and back. Compiler-generated totals retain their register-first layout.
+  // Register-owned segment bits still require the normalized scan layout.
+  bool keepLayout =
+      op && threadSegmentSize == 1 && bases[kReg].size() <= 2 &&
+      llvm::none_of(bases[kReg], inSegment) && numSegments <= 64 &&
+      llvm::none_of(bases[kLane], [](const auto &basis) {
+        return llvm::all_of(basis, [](int32_t x) { return x == 0; });
+      });
+  unsigned expected = 1;
+  for (const auto &basis : bases[kLane])
+    if (inSegment(basis)) {
+      keepLayout &=
+          basis[axis] == expected &&
+          llvm::count_if(basis, [](int32_t x) { return x != 0; }) == 1;
+      expected *= 2;
+    }
+  if (keepLayout && expected == numSegments)
+    return *intraWarpTotalsLayout;
   // Scanned totals are converted from intraWarpScanLayout back to
   // intraWarpTotalsLayout, but the separate inter-warp carries are not.
   // Only exchange when there are no partial thread prefixes to complete,
@@ -442,24 +463,61 @@ LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
   return getScanTotalsLayout(sourceLayout, axis, valuesPerSegment);
 }
 
+bool ScanLoweringHelper::canGroupInterWarpScan() const {
+  const auto &source =
+      intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
+  auto *ctx = source.getInDimNames().begin()->getContext();
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  unsigned segmentSize =
+      warpSegmentSize / (intraWarpScanLayout ? threadSegmentSize : 1);
+  // Grouped loading requires complete warp-local totals in registers.
+  return source.resizeOutDim(axisDim, segmentSize)
+      .sublayoutIsZero({StringAttr::get(ctx, "lane")}, {axisDim});
+}
+
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
+  constexpr unsigned smallScanTableWords = 8;
+  constexpr unsigned maxScanTableWords = 128;
+
   // Broadcast the full segment sequence across participating warps.
   auto *ctx = interWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
   unsigned numSegments = interWarpTotalsLayout->getOutDimSize(axisDim);
-  auto bases = interWarpTotalsLayout->getBases();
-  for (auto &[dim, dimBases] : bases)
-    for (auto &basis : dimBases)
-      basis[axis] = 0;
+  auto independentLayout = interWarpTotalsLayout->resizeOutDim(axisDim, 1);
+  auto bases = independentLayout.getBases();
+  unsigned independentRegs =
+      independentLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+  unsigned scanLanes = std::min<unsigned>(
+      numSegments,
+      independentLayout.getInDimSize(kLane) /
+          independentLayout.removeZeroBasesAlongDim(kLane).getInDimSize(kLane));
+  auto scanOp = op;
+  unsigned words = 0;
+  for (Type type : scanOp.getElementTypes())
+    words += llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 32u);
+  unsigned registerWords = numSegments * independentRegs * words;
+  unsigned scanWordsPerLane = numSegments * words / scanLanes;
+  bool canUseWarp = scanLanes > 1;
+
+  // Stream large tables when each scan's per-lane state exceeds the budget.
+  bool useGroup = canGroupInterWarpScan() &&
+                  registerWords > maxScanTableWords &&
+                  (!canUseWarp || scanWordsPerLane > maxScanTableWords);
+  // Replicate small tables, or tables with no available scan lanes.
+  bool useRegisters =
+      !useGroup && (registerWords <= smallScanTableWords || !canUseWarp);
+  // Distribute the remaining tables across lanes.
+  bool useWarp = !useRegisters && !useGroup;
   unsigned next = 1;
-  for (auto &basis : bases[kLane])
-    if (next < numSegments &&
-        llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
-      basis[axis] = next;
-      next *= 2;
-    }
+  if (useWarp)
+    for (auto &basis : bases[kLane])
+      if (next < numSegments &&
+          llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
+        basis[axis] = next;
+        next *= 2;
+      }
   while (next < numSegments) {
     std::vector<int32_t> basis(interWarpTotalsLayout->getNumOutDims(), 0);
     basis[axis] = next;
@@ -490,11 +548,11 @@ bool ScanLoweringHelper::useGroupedInterWarpScan() const {
   const auto &layout = *interWarpScanLayout;
   // TODO(Keren): support non-zero block bases, which requires a more complex
   // inter-CTA scan to complete the prefixes
-  if (!layout.sublayoutIsZero({kLane}, {axisDim}))
+  if (!canGroupInterWarpScan() || !layout.sublayoutIsZero({kLane}, {axisDim}))
     return false;
   unsigned words = 0;
   for (Type type : scanOp.getElementTypes())
-    words += llvm::divideCeil(type.getIntOrFloatBitWidth(), 32u);
+    words += llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 32u);
   // Group long register-only scans when their replicated totals exceed 128
   // logical 32-bit words per thread
   if (layout.getInDimSize(kReg) * words <= 128)
