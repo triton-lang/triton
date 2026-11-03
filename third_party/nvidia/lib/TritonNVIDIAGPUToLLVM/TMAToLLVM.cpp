@@ -108,21 +108,18 @@ struct TensormapFenceproxyAcquireOpConversion
   }
 };
 
-void initialize_tma(Location loc, MLIRContext *ctx,
-                    ConversionPatternRewriter &rewriter,
-                    const NVIDIA::TargetInfo &targetInfo, Value descPtr,
-                    Value src = {}) {
+void zero_fill_tma(Location loc, MLIRContext *ctx,
+                   ConversionPatternRewriter &rewriter,
+                   const NVIDIA::TargetInfo &targetInfo, Value descPtr) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // Write out zeros
   constexpr int kWarpSize = 32;
   Value threadId = getThreadId(rewriter, loc);
   Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
 
-  Value fillVal = b.i32_val(0);
-  if (src) {
-    Value lane = b.and_(threadId, b.i32_val(kWarpSize - 1));
-    fillVal = b.load(i32_ty, b.gep(src.getType(), i32_ty, src, lane));
-  }
-  auto writeAddr = b.gep(descPtr.getType(), i32_ty, descPtr, threadId);
+  auto fillVal = b.i32_val(0);
+  auto writeAddr =
+      b.gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
   targetInfo.storeShared(rewriter, loc, writeAddr, fillVal, pred);
   LLVM::NVIDIA::createSyncWarp(loc, rewriter);
 }
@@ -146,7 +143,7 @@ struct TensormapCreateOpConversion
     bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
-    initialize_tma(loc, ctx, rewriter, targetInfo, smemBase);
+    zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
     Value isLeader = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     auto [previousBlock, updateBlock, continuationBlock] =
         createIfBlock(rewriter, loc, isLeader);
@@ -209,42 +206,6 @@ struct TensormapCreateOpConversion
   }
 };
 
-struct TensormapUpdateOpConversion
-    : public ConvertOpToLLVMPattern<ttng::TensormapUpdateOp> {
-  const NVIDIA::TargetInfo &targetInfo;
-  TensormapUpdateOpConversion(LLVMTypeConverter &converter,
-                              const NVIDIA::TargetInfo &targetInfo,
-                              PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(ttng::TensormapUpdateOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-    initialize_tma(loc, ctx, rewriter, targetInfo, smem, adaptor.getSrc());
-    auto [prev, leader, cont] = createIfBlock(
-        rewriter, loc, b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0)));
-    rewriter.setInsertionPointToStart(leader);
-    if (adaptor.getBase())
-      tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::GLOBAL_ADDRESS, smem,
-                                adaptor.getBase());
-    if (isNarrowFP6Map(op.getSrc().getType()))
-      tensormap_replace_attr(loc, ctx, rewriter, NVVM::TensormapField::ELEMTYPE,
-                             smem,
-                             NVVM::TensormapElemtypeAttr::get(
-                                 ctx, NVVM::TensormapElemtype::B6x16P32));
-    rewriter.setInsertionPointToStart(cont);
-    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
-    tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDst(), smem);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 struct ReinterpretTensorDescOpConversion
     : public ConvertOpToLLVMPattern<ReinterpretTensorDescOp> {
 
@@ -267,8 +228,7 @@ struct ReinterpretTensorDescOpConversion
 void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<TensormapCreateOpConversion, TensormapUpdateOpConversion>(
-      typeConverter, targetInfo, benefit);
+  patterns.add<TensormapCreateOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TensormapFenceproxyAcquireOpConversion,
                ReinterpretTensorDescOpConversion>(typeConverter, benefit);
 }
