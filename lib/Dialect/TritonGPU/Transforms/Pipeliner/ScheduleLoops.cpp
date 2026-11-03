@@ -49,24 +49,31 @@ bool isSafeToPipeline(scf::ForOp forOp) {
 }
 
 // Find dependencies with distance of 1. They will go to the next stage,
-// but in the cluster before the current op.
+// but in the cluster before their earliest user.
 void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
   int numStages = schedule.getNumStages();
 
   // Mapping from the cluster to the cluster before it.
   DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!schedule.contains(&op))
-      continue;
-    auto [stage, cluster] = schedule[&op];
+  // A dependency is placed against the first user visited and has to run
+  // ahead of all of them, so visit users by stage and then cluster: program
+  // order can disagree with the cluster order.
+  SmallVector<Operation *> users;
+  for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp))
+    users.push_back(op);
+  llvm::stable_sort(users, [&](Operation *a, Operation *b) {
+    return schedule[a].first < schedule[b].first;
+  });
+  for (Operation *op : users) {
+    auto [stage, cluster] = schedule[op];
     // Can't schedule past the last stage.
     if (stage == numStages - 1)
       continue;
-    for (Value operand : getNestedOperands(&op)) {
+    for (Value operand : getNestedOperands(op)) {
       if (auto arg = dyn_cast<BlockArgument>(operand)) {
-        if (arg.getArgNumber() > 0 && arg.getOwner() == op.getBlock()) {
-          auto yieldOp = op.getBlock()->getTerminator();
+        if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
+          auto yieldOp = op->getBlock()->getTerminator();
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
           if (defOp && !schedule.contains(defOp)) {
