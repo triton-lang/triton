@@ -143,20 +143,22 @@ static bool isProfitableBypassSource(RankedTensorType srcType,
     return false;
 
   // Make sure that using the src layout would not increase the store count.
-  // A store is at most 128 bits wide, so we cap both runs at the number of
+  // A store is at most 128 bits wide, so we cap the dst run at the number of
   // elements that fit in it (4 for f32, 8 for f16): a src run of 8 f16 against
   // a dst run of 16 needs no more stores, since neither can write more than 8
   // elements at a time, and rejecting it would keep the LDS round trip for a
   // penalty the hardware does not have.
   Type elemType = dstType.getElementType();
-  const unsigned elemBitWidth =
-      elemType.isIntOrFloat() ? elemType.getIntOrFloatBitWidth() : 0;
-  const unsigned maxElems =
-      elemBitWidth ? std::max(128u / elemBitWidth, 1u) : ~0u;
-  return std::min(triton::gpu::getContigPerThread(srcType)[contigDim],
-                  maxElems) >=
-         std::min(triton::gpu::getContigPerThread(dstType)[contigDim],
-                  maxElems);
+  if (!elemType.isIntOrFloat())
+    return false;
+
+  const unsigned elemBitWidth = elemType.getIntOrFloatBitWidth();
+  const unsigned maxElems = std::max(128u / elemBitWidth, 1u);
+  const unsigned srcContig =
+      triton::gpu::getContigPerThread(srcType)[contigDim];
+  const unsigned dstContig =
+      triton::gpu::getContigPerThread(dstType)[contigDim];
+  return srcContig >= std::min(dstContig, maxElems);
 }
 
 // convert(val) : xmma -> blocked
