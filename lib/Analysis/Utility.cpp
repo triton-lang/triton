@@ -488,14 +488,14 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
 
   const auto &source =
       intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
-  unsigned segmentSize =
-      warpSegmentSize / (intraWarpScanLayout ? threadSegmentSize : 1);
+  uint64_t sourceLaneMask = getInputBasisMask(source, kLane, {axisDim});
+  uint64_t totalsLaneMask =
+      getInputBasisMask(*interWarpTotalsLayout, kLane, {axisDim});
   if (registerWords <= maxRegisterWords)
     interWarpScanType = InterWarpScanType::Registers;
   else if (laneWords <= maxLaneWords)
     interWarpScanType = InterWarpScanType::Warp;
-  else if (source.resizeOutDim(axisDim, segmentSize)
-               .sublayoutIsZero({kLane}, {axisDim}))
+  else if (sourceLaneMask == totalsLaneMask)
     interWarpScanType = InterWarpScanType::Grouped;
   else
     interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
