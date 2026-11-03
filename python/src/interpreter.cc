@@ -1,5 +1,6 @@
 #include <atomic>
 #include <bit>
+#include <cfenv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -618,7 +619,8 @@ void require_dtype(const AnyArray &array, const char *name) {
 }
 
 template <typename T>
-py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
+py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj,
+                     int rounding) {
   AnyArray x = py::cast<AnyArray>(x_obj);
   AnyArray y = py::cast<AnyArray>(y_obj);
   AnyArray z = py::cast<AnyArray>(z_obj);
@@ -630,6 +632,20 @@ py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
   py::object ret = numpy_empty(x.size(), x_obj.attr("dtype"));
   auto ret_array = py::cast<MutableArray>(ret);
   auto *out = static_cast<T *>(ret_array.data());
+  // std::fma rounds according to the current floating-point environment,
+  // which gives exactly-rounded directed results without extra code.
+  int fe_mode = FE_TONEAREST;
+  if (rounding == 1)
+    fe_mode = FE_TOWARDZERO;
+  else if (rounding == 2)
+    fe_mode = FE_DOWNWARD;
+  else if (rounding == 3)
+    fe_mode = FE_UPWARD;
+  else if (rounding != 0)
+    throw std::invalid_argument("invalid fma rounding mode");
+  int prev_mode = std::fegetround();
+  if (rounding != 0)
+    std::fesetround(fe_mode);
   for (size_t i = 0; i < x.size(); ++i) {
     T a, b, c;
     memcpy(&a, const_element_data(x, i), sizeof(T));
@@ -638,6 +654,8 @@ py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
     // Select the overload that rounds directly to the operand type.
     out[i] = std::fma(a, b, c);
   }
+  if (rounding != 0)
+    std::fesetround(prev_mode);
   return ret.attr("reshape")(shape_list(x));
 }
 
@@ -724,8 +742,18 @@ void init_triton_interpreter(py::module_ &m) {
       .value("UMAX", RMWOp::UMAX)
       .export_values();
 
-  m.def("fma_fp32", &fma_array<float>);
-  m.def("fma_fp64", &fma_array<double>);
+  m.def(
+      "fma_fp32",
+      [](py::object x, py::object y, py::object z, int rounding) {
+        return fma_array<float>(x, y, z, rounding);
+      },
+      py::arg("x"), py::arg("y"), py::arg("z"), py::arg("rounding") = 0);
+  m.def(
+      "fma_fp64",
+      [](py::object x, py::object y, py::object z, int rounding) {
+        return fma_array<double>(x, y, z, rounding);
+      },
+      py::arg("x"), py::arg("y"), py::arg("z"), py::arg("rounding") = 0);
 
   m.def("load",
         [](py::object ptr_obj, py::object mask_obj, py::object other_obj,
