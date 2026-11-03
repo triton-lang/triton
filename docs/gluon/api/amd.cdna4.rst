@@ -20,6 +20,7 @@ The ``buffer`` module re-exports the descriptor-based buffer ops of
     :toctree: generated
     :nosignatures:
 
+    CachePolicy
     buffer.load_to_shared
     buffer_load
     buffer_store

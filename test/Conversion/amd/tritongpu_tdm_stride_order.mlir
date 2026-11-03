@@ -141,3 +141,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [5, 4, 3, 2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_rank_too_large(%ptr: !tt.ptr<f16>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM supports 1D to 5D descriptors}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape, %shape, %shape, %shape, %shape], [%stride, %stride, %stride, %stride, %stride, %one] : <f16>, <2x2x2x2x2x2xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_boolean_element_type(%ptr: !tt.ptr<i1>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM requires 8-, 16-, 32-, or 64-bit elements}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape], [%stride, %one] : <i1>, <32x64xi1, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[1024:+8] {order = [1, 0], shape = [32, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_descriptor_padding_interval_too_large(%ptr: !tt.ptr<f16>) {
+    %shape = arith.constant 64 : i32
+    %stride = arith.constant 64 : i64
+    %one = arith.constant 1 : i64
+    // expected-error @+2 {{TDM padding must use a dword-aligned interval}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %desc = tt.make_tensor_descriptor %ptr, [%shape, %shape], [%stride, %one] : <f16>, <32x64xf16, #shared>
+    tt.return
+  }
+}

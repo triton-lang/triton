@@ -19,6 +19,8 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
@@ -802,6 +804,11 @@ def _preload_function():
     return 17
 
 
+@gluon.jit
+def _preload_gluon_function():
+    return 17
+
+
 def _serialize_constants(constants):
     from triton.runtime.jit import serialize_specialization_data
     return serialize_specialization_data("reference_kernel", {}, constants, {}, SimpleNamespace(), "reference-key",
@@ -821,7 +828,9 @@ def _preload_constants(specialization_data, monkeypatch):
     return jit.JITFunction.preload(kernel, specialization_data)
 
 
-@pytest.mark.parametrize("constant", [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function])
+@pytest.mark.parametrize(
+    "constant",
+    [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function, _preload_gluon_function])
 def test_preload_reference_constants(constant, monkeypatch):
     specialization_data = _serialize_constants({(0, ): constant})
     constants = _preload_constants(specialization_data, monkeypatch)
@@ -915,6 +924,35 @@ def test_preload_class_kernel(cls, device, fresh_triton_cache, fresh_knobs):
     assert preloaded.hash == compiled.hash
     output.zero_()
     assert kernel[(1, )](output, cls) is preloaded
+    assert output.item() == 17
+    assert len(specializations) == 4
+
+
+def test_preload_gluon_function_kernel(device, fresh_triton_cache, fresh_knobs):
+
+    @gluon.jit
+    def kernel(out, fn: gl.constexpr):
+        gl.store(out, fn())
+
+    specializations = []
+
+    def cache_hook(**kwargs):
+        specializations.append(kwargs["compile"]["specialization_data"])
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    fresh_knobs.runtime.jit_post_compile_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](output, _preload_gluon_function)
+    assert output.item() == 17
+    assert len(specializations) == 2
+    assert specializations[0] == specializations[1]
+
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches.clear()
+    preloaded = kernel.preload(specializations[0])
+    assert preloaded.hash == compiled.hash
+    output.zero_()
+    assert kernel[(1, )](output, _preload_gluon_function) is preloaded
     assert output.item() == 17
     assert len(specializations) == 4
 

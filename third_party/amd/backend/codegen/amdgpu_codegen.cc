@@ -4,7 +4,6 @@
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
@@ -367,7 +366,7 @@ extern "C" TRITON_AMD_EXPORT int triton_amdgpu_translate_to_mir(
   std::vector<ScopedLLVMOptions::Setting> settings =
       collectOptionSettings(options);
   // Stop right after the scheduling-DAG pass, which substitutes itself for the
-  // machine scheduler (see armLivePipelineDAGEmission). This truncates the
+  // machine scheduler (see LivePipelineDAGEmission). This truncates the
   // pipeline at exactly the same point -stop-before=machine-scheduler did, so
   // the MIR dumped below is unchanged.
   settings.emplace_back("stop-after", llvm::mir_dag::livePipelineDAGPassName());
@@ -388,9 +387,7 @@ extern "C" TRITON_AMD_EXPORT int triton_amdgpu_translate_to_mir(
   std::string mirText;
   std::string dagText;
   {
-    llvm::mir_dag::armLivePipelineDAGEmission(&dagText);
-    llvm::scope_exit disarm(
-        [] { llvm::mir_dag::disarmLivePipelineDAGEmission(); });
+    llvm::mir_dag::LivePipelineDAGEmission dagEmission(&dagText);
     llvm::raw_string_ostream output(mirText);
     llvm::buffer_ostream bufferedOutput(output);
     llvm::legacy::PassManager codegen;

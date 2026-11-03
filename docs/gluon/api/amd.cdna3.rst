@@ -15,6 +15,7 @@ AMD CDNA 3
     :toctree: generated
     :nosignatures:
 
+    CachePolicy
     buffer_load
     buffer_store
     buffer_atomic_add

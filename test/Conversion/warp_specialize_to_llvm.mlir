@@ -588,31 +588,6 @@ llvm.func @warpid_warp_specialize() attributes {allocation.offset = 32 : i32} {
 
 // -----
 
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 5 : i32} {
-
-llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
-
-// CHECK-LABEL: @warpid_one_warp_partition
-llvm.func @warpid_one_warp_partition() attributes {allocation.offset = 32 : i32} {
-  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NOT: ttg.warp_id
-  // CHECK: "use"([[C0]]) : (i32) -> ()
-  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
-  default {
-    ttg.warp_yield
-  }
-  partition0() num_warps(1) {
-    %0 = ttg.warp_id
-    "use"(%0) : (i32) -> ()
-    ttg.warp_return
-  } : () -> ()
-  llvm.return
-}
-
-}
-
-// -----
-
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32} {
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>

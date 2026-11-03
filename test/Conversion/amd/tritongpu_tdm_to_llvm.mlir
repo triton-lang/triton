@@ -578,3 +578,108 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#idx = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scope_cache_policy
+  tt.func public @tdm_scope_cache_policy(
+    %desc: !tt.tensordesc<64x64xf16, #shared>,
+    %smem: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>,
+    %rows_desc: !tt.tensordesc<8x64xf16, #shared>,
+    %rows: !ttg.memdesc<8x64xf16, #shared, #smem, mutable>,
+    %idx: tensor<8xi32, #idx>
+  ) {
+    // CHECK-DAG: %[[LOAD_AUX:.*]] = llvm.mlir.constant(17 : i32) : i32
+    // CHECK-DAG: %[[STORE_AUX:.*]] = llvm.mlir.constant(26 : i32) : i32
+    // CHECK-DAG: %[[GATHER_AUX:.*]] = llvm.mlir.constant(19 : i32) : i32
+    // CHECK-DAG: %[[SCATTER_AUX:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[LOAD_AUX]])
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %smem {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = none>} : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[STORE_AUX]])
+    %1 = amdg.async_tdm_copy_local_to_global %desc from %smem {scope = 3 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = high>} : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[GATHER_AUX]])
+    %2 = amdg.async_tdm_gather %rows_desc[%idx] to %rows {scope = 1 : i32, cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SCATTER_AUX]])
+    %3 = amdg.async_tdm_scatter %rows_desc[%idx] from %rows {scope = 3 : i32} : tensor<8xi32, #idx>, !ttg.memdesc<8x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<8x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// Same partial copy as tdm_load_warp_used_hint_predication, but with an
+// mbarrier. Warps 4..7 keep the user's pred and get a NOP descriptor instead
+// (workgroup_mask and tile_dim0 cleared), so every warp sends its arrive.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_warp_used_hint_barrier
+  tt.func public @tdm_load_warp_used_hint_barrier(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %bar: !ttg.memdesc<1xi64, #bar, #smem, mutable>) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 256 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <256x64xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[BAR_EN:.*]] = llvm.mlir.constant(262144 : i32) : i32
+    // CHECK-DAG: %[[HI_MASK:.*]] = llvm.mlir.constant(-65536 : i32) : i32
+    // CHECK-DAG: %[[LO_MASK:.*]] = llvm.mlir.constant(65535 : i32) : i32
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+    // CHECK-NOT: llvm.select %[[IS_ACTIVE]],
+    // CHECK: llvm.or %{{.*}}, %[[BAR_EN]] : i32
+    // CHECK: %[[BAR_ADDR:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
+    // CHECK: llvm.lshr %[[BAR_ADDR]],
+    // CHECK: %[[G1_0_NOP:.*]] = llvm.and %[[G1_0:[^,]*]], %[[HI_MASK]] : i32
+    // CHECK-NEXT: llvm.select %[[IS_ACTIVE]], %[[G1_0]], %[[G1_0_NOP]] : i1, i32
+    // CHECK-NEXT: %[[G1_3:.*]] = llvm.extractelement %{{.*}} : vector<8xi32>
+    // CHECK-NEXT: %[[G1_3_NOP:.*]] = llvm.and %[[G1_3]], %[[LO_MASK]] : i32
+    // CHECK-NEXT: llvm.select %[[IS_ACTIVE]], %[[G1_3]], %[[G1_3_NOP]] : i1, i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1, barrier = %bar {warp_used_hint = 15 : i32} : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Multi-chunk gather with an mbarrier. Warps 1..3 hold redundant indices:
+// chunk 0 gives them a NULL descriptor and no barrier, while the last chunk
+// keeps the user's pred, turns them into NOPs, and carries the barrier.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_multichunk_barrier
+  // CHECK-DAG: %[[BAR_EN:.*]] = llvm.mlir.constant(262144 : i32) : i32
+  // CHECK-DAG: %[[BAR_CLEAR:.*]] = llvm.mlir.constant(-262145 : i32) : i32
+  // CHECK-DAG: %[[MODE:.*]] = llvm.mlir.constant(-1073741824 : i32) : i32
+  // CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[USER_PRED:.*]] = llvm.extractelement %{{.*}}[%[[ZERO]] : i32] : vector<4xi32>
+  // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %{{.*}}, %[[ZERO]] : i32
+  // CHECK: %[[PRED:.*]] = llvm.select %[[IS_ACTIVE]], %[[USER_PRED]], %[[ZERO]] : i1, i32
+  // CHECK: llvm.or %[[PRED]], %[[MODE]] : i32
+  // CHECK: llvm.and %{{.*}}, %[[BAR_CLEAR]] : i32
+  // CHECK-NOT: llvm.or %{{.*}}, %[[BAR_EN]] : i32
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK: llvm.or %[[USER_PRED]], %[[MODE]] : i32
+  // CHECK-COUNT-2: llvm.select %[[IS_ACTIVE]],
+  // CHECK: llvm.or %{{.*}}, %[[BAR_EN]] : i32
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  tt.func public @tdm_gather_multichunk_barrier(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
+    %memDesc: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>,
+    %row_indices: tensor<16xi32, #slice>,
+    %bar: !ttg.memdesc<1xi64, #bar, #smem, mutable>
+  ) {
+    %0 = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc, barrier = %bar : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !tt.tensordesc<16x64xf16, #shared>
+    tt.return
+  }
+}

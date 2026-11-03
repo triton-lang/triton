@@ -12,6 +12,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -100,7 +101,7 @@ public:
     // a subregister def that loses `undef` makes the MIR printed alongside the
     // DAG unparseable ("Use not jointly dominated by defs"). That is harmless
     // when the MF is a throwaway re-parse, but not when we run on the live
-    // codegen pipeline's MF (see armLivePipelineDAGEmission), so snapshot the
+    // codegen pipeline's MF (see LivePipelineDAGEmission), so snapshot the
     // flags and put them back ourselves.
     //
     // (Kill flags are safe: we pass RemoveKillFlags=false, and fixupKills only
@@ -251,6 +252,12 @@ void DAGBuilder::setupAliasAnalysis() {
   // Store in member unique_ptr to ensure proper cleanup.
   BasicAA = std::make_unique<BasicAAResult>(DL, Func, *TLI, *AC);
   AA->addAAResult(*BasicAA);
+
+  // Keep in sync with createScopedNoAliasAAWrapperPass() in the MIR-to-ASM
+  // pipeline, which documents why: without it the emitted DAG carries memory
+  // edges the scheduler that compiles this MIR does not believe in.
+  ScopedAA = std::make_unique<ScopedNoAliasAAResult>();
+  AA->addAAResult(*ScopedAA);
 }
 
 SmallVector<SchedulingRegion, 8>
@@ -514,7 +521,10 @@ const char *llvm::mir_dag::livePipelineDAGPassName() {
   return "mir-dag-emit-scheduling-dag";
 }
 
-void llvm::mir_dag::armLivePipelineDAGEmission(std::string *Sink) {
+// Both sinks are always set together, so saving one covers the restore.
+llvm::mir_dag::LivePipelineDAGEmission::LivePipelineDAGEmission(
+    std::string *Sink)
+    : Previous(DAGTextSink) {
   PassRegistry &Registry = *PassRegistry::getPassRegistry();
   initializeEmitSchedulingDAGPassPass(Registry);
   initializeLiveIntervalsWrapperPassPass(Registry);
@@ -523,7 +533,7 @@ void llvm::mir_dag::armLivePipelineDAGEmission(std::string *Sink) {
   DAGTextSink = Sink;
 }
 
-void llvm::mir_dag::disarmLivePipelineDAGEmission() {
-  LivePipelineSink = nullptr;
-  DAGTextSink = nullptr;
+llvm::mir_dag::LivePipelineDAGEmission::~LivePipelineDAGEmission() {
+  LivePipelineSink = Previous;
+  DAGTextSink = Previous;
 }

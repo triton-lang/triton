@@ -58,6 +58,57 @@ LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       /*requireSurjective=*/false);
 }
 
+// Return the bits that are zero in `sharedLayout[kBlock]` and are not
+// zero in `regLayout[kBlock]
+static uint32_t getMissingCTAReplicaBits(const LinearLayout &regLayout,
+                                         const LinearLayout &sharedLayout) {
+  auto *ctx = sharedLayout.getInDimNames().begin()->getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  SmallVector<size_t> shardBits, replicaBits;
+  for (auto [bit, basis] :
+       llvm::enumerate(sharedLayout.getBases().find(kBlock)->second)) {
+    if (llvm::all_of(basis, [](int32_t x) { return x == 0; }))
+      replicaBits.push_back(bit);
+    else
+      shardBits.push_back(bit);
+  }
+  if (replicaBits.empty())
+    return 0;
+
+  // Give shard bits priority when choosing source pivots, then keep only
+  // the free-mask bits corresponding to replicaBits.
+  auto order = llvm::to_vector(llvm::concat<size_t>(shardBits, replicaBits));
+  auto orderedSrc = ColumnAction(order, kBlock, order.size()).apply(regLayout);
+  uint32_t freeReplicas =
+      orderedSrc.getFreeVariableMasks().lookup(kBlock) >> shardBits.size();
+  uint32_t missingMask = 0;
+  for (auto [i, bit] : llvm::enumerate(replicaBits))
+    if (!(freeReplicas & (1u << i)))
+      missingMask |= 1u << bit;
+  return missingMask;
+}
+
+LinearLayout invertAndComposeStore(const LinearLayout &sharedLayout,
+                                   const LinearLayout &regLayout) {
+  auto *ctx = sharedLayout.getInDimNames().begin()->getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
+  if (cvt.isSurjective() || sharedLayout.getInDimSize(kBlock) == 1)
+    return cvt;
+
+  uint32_t missingMask = getMissingCTAReplicaBits(regLayout, sharedLayout);
+  if (!missingMask)
+    return cvt;
+  auto bases = cvt.getBases();
+  auto &registers = bases[StringAttr::get(ctx, "register")];
+  int blockIdx = cvt.getOutDimIndex(kBlock);
+  for (uint32_t bits = missingMask; bits; bits &= bits - 1) {
+    auto &basis = registers.emplace_back(cvt.getNumOutDims(), 0);
+    basis[blockIdx] = 1u << llvm::countr_zero(bits);
+  }
+  return LinearLayout(std::move(bases), cvt.getOutDims(), false);
+}
+
 LinearLayout ensureLayoutNotLargerThan(const LinearLayout &layout,
                                        ArrayRef<StringAttr> dimNames,
                                        ArrayRef<int64_t> shape,

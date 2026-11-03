@@ -653,6 +653,38 @@ TEST_F(LinearLayoutTest, InvertAndComposeBlockLocal) {
             transposedReg.invertAndCompose(partitionedMem));
 }
 
+TEST_F(LinearLayoutTest, LocalStoreReplicasSkipOffsetHoles) {
+  auto reg = S("register");
+  auto offset = S("offset");
+  auto block = S("block");
+  auto dim = S("dim");
+  LinearLayout shared({{offset, {{1}, {0}}}, {block, {{0}, {0}}}}, {dim});
+  LinearLayout sharded({{reg, {}}, {block, {{1}, {0}}}}, {dim});
+
+  auto store = invertAndComposeStore(shared, sharded);
+  // CTA bit 1 already has a source copy. Repeat the value only across CTA
+  // bit 0, leaving the high offset bit clear.
+  EXPECT_EQ(store, LinearLayout({{reg, {{0, 1}}}, {block, {{1, 1}, {0, 2}}}},
+                                {{offset, 4}, {block, 4}},
+                                /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutTest, LocalStoreReplicasWithCorrelatedBlockBits) {
+  auto reg = S("register");
+  auto offset = S("offset");
+  auto block = S("block");
+  auto dim = S("dim");
+  LinearLayout src({{reg, {}}, {block, {{1}, {1}, {2}}}}, {dim});
+  LinearLayout shared({{offset, {{1}}}, {block, {{0}, {2}, {0}}}}, {dim});
+
+  // Source CTAs 0 and 3 already store element 0 in CTAs 0 and 1.
+  // A single register basis reaches the remaining copies in CTAs 4 and 5.
+  auto store = invertAndComposeStore(shared, src);
+  EXPECT_EQ(store,
+            LinearLayout({{reg, {{0, 4}}}, {block, {{1, 1}, {1, 0}, {0, 6}}}},
+                         {offset, block}));
+}
+
 TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
   SmallVector<StringAttr> outDims = {S("dim0"), S("dim1"), S("dim2"),
                                      S("dim3"), S("dim4"), S("dim5"),

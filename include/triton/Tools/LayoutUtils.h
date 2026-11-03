@@ -16,6 +16,12 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       ArrayRef<StringAttr> localDims);
 
+// Map registers to shared addresses for a store. Extra high register bits
+// repeat the source values across the remaining CTA replicas.
+[[nodiscard]] LinearLayout
+invertAndComposeStore(const LinearLayout &sharedLayout,
+                      const LinearLayout &regLayout);
+
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).

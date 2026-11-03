@@ -54,18 +54,24 @@ SmallVector<Value> lowerLocalScGt(Location loc, MemDescType memDescTy,
 LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
                               const LinearLayout &regLayout,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
-                              ArrayRef<Value> inVals,
+                              SmallVector<Value> &inVals,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
-  assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+  auto kReg = str_attr("register");
+  assert(regLayout.getFreeVariableMasks().lookup(kReg) == 0 &&
          "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
-  auto kBlock = str_attr("block");
-  auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
+  auto cvt = invertAndComposeStore(sharedLayout, regLayout);
+  // Extra high register bits select CTA replicas, so repeat the source values.
+  // reg = {register=[], block=[[1]]}, shmem = {offset=[[1]], block=[[0]]}.
+  // CTA i repeats x[i] to store it at offset i in both CTAs.
+  int numStoreRegs = cvt.getInDimSize(kReg);
+  if (numStoreRegs != regLayout.getInDimSize(kReg))
+    inVals = broadcastAs(inVals, regLayout.resizeInDim(kReg, numStoreRegs));
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo,

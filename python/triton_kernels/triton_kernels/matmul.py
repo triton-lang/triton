@@ -266,6 +266,10 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    A gather index of -1 denotes an inactive input row: its values contribute
+    zero to the matmul without reading source values or scales. Bias and other
+    epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
+
     With gather_indx, BlackwellActMXScaleLayout activation scales must already
     follow the gathered row order; strided activation scales are gathered with
     the values. For ragged-M matmul, the Blackwell scale layout must use the same
@@ -967,7 +971,14 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+        if gather_indx is None:
+            x = a[batch, idx, :]
+        else:
+            # Inactive routing slots contribute zero, not Python's last row.
+            x = a.new_zeros((idx.numel(), a.shape[-1]))
+            active = idx >= 0
+            x[active] = a[batch, idx[active], :]
+        out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]

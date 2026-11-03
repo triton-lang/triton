@@ -2,9 +2,8 @@
 Descriptor-based buffer memory ops for CDNA3.
 
 These access global memory through an explicit buffer resource descriptor (:func:`make_buffer_descriptor`)
-instead of a base pointer, with explicit bounds, a scalar offset and per-access coherence scope. The
-pointer-based ``buffer_load`` / ``buffer_store`` in the parent module are unchanged but will be deprecated and
-migrated to these ops soon.
+instead of a base pointer, with explicit bounds, a scalar offset and per-access coherence scope. They
+replace the deprecated pointer-based ``buffer_load`` / ``buffer_store`` in the parent module.
 """
 
 from __future__ import annotations
@@ -12,11 +11,11 @@ from __future__ import annotations
 from ..._core import builtin
 from .. import _buffer
 from .._buffer import buffer_descriptor, buffer_descriptor_type
-from ._cache_policy import CachePolicy
+from ._cache_policy import CachePolicy as _CachePolicy
 
 __all__ = [
-    "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store",
-    "atomic_load", "atomic_store"
+    "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store", "atomic_load",
+    "atomic_store"
 ]
 
 
@@ -89,7 +88,7 @@ def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cach
     Returns:
         tensor: The loaded values, with the shape and layout of ``offsets``.
     """
-    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, CachePolicy, _semantic)
+    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, _CachePolicy, _semantic)
 
 
 @builtin
@@ -112,7 +111,7 @@ def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_po
         {soffset_arg}
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
     """
-    _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)
+    _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic)
 
 
 @builtin

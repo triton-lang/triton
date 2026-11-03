@@ -10,8 +10,9 @@
 
 namespace mlir::triton::nvidia_gpu {
 
+// Synchronous stores and allocation initializers use the replica store layout.
 bool isCrossCTALoadStore(::mlir::triton::gpu::MemDescType memDescTy,
-                         ::mlir::RankedTensorType regTy);
+                         ::mlir::RankedTensorType regTy, bool isStore = false);
 
 bool isCrossCTAGatherScatter(::mlir::triton::gpu::MemDescType memDescTy,
                              ::mlir::RankedTensorType regTy, unsigned axis);

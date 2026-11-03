@@ -29,8 +29,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<8xi32>, i32, vector<8xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %c = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x64x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>, tensor<32x4xf8E8M0FNU, #linear> * tensor<64x32x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>, tensor<32x4xf8E8M0FNU, #linear1> -> tensor<32x32xf32, #mma>
     // CHECK-COUNT-8: llvm.extractelement {{.*}} : vector<8xf32>
     // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
@@ -57,8 +55,6 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %b: tensor<128x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_b, kWidth = 16}>>,
       %b_scale: tensor<64x4xi8, #b_scale>,
       %acc: tensor<64x64xf32, #mma_acc>) {
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %acc lhs = e4m3 rhs = e4m3 {fastMath = false} :
       tensor<64x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma_a, kWidth = 16}>>, tensor<64x4xi8, #a_scale> *
       tensor<128x64xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_b, kWidth = 16}>>, tensor<64x4xi8, #b_scale> ->
@@ -97,8 +93,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<8xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %c = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e2m1 rhs = e4m3 {fastMath = false} : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>, tensor<32x4xi8, #linear> * tensor<128x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear1> -> tensor<32x32xf32, #mma>
     // CHECK-COUNT-8: llvm.extractelement {{.*}} : vector<8xf32>
     // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
@@ -137,8 +131,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<16xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %c = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> * tensor<128x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear1> -> tensor<32x32xf32, #mma>
     // CHECK-COUNT-8: llvm.extractelement {{.*}} : vector<8xf32>
     // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
@@ -181,8 +173,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<16xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %c = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x2xi8, #linear> * tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x2xi8, #linear1> -> tensor<32x32xf32, #mma>
     // CHECK-COUNT-8: llvm.extractelement {{.*}} : vector<8xf32>
     // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
@@ -238,8 +228,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<16xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %c = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x256xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x8xi8, #linear> * tensor<256x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x8xi8, #linear1> -> tensor<32x32xf32, #mma>
     // CHECK-COUNT-8: llvm.extractelement {{.*}} : vector<8xf32>
     // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
@@ -262,8 +250,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %scale0 = arith.constant dense<127> :  tensor<128x4xi8, #linear>
     %scale1 = arith.constant dense<127> :  tensor<128x4xi8, #linear1>
     // CHECK-COUNT-16: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<16xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>
-    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
-    // expected-error @+1 {{failed to legalize operation}}
     %mm0 = tt.dot_scaled %arg0 scale %scale0, %arg2 scale %scale1, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<128x4xi8, #linear> * tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<128x4xi8, #linear1> -> tensor<128x128xf32, #mma>
     // CHECK-NOT: rocdl.ds_swizzle
     // CHECK-NOT: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"

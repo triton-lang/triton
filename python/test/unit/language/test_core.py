@@ -3590,8 +3590,8 @@ reduce_configs3 = [(op, 'float32', shape, axis, False)
                    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
-invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3]]
-negative_config = [('sum', 'float32', (32, 32), -1, False)]
+invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3, -3]]
+negative_config = [('xor_sum', 'int32', (4, 8), axis, keep_dims) for axis in [-1, -2] for keep_dims in [False, True]]
 keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1]] + [(op, 'float32', (32, 32), None, True) for op in ['min', 'max', 'sum']]
@@ -3638,7 +3638,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
             elif AXIS == 2 or AXIS == -1:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
         else:
-            if AXIS == 0:
+            if AXIS == 0 or AXIS == -2:
                 z_ptr = Z + range_n
             elif AXIS == 1 or AXIS == -1:
                 z_ptr = Z + range_m
@@ -3661,7 +3661,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
-    np_axis = axis if axis is not None and axis < len(shape) else None
+    np_axis = axis if axis is not None and -len(shape) <= axis < len(shape) else None
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_tri_dtype_str = 'bfloat16'
@@ -3677,7 +3677,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     USE_I1 = dtype_str == 'bool'
-    if axis is not None and axis >= len(shape):
+    if axis is not None and not -len(shape) <= axis < len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
@@ -6822,6 +6822,45 @@ def test_if_else(device):
     assert to_numpy(out)[0] == false_val[0]
 
 
+@pytest.mark.skipif(not is_hip(), reason="AMD pointer canonicalization regression")
+@pytest.mark.parametrize("num_tensors", [32, 100])
+def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
+    fresh_knobs.amd.use_buffer_ops = True
+
+    @triton.jit
+    def kernel(Inputs, Outputs, n_elements, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        blocks = tl.cdiv(n_elements, BLOCK)
+        # DISPATCH
+        offsets = local * BLOCK + tl.arange(0, BLOCK)
+        value = tl.load(in_ptr + offsets, offsets < n_elements, other=0)
+        tl.store(out_ptr + offsets, value + 1, offsets < n_elements)
+
+    # Selecting both pointers before the shared body produces nested scf.if
+    # operations with two pointer results. The forward-slice walk must not
+    # revisit their users once for every path through those results.
+    dispatch = []
+    for i in range(num_tensors):
+        dispatch += [
+            f"{'if' if i == 0 else 'elif'} pid < {i + 1} * blocks:",
+            f"    local = pid - {i} * blocks",
+            f"    in_ptr = Inputs[{i}]",
+            f"    out_ptr = Outputs[{i}]",
+        ]
+    dispatch += ["else:", "    local = pid", "    in_ptr = Inputs[0]", "    out_ptr = Outputs[0]"]
+    kernel = patch_kernel(kernel, {"# DISPATCH": "\n    ".join(dispatch)})
+
+    # Distinct data across tensors and elements catches incorrect pointer or
+    # offset propagation. The final block also exercises the load/store masks.
+    n_elements = 1000
+    inputs = tuple(
+        torch.arange(n_elements, device=device, dtype=torch.float32) + i * n_elements for i in range(num_tensors))
+    outputs = tuple(torch.full_like(x, float("nan")) for x in inputs)
+    kernel[(num_tensors * triton.cdiv(n_elements, 128), )](inputs, outputs, n_elements, BLOCK=128)
+    for x, y in zip(inputs, outputs):
+        torch.testing.assert_close(y, x + 1, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["dynamic", "static"])
 def test_if_return(mode, device):
@@ -8522,18 +8561,6 @@ def test_scan_dtype(op, in_dtype, dtype, member, device):
     if expected_dtype == tl.int8:
         expected = expected.astype(np.int8).astype(np.int64)
     np.testing.assert_array_equal(to_numpy(z), expected)
-
-
-@pytest.mark.interpreter
-def test_tensor_member(device):
-
-    @triton.jit
-    def kernel():
-        x = tl.arange(0, 16)
-        tl.device_assert(tl.abs(x) == x.abs())
-        tl.device_assert(tl.sum(x) == x.sum())
-
-    kernel[(1, )]()
 
 
 @pytest.mark.interpreter

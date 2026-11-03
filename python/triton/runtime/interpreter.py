@@ -216,6 +216,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
         significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
             (1 << input_dtype.fp_mantissa_width) - 1)
+    if input_dtype == tl.float8e4nv:
+        magnitude = input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)
+        input_nan = magnitude == (1 << (input_dtype.primitive_bitwidth - 1)) - 1
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype in (tl.float8e4b8, tl.float8e5b16):
+        input_nan = input_bin == (1 << (input_dtype.primitive_bitwidth - 1))
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    elif input_dtype == tl.float8e4b15:
+        input_nan = np.zeros(input_bin.shape, dtype=bool)
+        input_inf = np.zeros(input_bin.shape, dtype=bool)
+    else:
+        nonfinite_input = input_exponent == (1 << input_exponent_width) - 1
+        input_nan = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+        input_inf = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) == 0)
     sign_output = sign
     # Include the leading bit and align subnormal results before rounding.
     full_significand = significand | (1 << input_dtype.fp_mantissa_width)
@@ -237,20 +251,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     exponent_output = np.minimum(output_exponent, max_exponent)
     exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
     significand_output = retained & ((1 << output_dtype.fp_mantissa_width) - 1)
-    if not input_dtype.is_fp8() and not output_dtype.is_fp8():
-        # Reserved source exponents represent infinities/NaNs, not finite exponents.
-        nonfinite = input_exponent == (1 << input_exponent_width) - 1
-        input_nan = nonfinite & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+    if not output_dtype.is_fp8():
+        nonfinite = input_nan | input_inf
         overflow = (output_exponent >= max_exponent) & ~nonfinite
         if rounding_mode == _ir.ROUNDING_MODE.RTNE:
             exponent_output[overflow] = max_exponent
             significand_output[overflow] = 0
-            significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
         else:
             exponent_output[overflow] = max_exponent - 1
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
         exponent_output[nonfinite] = max_exponent
-        significand_output[nonfinite & ~input_nan] = 0
+        significand_output[input_inf] = 0
+        # if the input was NaN but conversion erased all its mantissa bits,
+        # set one bit so the output remains NaN.
+        significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
@@ -773,7 +787,7 @@ class InterpreterBuilder:
         return TensorHandle(1 / np.sqrt(arg.data), arg.dtype.scalar)
 
     # tensor operators
-    create_reshape = lambda self, arg, shape, allow_reorder: TensorHandle(arg.data.reshape(shape), arg.dtype.scalar)
+    create_reshape = lambda self, arg, shape: TensorHandle(arg.data.reshape(shape), arg.dtype.scalar)
 
     def create_trans(self, arg, perm):
         return TensorHandle(np.transpose(arg.data, perm), arg.dtype.scalar)
@@ -1060,8 +1074,9 @@ class ReduceScanOpInterface:
         self.combine_fn = combine_fn
 
     def check_axis(self, shape, axis):
-        if axis is not None and axis >= len(shape):
-            raise ValueError(f"axis {axis} out of bounds for shape {shape}")
+        axis = tl.core._unwrap_if_constexpr(axis)
+        if axis is not None:
+            self.axis = tl.core._wrap_axis(axis, len(shape))
 
     def check_tensor(self, input):
         for arg in input:
@@ -1482,6 +1497,11 @@ class GridExecutor:
         # run pre-run hooks
         for hook in self.pre_run_hooks:
             hook(*args_hst, **kwargs_hst)
+        # Callable grids inspect the original launch arguments and tensor metadata.
+        if callable(self.grid):
+            grid = self.grid(inspect.getcallargs(self.fn, *args_dev, **kwargs))
+        else:
+            grid = self.grid
         # remaps core language functions to interpreted ones
         patch_scope = _patch_lang(self.fn)
         try:
@@ -1490,7 +1510,6 @@ class GridExecutor:
             args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
             args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
             # iterate through grid
-            grid = self.grid(args) if callable(self.grid) else self.grid
             assert len(grid) <= 3, "grid must have at most 3 dimensions"
             grid = grid + (1, ) * (3 - len(grid))
             interpreter_builder.set_grid_dim(*grid)
@@ -1669,6 +1688,9 @@ class InterpretedFunction(KernelInterface[T]):
         if warmup:
             return
         fn = self.rewrite()
+        # Match JITFunction.run's debug precedence.
+        debug = kwargs.get("debug", self.kwargs.get("debug")) or triton.knobs.runtime.debug
+        interpreter_builder.options = InterpreterOptions(debug=bool(debug))
         return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
 
     def add_pre_run_hook(self, hook):
