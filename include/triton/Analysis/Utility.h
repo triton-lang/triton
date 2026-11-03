@@ -239,6 +239,10 @@ public:
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
 private:
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
+                     triton::ScanOp op);
+  bool canGroupInterWarpScan() const;
+
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpTotalsLayout() const;
   triton::LinearLayout buildIntraWarpScanLayout() const;
