@@ -1,5 +1,4 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
@@ -26,17 +25,21 @@ struct ExtractSliceOpConversion
   LogicalResult processLayout(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
+    auto *ctx = rewriter.getContext();
     auto srcTy = cast<RankedTensorType>(op.getSource().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
-    auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
+    auto vals = unpackUniqueTensorElements(loc, adaptor.getSource(), rewriter);
     auto offsets = op.getStaticOffsets();
 
-    auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
+    auto kReg = str_attr("register");
+    auto linearLayoutSrc =
+        triton::gpu::toLinearLayout(srcTy).removeZeroBasesAlongDim(kReg);
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
     // Call transposeOuts, to ensure that order of input and output tensor
     // element coordinates are compatible on stage 7 in algorithm below.
-    auto linearLayoutDst =
-        triton::gpu::toLinearLayout(dstTy).transposeOuts(outDimNames);
+    auto linearLayoutDst = triton::gpu::toLinearLayout(dstTy)
+                               .removeZeroBasesAlongDim(kReg)
+                               .transposeOuts(outDimNames);
 
     // Algorithm:
     // 1. for every dst register
@@ -44,9 +47,7 @@ struct ExtractSliceOpConversion
     // 3.   add coordinates of tile start relative to parent tensor
     // 4.   find source register number which holds dst value
     // 5.   copy from corresponding src register
-    auto ctx = rewriter.getContext();
     int rank = srcTy.getRank();
-    StringAttr kReg = StringAttr::get(ctx, "register");
     auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
 
     // for every output register get element coords, copy corresponding src
@@ -71,8 +72,8 @@ struct ExtractSliceOpConversion
       resultVals.push_back(vals[srcReg.value()]);
     }
 
-    Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
-                               rewriter, dstTy);
+    Value ret = packUniqueTensorElements(loc, this->getTypeConverter(),
+                                         resultVals, rewriter, dstTy);
 
     rewriter.replaceOp(op, ret);
     return success();

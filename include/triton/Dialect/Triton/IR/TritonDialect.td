@@ -8,6 +8,9 @@ def Triton_Dialect : Dialect {
 
   let cppNamespace = "::mlir::triton";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let summary = "The Triton IR in MLIR";
 
   let description = [{
@@ -50,6 +53,7 @@ def Triton_Dialect : Dialect {
   );
 
   let hasConstantMaterializer = 1;
+  let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
 }
 

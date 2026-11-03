@@ -84,8 +84,7 @@ private:
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    if (!caller->hasAttr("allocation.offset") ||
-        !callOp->hasAttr("allocation.offset")) {
+    if (!callOp->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
     } else {
@@ -125,10 +124,12 @@ private:
                 this->getTypeConverter()->packFunctionResults(resultTypes)))
         return nullptr;
     }
-    auto newCallOp = LLVM::CallOp::create(rewriter, callOp.getLoc(),
-                                          packedResult ? TypeRange(packedResult)
-                                                       : TypeRange(),
-                                          promotedOperands, callOp->getAttrs());
+    auto attrs = splitBuilderAttributes<LLVM::CallOp>(rewriter, callOp.getLoc(),
+                                                      callOp->getAttrs());
+    auto newCallOp = LLVM::CallOp::create(
+        rewriter, callOp.getLoc(),
+        packedResult ? TypeRange(packedResult) : TypeRange(), promotedOperands,
+        attrs.properties, attrs.discardableAttrs);
     newCallOp.getProperties().setOpBundleSizes(
         rewriter.getDenseI32ArrayAttr({}));
     newCallOp.getProperties().setOperandSegmentSizes(

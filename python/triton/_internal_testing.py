@@ -1,6 +1,7 @@
+import importlib
+import functools
 import multiprocessing
 import os
-import queue
 import re
 import tempfile
 import numpy as np
@@ -11,9 +12,14 @@ import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
+from contextlib import contextmanager
 import pytest
+import resource
+
+from triton._compile_warmup_state import is_compile_warmup
 
 from numpy.random import RandomState
+from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -26,14 +32,29 @@ dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
+_PROCESS_POOL = None
 
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
 
 
+def random_int(low, high, *, warmup_value=None, **kwargs):
+    if is_compile_warmup():
+        return low if warmup_value is None else warmup_value
+    return int(torch.randint(low, high, size=(), **kwargs).item())
+
+
+def random_float(*, warmup_value=0.5, **kwargs):
+    if is_compile_warmup():
+        return warmup_value
+    return float(torch.rand((), **kwargs).item())
+
+
 def get_current_target():
     if is_interpreter():
+        return None
+    if not any(backend.driver.is_active() for backend in backends.values()):
         return None
     return triton.runtime.driver.active.get_current_target()
 
@@ -51,8 +72,34 @@ def is_blackwell():
     return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
 
 
+@triton.jit
+def _cluster_size_probe(out):
+    tl.store(out, 0)
+
+
+@functools.lru_cache(None)
+def _supports_cluster_size(device, num_ctas):
+    if torch.cuda.get_device_capability(device)[0] < 9:
+        return False
+    # A minimal kernel rejects cluster sizes that the device cannot launch at all.
+    out = torch.empty((), device=f"cuda:{device}")
+    kernel = _cluster_size_probe.warmup(out, grid=(1, ), num_warps=4, num_ctas=num_ctas)
+    kernel._init_handles()
+    return triton.runtime.driver.active.utils.cuOccupancyMaxActiveClusters(kernel.function, kernel.metadata.shared,
+                                                                           num_ctas) > 0
+
+
+def skip_if_unsupported_cluster_size(num_ctas):
+    if is_cuda() and num_ctas > 1 and not _supports_cluster_size(torch.cuda.current_device(), num_ctas):
+        pytest.skip(f"Device does not support {num_ctas} CTAs per cluster")
+
+
 def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
+
+
+def is_rubin():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 7)
 
 
 def is_hopper_or_newer():
@@ -89,7 +136,12 @@ def is_hip_cdna4():
 
 def is_hip_rdna3():
     target = get_current_target()
-    return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
+    return target is not None and target.backend == 'hip' and ('gfx110' in target.arch or 'gfx115' in target.arch)
+
+
+def is_hip_rdna4m():
+    target = get_current_target()
+    return target is not None and target.backend == 'hip' and 'gfx117' in target.arch
 
 
 def is_hip_rdna4():
@@ -98,7 +150,7 @@ def is_hip_rdna4():
     return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
 
 
-def is_hip_gfx1250():
+def is_hip_cdna5():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
@@ -112,7 +164,7 @@ def is_hip_cdna():
 
 
 def is_hip_rdna():
-    return is_hip_rdna3() or is_hip_rdna4()
+    return is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4()
 
 
 def get_hip_lds_size():
@@ -219,6 +271,10 @@ def supports_ws():
     return torch.cuda.get_device_capability()[0] >= 9
 
 
+def supports_clc():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 10
+
+
 def tma_skip_msg(byval_only=False):
     if byval_only:
         return "Requires __grid_constant__ TMA support (NVIDIA Hopper or higher, CUDA 12.0 or higher)"
@@ -226,7 +282,9 @@ def tma_skip_msg(byval_only=False):
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+# Evaluate hardware requirements when pytest runs the test, so importing the
+# process helpers does not initialize CUDA before a worker's startup code.
+requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
@@ -245,9 +303,15 @@ class ProcessResult:
     driver_stderr_output: str
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
+def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener):
     if env is not None:
         os.environ.update(env)
+
+    # Avoid initializing the GPU driver before the callback's startup code.
+    # The HIP build of PyTorch needs abort-on-device-assert disabled.
+    if not is_interpreter() and torch.version.hip is not None:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
 
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
     with open(stderr_file, "w+b") as tmp_stderr:
@@ -255,38 +319,169 @@ def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file):
         os.dup2(tmp_stderr.fileno(), 2)
         exc = None
 
+        previous_listener = knobs.compilation.listener
+        knobs.compilation.listener = compilation_listener
         try:
             client_fn(*args, **kwargs)
             # Raise any CUDA errors
-            torch.cuda.synchronize()
+            if not is_interpreter():
+                torch.cuda.synchronize()
         except Exception as e:
             exc = e
         finally:
+            knobs.compilation.listener = previous_listener
             sys.stderr.flush()
             os.dup2(saved_stderr_fd, 2)
             os.close(saved_stderr_fd)
-            q.put(exc)
+    return exc
+
+
+def _run_in_process_worker(client_fn, result_pipe, args, kwargs, env, stderr_file, compilation_listener):
+    result_pipe.send(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+
+
+def _run_in_replenishing_process_worker(task_pipe, preload_module, triton_key):
+    importlib.import_module(preload_module)
+    # The source tree is fixed for the pool lifetime; avoid rehashing it in each worker.
+    triton.runtime.cache.triton_key = lambda: triton_key
+    torch.cuda.synchronize()
+    while True:
+        try:
+            client_fn, args, kwargs, env, stderr_file, compilation_listener = task_pipe.recv()
+        except EOFError:
+            return
+        previous_environment = dict(os.environ)
+        try:
+            with knobs.compilation.scope(), knobs.runtime.scope(), knobs.cache.scope():
+                exc = _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener)
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_environment)
+        task_pipe.send(exc)
+        if exc is not None:
+            return
+
+
+class ReplenishingProcessPool:
+
+    def __init__(self, preload_module):
+        self.preload_module = preload_module
+        self.triton_key = triton.runtime.cache.triton_key()
+        self.ctx = multiprocessing.get_context("forkserver")
+        self.worker = None
+        self.spare = None
+
+    def _start_process(self):
+        task_pipe, child_pipe = self.ctx.Pipe()
+        process = self.ctx.Process(
+            target=_run_in_replenishing_process_worker,
+            args=(child_pipe, self.preload_module, self.triton_key),
+            daemon=True,
+        )
+        process.start()
+        child_pipe.close()
+        return process, task_pipe
+
+    def start(self):
+        if self.worker is None:
+            self.worker = self._start_process()
+            self.spare = self._start_process()
+
+    def close(self):
+        for current in (self.worker, self.spare):
+            if current is None:
+                continue
+            process, task_pipe = current
+            task_pipe.close()
+            process.terminate()
+            process.join()
+        self.worker = None
+        self.spare = None
+
+    def run(self, client_fn, args=(), kwargs=None, env=None):
+        if kwargs is None:
+            kwargs = {}
+        self.start()
+        process, task_pipe = self.worker
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stderr_file = os.path.join(tmpdir, "err.log")
+            task_pipe.send((client_fn, args, kwargs, env, stderr_file, knobs.compilation.listener))
+            try:
+                exc = task_pipe.recv()
+            except EOFError:
+                process.join()
+                with open(stderr_file, "r") as f:
+                    stderr = f.read()
+                print(stderr, file=sys.stderr)
+                raise RuntimeError(
+                    f"child process exited with code {process.exitcode} without returning a result") from None
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+        if exc is not None:
+            process.join()
+            task_pipe.close()
+            self.worker = self.spare
+            self.spare = self._start_process()
+        return ProcessResult(exc, stderr)
+
+
+@contextmanager
+def use_process_pool(preload_module):
+    global _PROCESS_POOL
+
+    pool = ReplenishingProcessPool(preload_module)
+    pool.start()
+    _PROCESS_POOL = pool
+    try:
+        yield pool
+    finally:
+        pool.close()
+        _PROCESS_POOL = None
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
+        return client_fn(*args, **(kwargs or {}))
+    if _PROCESS_POOL is not None:
+        return _PROCESS_POOL.run(client_fn, args, kwargs, env)
     if kwargs is None:
         kwargs = {}
 
     ctx = multiprocessing.get_context("forkserver")
-    q = ctx.Queue()
+    result_pipe, child_pipe = ctx.Pipe(duplex=False)
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")
-        process = ctx.Process(target=_run_in_process_worker, args=(client_fn, q, args, kwargs, env, stderr_file))
+        process = ctx.Process(
+            target=_run_in_process_worker,
+            args=(client_fn, child_pipe, args, kwargs, env, stderr_file, knobs.compilation.listener),
+        )
         process.start()
-        process.join()
+        child_pipe.close()
+        timeout = os.environ.get("TRITON_TEST_PROCESS_TIMEOUT")
+        timeout = None if timeout is None else float(timeout)
+        if not result_pipe.poll(timeout):
+            process.kill()
+            process.join()
+            result_pipe.close()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
+        try:
+            exc = result_pipe.recv()
+        except EOFError:
+            process.join()
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+            print(stderr, file=sys.stderr)
+            raise RuntimeError(
+                f"child process exited with code {process.exitcode} without returning a result") from None
+        finally:
+            result_pipe.close()
+        process.join(timeout)
+        if process.is_alive():
+            process.kill()
+            process.join()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
         with open(stderr_file, "r") as f:
             stderr = f.read()
-    exc = None
-    try:
-        exc = q.get(timeout=1)
-    except queue.Empty:
-        print(stderr, file=sys.stderr)
-        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result") from None
     return ProcessResult(exc, stderr)
 
 
@@ -334,3 +529,37 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
         knobs.propagate_env = prev_propagate_env
 
     return fresh_function, reset_function
+
+
+def assert_no_collectives_in_ptx_loop(ptx):
+    # Block order does not imply a loop: LLVM may place the exit before the
+    # header. Follow branches and fallthroughs to identify actual cycles.
+    lines = [line.partition("//")[0].strip() for line in ptx.splitlines()]
+    labels = {line[:-1]: i for i, line in enumerate(lines) if re.fullmatch(r"\$\w+:", line)}
+    successors = [{i + 1} if i + 1 < len(lines) else set() for i in range(len(lines))]
+    branches = []
+    for i, line in enumerate(lines):
+        branch = re.fullmatch(r"(@!?%\w+\s+)?bra(?:\.uni)?\s+(\$\w+);", line)
+        if branch:
+            successors[i] = {labels[branch[2]]} | (successors[i] if branch[1] else set())
+            branches.append(i)
+        elif re.fullmatch(r"(?:ret|exit)(?:\.uni)?;", line):
+            successors[i] = set()
+
+    def on_cycle(start):
+        pending = list(successors[start])
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node == start:
+                return True
+            if node not in visited:
+                visited.add(node)
+                pending.extend(successors[node])
+        return False
+
+    assert any(on_cycle(branch) for branch in branches), "Expected a polling loop"
+    for i, line in enumerate(lines):
+        if any(op in line for op in ("bar.sync", "barrier.sync", "barrier.cluster", "bar.warp.sync", "bar.red",
+                                     "barrier.red", "shfl.sync", "vote.sync")):
+            assert not on_cycle(i), "Collective instruction inside a polling loop"

@@ -12,34 +12,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK: scf.for
   // CHECK-NEXT: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster1
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster2
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield
@@ -86,32 +86,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NOT: rocdl.s
   // CHECK: scf.for
   // CHECK: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster1
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster2
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield

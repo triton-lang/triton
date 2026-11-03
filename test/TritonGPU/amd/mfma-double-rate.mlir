@@ -142,9 +142,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mxfp4_2step(%arg0: tensor<256x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, %arg1: tensor<256x8xi8, #linear>, %arg2: tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, %arg3: tensor<256x8xi8, #linear1>) {
     // CHECK-COUNT-32: rocdl.mfma.scale.f32.16x16x128.f8f6f4
-    // CHECK: rocdl.sched.barrier 0
+    // CHECK: rocdl.sched.barrier none
     // CHECK: rocdl.s.barrier
-    // CHECK: rocdl.sched.barrier 0
+    // CHECK: rocdl.sched.barrier none
     // CHECK-COUNT-32: rocdl.mfma.scale.f32.16x16x128.f8f6f4
     %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
     %dots = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, pingpong_2step} : tensor<256x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<256x8xi8, #linear> * tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<256x8xi8, #linear1> -> tensor<256x256xf32, #mma>

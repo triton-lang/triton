@@ -7,8 +7,9 @@ namespace hsa {
 
 struct ExternLibHsa : public ExternLibBase {
   using RetType = hsa_status_t;
-  static constexpr const char *name = "libhsa-runtime64.so";
-  static constexpr const char *defaultDir = "";
+  static constexpr const char *name = "libhsa-runtime64.so.1";
+  static constexpr const char *pathEnv = "TRITON_HSA_RUNTIME_PATH";
+  static constexpr const char *libraryEnv = "TRITON_HSA_RUNTIME_LIBRARY";
   static constexpr RetType success = HSA_STATUS_SUCCESS;
   static void *lib;
 };

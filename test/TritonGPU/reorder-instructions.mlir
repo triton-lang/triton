@@ -156,3 +156,51 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#transposed = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @alloc_stays_after_completion_wait
+  tt.func public @alloc_stays_after_completion_wait(%ptr: tensor<128x64x!tt.ptr<f16>, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // CHECK: %[[OUTER_VALUE:.*]] = tt.load
+    %outer_value = tt.load %ptr : tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: scf.for
+    scf.for %i = %c0 to %c2 step %c1 : i32 {
+      // CHECK: %[[VALUE:.*]] = tt.load
+      %value = tt.load %ptr : tensor<128x64x!tt.ptr<f16>, #blocked>
+      %has_previous = arith.cmpi sgt, %i, %c0 : i32
+      // CHECK: scf.if
+      scf.if %has_previous {
+        // CHECK: ttng.wait_barrier
+        ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+      }
+      // Reuse this allocation only after the previous iteration's MMA finishes.
+      // CHECK: %[[A:.*]] = ttg.local_alloc %[[VALUE]]
+      %a = ttg.local_alloc %value : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      // Keep an allocation with a loop-invariant initializer inside the loop too.
+      // CHECK: %[[B_STORAGE:.*]] = ttg.local_alloc %[[OUTER_VALUE]]
+      %b_storage = ttg.local_alloc %outer_value : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+      %b = ttg.memdesc_trans %b_storage {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x128xf16, #transposed, #smem, mutable>
+      // CHECK: ttng.tc_gen5_mma %[[A]],
+      %mma = ttng.tc_gen5_mma %a, %b, %acc[], %false, %true : !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x128xf16, #transposed, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      ttng.tc_gen5_commit %bar, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    }
+    ttng.wait_barrier %bar, %c1, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}

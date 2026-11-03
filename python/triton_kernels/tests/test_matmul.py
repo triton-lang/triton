@@ -1,28 +1,34 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass, fields
+from contextlib import nullcontext
+from dataclasses import dataclass, fields, replace
 import itertools
+import importlib
+from types import SimpleNamespace
 import pytest
 import torch
 from typing import Union
 import triton
-from triton._internal_testing import is_hopper
+import triton.language as tl
+from triton._internal_testing import is_compile_warmup, is_hopper, is_hopper_or_newer
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
-from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
+from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FusedComm, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul import apply_precision, matmul_set_idle_sms, matmul, matmul_torch
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
+from triton_kernels.meta import Closure
+from triton_kernels.fpsan import embed, unembed
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
-from triton_kernels.tensor_details.dtype import FP32
+from triton_kernels.tensor_details.dtype import FP32, FP4
 
 # ---------------
 # numerics stuff
@@ -41,7 +47,7 @@ class DType:
         self.is_nvfp4 = dtype_str in {"nvfp4_e2m1", "nvfp4_e2m1_fiber"}
         self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
         self.is_any_float8 = "float8" in dtype_str
-        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}
+        self.uses_fp8e4nv = dtype_str in {"float8_e4m3fn", "mxfloat8_e4m3fn", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}
         if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}:
             self.torch_dtype = torch.uint8
         else:
@@ -51,9 +57,9 @@ class DType:
         self.microblock_size = NVFP_BLOCK_SIZE.value if self.is_nvfp4 else MXFP_BLOCK_SIZE.value if self.has_mx_scale else None
 
 
-# Scope to ensure that the opt_flags_constraints are reset after the test
 @pytest.fixture
-def opt_flags_scope(request):
+def opt_flags_scope():
+    opt_flags.reset_opt_flags_constraints()
     yield
     opt_flags.reset_opt_flags_constraints()
 
@@ -68,7 +74,7 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
     }
     if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
         # Minimum block size to satisfy scale preshuffling
-        if is_hip_gfx1250():
+        if is_hip_cdna5():
             constraints.update({
                 "block_m": 128,
                 "block_n": 128,
@@ -154,6 +160,12 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
         for val in (1, 2, 4)
     ])
+    test_cases.extend([
+        Case(*odd_shape2, "plain", lhs, rhs, dtype, b_transpose=b_transpose)
+        for dtype in ("float16", "bfloat16")
+        for lhs, rhs in (("float8_e4m3fn", dtype), (dtype, "float8_e4m3fn"))
+        for b_transpose in (False, True)
+    ])
     # fp32
     test_cases.extend([
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
@@ -200,6 +212,10 @@ def _build_test_op_cases():
     # nvfp4 x dense
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"))
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1_fiber", "bfloat16", "bfloat16"))
+    test_cases.extend([
+        Case(256, 256, 128, "ragged", "nvfp4_e2m1", rhs_dtype, "bfloat16", a_hbm_swizzling=True)
+        for rhs_dtype in ("bfloat16", "float16")
+    ])
     # mxfloat x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1"),
@@ -279,6 +295,13 @@ def _build_test_op_cases():
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
+    # MXFP8 lhs x dense rhs needs TMEM headroom even with fused MX output.
+    test_cases.extend([
+        Case(32, 256, 128, "plain", "mxfloat8_e4m3fn", rhs_dtype, "mxfloat8_e4m3fn",
+             a_hbm_swizzling=True, c_hbm_swizzling=c_hbm_swizzling, swiglu_opts=(1.702, 7.0))
+        for rhs_dtype in ["bfloat16", "float16"]
+        for c_hbm_swizzling in [False, True]
+    ])
     # swiglu together with nvfp4 downcast epilogue
     test_cases.extend([
         Case(*shape, mode, "bfloat16", "bfloat16", "nvfp4_e2m1", swiglu_opts=(1.1, 7.0))
@@ -308,6 +331,7 @@ def _build_test_op_cases():
 @pytest.mark.parametrize("do_gamma", [False,True])
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
+@pytest.mark.enable_warmup(priority=2)
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
@@ -330,18 +354,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
             swiglu_opts, c_hbm_swizzling, device, opt_flags_scope):
+    if is_compile_warmup() and inner_expt_opt is not None and 0 in (m, n, k):
+        pytest.skip("zero-sized inner-expert kernels do not preserve FakeTensor specialization")
     a_dtype = DType(act_dtype_str)
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
     device_capability = torch.cuda.get_device_capability()[0]
-    # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
             pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
-            pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
-        if b_dtype.is_any_float8 and device_capability < 9:
-            pytest.skip("Float8 not tested on A100")
+            pytest.skip("FP8 E4M3FN tests require Hopper or newer")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
@@ -352,8 +375,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
             pytest.skip("NVFP4 matmul not tested on AMD GPU")
-        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
-            pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
+        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_cdna5()):
+            pytest.skip("float8 x mx only supported on CDNA4 and CDNA5")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
@@ -375,8 +398,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if b_hbm_swizzling:
         if is_hip():
-            if not (is_hip_cdna4() or is_hip_gfx1250()):
-                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
+            if not (is_hip_cdna4() or is_hip_cdna5()):
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and CDNA5 yet.")
             if not b_dtype.has_mx_scale:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
         if device_capability < 9:
@@ -428,7 +451,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if block_m == 16:
             pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
-    if b_dtype.is_any_float8 and device_capability < 10:
+    if (b_dtype.is_any_float8 and device_capability < 10
+            and not (weight_dtype_str == "float8_e4m3fn" and act_dtype_str in ("float16", "bfloat16"))):
         b_transpose = True
 
     torch.manual_seed(0)
@@ -512,7 +536,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
-    flex_a = InFlexData(c_dtype.torch_dtype, wrap_list([1.25])) if c_dtype.has_global_scale else InFlexData()
+    flex_a = InFlexData(a_dtype.torch_dtype, wrap_list([1.25])) if a_dtype.has_global_scale else InFlexData()
     flex_b = InFlexData(b_dtype.torch_dtype, wrap_list([1.25])) if b_dtype.has_global_scale else InFlexData()
     if c_dtype.has_global_scale:
         flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([4.00]), wrap_list([0]), None)
@@ -557,7 +581,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             if c_dtype.is_nvfp4
             else FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         )
-        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=2.0 if c_dtype.is_nvfp4 else 6.0)
+        effective_itemsize = 2.0 if c_dtype.is_nvfp4 else 6.0
+        if c_dtype.is_nvfp4 and fused_activation is not None and fused_activation.specs.reduction_n > 1:
+            effective_itemsize = 4 * fused_activation.specs.reduction_n
+        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=effective_itemsize)
 
 
     # --- triton implementation ---
@@ -578,22 +605,41 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
     # float32 until that final downcast instead of letting matmul_torch
     # return bf16 and apply the output scale early.
-    ref_y = matmul_torch(
-        a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a,
-        b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b,
-        bias,
-        a_ragged_metadata,
-        b_ragged_metadata,
-        gather_indx,
-        scatter_indx,
+    reference_a = a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a
+    reference_b = b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b
+    reference_precision = (
         PrecisionConfig(
             a_mx_scale=a_scales,
             a_microblock_size=a_dtype.microblock_size,
             b_mx_scale=b_scale_tri,
             b_microblock_size=b_dtype.microblock_size,
-        ) if c_dtype.is_nvfp4 else precision_opt,
-        gammas=gammas,
+        ) if c_dtype.is_nvfp4 else precision_opt
     )
+    if c_dtype.is_nvfp4:
+        # Decode first: apply_precision returns BF16 for microscaled operands,
+        # and matmul_torch uses the decoded lhs dtype for its output buffer.
+        reference_a, reference_b = apply_precision(reference_a, reference_b, reference_precision)
+        reference_a, reference_b = reference_a.float(), reference_b.float()
+        reference_precision = PrecisionConfig()
+    if is_compile_warmup():
+        apply_precision(reference_a, reference_b, reference_precision)
+        reference_dtype = (torch.float32 if c_dtype.is_nvfp4 or inner_expt_opt is not None
+                           else torch.bfloat16 if a_dtype.has_mx_scale else a_dtype.torch_dtype)
+        ref_y = torch.empty(c_shape[:-1] + (n,), dtype=reference_dtype, device=device)
+    else:
+        ref_y = matmul_torch(
+            reference_a,
+            reference_b,
+            bias,
+            a_ragged_metadata,
+            b_ragged_metadata,
+            gather_indx,
+            scatter_indx,
+            reference_precision,
+            gammas=gammas,
+        )
+    if c_dtype.is_nvfp4:
+        assert ref_y.dtype == torch.float32
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:
@@ -605,16 +651,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if isinstance(tri_y_scale, Tensor):
             tri_y_scale = convert_layout(tri_y_scale, layout.StridedLayout()).storage.data
         tri_y = upcast_from_mxfp(tri_y, tri_y_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
-        ref_target_dtype = ref_y.dtype
-        ref_y, ref_scale = downcast_to_mxfp_torch(
-            ref_y,
-            c_dtype.torch_dtype,
-            axis=-1,
-            scale_dtype=c_dtype.scale_dtype,
-            microblock_size=c_dtype.microblock_size,
-            expected_scale=precision_opt.flex_ctx.out_data.expected_scale,
-        )
-        ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
+        if not is_compile_warmup():
+            ref_target_dtype = ref_y.dtype
+            ref_y, ref_scale = downcast_to_mxfp_torch(
+                ref_y,
+                c_dtype.torch_dtype,
+                axis=-1,
+                scale_dtype=c_dtype.scale_dtype,
+                microblock_size=c_dtype.microblock_size,
+                expected_scale=precision_opt.flex_ctx.out_data.expected_scale,
+            )
+            ref_y = upcast_from_mxfp_torch(ref_y, ref_scale, target_dtype=ref_target_dtype, axis=-1)
     maxtol, rmstol = None, None
     if c_dtype.is_nvfp4 and a_dtype.is_nvfp4 and b_dtype.is_nvfp4:
         maxtol, rmstol = 6e-1, 4e-2
@@ -625,9 +672,474 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif c_dtype.torch_dtype == torch.float64:
         maxtol, rmstol = 1e-12, 1e-12
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
-    if c_dtype.has_global_scale:
+    if c_dtype.has_global_scale and not is_compile_warmup():
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("k", [64, 80])
+@pytest.mark.parametrize("all_inactive", [False, True])
+@pytest.mark.parametrize("tensor_scale", [False, True])
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_scale, with_bias, device):
+    if not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer for persistent matmul")
+    m, n = 33, 64
+    # Keep the negative-row address inside our allocation and make any read visible.
+    storage = torch.full((m + 1, k), float("nan"), dtype=torch.bfloat16, device=device)
+    a = storage[1:]
+    a[:] = (torch.arange(m, device=device) % 4 + 1)[:, None]
+    b = torch.ones((k, n), dtype=a.dtype, device=device)
+    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+    if all_inactive:
+        gather.fill_(-1)
+    else:
+        gather[::2] = -1
+    expected = torch.zeros((m, n), dtype=a.dtype, device=device)
+    active = gather >= 0
+    expected[active] = a[gather[active].long(), :1] * k
+
+    scale_storage = torch.full((m + 1,), float("nan"), device=device)
+    scale_storage[1:] = 2.0
+    config = PrecisionConfig(a_mx_tensor_scale=scale_storage[1:] if tensor_scale else None)
+    if tensor_scale:
+        expected *= 2.0
+    bias = torch.ones(n, dtype=torch.float32, device=device) if with_bias else None
+    if with_bias:
+        expected += 1.0
+    reference_a = a * (2.0 if tensor_scale else 1.0)
+    reference = matmul_torch(reference_a, b, bias, gather_indx=gather, precision_config=PrecisionConfig())
+    torch.testing.assert_close(reference, expected, rtol=0, atol=0)
+    with opt_flags.scoped_opt_flags_constraints({
+        "is_persistent": is_persistent, "split_k": split_k,
+        "block_m": 32, "block_n": 64, "block_k": 64,
+    }):
+        actual = matmul(a, b, bias, gather_indx=gather, precision_config=config)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("all_inactive", [False, True])
+@pytest.mark.parametrize("requantize", [False, True])
+def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device):
+    if not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer")
+    if requantize and torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("NVFP4 requantization requires Blackwell")
+    m, n, k = 33, 64, 128
+    # Guard both scale arrays: masking values alone must not hide scale reads.
+    scale_dtype = torch.float8_e4m3fn if requantize else torch.uint8
+    scale_storage = torch.full((m + 1, k // (16 if requantize else 32)),
+                               float("nan") if requantize else 255, dtype=scale_dtype, device=device)
+    scale_storage[1:] = 1.0 if requantize else 127
+    outer_storage = torch.full((m + 1,), float("nan"), device=device)
+    outer_storage[1:] = 2.0
+    if requantize:
+        a = wrap_torch_tensor(torch.full((m, k // 2), 0x22, dtype=torch.uint8, device=device), dtype=FP4)
+        b = wrap_torch_tensor(torch.full((n, k // 2), 0x22, dtype=torch.uint8, device=device).T, dtype=FP4)
+        b_scale = torch.full((k // 32, n), 127, dtype=torch.uint8, device=device)
+    else:
+        a = torch.ones((m, k), dtype=torch.float8_e4m3fn, device=device)
+        b = torch.ones((k, n), dtype=torch.bfloat16, device=device)
+        b_scale = None
+    config = PrecisionConfig(a_mx_scale=scale_storage[1:], a_microblock_size=16 if requantize else 32,
+                             a_mx_tensor_scale=outer_storage[1:] if requantize else None,
+                             b_mx_scale=b_scale, b_microblock_size=32 if requantize else None,
+                             out_dtype=torch.float32)
+    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+    gather[::1 if all_inactive else 2] = -1
+    expected = torch.zeros((m, n), device=device)
+    expected[gather >= 0] = k * (2 if requantize else 1)
+    with opt_flags.scoped_opt_flags_constraints({
+        "is_persistent": is_persistent, "split_k": 1,
+        "block_m": 32, "block_n": 64, "block_k": 128,
+    }):
+        actual = matmul(a, b, None, gather_indx=gather, precision_config=config)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("swizzled", [False, True])
+@pytest.mark.parametrize("weights_swizzled", [False, True])
+@pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
+@pytest.mark.parametrize("k, out_dtype", [(256, None), (1024, torch.float32)])
+@pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
+def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    m, n = 73, 256
+    source_m = 97 if mode == "gather" else m
+    slices = 3 if mode in ("ragged", "ragged_gather") else 2 if mode == "batched" else 1
+    a, a_scale, metadata = make_random_tensor(
+        (source_m, k), slices, 0 if mode in ("ragged", "ragged_gather") else None, False, device,
+        DType("nvfp4_e2m1"), -1, False, mode != "batched")
+    b, b_scale, _ = make_random_tensor(
+        (k, n), slices, None, False, device, DType("mxfloat4_e2m1"), -2, False,
+        mode in ("plain", "gather"))
+    decoded_a = upcast_from_mxfp_torch(a.storage.data, a_scale.storage.data, torch.float32, -1)
+    decoded_b = upcast_from_mxfp_torch(b.storage.data, b_scale.storage.data, torch.float32, -2)
+    outer_scale = None
+    if tensor_scale == "wide_row":
+        exponents = torch.tensor([-80, -32, 0, 32, 80], device=device, dtype=torch.int32)
+        exponents = exponents[torch.arange(decoded_a.numel() // k, device=device) % exponents.numel()]
+        outer_scale = torch.ldexp(torch.ones_like(exponents, dtype=torch.float32), exponents).reshape(
+            decoded_a.shape[:-1])
+        decoded_a *= outer_scale[..., None]
+        assert torch.isfinite(decoded_a).all()
+        assert decoded_a.abs().max() > torch.finfo(torch.float16).max
+    elif tensor_scale in ("row", "both"):
+        outer_scale = torch.linspace(0.5, 1.5, decoded_a.numel() // k, device=device).reshape(decoded_a.shape[:-1])
+        decoded_a *= outer_scale[..., None]
+    converted, converted_scale = downcast_to_mxfp_torch(decoded_a, torch.float8_e4m3fn, -1)
+    reference_a = upcast_from_mxfp_torch(converted, converted_scale, torch.float32, -1)
+    weight_outer_scale = None
+    if tensor_scale in ("column", "both"):
+        weight_outer_scale = torch.linspace(0.5, 1.5, decoded_b.numel() // k, device=device).reshape(
+            decoded_b.shape[:-2] + (n,))
+        decoded_b *= weight_outer_scale[..., None, :]
+    gather = torch.randint(source_m, (m,), device=device, dtype=torch.int32) if mode in ("gather", "ragged_gather") else None
+    if swizzled:
+        if gather is not None:
+            a_scale = wrap_torch_tensor(a_scale.storage.data[gather.long()])
+        a_scale = convert_layout(a_scale, layout.BlackwellActMXScaleLayout(metadata))
+    if weights_swizzled:
+        b = convert_layout(b, layout.BlackwellMXValueLayout())
+        b_scale = convert_layout(b_scale, layout.BlackwellMXScaleLayout())
+    else:
+        b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
+    config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
+                             b_mx_scale=b_scale, b_microblock_size=32,
+                             b_mx_tensor_scale=weight_outer_scale, out_dtype=out_dtype)
+    actual = matmul(a, b, None, a_ragged_metadata=metadata, gather_indx=gather, precision_config=config)
+    expected = matmul_torch(reference_a, decoded_b, None, a_ragged_metadata=metadata,
+                            gather_indx=gather, precision_config=PrecisionConfig()).to(actual.dtype)
+    assert actual.dtype == (out_dtype or torch.bfloat16)
+    assert config.a_mx_scale is a_scale and config.a_microblock_size == 16
+    assert config.a_mx_tensor_scale is outer_scale
+    if tensor_scale == "wide_row":
+        assert torch.isfinite(expected).all() and torch.isfinite(actual).all()
+        # Compare every row at its own scale so large rows cannot hide underflow.
+        result_scale = outer_scale if gather is None else outer_scale[gather.long()]
+        expected = expected.float() / result_scale[..., None]
+        actual = actual.float() / result_scale[..., None]
+    assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("k", [160, 1024])
+@pytest.mark.parametrize("mode", ["plain", "ragged_gather"])
+def test_nvfp4_acts_mxfp4_weights_nonpersistent(k, mode, device, opt_flags_scope):
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
+        test_nvfp4_acts_mxfp4_weights(False, False, mode, k, "wide_row", torch.float32, device, opt_flags_scope)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("mode", ["plain", "ragged_gather"])
+@pytest.mark.parametrize("output", ["fp32", "swiglu", "swiglu_mxfp8"])
+def test_nvfp4_requantization_matches_mxfp8(is_persistent, mode, output, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    m, n, k = 129, 256, 256
+    ragged = mode == "ragged_gather"
+    slices = 4 if ragged else 1
+    a, a_scale, _ = make_random_tensor(
+        (m, k), 1, None, False, device, DType("nvfp4_e2m1"), -1, False, True)
+    b, b_scale, _ = make_random_tensor(
+        (k, n), slices, None, False, device, DType("mxfloat4_e2m1"), -2, False, not ragged)
+    b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
+    metadata = make_ragged_tensor_metadata(torch.tensor([0, 1, 63, 65], device=device, dtype=torch.int32), m) if ragged else None
+    gather = torch.randperm(m, device=device).to(torch.int32) if ragged else None
+    outer_scale = torch.linspace(0.37, 1.37, m, device=device)
+    outer_scale[0] = 0
+    decoded = upcast_from_mxfp_torch(a.storage.data, a_scale.storage.data, torch.float32, -1)
+    decoded *= outer_scale[:, None]
+    converted, converted_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, -1)
+    bias = torch.randn((slices, n) if ragged else (n,), device=device)
+    fused_activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.1, 7.0)) if output != "fp32" else None
+    config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
+                             b_mx_scale=b_scale, b_microblock_size=32, out_dtype=torch.float32,
+                             enforce_bitwise_invariance=True)
+    converted_config = replace(config, a_mx_scale=converted_scale, a_microblock_size=32, a_mx_tensor_scale=None)
+    epilogue = None
+    if output == "swiglu_mxfp8":
+        actual_scale = torch.empty((m, n // 2 // 32), dtype=torch.uint8, device=device)
+        expected_scale = torch.empty_like(actual_scale)
+        config = replace(config, out_dtype=torch.float8_e4m3fn, c_mx_scale=actual_scale, c_microblock_size=32)
+        converted_config = replace(converted_config, out_dtype=torch.float8_e4m3fn,
+                                   c_mx_scale=expected_scale, c_microblock_size=32)
+        epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()), (), (), effective_itemsize=6.0)
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, block_m=128, block_n=128,
+                                                 block_k=128, split_k=1))
+    actual = matmul(a, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
+                    precision_config=config, fused_activation=fused_activation, epilogue=epilogue)
+    expected = matmul(converted, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
+                      precision_config=converted_config, fused_activation=fused_activation, epilogue=epilogue)
+    torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8), rtol=0, atol=0)
+    if output == "swiglu_mxfp8":
+        torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("shape, fp8_lhs, constraints", [
+    ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
+    ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
+    ((128, 256, 1024), True, {}),
+    ((273, 544, 576), False, {}),
+])
+def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, opt_flags_scope):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and constraints.get("is_persistent"):
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+
+    torch.manual_seed(0)
+    m, n, k = shape
+    a_dtype, b_dtype = (torch.float8_e4m3fn, torch.bfloat16) if fp8_lhs else (torch.bfloat16, torch.float8_e4m3fn)
+    a = torch.randn((m, k), device=device).to(a_dtype)
+    b = torch.randn((n, k), device=device).to(b_dtype).mT
+
+    opt_flags.update_opt_flags_constraints(constraints)
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.bfloat16))
+
+    expected = torch.matmul(a.float(), b.float()).to(torch.bfloat16)
+    assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("fp8_lhs", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("b_transpose", [False, True])
+@pytest.mark.parametrize("use_fpsan", [False, True])
+@pytest.mark.parametrize("shape, constraints", [
+    ((64, 128, 1024), {}),
+    ((67, 80, 272), dict(is_persistent=False, split_k=3)),
+    ((67, 80, 272), dict(is_persistent=True, split_k=1)),
+])
+def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose, use_fpsan, shape,
+                                        constraints, device, opt_flags_scope, fresh_knobs):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and constraints.get("is_persistent"):
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if use_fpsan and is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_cdna5()):
+        pytest.skip("FPSan requires gfx942, gfx950, or gfx1250")
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan" if use_fpsan else ""
+    torch.manual_seed(0)
+    m, n, k = shape
+    a_dtype, b_dtype = (torch.float8_e4m3fn, dtype) if fp8_lhs else (dtype, torch.float8_e4m3fn)
+    a = torch.randn((m, k), device=device).to(a_dtype)
+    b = torch.randn((n, k) if b_transpose else (k, n), device=device).to(b_dtype)
+    b = b.mT if b_transpose else b
+
+    fp8 = a if fp8_lhs else b
+    # FPSan widening sign-extends payloads; a Torch float cast would change them.
+    upcast = unembed(embed(fp8).to(torch.int16), dtype) if use_fpsan else fp8.to(dtype)
+    a_upcast, b_upcast = (upcast, b) if fp8_lhs else (a, upcast)
+    opt_flags.update_opt_flags_constraints(constraints)
+    config = PrecisionConfig(out_dtype=out_dtype)
+    actual = matmul(a, b, None, precision_config=config)
+    expected = matmul(a_upcast, b_upcast, None, precision_config=config)
+
+    if use_fpsan:
+        torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
+                                   rtol=0, atol=0)
+    else:
+        # Allow output rounding and small FP32 accumulation-order differences.
+        torch.testing.assert_close(actual.float(), expected.float(), rtol=torch.finfo(out_dtype).eps, atol=1e-4)
+
+
+@pytest.mark.parametrize("fp8_lhs", [False, True])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and is_persistent:
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+
+    a = torch.zeros((128, 128), dtype=torch.float16, device=device)
+    b = torch.zeros_like(a)
+    a[:, 0] = 1
+    a[:, 1] = -1
+    # Rounding the FP16 operand to BF16 would erase the residual.
+    b[0, :] = 1 + 2**-10
+    b[1, :] = 1
+    a = a.to(torch.float8_e4m3fn)
+    if not fp8_lhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
+
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1))
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
+
+    expected = torch.full((128, 128), 2**-10, dtype=torch.float16, device=device)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("block_m", [16, 128])
+@pytest.mark.parametrize("scale_source, epilogue_subtile, has_beta, expected", [
+    ("global", 2, False, 0.00787353515625),
+    ("global", 2, True, 0.0079345703125),
+    ("row", 1, False, 0.00787353515625),
+    ("row", 2, False, 0.0079345703125),
+    ("row", 2, True, 0.0079345703125),
+    ("column", 1, False, 0.00787353515625),
+    ("column", 2, False, 0.0079345703125),
+    ("row_and_column", 1, False, 0.00787353515625),
+    ("row_and_column", 2, False, 0.0079345703125),
+])
+def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_subtile, has_beta, expected, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+
+    a = torch.zeros((128, 128), device=device)
+    b = torch.zeros((256, 128), device=device)
+    a[:, :3] = 1
+    b[:, :3] = 1
+    # The accumulator is 3. Separate scaling reaches a BF16 tie; FMA stays below it.
+    scale = torch.tensor([0.1], device=device)
+    bias = torch.full((256, ), -0.29209595918655396, device=device)
+    betas = torch.ones(128, device=device) if has_beta else None
+    config = PrecisionConfig(out_dtype=torch.bfloat16)
+    if scale_source == "global":
+        config.flex_ctx = FlexCtx(lhs_data=InFlexData(scale=scale))
+    if scale_source in ("row", "row_and_column"):
+        config.a_mx_tensor_scale = scale.expand(128).contiguous()
+    if scale_source in ("column", "row_and_column"):
+        column_scale = torch.ones_like(scale) if scale_source == "row_and_column" else scale
+        config.b_mx_tensor_scale = column_scale.expand(256).contiguous()
+    opt_flags.update_opt_flags_constraints(
+        dict(
+            block_m=block_m,
+            block_n=256,
+            block_k=128,
+            num_stages=2,
+            is_persistent=True,
+            split_k=1,
+            epilogue_subtile=epilogue_subtile,
+        ))
+    actual = matmul(a.to(torch.float8_e4m3fn), b.to(torch.float8_e4m3fn).T, bias, precision_config=config, betas=betas)
+
+    torch.testing.assert_close(actual, torch.full_like(actual, expected), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_persistent_matmul_residual_scale_rounding(dtype, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+
+    a = torch.ones((128, 128), device=device).to(torch.float8_e4m3fn)
+    b = torch.full((256, 128), 3 / 128, device=device).to(torch.float8_e4m3fn).T
+    residual = torch.full((128, 256), -30, dtype=dtype, device=device)
+    scale = torch.tensor([0.1], dtype=dtype, device=device)
+    config = PrecisionConfig(out_dtype=dtype, flex_ctx=FlexCtx(acc_data=InFlexData(scale=scale)))
+    opt_flags.update_opt_flags_constraints(
+        dict(is_persistent=True, block_m=64, block_n=128, block_k=128, split_k=1, epilogue_subtile=2))
+    actual = matmul(a, b, None, precision_config=config, c=residual, c_acc_in=residual)
+
+    # Rounding -30 * 0.1 in the residual dtype gives -3 before adding 3.
+    torch.testing.assert_close(actual, torch.zeros_like(actual), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("n", [960, 1024, 1536, 1568, 1600, 1632, 1664])
+def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, k = 128, 256
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    b = torch.randn((k, n), device=device, dtype=torch.bfloat16)
+    scale_blocks = triton.cdiv(n, MXFP_BLOCK_SIZE.value)
+    out_scale = convert_layout(
+        wrap_torch_tensor(torch.empty((m, scale_blocks), device=device, dtype=torch.uint8)),
+        layout.BlackwellActMXScaleLayout(None),
+    )
+    out_scale.storage.data.fill_(0xFF)
+    epilogue = Epilogue(
+        FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()),
+        tuple(),
+        tuple(),
+        effective_itemsize=6.0,
+    )
+
+    with opt_flags.scoped_opt_flags_constraints(
+        {"block_m": 128, "block_k": 128, "is_persistent": is_persistent, "split_k": 1}
+    ):
+        actual = matmul(
+            a,
+            b,
+            None,
+            precision_config=PrecisionConfig(
+                c_mx_scale=out_scale,
+                c_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.float8_e4m3fn,
+            ),
+            epilogue=epilogue,
+        )
+
+    logical_scale = convert_layout(out_scale, layout.StridedLayout(-1)).storage.data
+    actual = upcast_from_mxfp(actual, logical_scale, target_dtype=torch.bfloat16, axis=-1)
+    assert_close(torch.matmul(a, b), actual, maxtol=4e-1, rmstol=4e-2)
+
+    group_index, valid_bytes = divmod(scale_blocks, 4)
+    if valid_bytes:
+        scale_group = out_scale.storage.data.select(-3, group_index).reshape(-1, 4)
+        assert torch.count_nonzero(scale_group[:, valid_bytes:]).item() == 0
+
+    first_unused_group = triton.cdiv(scale_blocks, 4)
+    n_scale_groups = out_scale.storage.data.shape[-3]
+    if first_unused_group < n_scale_groups:
+        unused_groups = out_scale.storage.data.narrow(
+            -3, first_unused_group, n_scale_groups - first_unused_group
+        )
+        assert torch.all(unused_groups == 0xFF)
+
+
+@pytest.mark.parametrize("scale_slice_sizes", [None, (128, 128), (130, 126), (129, 127)],
+                         ids=["shared", "different-block-offsets", "different-slice-offsets", "equal-copy"])
+def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, k = 256, 128
+    values = (torch.arange(m * k, device=device).reshape(m, k) % 7 - 3).to(torch.float8_e4m3fn)
+    scale_shape = (m, k // MXFP_BLOCK_SIZE.value)
+    scales = (torch.arange(m * scale_shape[1], device=device).reshape(scale_shape) % 7 + 124).to(torch.uint8)
+    gather_indx = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+
+    # The second slice starts at scale block 2 after padding the first slice.
+    slice_sizes = torch.tensor([129, 127], dtype=torch.int32, device=device)
+    metadata = make_ragged_tensor_metadata(slice_sizes, m)
+    scale_metadata = metadata if scale_slice_sizes is None else make_ragged_tensor_metadata(
+        torch.tensor(scale_slice_sizes, dtype=torch.int32, device=device), m)
+    gathered_scales = convert_layout(
+        wrap_torch_tensor(scales[gather_indx.long()]),
+        layout.BlackwellActMXScaleLayout(scale_metadata),
+    )
+    weights = torch.eye(k, dtype=torch.bfloat16, device=device).repeat(2, 1, 1)
+
+    expected_error = nullcontext() if scale_slice_sizes is None else pytest.raises(
+        AssertionError, match="same RaggedTensorMetadata instance")
+    constraints = {"block_m": 128, "block_k": 128, "is_persistent": True, "split_k": 1}
+    with opt_flags.scoped_opt_flags_constraints(constraints), expected_error:
+        actual = matmul(
+            wrap_torch_tensor(values),
+            weights,
+            None,
+            metadata,
+            gather_indx=gather_indx,
+            precision_config=PrecisionConfig(
+                a_mx_scale=gathered_scales,
+                a_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.bfloat16,
+            ),
+        )
+
+    if scale_slice_sizes is None:
+        expected = upcast_from_mxfp_torch(values, scales, torch.bfloat16, axis=-1)[gather_indx.long()]
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
@@ -694,3 +1206,194 @@ def test_set_idle_sms():
             assert flags.idle_sms == num_idle_sms + 1
     finally:
         matmul_set_idle_sms(0)
+
+
+@pytest.fixture
+def matmul_launch_stub(monkeypatch):
+    module = importlib.import_module("triton_kernels.matmul")
+    flags = opt_flags.OptFlags(
+        block_m=32, block_n=64, block_k=32, num_warps=4, num_stages=2,
+        group_m=1, xcd_swizzle=1, w_cache_modifier="", split_k=1,
+        is_persistent=False, idle_sms=0, epilogue_subtile=1, arch=80,
+        occupancy_target=1, target_kernel_kwargs={},
+    )
+    launches = []
+
+    class Kernel:
+        def __getitem__(self, grid):
+            return lambda *args, **kwargs: launches.append((args, kwargs))
+
+    kernels = SimpleNamespace(_matmul=Kernel(), _p_matmul=Kernel())
+    monkeypatch.setattr(module, "make_opt_flags", lambda *args, **kwargs: flags)
+    monkeypatch.setattr(module, "get_swap_xw", lambda *args: False)
+    monkeypatch.setattr(module.specializations, "get", lambda **kwargs: kernels)
+    return flags, launches
+
+
+@pytest.mark.parametrize("fused, output_kind", [(True, "none"), (True, "meta"), (True, "real"),
+                                               (False, "none"), (False, "real")])
+@pytest.mark.parametrize("m, n", [(32, 64), (0, 64), (32, 0)])
+def test_fused_comm_output_metadata(matmul_launch_stub, monkeypatch, fused, output_kind, m, n):
+    _, launches = matmul_launch_stub
+    a = torch.empty((m, 32), dtype=torch.float16)
+    b = torch.empty((32, n), dtype=torch.float16)
+    c = None if output_kind == "none" else torch.empty(
+        (m, n), dtype=torch.float16, device="meta" if output_kind == "meta" else "cpu")
+    comm = FusedComm(torch.empty(1, dtype=torch.uint64), None, None) if fused else None
+    omit_local_output = fused and output_kind != "real"
+    allocations = []
+    original_empty = torch.empty
+
+    def record_empty(*args, **kwargs):
+        tensor = original_empty(*args, **kwargs)
+        allocations.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(torch, "empty", record_empty)
+    result = matmul(a, b, None, c=c, fused_comm=comm)
+    assert result.shape == (m, n)
+    assert result.dtype == a.dtype
+    assert result.is_meta == omit_local_output
+    if output_kind == "real":
+        assert result.data_ptr() == c.data_ptr()
+    if omit_local_output:
+        assert all(t.is_meta or t.untyped_storage().nbytes() == 0 for t in allocations)
+    assert len(launches) == int(m * n != 0)
+    if launches:
+        args, kwargs = launches[0]
+        assert not args[0].is_meta and not args[1].is_meta
+        assert args[0].dtype == result.dtype and args[1].dtype == result.dtype
+        assert kwargs["Y_TMA_MODE"] is None
+        if omit_local_output:
+            assert args[0].numel() == args[1].numel() == 0
+
+
+@pytest.mark.parametrize("output_kind", ["none", "meta"])
+@pytest.mark.parametrize("unsupported", ["split_k", "output_tma", "accumulation", "mx_scale"])
+def test_fused_comm_no_local_output_rejects_unsupported(matmul_launch_stub, output_kind, unsupported):
+    flags, launches = matmul_launch_stub
+    a = torch.empty((32, 32), dtype=torch.float16)
+    b = torch.empty((32, 64), dtype=torch.float16)
+    c = torch.empty((32, 64), dtype=torch.float16, device="meta") if output_kind == "meta" else None
+    comm = FusedComm(torch.empty(1, dtype=torch.uint64), None, None)
+    config = PrecisionConfig()
+    c_acc_in = None
+    if unsupported == "split_k":
+        flags.split_k = 2
+    elif unsupported == "output_tma":
+        flags.use_output_tma = True
+    elif unsupported == "accumulation":
+        c_acc_in = torch.empty((32, 64), dtype=torch.float16)
+    else:
+        config.c_mx_scale = torch.empty((32, 2), dtype=torch.uint8)
+    error = NotImplementedError if unsupported == "mx_scale" else ValueError
+    with pytest.raises(error, match="[Ff]used comm"):
+        matmul(a, b, None, c=c, fused_comm=comm, precision_config=config, c_acc_in=c_acc_in)
+    assert not launches
+
+
+@triton.jit
+def _fused_comm_map_dst(base_m, rows, base_n, cols, rows_per_peer: tl.constexpr):
+    return (rows // rows_per_peer)[:, None], rows % rows_per_peer, cols
+
+
+@triton.jit
+def _fused_comm_writes_issued():
+    pass
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("n_peers", [1, 2])
+@pytest.mark.parametrize("ragged", [False, True])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
+    if not is_cuda() or torch.cuda.device_count() < n_peers:
+        pytest.skip("Requires CUDA devices for all communication peers")
+    if is_persistent and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Persistent matmul requires compute capability >= 9")
+    device = torch.cuda.current_device()
+    peer_devices = [(device + peer) % torch.cuda.device_count() for peer in range(n_peers)]
+    if n_peers > 1 and not torch.cuda.can_device_access_peer(*peer_devices):
+        pytest.skip("Requires CUDA peer access")
+    a = torch.randn((1024, 128), device=device, dtype=dtype)
+    b = torch.randn((2, 128, 256) if ragged else (128, 256), device=device, dtype=dtype)
+    metadata = make_ragged_tensor_metadata(
+        torch.tensor([512, 512], device=device, dtype=torch.int32), 1024) if ragged else None
+    scatter = torch.arange(1023, -1, -1, device=device, dtype=torch.int32) if ragged else None
+    destinations = [torch.empty((1024 // n_peers, 256), device=peer, dtype=dtype) for peer in peer_devices]
+    if n_peers > 1:
+        destinations[1].copy_(destinations[0])
+        torch.cuda.synchronize(peer_devices[1])
+    handles = torch.tensor([d.data_ptr() for d in destinations], device=device, dtype=torch.uint64)
+    comm = FusedComm(handles, Closure(_fused_comm_map_dst, (1024 // n_peers,)),
+                     Closure(_fused_comm_writes_issued, ()))
+    config = PrecisionConfig(out_dtype=dtype)
+
+    def run(c=None):
+        return matmul(a, b, None, a_ragged_metadata=metadata, scatter_indx=scatter,
+                      precision_config=config, fused_comm=comm, c=c)
+
+    def collected():
+        torch.cuda.synchronize(device)
+        return torch.cat([d.to(device) for d in destinations])
+
+    expected = torch.cat([a[:512] @ b[0], a[512:] @ b[1]]).flip(0) if ragged else a @ b
+    with opt_flags.scoped_opt_flags_constraints({"split_k": 1, "is_persistent": is_persistent}):
+        local_output = torch.empty((1024, 256), device=device, dtype=dtype)
+        assert run(local_output).data_ptr() == local_output.data_ptr()
+        reference = collected()
+        torch.testing.assert_close(reference, expected, rtol=0.02, atol=0.1)
+        for c in (None, torch.empty((1024, 256), device="meta", dtype=dtype)):
+            for destination in destinations:
+                destination.zero_()
+                torch.cuda.synchronize(destination.device)
+            result = run(c)
+            assert result.is_meta and result.shape == local_output.shape and result.dtype == dtype
+            torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+        torch.cuda.synchronize(device)
+        before = torch.cuda.memory_allocated(device)
+        torch.cuda.reset_peak_memory_stats(device)
+        run()
+        torch.cuda.synchronize(device)
+        assert torch.cuda.memory_allocated(device) == before
+        assert torch.cuda.max_memory_allocated(device) == before
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            run()
+        for _ in range(3):
+            for destination in destinations:
+                destination.zero_()
+                torch.cuda.synchronize(destination.device)
+            graph.replay()
+            torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("tile_a,tile_b", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("accumulate", [False, True])
+def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(17)
+    m, n, k = 256, 512, 1024
+    a = wrap_torch_tensor(torch.randn(m, k, device=device).to(torch.float8_e4m3fn))
+    b = wrap_torch_tensor(torch.randn(n, k, device=device).to(torch.float8_e4m3fn).T)
+    a_scale = convert_layout(wrap_torch_tensor(torch.full((m, k // 32), 127, dtype=torch.uint8, device=device)),
+                             layout.BlackwellActMXScaleLayout(None))
+    b_scale = convert_layout(wrap_torch_tensor(torch.full((k // 32, n), 127, dtype=torch.uint8, device=device)),
+                             layout.BlackwellMXScaleLayout())
+    metadata = make_ragged_tensor_metadata(torch.tensor([256, 256, 512, 0], dtype=torch.int32, device=device), k)
+    metadata = replace(metadata, slice_sizes_divisibility=128)
+    precision = PrecisionConfig(a_mx_scale=a_scale, b_mx_scale=b_scale, a_microblock_size=32,
+                                b_microblock_size=32, out_dtype=out_dtype)
+    expected = torch.randn(4, m, n, device=device, dtype=out_dtype)
+    actual = expected.clone()
+    matmul(a, b, None, c=expected, c_acc_in=expected if accumulate else None,
+           precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    if tile_a:
+        a = convert_layout(a, layout.TiledLayout(-1))
+    if tile_b:
+        b = convert_layout(b, layout.TiledLayout(-2))
+    matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
+           precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)

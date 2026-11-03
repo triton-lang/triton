@@ -11,6 +11,7 @@ add_triton_library(TritonGPUTransforms
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
+  OptimizeThreadRegions.cpp
   Pipeliner/AssignLatencies.cpp
   Pipeliner/LowerLoops.cpp
   Pipeliner/MMAv5PipelineUtility.cpp
@@ -27,10 +28,12 @@ add_triton_library(TritonGPUTransforms
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
   CoalesceAsyncCopy.cpp
+  TargetInfo.cpp
   Utility.cpp
   CoalesceUtils.cpp
   LayoutPropagationUtility.cpp
   WarpSpecialization/AutomaticWarpSpecialization.cpp
+  WarpSpecialization/NormalizeWSWhileLoops.cpp
   WarpSpecialization/Partition.cpp
   WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionBuilder.cpp

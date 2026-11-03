@@ -410,3 +410,103 @@ module {
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
 }
+
+// -----
+
+module {
+  // expected-remark @below {{event}}
+  tt.func @event() {
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "outer"
+    // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = 0}}
+    %event = proton.allocate_event "async" : i32
+    proton.event start %event : i32
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.record start "inner"
+    // expected-remark @below {{scope id = 3}}
+    // expected-remark @below {{scope parent id = 2}}
+    %nested_event = proton.allocate_event "nested_async" : i32
+    proton.event start %nested_event : i32
+    proton.event end %nested_event : i32
+    // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = 0}}
+    proton.record end "inner"
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "outer"
+    proton.event end %event : i32
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // Unlike synchronous scopes, async events with the same name identify
+  // independent static sites and do not need structurally paired endpoints.
+  // expected-remark @below {{event_conditional}}
+  tt.func @event_conditional(%cond: i1) {
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %event = proton.allocate_event "async" : i32
+    proton.event start %event : i32
+    scf.if %cond {
+      proton.event end %event : i32
+    } else {
+      // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = -1}}
+      %other = proton.allocate_event "async" : i32
+      proton.event start %other : i32
+      proton.event end %other : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  // Each branch ends the event for one pipeline slot and carries its
+  // replacement to a later loop iteration.
+  // expected-remark @below {{event_loop_alternating_events}}
+  tt.func @event_loop_alternating_events() {
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c10 = arith.constant 10 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial0 = proton.allocate_event "async_copy0" : i32
+    proton.event start %initial0 : i32
+    // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
+    %initial1 = proton.allocate_event "async_op1" : i32
+    proton.event start %initial1 : i32
+    %final0, %final1 = scf.for %i = %c1 to %c10 step %c1
+        iter_args(%event0 = %initial0, %event1 = %initial1) -> (i32, i32) {
+      %remainder = arith.remui %i, %c2 : index
+      %is_odd = arith.cmpi eq, %remainder, %c1 : index
+      %next0, %next1 = scf.if %is_odd -> (i32, i32) {
+        proton.event end %event0 : i32
+        // expected-remark @below {{scope id = 2}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new0 = proton.allocate_event "async_copy0" : i32
+        proton.event start %new0 : i32
+        scf.yield %new0, %event1 : i32, i32
+      } else {
+        proton.event end %event1 : i32
+        // expected-remark @below {{scope id = 3}}
+        // expected-remark @below {{scope parent id = -1}}
+        %new1 = proton.allocate_event "async_op1" : i32
+        proton.event start %new1 : i32
+        scf.yield %event0, %new1 : i32, i32
+      }
+      scf.yield %next0, %next1 : i32, i32
+    }
+    proton.event end %final0 : i32
+    proton.event end %final1 : i32
+    tt.return
+  }
+}

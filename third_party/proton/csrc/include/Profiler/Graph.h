@@ -9,14 +9,17 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
 namespace proton {
 
 class Data;
+class PendingGraphPool;
 class Runtime;
 
 struct NodeStatus {
@@ -61,11 +64,8 @@ struct GraphState {
     }
   };
   using NodeIdToStateMap = std::map<uint64_t, NodeState>;
-  // Precomputed per-Data launch links maintained on graph node
-  // create/clone/destroy callbacks.
-  // data -> (static_entry_id -> graph-node metadata pointers)
-  std::map<Data *, std::unordered_map<size_t, std::set<NodeState *>>>
-      dataToEntryIdToNodeStates;
+  // Data objects that were active for at least one node during graph capture.
+  std::set<Data *> capturedData;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;
@@ -86,6 +86,17 @@ struct GraphState {
   bool captureStatusChecked{};
   // Total number of uint64 words written by all metric nodes in this graph.
   size_t numMetricWords{};
+
+  void recordNode(uint64_t nodeId, const std::string &name,
+                  std::optional<MetricNodeState> metricNodeState,
+                  const std::set<Data *> &dataSet, bool isApiExternOp);
+
+  void buildLaunchEntries(const DataToEntryMap &dataToEntry,
+                          DataToEntryMap &dataToGraphEntry) const;
+
+  void queueMetrics(PendingGraphPool *pendingGraphPool,
+                    const DataToEntryMap *dataToGraphEntry,
+                    bool flushIfNeeded) const;
 };
 
 struct PendingGraphQueue {

@@ -83,6 +83,7 @@ public:
     // We zero out the bases that are constant
     auto kReg = StringAttr::get(ctx, "register");
     auto ll = toLinearLayout(rtType);
+    ll = ll.removeZeroBasesAlongDim(kReg);
     auto dims = to_vector(ll.getOutDimNames());
     auto llReg = ll.sublayout({kReg}, dims);
     auto inv = ll.pseudoinvert();
@@ -116,7 +117,7 @@ public:
     Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
     SmallVector<SmallVector<Value>> allOperands;
     for (auto operand : adaptor.getOperands()) {
-      auto subOperands = unpackLLElements(loc, operand, rewriter);
+      auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
       allOperands.resize(subOperands.size());
       for (auto v : llvm::enumerate(subOperands))
         allOperands[v.index()].push_back(v.value());
@@ -138,8 +139,8 @@ public:
       it += curr.size();
     }
     resultVals = maybeDeduplicate(op, resultVals);
-    Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
-                                rewriter, resultTy);
+    Value view = packUniqueTensorElements(loc, this->getTypeConverter(),
+                                          resultVals, rewriter, resultTy);
     rewriter.replaceOp(op, view);
 
     return success();
@@ -150,13 +151,12 @@ protected:
 };
 
 // Trivial case where we map elementwise to an existing LLVM operator
-template <typename SourceOp, typename DestOp>
+template <typename SourceOp, typename DestOp, auto Customize = [](DestOp) {}>
 struct ElementwiseOpConversion
     : public ElementwiseOpConversionBase<
-          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp,
-                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>> {
+  using Base = ElementwiseOpConversionBase<
+      SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>>;
   using Base::Base;
   using OpAdaptor = typename Base::OpAdaptor;
 
@@ -165,8 +165,12 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {DestOp::create(rewriter, loc, elemTy, operands[0],
-                           adaptor.getAttributes().getValue())};
+    auto attrs = splitBuilderAttributes<DestOp>(
+        rewriter, loc, adaptor.getAttributes().getValue());
+    auto result = DestOp::create(rewriter, loc, elemTy, operands[0],
+                                 attrs.properties, attrs.discardableAttrs);
+    Customize(result);
+    return {result};
   }
 };
 

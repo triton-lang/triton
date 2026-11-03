@@ -39,7 +39,7 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
     }
     return CGAEncodingAttr::get(ctx, std::move(ll));
   }
-  // For rank-reducing loads, we need to rank-increase the CTA Layout
+  // For rank-reducing loads, we need to rank-increase the CGA layout.
   auto rankDiff = rank - cgaLayout.getRank();
   for (unsigned i = 0; i < rankDiff; ++i) {
     assert(shape[i] == 1 && "Should only happen for rank-reducing loads");
@@ -52,11 +52,12 @@ CGAEncodingAttr updateCGALayoutForShape(CGAEncodingAttr cgaLayout,
     ll = LinearLayout::identity1D(1, kBlock, standardOuts[i]) * ll;
   }
   // Rename out dims to dim0..dimn-1
-  auto dimSizes = ll.getOutDims();
-  for (auto [i, dim] : llvm::enumerate(standardOuts)) {
-    dimSizes[i].first = dim;
+  SmallVector<std::pair<StringAttr, StringAttr>> renames;
+  for (auto [oldDim, newDim] :
+       llvm::zip_equal(ll.getOutDimNames(), standardOuts)) {
+    renames.push_back({oldDim, newDim});
   }
-  ll = LinearLayout(ll.getBases(), dimSizes, false);
+  ll = renameLinearLayoutDims(ll, {}, renames);
   return CGAEncodingAttr::get(ctx, std::move(ll));
 }
 

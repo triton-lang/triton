@@ -82,8 +82,7 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   //    yield undef
   // }
   // #thenBlock
-  Block *thenBlock =
-      rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+  Block *thenBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
 
   auto returnOp = newCombine.getTerminator();
   auto results = SmallVector<Value>(returnOp->getOperands());
@@ -138,8 +137,8 @@ public:
     std::iota(indices.begin(), indices.end(), 0);
 
     std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
-             op.getElementTypes()[j].getIntOrFloatBitWidth();
+      return getIntOrFloatOrPtrBitWidth(op.getElementTypes()[i]) >
+             getIntOrFloatOrPtrBitWidth(op.getElementTypes()[j]);
     });
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;

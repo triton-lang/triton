@@ -2,9 +2,7 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_
 
 #include "TargetInfo.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Analysis/Utility.h"
@@ -46,7 +44,7 @@ namespace mlir::LLVM::AMD {
 // def masked_op(base_ptr, offset, pred)
 //     mem_desc.base_ptr = base_ptr
 //     mem_desc.num_records = max_int_32
-//     oob_offset = max_int_32+1
+//     oob_offset = 0xFFFFFFFF  // out of bounds for any 32-bit num_records
 //     masked_offset = (pred ? offset : oob_offset)
 //     buffer_op(mem_desc, masked_offset)
 // ```
@@ -61,29 +59,33 @@ namespace mlir::LLVM::AMD {
 // Failure to meet 2) and 3) will result in incorrect memory access.
 struct BufferEmitter {
   BufferEmitter(RewriterBase &rw, Location loc,
-                mlir::triton::AMD::TargetInfo ti,
-                const DataFlowSolver *uniformitySolver);
+                mlir::triton::AMD::TargetInfo ti);
 
-  // Create a resource descriptor that points to the area of memory we want to
-  // load from
-  Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr);
+  // Create a resource descriptor (V#) for `basePtr`. `numRecords` is the i32
+  // byte bound; null means the default 2^31 - 2 bytes.
+  Value createResourceDescriptor(Value basePtr, Value numRecords);
 
-  // Emit a predicated rocdl.raw.ptr.buffer.load. `splitSoffsetSafe` is
-  // set by the TTGIR `AnnotateBufferOpSplitSafety` pass when the offsets
-  // are provably non-negative; only then is it safe to lift uniform
-  // components into soffset (AMD raw buffer ops bound-check voffset
-  // alone, so a negative voffset on any lane OOB-drops the access).
-  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
-                 Value falseVal, CacheModifier cm,
-                 bool splitSoffsetSafe = false);
+  // Convert the op's optional `soffset`, which counts elements of `elemTy`,
+  // to the i32 byte value the instruction takes. Null stays null.
+  Value getScalarOffsetBytes(Type elemTy, Value soffset);
+
+  // Emit a predicated rocdl.raw.ptr.buffer.load. `soffsetBytes` may be null.
+  // `aux` is the instruction's cache-policy operand.
+  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value soffsetBytes,
+                 Value pred, Value falseVal, int32_t aux);
+
+  // Emit a predicated llvm.amdgcn.raw.ptr.atomic.buffer.load: a load that
+  // LLVM keeps in order with other memory operations and never removes.
+  Value emitAtomicLoad(Type type, Value rsrcDesc, Value offset,
+                       Value soffsetBytes, Value pred, int32_t aux);
 
   // Emit a rocdl.raw.ptr.buffer.load.async.lds for direct-to-LDS loads.
   // Always emits the async variant since buffer_load_to_lds is only supported
   // on gfx942/gfx950 which use asyncmark-based synchronization.
-  ROCDL::RawPtrBufferLoadAsyncLdsOp
-  emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc, Value offset,
-                Value dst, Value pred, CacheModifier cm,
-                bool splitSoffsetSafe = false);
+  ROCDL::RawPtrBufferLoadAsyncLdsOp emitLoadToLds(Type type, Value byteWidth,
+                                                  Value rsrcDesc, Value offset,
+                                                  Value soffsetBytes, Value dst,
+                                                  Value pred, int32_t aux);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
@@ -93,21 +95,17 @@ struct BufferEmitter {
   Value emitAtomicCAS(Type type, Value rsrcDesc, Value offset, Value casCmpVal,
                       Value casStoreVal, Value pred, bool hasUsers);
 
-  // Emit a predicated rocdl.raw.ptr.buffer.store. See `emitLoad` for
-  // the meaning of `splitSoffsetSafe`.
-  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
-                 CacheModifier cm, bool splitSoffsetSafe = false);
+  // Emit a predicated rocdl.raw.ptr.buffer.store
+  void emitStore(Value rsrcDesc, Value offset, Value soffsetBytes, Value data,
+                 Value pred, int32_t aux);
 
 private:
-  // Fill common buffer operation arguments.
-  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args, bool splitSoffsetSafe = false);
-
-  // Fill buffer atomics arguments
-  void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
-                             Value pred, bool hasUsers,
-                             SmallVector<Value> &args);
+  // Fill the descriptor, the per-lane byte offset and the scalar byte offset
+  // arguments, masking off lanes where `pred` is false through the hardware
+  // range check.
+  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
+                      Value soffsetBytes, Value pred, bool isAtomicRMW,
+                      SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
@@ -118,9 +116,6 @@ private:
   RewriterBase &rewriter;
   Location loc;
   mlir::triton::AMD::TargetInfo targetInfo;
-  // Wave-uniformity solver threaded from the AMD conversion pass.
-  // Must be non-null (asserted in constructor).
-  const DataFlowSolver *uniformitySolver;
 };
 
 } // namespace mlir::LLVM::AMD

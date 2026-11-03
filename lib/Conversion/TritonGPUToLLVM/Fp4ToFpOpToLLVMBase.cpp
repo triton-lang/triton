@@ -16,7 +16,7 @@ LogicalResult Fp4ToFpOpConversionBase::matchAndRewrite(
   auto elemType = resTy.getElementType();
   assert(elemType == f16_ty || elemType == bf16_ty);
 
-  auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  auto xVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
 
   SmallVector<Value> results;
   results.reserve(xVals.size() * 2);
@@ -30,8 +30,8 @@ LogicalResult Fp4ToFpOpConversionBase::matchAndRewrite(
     results.append(upcast.begin(), upcast.end());
   }
 
-  Value result =
-      packLLElements(loc, getTypeConverter(), results, rewriter, resTy);
+  Value result = packUniqueTensorElements(loc, getTypeConverter(), results,
+                                          rewriter, resTy);
   rewriter.replaceOp(op, result);
   return success();
 }

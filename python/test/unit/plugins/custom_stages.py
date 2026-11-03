@@ -34,7 +34,7 @@ def inspect_stages_hook(self=None, stages=None, options=None, language=None, cap
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         if num_warps != 4:
-            passes.plugin.add_plugin(pm, {str(num_warps)})
+            passes.plugin.add_plugin(pm, [str(num_warps)])
         else:
             passes.plugin.add_plugin(pm)
         pm.run(mod, 'make_ttir_plugin')
@@ -55,7 +55,7 @@ def inspect_stages_hook_dialect(self=None, stages=None, options=None, language=N
         mod = self.make_ttgir(mod, metadata, opt, capability)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.plugin.plugingpu_conversion(pm)
+        passes.plugin.add_plugingpu_conversion(pm)
         pm.run(mod, 'make_ttgir_plugin')
         return mod
 

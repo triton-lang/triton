@@ -65,16 +65,7 @@ def sm86_min_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.inline_asm_elementwise(
-        """{
-    min.NaN.xorsign.abs.f32 $0, $1, $2;
-    }""",
-        "=r,r,r",
-        [a, b],
-        dtype=tl.float32,
-        is_pure=True,
-        pack=1,
-    )
+    return tl.extra.cuda.min_xorsign_abs_f32(a, b, propagate_nan=tl.PropagateNan.ALL)
 
 
 @triton.jit
@@ -90,16 +81,7 @@ def sm86_max_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.inline_asm_elementwise(
-        """{
-    max.NaN.xorsign.abs.f32 $0, $1, $2;
-    }""",
-        "=r,r,r",
-        [a, b],
-        dtype=tl.float32,
-        is_pure=True,
-        pack=1,
-    )
+    return tl.extra.cuda.max_xorsign_abs_f32(a, b, propagate_nan=tl.PropagateNan.ALL)
 
 
 @triton.jit
@@ -135,7 +117,7 @@ def nan_propagating_absmax_reduce(x, axis=None):
 
 @triton.jit
 def compute_scale(x, Out):
-    x_absmax = nan_propagating_absmax_reduce(tl.ravel(x, can_reorder=True))
+    x_absmax = nan_propagating_absmax_reduce(tl.ravel(x))
 
     # atomic_max does not propagate NaNs, so we replace them with +inf (0x7f800000).
     # We use integer minimum because NaNs are above +inf in integer representation.
@@ -173,7 +155,7 @@ def float_to_flex(
         zero = tl.cast(0.0, tl.int32)
         if mask is not None:
             x_int32 = tl.where(mask, x_int32, zero)
-        checksum_local = tl.xor_sum(tl.ravel(x_int32, can_reorder=True), 0)
+        checksum_local = tl.xor_sum(tl.ravel(x_int32), 0)
         tl.atomic_add(checksum_scale_ptr, checksum_local)
     if mask is not None:
         if actual_scale_ptr is not None:

@@ -62,6 +62,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.tensor_memory_size = 512
+  // CHECK-LABEL: @tmem_subslice_extends_liveness
+  tt.func @tmem_subslice_extends_liveness() {
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %parent = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %view = ttng.tmem_subslice %parent {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32}
+    %other = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %other, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %zero, %view, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 256x128>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_n1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, colStride = 1>
+#tmem = #ttng.tensor_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.tensor_memory_size = 32
+  // CHECK-LABEL: @tmem_f16_one_column
+  tt.func public @tmem_f16_one_column() {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x1xf16, #tmem_n1, #tmem, mutable>
+    "use"(%a) : (!ttg.memdesc<128x1xf16, #tmem_n1, #tmem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
@@ -297,7 +335,7 @@ tt.func @mma_scaled_lhs_tmem(
 
 // -----
 
-#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
+#tmem_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, fp4Padded = true>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 #tmem = #ttng.tensor_memory
 
@@ -420,4 +458,105 @@ tt.func @mma_lhs_tmem(
   tt.return
 }
 
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_select_extends_liveness
+  tt.func @tmem_select_extends_liveness(%pred: i1) {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 32 : i32, tensor_memory_row_offset = 0 : i32}
+    %b = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %selected = arith.select %pred, %a, %b : !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // Both possible sources must remain occupied until the selected use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
+    %temp = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%temp) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    "use"(%selected) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    // The selected sources may be reused after their last use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %after = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%after) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_view_select_extends_liveness
+  tt.func @tmem_view_select_extends_liveness(%pred: i1) {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
+    %b = ttng.tmem_alloc : () -> !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %a_view = ttng.tmem_subslice %a {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>
+    %b_view = ttng.tmem_subslice %b {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>
+    %selected = arith.select %pred, %a_view, %b_view : !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>
+    // Both possible sources must remain occupied until the selected use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %temp = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%temp) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    "use"(%selected) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>) -> ()
+    // The selected sources may be reused after their last use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %after = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%after) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_select_view_extends_liveness
+  tt.func @tmem_select_view_extends_liveness(%pred: i1) {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
+    %b = ttng.tmem_alloc : () -> !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %selected = arith.select %pred, %a, %b : !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %view = ttng.tmem_subslice %selected {offset = 128 : i32, dim = 0 : i32} : !ttg.memdesc<256x32xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>
+    // Both possible sources must remain occupied until the selected use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %temp = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%temp) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    "use"(%view) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable, 256x32>) -> ()
+    // The selected sources may be reused after their last use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %after = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%after) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_chain_extends_liveness
+  tt.func @tmem_chain_extends_liveness(%pred: i1, %outer: i1) {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 32 : i32, tensor_memory_row_offset = 0 : i32}
+    %b = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %selected = arith.select %pred, %a, %b : !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %alternate = arith.select %pred, %b, %a : !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    %chain = arith.select %outer, %selected, %alternate : !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    // Both possible sources must remain occupied until the selected use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
+    %temp = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%temp) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    "use"(%chain) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    // The selected sources may be reused after their last use.
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %after = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%after) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
 }
