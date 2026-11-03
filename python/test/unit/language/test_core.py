@@ -6822,6 +6822,45 @@ def test_if_else(device):
     assert to_numpy(out)[0] == false_val[0]
 
 
+@pytest.mark.skipif(not is_hip(), reason="AMD pointer canonicalization regression")
+@pytest.mark.parametrize("num_tensors", [32, 100])
+def test_if_elif_shared_pointer_body(num_tensors, device, fresh_knobs):
+    fresh_knobs.amd.use_buffer_ops = True
+
+    @triton.jit
+    def kernel(Inputs, Outputs, n_elements, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        blocks = tl.cdiv(n_elements, BLOCK)
+        # DISPATCH
+        offsets = local * BLOCK + tl.arange(0, BLOCK)
+        value = tl.load(in_ptr + offsets, offsets < n_elements, other=0)
+        tl.store(out_ptr + offsets, value + 1, offsets < n_elements)
+
+    # Selecting both pointers before the shared body produces nested scf.if
+    # operations with two pointer results. The forward-slice walk must not
+    # revisit their users once for every path through those results.
+    dispatch = []
+    for i in range(num_tensors):
+        dispatch += [
+            f"{'if' if i == 0 else 'elif'} pid < {i + 1} * blocks:",
+            f"    local = pid - {i} * blocks",
+            f"    in_ptr = Inputs[{i}]",
+            f"    out_ptr = Outputs[{i}]",
+        ]
+    dispatch += ["else:", "    local = pid", "    in_ptr = Inputs[0]", "    out_ptr = Outputs[0]"]
+    kernel = patch_kernel(kernel, {"# DISPATCH": "\n    ".join(dispatch)})
+
+    # Distinct data across tensors and elements catches incorrect pointer or
+    # offset propagation. The final block also exercises the load/store masks.
+    n_elements = 1000
+    inputs = tuple(
+        torch.arange(n_elements, device=device, dtype=torch.float32) + i * n_elements for i in range(num_tensors))
+    outputs = tuple(torch.full_like(x, float("nan")) for x in inputs)
+    kernel[(num_tensors * triton.cdiv(n_elements, 128), )](inputs, outputs, n_elements, BLOCK=128)
+    for x, y in zip(inputs, outputs):
+        torch.testing.assert_close(y, x + 1, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("mode", ["dynamic", "static"])
 def test_if_return(mode, device):
