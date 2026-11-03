@@ -32,6 +32,19 @@ class TritonNVPTXTTIImpl final
 public:
   explicit TritonNVPTXTTIImpl(const DataLayout &layout) : BaseT(layout) {}
 
+  void getUnrollingPreferences(Loop *loop, ScalarEvolution &se,
+                               TTI::UnrollingPreferences &prefs,
+                               OptimizationRemarkEmitter *ore) const override {
+    BaseT::getUnrollingPreferences(loop, se, prefs, ore);
+    // A masked load costs ~25 per iteration, so the default threshold leaves
+    // such loops rolled past ~12 iterations and ptxas does not unroll them.
+    prefs.Threshold = 2000;
+    // Partial and runtime unrolling as in LLVM's NVPTXTTIImpl, with its O3
+    // partial threshold (300 / 4).
+    prefs.Partial = prefs.Runtime = true;
+    prefs.PartialThreshold = 75;
+  }
+
   InstructionCost
   getVectorInstrCost(unsigned opcode, Type *type, TTI::TargetCostKind costKind,
                      unsigned index, const Value *op0, const Value *op1,

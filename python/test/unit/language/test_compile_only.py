@@ -55,6 +55,28 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     assert "arith.extui" not in compiled.asm["ttgir"]
 
 
+@pytest.mark.parametrize("tiles", [16, 24, 45, 64])
+@pytest.mark.parametrize("masked_tail", [False, True])
+def test_compile_only_constant_trip_loop_unrolled(tiles, masked_tail):
+
+    @triton.jit
+    def row_sum(x_ptr, out_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        row = tl.program_id(0)
+        offs = tl.arange(0, BLOCK)
+        acc = tl.zeros((BLOCK, ), dtype=tl.float32)
+        for start in tl.range(0, N, BLOCK):
+            cols = start + offs
+            acc += tl.load(x_ptr + row * N + cols, mask=cols < N, other=0.0).to(tl.float32)
+        tl.store(out_ptr + row, tl.sum(acc, axis=0))
+
+    n = tiles * 1024 - (512 if masked_tail else 0)
+    signature = {"x_ptr": "*bf16", "out_ptr": "*fp32", "N": "constexpr", "BLOCK": "constexpr"}
+    attrs = {(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]}
+    source = ASTSource(fn=row_sum, signature=signature, constexprs={"N": n, "BLOCK": 1024}, attrs=attrs)
+    ptx = triton.compile(source, target=GPUTarget("cuda", 100, 32), options={"num_warps": 8}).asm["ptx"]
+    assert len(re.findall(r"\bld\.global", ptx)) == tiles
+
+
 def test_compile_only_sm100() -> None:
 
     @triton.jit
