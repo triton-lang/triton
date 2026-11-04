@@ -686,23 +686,22 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\], \[0, 1\]\]}}}>
+
+// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\], \[0, 1\]\]}}}>
+// CHECK-DAG: #[[$LARGE_M:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_4cta
+  // CHECK-LABEL: tt.func @dot_blackwell_4cta
   // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_4cta
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_4cta
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_4cta(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %i: i32) -> tensor<256x256xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #blocked> -> tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>> -> tensor<64x256xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x256xf16, #b> -> tensor<256x256xf32, #blocked>
-    tt.return %d : tensor<256x256xf32, #blocked>
+  tt.func @dot_blackwell_4cta(%a: tensor<256x32xf16, #a>, %b: tensor<32x256xf16, #b>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<256x32xf16, #a> * tensor<32x256xf16, #b> -> tensor<256x256xf32, #blocked>
+    tt.return %dot : tensor<256x256xf32, #blocked>
+  }
+
+  // CHECK-LABEL: tt.func @dot_blackwell_large_m
+  // CHECK: tt.dot {{.*}} -> tensor<512x256xf32, #[[$LARGE_M]]>
+  tt.func @dot_blackwell_large_m(%a: tensor<512x32xf16, #a>, %b: tensor<32x256xf16, #b>, %c: tensor<512x256xf32, #blocked>) -> tensor<512x256xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<512x32xf16, #a> * tensor<32x256xf16, #b> -> tensor<512x256xf32, #blocked>
+    tt.return %dot : tensor<512x256xf32, #blocked>
   }
 }
 
@@ -711,48 +710,22 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2], [0, 4]]}>
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\], \[0, 1\]\]}}}>
+
+// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\], \[2, 0\], \[0, 1\]\]}}}>
+// CHECK-DAG: #[[$WIDE_N:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\], \[0, 1\], \[0, 2\]\]}}}>
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_8cta
+  // CHECK-LABEL: tt.func @dot_blackwell_8cta
   // CHECK: tt.dot {{.*}} -> tensor<256x512xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_8cta
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_8cta
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_8cta(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<512x64xf16>, %i: i32) -> tensor<256x512xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<512x64xf16, #blocked> -> tensor<64x512xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0], [4, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x512xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0], [4, 0]]}>> -> tensor<64x512xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x512xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x512xf16, #b> -> tensor<256x512xf32, #blocked>
-    tt.return %d : tensor<256x512xf32, #blocked>
+  tt.func @dot_blackwell_8cta(%a: tensor<256x32xf16, #a>, %b: tensor<32x512xf16, #b>, %c: tensor<256x512xf32, #blocked>) -> tensor<256x512xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<256x32xf16, #a> * tensor<32x512xf16, #b> -> tensor<256x512xf32, #blocked>
+    tt.return %dot : tensor<256x512xf32, #blocked>
   }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
-#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
-#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_2cta
-  // CHECK: tt.dot {{.*}} -> tensor<256x128xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_2cta
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_2cta
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_2cta(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<128x64xf16>, %i: i32) -> tensor<256x128xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<128x64xf16, #blocked> -> tensor<64x128xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x128xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0]]}>> -> tensor<64x128xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x128xf16, #b> -> tensor<256x128xf32, #blocked>
-    tt.return %d : tensor<256x128xf32, #blocked>
+  // CHECK-LABEL: tt.func @dot_blackwell_wide_n
+  // CHECK: tt.dot {{.*}} -> tensor<256x1024xf32, #[[$WIDE_N]]>
+  tt.func @dot_blackwell_wide_n(%a: tensor<256x32xf16, #a>, %b: tensor<32x1024xf16, #b>, %c: tensor<256x1024xf32, #blocked>) -> tensor<256x1024xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<256x32xf16, #a> * tensor<32x1024xf16, #b> -> tensor<256x1024xf32, #blocked>
+    tt.return %dot : tensor<256x1024xf32, #blocked>
   }
 }
 
@@ -761,73 +734,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}>
-module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_large_m
-  // CHECK: tt.dot {{.*}} -> tensor<512x256xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_large_m
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_large_m
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_large_m(%a_desc: !tt.tensordesc<512x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %i: i32) -> tensor<512x256xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #blocked> -> tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<512x64xf16, #blocked> -> tensor<512x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>> -> tensor<64x256xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<512x256xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<512x64xf16, #a> * tensor<64x256xf16, #b> -> tensor<512x256xf32, #blocked>
-    tt.return %d : tensor<512x256xf32, #blocked>
-  }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2], [0, 4]]}>
-#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
-#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\], \[0, 1\], \[0, 2\]\]}}}>
-module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_wide_n
-  // CHECK: tt.dot {{.*}} -> tensor<256x1024xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_wide_n
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_wide_n
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_wide_n(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<1024x64xf16>, %i: i32) -> tensor<256x1024xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<1024x64xf16> -> tensor<1024x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<1024x64xf16, #blocked> -> tensor<64x1024xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0], [4, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x1024xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0], [4, 0]]}>> -> tensor<64x1024xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x1024xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x1024xf16, #b> -> tensor<256x1024xf32, #blocked>
-    tt.return %d : tensor<256x1024xf32, #blocked>
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
-#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
-#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}}>
+// CHECK-DAG: #[[$CGA:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_hopper_unchanged
-  // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_hopper_unchanged
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_hopper_unchanged
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_hopper_unchanged(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %i: i32) -> tensor<256x256xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #blocked> -> tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>> -> tensor<64x256xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x256xf16, #b> -> tensor<256x256xf32, #blocked>
-    tt.return %d : tensor<256x256xf32, #blocked>
+  // CHECK-LABEL: tt.func @dot_hopper_unchanged
+  // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$CGA]]>
+  tt.func @dot_hopper_unchanged(%a: tensor<256x32xf16, #a>, %b: tensor<32x256xf16, #b>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<256x32xf16, #a> * tensor<32x256xf16, #b> -> tensor<256x256xf32, #blocked>
+    tt.return %dot : tensor<256x256xf32, #blocked>
   }
 }
 
@@ -836,68 +750,14 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}}>
+
+// CHECK-DAG: #[[$CGA:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @descriptor_pair_sm120_unchanged
-  // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @descriptor_pair_sm120_unchanged
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @descriptor_pair_sm120_unchanged
-  // PIPELINE: tt.dot
-  tt.func @descriptor_pair_sm120_unchanged(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %i: i32) -> tensor<256x256xf32, #blocked> {
-    %a = tt.descriptor_load %a_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #blocked> -> tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>> -> tensor<64x256xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x256xf16, #b> -> tensor<256x256xf32, #blocked>
-    tt.return %d : tensor<256x256xf32, #blocked>
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
-#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
-#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-// CHECK-DAG: #[[$PAIR:.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\], \[0, 1\]\]}}}>
-module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @ordinary_operand_pair_layout
-  // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$PAIR]]>
-  // E2E-LABEL: tt.func @ordinary_operand_pair_layout
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @ordinary_operand_pair_layout
-  // PIPELINE: tt.dot
-  tt.func @ordinary_operand_pair_layout(%a: tensor<256x64xf16, #blocked>, %b_desc: !tt.tensordesc<256x64xf16>, %i: i32) -> tensor<256x256xf32, #blocked> {
-    %b = tt.descriptor_load %b_desc[%i, %i] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #blocked>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #blocked> -> tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>>
-    %ad = ttg.convert_layout %a : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #a>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0], [2, 0]]}>> -> tensor<64x256xf16, #b>
-    %c = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #blocked>
-    %d = tt.dot %ad, %bd, %c : tensor<256x64xf16, #a> * tensor<64x256xf16, #b> -> tensor<256x256xf32, #blocked>
-    tt.return %d : tensor<256x256xf32, #blocked>
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
-#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
-#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
-
-// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0, 0\], \[2, 0, 0\]\]}}}>
-module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tt.func @dot_blackwell_batch_only
-  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<4x32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<4x128x128xf32, #[[$BATCH]]>
-  // CHECK: ttg.convert_layout %[[DOT]] : tensor<4x128x128xf32, #[[$BATCH]]> -> tensor<4x128x128xf32, #{{.*}}>
-  // E2E-LABEL: tt.func @dot_blackwell_batch_only
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @dot_blackwell_batch_only
-  // PIPELINE: tt.dot
-  tt.func @dot_blackwell_batch_only(%a: tensor<4x128x32xf16, #a>, %b: tensor<4x32x128xf16, #b>, %c: tensor<4x128x128xf32, #blocked>) -> tensor<4x128x128xf32, #blocked> {
-    %dot = tt.dot %a, %b, %c : tensor<4x128x32xf16, #a> * tensor<4x32x128xf16, #b> -> tensor<4x128x128xf32, #blocked>
-    tt.return %dot : tensor<4x128x128xf32, #blocked>
+  // CHECK-LABEL: tt.func @dot_sm120_unchanged
+  // CHECK: tt.dot {{.*}} -> tensor<256x256xf32, #[[$CGA]]>
+  tt.func @dot_sm120_unchanged(%a: tensor<256x32xf16, #a>, %b: tensor<32x256xf16, #b>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<256x32xf16, #a> * tensor<32x256xf16, #b> -> tensor<256x256xf32, #blocked>
+    tt.return %dot : tensor<256x256xf32, #blocked>
   }
 }
 
@@ -907,15 +767,18 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 
-// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1, 0\], \[0, 0, 1\], \[1, 0, 0\]\]}}}>
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0, 0\], \[2, 0, 0\], \[4, 0, 0\]\]}}}>
+// CHECK-DAG: #[[$BATCH_MN:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1, 0\], \[0, 0, 1\], \[1, 0, 0\]\]}}}>
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_blackwell_batch_only
+  // CHECK: tt.dot {{.*}} -> tensor<8x128x128xf32, #[[$BATCH]]>
+  tt.func @dot_blackwell_batch_only(%a: tensor<8x128x32xf16, #a>, %b: tensor<8x32x128xf16, #b>, %c: tensor<8x128x128xf32, #blocked>) -> tensor<8x128x128xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<8x128x32xf16, #a> * tensor<8x32x128xf16, #b> -> tensor<8x128x128xf32, #blocked>
+    tt.return %dot : tensor<8x128x128xf32, #blocked>
+  }
+
   // CHECK-LABEL: tt.func @dot_blackwell_batch_then_mn
-  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<2x256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<2x32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<2x256x256xf32, #[[$BATCH]]>
-  // CHECK: ttg.convert_layout %[[DOT]] : tensor<2x256x256xf32, #[[$BATCH]]> -> tensor<2x256x256xf32, #{{.*}}>
-  // E2E-LABEL: tt.func @dot_blackwell_batch_then_mn
-  // E2E: tt.dot
-  // PIPELINE-LABEL: tt.func @dot_blackwell_batch_then_mn
-  // PIPELINE: tt.dot
+  // CHECK: tt.dot {{.*}} -> tensor<2x256x256xf32, #[[$BATCH_MN]]>
   tt.func @dot_blackwell_batch_then_mn(%a: tensor<2x256x32xf16, #a>, %b: tensor<2x32x256xf16, #b>, %c: tensor<2x256x256xf32, #blocked>) -> tensor<2x256x256xf32, #blocked> {
     %dot = tt.dot %a, %b, %c : tensor<2x256x32xf16, #a> * tensor<2x32x256xf16, #b> -> tensor<2x256x256xf32, #blocked>
     tt.return %dot : tensor<2x256x256xf32, #blocked>
