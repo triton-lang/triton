@@ -334,6 +334,21 @@ template <typename CondT> void check(CondT &&cond, const char *msg) {
     throw py::value_error(msg);
 }
 
+tt::MemSyncScopeAttr getScopeAttr(MLIRContext *ctx,
+                                  std::optional<tt::MemSyncScope> scope) {
+  return scope ? tt::MemSyncScopeAttr::get(ctx, *scope)
+               : tt::MemSyncScopeAttr();
+}
+
+ttag::CachePolicyGfx12Attr
+getGfx12CachePolicy(std::optional<Attribute> cachePolicy) {
+  if (!cachePolicy || !*cachePolicy)
+    return {};
+  auto policy = dyn_cast<ttag::CachePolicyGfx12Attr>(*cachePolicy);
+  check(policy, "expected a gfx12 cache policy");
+  return policy;
+}
+
 } // namespace
 
 void init_gluon_ir(py::module_ &m) {
@@ -793,12 +808,16 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("smem"), py::arg("pointer"), py::arg("mask"),
           py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
-      .def("create_async_copy_local_to_global",
-           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              Attribute cachePolicy) {
-             self.create<ttag::AsyncCopyLocalToGlobalOp>(
-                 smem, pointer, mask, cachePolicy, /*contiguity=*/1);
-           })
+      .def(
+          "create_async_copy_local_to_global",
+          [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+             Attribute cachePolicy, std::optional<tt::MemSyncScope> scope) {
+            self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                smem, pointer, mask, cachePolicy, /*contiguity=*/1,
+                getScopeAttr(self.getContext(), scope));
+          },
+          py::arg("smem"), py::arg("pointer"), py::arg("mask"),
+          py::arg("cachePolicy"), py::arg("scope").none() = py::none())
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -1382,36 +1401,57 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tdm_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, Value result, Value barrier,
              tt::CacheModifier cacheModifier,
-             std::optional<uint32_t> warpUsedHint) {
+             std::optional<uint32_t> warpUsedHint,
+             std::optional<Attribute> cachePolicy,
+             std::optional<tt::MemSyncScope> scope) {
             IntegerAttr hintAttr;
             if (warpUsedHint.has_value())
               hintAttr = self.getBuilder().getI32IntegerAttr(
                   static_cast<int32_t>(*warpUsedHint));
             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
-                descPtr, result, barrier, cacheModifier, hintAttr);
+                descPtr, result, barrier, cacheModifier, hintAttr,
+                getGfx12CachePolicy(cachePolicy),
+                getScopeAttr(self.getContext(), scope));
           },
           py::arg("descPtr"), py::arg("result"), py::arg("barrier"),
           py::arg("cacheModifier"),
-          (py::arg("warpUsedHint").none() = py::none()))
+          (py::arg("warpUsedHint").none() = py::none()),
+          (py::arg("cachePolicy").none() = py::none()),
+          (py::arg("scope").none() = py::none()))
       .def(
           "create_async_tdm_fused_copy_global_to_local",
           [](GluonOpBuilder &self, std::vector<Value> &descs,
              std::vector<Value> &dests, std::vector<int32_t> &warpUsedHints,
-             tt::CacheModifier cacheModifier) {
+             tt::CacheModifier cacheModifier,
+             std::optional<Attribute> cachePolicy,
+             std::optional<tt::MemSyncScope> scope) {
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
             auto hintAttr =
                 self.getBuilder().getDenseI32ArrayAttr(warpUsedHints);
             self.create<ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
-                tokType, descs, dests, hintAttr, cacheModifier);
+                tokType, descs, dests, hintAttr, cacheModifier,
+                getGfx12CachePolicy(cachePolicy),
+                getScopeAttr(self.getContext(), scope));
           },
           py::arg("descs"), py::arg("dests"), py::arg("warpUsedHints"),
-          py::arg("cacheModifier") = tt::CacheModifier::NONE)
-      .def("create_async_tdm_copy_local_to_global",
-           [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
-              tt::CacheModifier cacheModifier) {
-             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
-                 descPtr, src, barrier, cacheModifier);
-           })
+          py::arg("cacheModifier") = tt::CacheModifier::NONE,
+          (py::arg("cachePolicy").none() = py::none()),
+          (py::arg("scope").none() = py::none()))
+      .def(
+          "create_async_tdm_copy_local_to_global",
+          [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
+             tt::CacheModifier cacheModifier,
+             std::optional<Attribute> cachePolicy,
+             std::optional<tt::MemSyncScope> scope) {
+            self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(
+                descPtr, src, barrier, cacheModifier,
+                getGfx12CachePolicy(cachePolicy),
+                getScopeAttr(self.getContext(), scope));
+          },
+          py::arg("descPtr"), py::arg("src"), py::arg("barrier"),
+          py::arg("cacheModifier"),
+          (py::arg("cachePolicy").none() = py::none()),
+          (py::arg("scope").none() = py::none()))
       .def("create_update_tensor_descriptor",
            [](GluonOpBuilder &self, Value descPtr,
               std::vector<Value> &addOffsets, std::vector<Value> &setBounds,
@@ -1424,18 +1464,32 @@ void init_gluon_ir(py::module_ &m) {
                                             self.getBuilder().getUnitAttr());
              return res;
            })
-      .def("create_async_tdm_scatter",
-           [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
-              Value src, Value barrier) {
-             self.create<ttag::AsyncTDMScatterOp>(descPtr, dstRowIndices, src,
-                                                  barrier);
-           })
-      .def("create_async_tdm_gather",
-           [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
-              Value dst, Value barrier) {
-             self.create<ttag::AsyncTDMGatherOp>(descPtr, srcRowIndices, dst,
-                                                 barrier);
-           })
+      .def(
+          "create_async_tdm_scatter",
+          [](GluonOpBuilder &self, Value descPtr, Value dstRowIndices,
+             Value src, Value barrier, std::optional<Attribute> cachePolicy,
+             std::optional<tt::MemSyncScope> scope) {
+            self.create<ttag::AsyncTDMScatterOp>(
+                descPtr, dstRowIndices, src, barrier,
+                getGfx12CachePolicy(cachePolicy),
+                getScopeAttr(self.getContext(), scope));
+          },
+          py::arg("descPtr"), py::arg("dstRowIndices"), py::arg("src"),
+          py::arg("barrier"), (py::arg("cachePolicy").none() = py::none()),
+          (py::arg("scope").none() = py::none()))
+      .def(
+          "create_async_tdm_gather",
+          [](GluonOpBuilder &self, Value descPtr, Value srcRowIndices,
+             Value dst, Value barrier, std::optional<Attribute> cachePolicy,
+             std::optional<tt::MemSyncScope> scope) {
+            self.create<ttag::AsyncTDMGatherOp>(
+                descPtr, srcRowIndices, dst, barrier,
+                getGfx12CachePolicy(cachePolicy),
+                getScopeAttr(self.getContext(), scope));
+          },
+          py::arg("descPtr"), py::arg("srcRowIndices"), py::arg("dst"),
+          py::arg("barrier"), (py::arg("cachePolicy").none() = py::none()),
+          (py::arg("scope").none() = py::none()))
       .def("create_tdm_prefetch",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
               Value pred, bool speculative, bool returnOffsets) -> Value {

@@ -4066,6 +4066,14 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << "(e.g., swizzled warp bases or non-injective layout) "
                        << "is not supported on " << op->getName() << ".";
     }
+    // Only the AMD backend supports generic linear encodings.
+    if (isGenericLinearEncoding(layout)) {
+      auto target = op->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
+          AttrTargetName);
+      if (target && !target.getValue().starts_with("hip:"))
+        return makeErr() << "Distributed layouts on non AMD targets should be "
+                         << "permutation matrices with zero columns.";
+    }
     if (llvm::any_of(rankedTy.getShape(),
                      [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
       return makeErr() << "Layout has shape " << rankedTy.getShape()
