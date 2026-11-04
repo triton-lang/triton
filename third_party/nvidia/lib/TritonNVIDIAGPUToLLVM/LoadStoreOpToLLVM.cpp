@@ -1014,6 +1014,15 @@ struct AsyncCopyGlobalToLocalOpConversion
     // Remove broadcasted registers
     auto srcLayout = ttg::toLinearLayout(srcTy);
     srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
+    if (!isa<ttg::SharedEncodingTrait>(dstTy.getEncoding()))
+      return op.emitOpError("requires a shared-memory destination");
+    auto cvt =
+        srcLayout.invertAndCompose(ttg::toLinearLayoutIgnoringPadding(dstTy));
+    auto maskSpanAffineBlock =
+        SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
+    if (!cvt.isTrivialOver({str_attr("block")}) || maskSpanAffineBlock)
+      return emitError(loc,
+                       "cp.async does not support non-trivial block dimension");
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -1025,18 +1034,18 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
-    // If the op has a contiguity hint use it to increase the vector size.
     maxVec = std::max(maxVec, op.getContiguity());
-    // The maximum vector size is 128 bits on NVIDIA GPUs.
-    maxVec = std::min(maxVec, 128 / resElemTy.getIntOrFloatBitWidth());
-
-    int vecBytes = maxVec * resElemTy.getIntOrFloatBitWidth() / 8;
-    if (vecBytes < 4) {
-      return emitError(loc, "cp.async does not support transfers smaller than "
-                            "4 bytes; calculated this as ")
+    // Each copy uses one source pointer and mask for consecutive shared
+    // elements.
+    unsigned bitwidth = dstTy.getElementTypeBitWidth();
+    maxVec = std::min({maxVec, 128u / bitwidth,
+                       static_cast<unsigned>(cvt.getNumConsecutiveInOut())});
+    unsigned layoutBound = ttg::getMaxAlignedSharedElements(dstTy);
+    unsigned vecBytes = std::min(maxVec, layoutBound) * bitwidth / 8;
+    if (vecBytes != 4 && vecBytes != 8 && vecBytes != 16)
+      return op.emitOpError("cp.async requires a 4-, 8-, or 16-byte transfer; "
+                            "source and destination layouts allow ")
              << vecBytes << " bytes";
-    }
-    assert(vecBytes == 16 || vecBytes == 8 || vecBytes == 4);
 
     auto freeVarMasks = getFreeVariableMasks(srcTy);
     // NOTE(@peterbell10): We load redundant data on different CTAs, so the data
@@ -1073,7 +1082,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(isa<VectorType>(vecTy));
       auto *ctx = rewriter.getContext();
       auto elemTy = vecTy.getElementType();
-      auto nBytes = vecTy.getNumElements() * elemTy.getIntOrFloatBitWidth() / 8;
+      auto nBytes =
+          vecTy.getNumElements() * getIntOrFloatOrPtrBitWidth(elemTy) / 8;
       assert(nBytes == 16 || nBytes == 8 || nBytes == 4);
       // Prefer CG for 16-byte copies unless CA was explicitly requested.
       // Smaller copies must use CA because CG only supports 16-byte transfers.
@@ -1122,20 +1132,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %dst
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
-    auto smemLayout = ttg::toLinearLayout(dstTy);
-    auto cvt = srcLayout.invertAndCompose(smemLayout);
-    if (!cvt.isTrivialOver({str_attr("block")})) {
-      return emitError(loc,
-                       "cp.async does not support non-trivial block dimension");
-    }
-    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
-    auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-              /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
-              warpId, rewriter, targetInfo, maxVec, /*allowPermutation=*/false,
-              emitCpAsync);
+    lowerLocalLdSt(loc, ctx, cvt, vals, resElemTy, dstTy, smemObj, rewriter,
+                   targetInfo, emitCpAsync, maxVec);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
