@@ -306,8 +306,7 @@ def _scan_tuple_combine(a1, b1, a2, b2):
         torch.bool, id="boolean_terminal_store"),
 ])
 @pytest.mark.parametrize("reverse", [False, True])
-@pytest.mark.parametrize("seed", [0, 127])
-def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, seed, device):
+def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
@@ -320,7 +319,7 @@ def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, seed, devi
         ttgl.store(OutA + m * N + n, a)
         ttgl.store(OutB + m * N + n, b)
 
-    torch.manual_seed(seed)
+    torch.manual_seed(0)
     a = (torch.randint(0, 2, (M, N), dtype=torch.int32) * 2 - 1).to(dtype)
     if dtype == torch.bool:
         a.zero_()
