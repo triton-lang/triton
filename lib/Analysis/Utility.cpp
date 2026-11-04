@@ -502,7 +502,7 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
       interWarpScanType = InterWarpScanType::Grouped;
     else
       interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
-                                      : InterWarpScanType::Registers;
+                                        : InterWarpScanType::Registers;
   }
 
   unsigned next = 1;
