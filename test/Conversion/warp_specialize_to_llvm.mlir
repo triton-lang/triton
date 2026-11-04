@@ -59,15 +59,24 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 // AMD-DAG: llvm.mlir.global internal @nbar4() {addr_space = 15 : i32}
 
 llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
+  // AMD-DAG: [[NBAR1:%.*]] = llvm.mlir.addressof @nbar1 : !llvm.ptr<15>
+  // AMD-DAG: [[NBAR2:%.*]] = llvm.mlir.addressof @nbar2 : !llvm.ptr<15>
+  // AMD-DAG: [[NBAR3:%.*]] = llvm.mlir.addressof @nbar3 : !llvm.ptr<15>
   // AMD: bb{{[0-9]+}}:
   // AMD-NEXT: rocdl.barrier
 
   // Check that named barriers are used and that we have the correct counts.
-  // AMD-DAG-COUNT-5: rocdl.s.barrier.join {{.*}} : !llvm.ptr<15>
-  // AMD-DAG-COUNT-4: rocdl.s.barrier.signal.var {{.*}} member_cnt = 4
-  // AMD-DAG-COUNT-1: rocdl.s.barrier.signal.var {{.*}} member_cnt = 2
-  // AMD-DAG-COUNT-1: rocdl.wave.barrier
-  // AMD-DAG-COUNT-5: rocdl.s.barrier.wait id = 1
+  // AMD: rocdl.s.barrier.join [[NBAR2]]
+  // AMD-NEXT: rocdl.s.barrier.signal.var [[NBAR2]] member_cnt = 4
+  // AMD-NEXT: rocdl.s.barrier.wait id = 1
+  // AMD: rocdl.s.barrier.join [[NBAR3]]
+  // AMD-NEXT: rocdl.s.barrier.signal.var [[NBAR3]] member_cnt = 2
+  // AMD-NEXT: rocdl.s.barrier.wait id = 1
+  // A single-warp partition only needs a wave barrier.
+  // AMD: rocdl.wave.barrier
+  // AMD: rocdl.s.barrier.join [[NBAR1]]
+  // AMD-NEXT: rocdl.s.barrier.signal.var [[NBAR1]] member_cnt = 4
+  // AMD-NEXT: rocdl.s.barrier.wait id = 1
 
   rocdl.barrier
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 10>}
