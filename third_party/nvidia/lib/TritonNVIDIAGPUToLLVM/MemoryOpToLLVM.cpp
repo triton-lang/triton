@@ -35,8 +35,8 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value pred = Value()) {
   if (!pred) {
     TritonLLVMOpBuilder b(loc, rewriter);
-    return emitLLVMAtomicRMW(
-        rewriter, loc, ptr, b.i32_val(-1), LLVM::AtomicBinOp::uinc_wrap,
+    return LLVM::AtomicRMWOp::create(
+        rewriter, loc, LLVM::AtomicBinOp::uinc_wrap, ptr, b.i32_val(-1),
         LLVM::AtomicOrdering::monotonic, isCluster ? "cluster" : "block");
   }
   PTXBuilder ptxBuilder;
@@ -67,18 +67,24 @@ FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
                                      Value value, RMWOp rmwOp, bool returnOld,
                                      bool isCluster, Value pred,
                                      const NVIDIA::TargetInfo &targetInfo) {
-  SmallVector<Value> vals{value};
-  if (!returnOld) {
-    auto result = emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals,
-                                         rmwOp, pred, isCluster,
-                                         PtxAtomicInstr::Red, targetInfo);
-    if (succeeded(result))
-      return result;
+  if (!pred && !usePtxForHalfAdd(rmwOp, valueElemTy, targetInfo)) {
+    auto binOp = matchAtomicOp(rmwOp);
+    if (!binOp)
+      return failure();
+    return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, value,
+                                     LLVM::AtomicOrdering::monotonic,
+                                     isCluster ? "cluster" : "block")
+        .getResult();
   }
-
-  return emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                                pred, isCluster, PtxAtomicInstr::Atom,
-                                targetInfo);
+  auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
+                             : PtxAtomicAddrSpace::Shared;
+  // Exchange has no PTX reduction form.
+  auto instr = returnOld || rmwOp == RMWOp::XCHG ? PtxAtomicInstr::Atom
+                                                 : PtxAtomicInstr::Red;
+  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, value, rmwOp,
+                              MemSemantic::RELAXED,
+                              isCluster ? "cluster" : "cta", pred, /*vec=*/1,
+                              /*packed=*/1, addrSpace, instr);
 }
 
 LogicalResult lowerLdStMatrix(

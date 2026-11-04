@@ -161,15 +161,6 @@ emitPtxAtomicRMWImpl(ConversionPatternRewriter &rewriter, Location loc,
   return ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 }
 
-inline Value emitLLVMAtomicRMW(ConversionPatternRewriter &rewriter,
-                               Location loc, Value ptr, Value val,
-                               LLVM::AtomicBinOp binOp,
-                               LLVM::AtomicOrdering ordering,
-                               StringRef syncScope) {
-  return LLVM::AtomicRMWOp::create(rewriter, loc, binOp, ptr, val, ordering,
-                                   syncScope);
-}
-
 inline bool usePtxForHalfAdd(RMWOp op, Type type,
                              const TargetInfoBase &targetInfo) {
   // NVPTX can widen a 16-bit add of NaN to a 32-bit CAS.
@@ -195,29 +186,10 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  return emitLLVMAtomicRMW(rewriter, loc, ptr, vals.front(), *binOp, *ordering,
-                           targetInfo.getAtomicSyncScope(scope));
-}
-
-inline FailureOr<Value>
-emitPtxSharedAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
-                       Type valueElemTy, Value ptr, ArrayRef<Value> vals,
-                       RMWOp rmwOpAttr, Value pred, bool isCluster,
-                       PtxAtomicInstr instr, const TargetInfoBase &targetInfo) {
-  if (!pred && !usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo)) {
-    auto binOp = matchAtomicOp(rmwOpAttr);
-    if (!binOp)
-      return failure();
-    return emitLLVMAtomicRMW(rewriter, loc, ptr, vals.front(), *binOp,
-                             LLVM::AtomicOrdering::monotonic,
-                             isCluster ? "cluster" : "block");
-  }
-  auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
-                             : PtxAtomicAddrSpace::Shared;
-  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr,
-                              MemSemantic::RELAXED,
-                              isCluster ? "cluster" : "cta", pred, /*vec=*/1,
-                              /*packed=*/1, addrSpace, instr);
+  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
+                                   *ordering,
+                                   targetInfo.getAtomicSyncScope(scope))
+      .getResult();
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
