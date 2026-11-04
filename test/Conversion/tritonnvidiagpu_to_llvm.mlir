@@ -1257,6 +1257,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #vector8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #padded1 = #ttg.padded_shared<[32:+1] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
 #padded8 = #ttg.padded_shared<[32:+8] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
+#broadcast_pair = #ttg.linear<{register = [[0], [1]], lane = [[2], [4], [8], [16], [32]], warp = [[64], [128]], block = [[0]]}>
 #inactive_padding = #ttg.padded_shared<[256:+2] {offset = [[1], [2], [4], [8], [16], [32], [64], [128]], block = [[0]]}>
 #prefix_padding = #ttg.padded_shared<[64:+1] {offset = [[1], [2], [4], [8], [16], [32], [64]], block = [[0]]}>
 #row4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
@@ -1281,6 +1282,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
   tt.func public @async_shared_store_inactive_padding(%src: tensor<256xf16, #vector>, %dst: !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #vector> -> !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // The two distinct FP16 values fit in a single store after register deduplication.
+  // CHECK-LABEL: @async_shared_store_broadcast_registers
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-NOT: st.async
+  // CHECK: llvm.return
+  tt.func public @async_shared_store_broadcast_registers(%src: tensor<256xf16, #broadcast_pair>, %dst: !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #broadcast_pair> -> !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
   }
 

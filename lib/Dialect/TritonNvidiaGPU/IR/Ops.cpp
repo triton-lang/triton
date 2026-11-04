@@ -561,22 +561,22 @@ LogicalResult AsyncSharedStoreOp::verify() {
     return emitOpError("requires a shared-memory destination");
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
-  auto regLayout = toLinearLayout(srcTy);
+  auto kRegister = StringAttr::get(getContext(), "register");
+  auto regLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
   auto kBlock = StringAttr::get(getContext(), "block");
   auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
   unsigned maxVecElems =
       std::min(128u / bitwidth, gpu::getMaxAlignedSharedElements(dstTy));
-  bool allowPermutation = !isPaddedEncoding(dstTy.getEncoding());
-  int elemsPerVec = maxVecElems > 0
-                        ? largestVectorisation(getContext(), cvt, maxVecElems,
-                                               allowPermutation)
-                              .first
-                        : 0;
-  if (elemsPerVec * bitwidth < 32)
-    return emitOpError("requires a layout vectorizing stores to at least 32 "
-                       "bits");
-  return success();
+  if (maxVecElems > 0) {
+    auto [elemsPerVec, _] =
+        largestVectorisation(getContext(), cvt, maxVecElems,
+                             /*allowPermutation=*/!isPaddedEncoding(encoding));
+    if (elemsPerVec * bitwidth >= 32)
+      return success();
+  }
+  return emitOpError(
+      "requires a layout vectorizing stores to at least 32 bits");
 }
 
 TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {
