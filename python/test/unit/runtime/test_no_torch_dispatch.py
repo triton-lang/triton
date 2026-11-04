@@ -8,12 +8,9 @@ import pytest
 from triton._internal_testing import is_cuda
 
 
-def test_backend_discovery_and_dispatch_without_torch():
-    # Backend discovery probes every available driver (including HIP) with
-    # torch imports forbidden. The example kernel launch itself uses NVIDIA
-    # device helpers and a TMA descriptor, so it requires an sm90+ NVIDIA GPU.
+def test_nvidia_kernel_dispatch_without_torch():
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
-        pytest.skip("Requires an NVIDIA GPU with TMA support (sm90+)")
+        pytest.skip("Requires CUDA and TMAs")
 
     env = os.environ.copy()
     env.pop("TRITON_DEFAULT_BACKEND", None)
@@ -23,6 +20,6 @@ def test_backend_discovery_and_dispatch_without_torch():
     script_path = Path(__file__).with_name("no_torch_dispatch_example.py")
     proc = subprocess.run([sys.executable, str(script_path)], text=True, capture_output=True, env=env)
 
-    assert proc.returncode == 0, ("Torch-free backend discovery and dispatch subprocess failed.\n"
+    assert proc.returncode == 0, ("Torch-free runtime dispatch subprocess failed.\n"
                                   f"stdout:\n{proc.stdout}\n"
                                   f"stderr:\n{proc.stderr}")
