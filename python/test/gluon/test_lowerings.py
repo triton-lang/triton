@@ -265,8 +265,8 @@ def _scan_tuple_combine(a1, b1, a2, b2):
             [[1, 0], [4, 0], [16, 0], [0, 1], [0, 2]], [[2, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
             (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [64, 0]], [], [128, 32]), 256, 32, 0, torch.int32,
         id="converted_thread_totals"),
-    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0]), 64, 8, 1,
-                 torch.int32, id="small_independent_lane_scans"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [4, 1], [1, 0]), 64, 8, 1, torch.int32,
+                 id="small_independent_lane_scans"),
     # Multi-element thread prefixes need inter-warp boundary carries in their
     # original owners, including high axis register bits and independent scans.
     pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 32 * THREADS_PER_WARP, 1, 0,
