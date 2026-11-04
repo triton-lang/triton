@@ -64,14 +64,14 @@ def test_mode_obj(mode, tmp_path: pathlib.Path):
     proton.finalize()
 
 
-def test_jit(tmp_path):
+def test_jit(device, tmp_path):
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook_instrumentation.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
@@ -84,7 +84,7 @@ def test_jit(tmp_path):
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
-def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
+def test_record(method, device, fresh_knobs, tmp_path: pathlib.Path):
     fresh_knobs.compilation.disable_line_info = False
 
     from contextlib import contextmanager
@@ -124,8 +124,8 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_record.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -181,7 +181,7 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
     else:
         # The AMD lowering emits llvm.readcyclecounter in LLIR. The backend
         # later selects s_memtime on gfx942/gfx950 or
-        # s_get_shader_cycles_u64 on gfx1250.
+        # s_get_shader_cycles_u64 on CDNA5.
         clock_instr = "readcyclecounter"
     clock_loc = None
     for line in llir_lines:
@@ -199,7 +199,7 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
     assert "line: " in loc_line and "line: 0" not in loc_line
 
 
-def test_event(tmp_path: pathlib.Path):
+def test_event(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def kernel(x_ptr):
@@ -218,7 +218,7 @@ def test_event(tmp_path: pathlib.Path):
                 return result
         return None
 
-    x = torch.tensor([5], device="cuda", dtype=torch.int32)
+    x = torch.tensor([5], device=device, dtype=torch.int32)
     tree_path = tmp_path / "event.hatchet"
     proton.start(str(tree_path.with_suffix("")), backend="instrumentation")
     kernel[(1, )](x, num_warps=1)
@@ -248,7 +248,7 @@ def test_event(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="requires Ampere or newer")
-def test_gluon_event(tmp_path: pathlib.Path):
+def test_gluon_event(device, tmp_path: pathlib.Path):
 
     @gluon.jit
     def kernel(output_ptr, input_ptr, BLOCK: gl.constexpr, NUM_TILES: gl.constexpr):
@@ -280,7 +280,7 @@ def test_gluon_event(tmp_path: pathlib.Path):
         value = shared.load(blocked_layout)
         gl.store(output_ptr + (NUM_TILES - 1) * tile_size + offsets, value)
 
-    input = torch.randn((3, 32, 32), device="cuda", dtype=torch.float32)
+    input = torch.randn((3, 32, 32), device=device, dtype=torch.float32)
     output = torch.empty_like(input)
     trace_path = tmp_path / "gluon_event.chrome_trace"
     proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
@@ -382,7 +382,7 @@ def test_gluon_warp_specialized_dynamic_event(tmp_path: pathlib.Path):
     assert all(event["ph"] == "X" for event in async_events)
 
 
-def test_select_ids(tmp_path: pathlib.Path):
+def test_select_ids(device, tmp_path: pathlib.Path):
     from contextlib import contextmanager
 
     select_ids = [0, 2]
@@ -425,8 +425,8 @@ def test_select_ids(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_select_ids.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -453,7 +453,7 @@ def test_select_ids(tmp_path: pathlib.Path):
         assert sorted(warp_indices) == select_ids
 
 
-def test_no_scope_zero_scratch(tmp_path: pathlib.Path):
+def test_no_scope_zero_scratch(device, tmp_path: pathlib.Path):
     from contextlib import contextmanager
 
     # A kernel with no `pl.scope` is instrumented but allocates no profile scratch
@@ -482,8 +482,8 @@ def test_no_scope_zero_scratch(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, x + y, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     temp_file = tmp_path / "test_no_scope_zero_scratch.hatchet"
 
@@ -495,7 +495,7 @@ def test_no_scope_zero_scratch(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("hook", ["triton", None])
-def test_tree(tmp_path: pathlib.Path, hook):
+def test_tree(device, tmp_path: pathlib.Path, hook):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         BLOCK_SIZE = args["BLOCK_SIZE"]
@@ -523,8 +523,8 @@ def test_tree(tmp_path: pathlib.Path, hook):
             tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_tree.hatchet"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -550,7 +550,7 @@ def test_tree(tmp_path: pathlib.Path, hook):
         assert load_ops["children"][1]["metrics"]["normalized_cycles"] > 0
 
 
-def test_trace(tmp_path: pathlib.Path):
+def test_trace(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -591,8 +591,8 @@ def test_trace(tmp_path: pathlib.Path):
             tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_trace.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -615,7 +615,7 @@ def test_trace(tmp_path: pathlib.Path):
         assert events[3]["cat"] == "sub_kernel"
 
 
-def test_multi_session(tmp_path: pathlib.Path):
+def test_multi_session(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -637,8 +637,8 @@ def test_multi_session(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file_inst = tmp_path / "test_tree_inst.hatchet"
     temp_file_driver = tmp_path / "test_tree_driver.hatchet"
     output = torch.empty_like(x)
@@ -680,7 +680,7 @@ def test_multi_session(tmp_path: pathlib.Path):
         assert "cycles" in kernel_frame["children"][0]["metrics"]
 
 
-def test_autotune(tmp_path: pathlib.Path):
+def test_autotune(device, tmp_path: pathlib.Path):
 
     def metadata_fn(
         grid: tuple,
@@ -720,8 +720,8 @@ def test_autotune(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 2048
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
@@ -739,7 +739,7 @@ def test_autotune(tmp_path: pathlib.Path):
         assert "add_1024" in names
 
 
-def test_warp_spec(tmp_path: pathlib.Path):
+def test_warp_spec(device, tmp_path: pathlib.Path):
     if not supports_tma() or not supports_ws():
         pytest.skip("target backend does not support warp specialization and TMA")
 
@@ -827,8 +827,8 @@ def test_warp_spec(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_warpspec.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", mode=mode)
     M, N, K = 512, 512, 512
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(torch.float8_e4m3fn)
+    a = torch.randn((M, K), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
+    b = torch.randn((K, N), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
     b = b.T.contiguous()
 
     matmul_tma(a, b, warp_specialize=HAS_WARP_SPECIALIZE)
@@ -842,7 +842,7 @@ def test_warp_spec(tmp_path: pathlib.Path):
         assert kernel["frame"]["name"] == "matmul_kernel_tma"
 
 
-def test_timeline(tmp_path: pathlib.Path):
+def test_timeline(device, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_timeline.chrome_trace"
     mode = proton.mode.Default(metric_type="cycle", optimizations="time_shift")
     proton.start(
@@ -866,7 +866,7 @@ def test_timeline(tmp_path: pathlib.Path):
         pl.exit_scope("entire")
 
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
 
     with proton.scope("test"):
@@ -884,7 +884,7 @@ def test_timeline(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
-def test_globaltime(tmp_path: pathlib.Path):
+def test_globaltime(device, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
         metric_type="cycle",
@@ -913,8 +913,8 @@ def test_globaltime(tmp_path: pathlib.Path):
         pl.exit_scope("elementwise_add_kernel")
 
     size = 1024 * 2000
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     n_elements = output.numel()
     BLOCK_SIZE = 1024
@@ -936,7 +936,7 @@ def test_globaltime(tmp_path: pathlib.Path):
 
 
 @pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
-def test_overhead(tmp_path: pathlib.Path):
+def test_overhead(device, tmp_path: pathlib.Path):
     temp_file_cycles = tmp_path / "test_overhead.hatchet"
     temp_file_time = tmp_path / "test_overhead_time.hatchet"
 
@@ -953,7 +953,7 @@ def test_overhead(tmp_path: pathlib.Path):
         pl.exit_scope("kernel")
 
     BLOCK_SIZE = 256
-    x = torch.zeros(BLOCK_SIZE, device="cuda", dtype=torch.float32)
+    x = torch.zeros(BLOCK_SIZE, device=device, dtype=torch.float32)
     y = torch.zeros_like(x)
 
     def bench():
@@ -1005,7 +1005,7 @@ def test_overhead(tmp_path: pathlib.Path):
     assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
 
 
-def test_gmem_buffer(tmp_path: pathlib.Path):
+def test_gmem_buffer(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -1027,8 +1027,8 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
             tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 512
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_gmem_buffer.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -1069,7 +1069,7 @@ def test_gmem_buffer(tmp_path: pathlib.Path):
         assert len(warp1_events) == 2
 
 
-def test_event_args(tmp_path: pathlib.Path):
+def test_event_args(device, tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -1090,8 +1090,8 @@ def test_event_args(tmp_path: pathlib.Path):
             tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     temp_file = tmp_path / "test_block_metadata.chrome_trace"
     output = torch.empty_like(x)
     n_elements = output.numel()
@@ -1126,7 +1126,7 @@ def test_event_args(tmp_path: pathlib.Path):
             assert finalization_time >= 0
 
 
-def test_threaded_kernel_call(tmp_path: pathlib.Path):
+def test_threaded_kernel_call(device, tmp_path: pathlib.Path):
 
     import threading
 
@@ -1149,8 +1149,8 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
             tl.store(output_ptr + offsets, output, mask=mask)
 
     size = 256
-    x = torch.rand(size, device="cuda")
-    y = torch.rand(size, device="cuda")
+    x = torch.rand(size, device=device)
+    y = torch.rand(size, device=device)
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
@@ -1194,7 +1194,7 @@ def test_threaded_kernel_call(tmp_path: pathlib.Path):
         ("trace", ".chrome_trace"),
     ],
 )
-def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
+def test_gluon_clc_profile(device, tmp_path: pathlib.Path, profile_data: str, file_suffix: str):
 
     @gluon.jit
     def gluon_clc_vector_add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: gl.constexpr):
@@ -1228,8 +1228,8 @@ def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffi
     num_tiles = torch.cuda.get_device_properties(0).multi_processor_count * 8
     n_elements = block_size * num_tiles
 
-    x = torch.rand((n_elements, ), device="cuda", dtype=torch.float32)
-    y = torch.rand((n_elements, ), device="cuda", dtype=torch.float32)
+    x = torch.rand((n_elements, ), device=device, dtype=torch.float32)
+    y = torch.rand((n_elements, ), device=device, dtype=torch.float32)
     out = torch.empty_like(x)
     expected = x + y
 
@@ -1274,7 +1274,7 @@ def test_gluon_clc_profile(tmp_path: pathlib.Path, profile_data: str, file_suffi
 
 
 @pytest.mark.parametrize("num_ctas", [1, 2])
-def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
+def test_tensor_descriptor(device, num_ctas, tmp_path: pathlib.Path):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
 
@@ -1302,14 +1302,14 @@ def test_tensor_descriptor(num_ctas, tmp_path: pathlib.Path):
         assert size == 128 * num_ctas
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="cuda")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
     M_BLOCK = 4
     N_BLOCK = 4
     M, N = M_BLOCK * 3, N_BLOCK * 4
-    inp = torch.randn((M, N), device="cuda", dtype=torch.float32)
+    inp = torch.randn((M, N), device=device, dtype=torch.float32)
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
     temp_file = tmp_path / "test_tensor_descriptor.chrome_trace"

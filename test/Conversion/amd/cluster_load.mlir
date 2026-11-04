@@ -1,5 +1,9 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 2>&1 | FileCheck %s --check-prefix=REMARK
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250-strict | FileCheck %s --check-prefix=STRICT
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250-strict 2>&1 >/dev/null | FileCheck %s --allow-empty --check-prefix=STRICTREMARK
+
+// STRICTREMARK-NOT: Multicast group contains
 
 // CGA layout has no broadcasting so we should not emit cluster loads
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0], [4, 0]]}>
@@ -18,6 +22,10 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [0, 0], [0, 0]]}>
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
   // CHECK-LABEL: cluster_load_b128
+  // STRICT-LABEL: cluster_load_b128
+  // STRICT-NOT: rocdl.cluster.workgroup.id.x
+  // STRICT-NOT: llvm.amdgcn.cluster.load
+  // STRICT: llvm.return
   tt.func public @cluster_load_b128(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
     // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[NON_FREE_BITS:.*]] = llvm.mlir.constant(-7 : i32) : i32
@@ -51,13 +59,16 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 // 16 CTAs with communication groups {0,1,4,5,8,9,12,13} and
-// {2,3,6,7,10,11,14,15}. The eight-bit masks exceed gfx1250's limit of five
+// {2,3,6,7,10,11,14,15}. The eight-bit masks exceed CDNA5's limit of five
 // bits, so split each group into four-CTA subgroups selected by CTA id bit 3.
 // The retained free bits 0 and 2 give a mask of 0b110011 (51) and the shift is
 // taken from bit 1 (group offset) and bit 3 (subgroup) => -6 (~0b101).
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [1, 0], [0, 0], [0, 0]]}>
 module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
   // CHECK-LABEL: cluster_load_split_multicast_mask
+  // STRICT-LABEL: cluster_load_split_multicast_mask
+  // STRICT-NOT: llvm.amdgcn.cluster.load
+  // STRICT: llvm.return
   tt.func public @cluster_load_split_multicast_mask(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
     // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
     // CHECK: %[[SUBGROUP_SELECTOR:.*]] = llvm.mlir.constant(-6 : i32) : i32
@@ -171,8 +182,8 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // Check that scalar loads works without emitting cluster load
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: scalar_load_gfx1250
-  tt.func public @scalar_load_gfx1250(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  // CHECK-LABEL: scalar_load_cdna5
+  tt.func public @scalar_load_cdna5(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
     // Scalar load should produce a regular llvm.load, not a cluster load
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<1> -> vector<1xi16>

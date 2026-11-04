@@ -49,6 +49,7 @@ namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrWarpIdOffsetName[] = "ttg.warp-id-offset";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
@@ -307,8 +308,6 @@ inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
 SmallVector<unsigned> getCTASplitNum(Attribute layout);
-
-SmallVector<unsigned> getCTAOrder(Attribute layout);
 
 // Returns the "logical" shape per CTA.
 // When shape and CTASplitNum have different number of dimensions, we assume

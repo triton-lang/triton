@@ -1,6 +1,9 @@
 NVIDIA Blackwell
 ================
 
+TCGen05 and tensor-memory operations require an SM10x or SM11x target. They are
+rejected on unsupported targets before instrumentation and lowering.
+
 .. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
 
 .. autosummary::

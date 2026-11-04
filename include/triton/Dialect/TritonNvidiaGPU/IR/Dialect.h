@@ -89,6 +89,9 @@ inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
 
+// Return the declared MMA N, restricted to a true N subview.
+unsigned getMMAv5InstructionN(gpu::MemDescType type);
+
 // Returns the required ordering of repeated TMEM scale blocks for one
 // tcgen05 scaled-MMA operand.
 TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(

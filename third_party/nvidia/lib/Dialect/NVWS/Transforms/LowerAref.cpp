@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       assert(partitionIds.size() == 1 &&
              "aref producer must have exactly one partition");
-      if (producerGroups.count(partitionIds.front())) {
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
@@ -292,7 +292,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
                    Value barrierAlloc, Value pred) {
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
-      op.getResult(), pred);
+      op.getResult(), pred, /*multicast=*/false, op.getCachePolicyAttr());
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };
@@ -622,13 +622,14 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
           mmav5Ops.insert(mmav5);
         } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          auto users =
-              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                return isa<MMAv5OpInterface>(user);
-              });
-          for (auto user : users) {
-            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
-          }
+          // Collect the MMAs themselves: the top-level users returned here are
+          // their ancestors in the loop body, e.g. an scf.if around the MMA.
+          getTopLevelUsersInLoop(consumer, forOp, [&](Operation *user) {
+            auto mmav5 = dyn_cast<MMAv5OpInterface>(user);
+            if (mmav5)
+              mmav5Ops.insert(mmav5);
+            return bool(mmav5);
+          });
         }
       }
     }

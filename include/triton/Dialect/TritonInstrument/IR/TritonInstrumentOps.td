@@ -119,13 +119,13 @@ def TTI_ExperimentalLocalGatherOp
 def TTI_ExperimentalGSanInitOp
     : TTI_Op<"experimental_gsan_init"> {
   let summary = "Initialize GSan thread";
-  let arguments = (ins BoolAttr:$acquireStreamClock);
-  let assemblyFormat = "$acquireStreamClock attr-dict";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
 }
 
 def TTI_ExperimentalGSanKernelExitOp
     : TTI_Op<"experimental_gsan_kernel_exit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Publish a completed GSan thread clock to its launch stream";
+  let summary = "Publish a completed GSan thread clock to its launch";
   let arguments = (ins);
   let assemblyFormat = "attr-dict";
 }

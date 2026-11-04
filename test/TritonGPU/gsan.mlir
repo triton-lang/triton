@@ -4,6 +4,9 @@
 
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tt.func @instrumented
+  // CHECK-SAME: !tt.ptr<i8> {tti.gsan_global_state}
+  // CHECK-SAME: !tt.ptr<i8> {tti.gsan_launch_table}
+  // CHECK-SAME: i64 {tti.gsan_launch_index}
   tt.func @instrumented(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>,
                         %mask: tensor<128xi1, #blocked>,
                         %other: tensor<128xf32, #blocked>,
@@ -23,7 +26,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: tt.func @instrumented_atomic_poll
   tt.func @instrumented_atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
-    // CHECK: %[[MATCHED:.*]] = tt.atomic_poll acquire, sys, %[[PTR:.*]], %{{.*}}
+    // CHECK: %[[MATCHED:.*]] = tt.atomic_poll acquire, sys, %[[PTR:.*]], %{{.*}} : !tt.ptr<i32>, i32 -> i1
     // CHECK-NEXT: tti.experimental_gsan_atomic_poll acquire, sys, %[[PTR]], %[[MATCHED]] : !tt.ptr<i32>
     // CHECK-NEXT: ttg.barrier local
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
@@ -135,6 +138,61 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       ttng.wait_barrier %partition_barrier, %phase, %partition_pred : !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
       ttg.warp_return
     } : (!ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>, i1) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_dynamic_index
+  tt.func @mbarrier_dynamic_index() {
+    // Four barriers per CTA, including those reached on later loop iterations.
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 1424 : i32,
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 8 : <i8>
+    %barriers = ttg.local_alloc : () -> !ttg.memdesc<4x2xi64, #mbarrier, #smem, mutable>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    scf.for %i = %c0 to %c4 step %c1 : i32 {
+      %barrier = ttg.memdesc_index %barriers[%i] : !ttg.memdesc<4x2xi64, #mbarrier, #smem, mutable> -> !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      // Reinitialization must not count the same allocation again.
+      ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_loop_carried_allocations
+  tt.func @mbarrier_loop_carried_allocations() {
+    // Both loop-carried allocations can reach the same init operation.
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 720 : i32,
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 4 : <i8>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %r:2 = scf.for %i = %c0 to %c2 step %c1 iter_args(%current = %a, %next = %b) -> (!ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>, !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>) : i32 {
+      scf.for %j = %c0 to %c2 step %c1 : i32 {
+        %barrier = ttg.memdesc_index %current[%j] : !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable> -> !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+        ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+        ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+      }
+      scf.yield %next, %current : !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>, !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    }
     tt.return
   }
 }
@@ -380,19 +438,19 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func public @instrumented_call_in_warp_specialize
   // CHECK-SAME: %[[STATE:[^:, )]+]]: !tt.ptr<i8>
-  // CHECK-SAME: %[[STREAM_CLOCK:[^:, )]+]]: !tt.ptr<i32>
-  // CHECK-SAME: %[[KERNEL_ID:[^:, )]+]]: i64
+  // CHECK-SAME: %[[LAUNCH_TABLE:[^:, )]+]]: !tt.ptr<i8>
+  // CHECK-SAME: %[[LAUNCH_INDEX:[^:, )]+]]: i64
   tt.func public @instrumented_call_in_warp_specialize(%value: i32) {
-    // CHECK: ttg.warp_specialize(%{{.*}}, %[[STATE]], %[[STREAM_CLOCK]], %[[KERNEL_ID]])
+    // CHECK: ttg.warp_specialize(%{{.*}}, %[[STATE]], %[[LAUNCH_TABLE]], %[[LAUNCH_INDEX]])
     ttg.warp_specialize(%value)
     default {
       ttg.warp_yield
     }
     // CHECK: partition0(%[[VALUE:[^:, )]+]]: i32, %[[PARTITION_STATE:[^:, )]+]]: !tt.ptr<i8>,
-    // CHECK-SAME: %[[PARTITION_STREAM_CLOCK:[^:, )]+]]: !tt.ptr<i32>, %[[PARTITION_KERNEL_ID:[^:, )]+]]: i64) num_warps(4)
+    // CHECK-SAME: %[[PARTITION_TABLE:[^:, )]+]]: !tt.ptr<i8>, %[[PARTITION_INDEX:[^:, )]+]]: i64) num_warps(4)
     partition0(%partition_value: i32) num_warps(4) {
-      // CHECK: tt.call @identity(%[[VALUE]], %[[PARTITION_STATE]], %[[PARTITION_STREAM_CLOCK]], %[[PARTITION_KERNEL_ID]])
-      // CHECK-SAME: : (i32, !tt.ptr<i8>, !tt.ptr<i32>, i64) -> i32
+      // CHECK: tt.call @identity(%[[VALUE]], %[[PARTITION_STATE]], %[[PARTITION_TABLE]], %[[PARTITION_INDEX]])
+      // CHECK-SAME: : (i32, !tt.ptr<i8>, !tt.ptr<i8>, i64) -> i32
       %result = tt.call @identity(%partition_value) : (i32) -> i32
       ttg.warp_return
     } : (i32) -> ()

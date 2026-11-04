@@ -331,6 +331,15 @@ tt.func public @fn(%arg0: f32) {
     %a, %b = tt.split %arg0 : f32 -> f16
     tt.return
 }
+
+// -----
+
+tt.func public @split_result_type_mismatch(%arg0: tensor<32x2xf32>) {
+    // expected-error @+1 {{outLHS and outRHS types match}}
+    %parts:2 = "tt.split"(%arg0) : (tensor<32x2xf32>) -> (tensor<32xf32>, tensor<32xf16>)
+    tt.return
+}
+
 // -----
 
 tt.func public @fn(%arg0: tensor<2xf32>) {

@@ -68,7 +68,13 @@ public:
     if (valueFromTMEM == kUnknown) {
       return failure();
     }
+    // The store predicate is a scalar i1, so only a uniform condition can be
+    // folded into it. A splatted condition is uniform; use its scalar source.
     Value pred = select.getCondition();
+    if (auto splat = pred.getDefiningOp<tt::SplatOp>())
+      pred = splat.getSrc();
+    if (!pred.getType().isInteger(1))
+      return failure();
     // In case the false operand is overwriting, we need to negate the predicate
     // (owerwrite when select would be false)
     if (valueFromTMEM == kTrue) {

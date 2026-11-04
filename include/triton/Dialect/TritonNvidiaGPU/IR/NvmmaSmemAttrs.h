@@ -12,6 +12,9 @@ struct NvmmaSmemAttrs {
   unsigned swizzlingByteWidth = 0;
   bool transposed = false;
   bool fp4Padded = false;
+
+  bool isCompatibleWith(const LinearLayout &layout,
+                        const LinearLayout &tile) const;
 };
 
 // Internal helper for creating SMEM descriptors for MMA instructions. The

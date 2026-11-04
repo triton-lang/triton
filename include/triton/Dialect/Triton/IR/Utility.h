@@ -17,6 +17,8 @@ constexpr int kPtrBitWidth = 64;
 inline int getIntOrFloatOrPtrBitWidth(Type type) {
   if (isa<LLVM::LLVMPointerType, triton::PointerType>(type))
     return kPtrBitWidth;
+  if (isa<triton::PackedFloat4E2M1Type>(type))
+    return 8;
   return type.getIntOrFloatBitWidth();
 }
 

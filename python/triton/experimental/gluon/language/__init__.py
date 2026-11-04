@@ -19,6 +19,8 @@ from ._core import (
     uint16,
     uint32,
     uint64,
+    float4e2m1x2,
+    float8e8m0fnu,
     float8e5,
     float8e5b16,
     float8e4nv,
@@ -64,6 +66,7 @@ from ._core import (
     num_ctas,
     histogram,
     inline_asm_elementwise,
+    inline_asm,
     join,
     load,
     map_elementwise,
@@ -127,7 +130,11 @@ from ._math import (
     ceil,
 )
 from ._standard import (
+    all,
+    any,
     cdiv,
+    cumprod,
+    cumsum,
     full_like,
     max,
     min,

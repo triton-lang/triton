@@ -28,6 +28,9 @@ def NVWS_Dialect : Dialect {
   let name = "nvws";
   let cppNamespace = "::mlir::triton::nvws";
 
+  // Preserve the existing attr-dict syntax for inherent attributes.
+  let useStrictPropertiesInAssemblyFormat = 0;
+
   let description = [{
     Nvidia Warp Specialization Dialect.
   }];

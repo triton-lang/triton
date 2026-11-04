@@ -4,9 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
-using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
-using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
 
@@ -202,7 +200,7 @@ public:
       }
       if (bitwidth < bitsPerVecElem) {
         llvm::for_each(unpackedVals, [&](Value &v) {
-          v = b.trunc(int_ty(bitwidth), v);
+          v = b.trunc(int_ty(bitwidth), v, LLVM::IntegerOverflowFlags::nuw);
           if (elemTy != int_ty(bitwidth))
             v = b.bitcast(v, elemTy);
         });
@@ -226,7 +224,7 @@ public:
         if (isa<LLVM::LLVMPointerType>(elemTy))
           v = b.inttoptr(elemTy, v);
         if (bitwidth < 32)
-          v = b.trunc(int_ty(bitwidth), v);
+          v = b.trunc(int_ty(bitwidth), v, LLVM::IntegerOverflowFlags::nuw);
         if (!isa<IntegerType>(elemTy))
           v = b.bitcast(v, elemTy);
       });
@@ -318,7 +316,7 @@ public:
   // Converts full layout mapping to more convenient form.
   // Mapping each output register byte to some input byte:
   // regContents[output reg no][output reg byte no] -> ByteLocation(input
-  // regiser no, byte index in this register)
+  // register no, byte index in this register)
   static std::vector<std::array<ByteLocation, regBytes>>
   generateDstRegContents(const std::vector<int> &fullLayout) {
     int numRegs = fullLayout.size() / regBytes;
@@ -732,7 +730,7 @@ public:
     for (const auto &base : conversion.getBases().at(kRegister)) {
       assert(base.size() == 1);
       // Currently swizzled distributed layouts are forbidden.
-      // This is a safety check in case such layouts are permited.
+      // This is a safety check in case such layouts are permitted.
       // Main concern is processFourWayDependencies function.
       // It assumes each src byte is paired with at most one src byte,
       // which is not true for broadcasted + swizzled layouts.

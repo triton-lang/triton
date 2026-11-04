@@ -152,13 +152,14 @@ def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mb
   ];
 }
 
-def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
-  let summary = "Insert barriers to order tensor-memory reuse";
+def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimize-mbarrier-arrivals", "mlir::ModuleOp"> {
+  let summary = "Finalize distributed mbarrier arrivals after synchronization";
 
   let description = [{
-    This pass inserts CTA barriers between tensor-memory accesses that reuse
-    aliasing physical tensor-memory storage and require ordering across logical
-    allocation lifetimes.
+    Analyze the completed shared-memory and tensor-memory synchronization to
+    remove redundant warp barriers and clear unnecessary per-warp flags, then
+    scale closed barrier groups once.
+    Run after both synchronization passes and before sanitizer insertion.
   }];
 
   let dependentDialects = [
@@ -167,13 +168,13 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
   ];
 }
 
-def TritonNvidiaGPUTMemWaitInsertionPass : Pass<"triton-nvidia-gpu-tmem-wait-insertion", "mlir::ModuleOp"> {
-  let summary = "Insert tensor-memory completion waits";
+def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert barriers to order tensor-memory reuse";
 
   let description = [{
-    This pass inserts load and store completion waits before dependent accesses
-    or synchronization boundaries, reusing existing CTA barriers where possible.
-    Run after tensor-memory allocation and barrier insertion, before lowering.
+    This pass inserts CTA barriers between tensor-memory accesses that reuse
+    aliasing physical tensor-memory storage and require ordering across logical
+    allocation lifetimes.
   }];
 
   let dependentDialects = [
