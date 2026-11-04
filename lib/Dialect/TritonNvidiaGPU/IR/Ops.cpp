@@ -685,7 +685,7 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   if (!descEnc || descEnc.getTransposed() != nvmma.getTransposed() ||
       descEnc.getSwizzlingByteWidth() != nvmma.getSwizzlingByteWidth() ||
       descEnc.getElementBitWidth() != nvmma.getElementBitWidth() ||
-      descEnc.getFp4Padded() != nvmma.getFp4Padded()) {
+      descEnc.isPaddedFp4() != nvmma.isPaddedFp4()) {
     return op->emitOpError("TMA descriptor layout must match shared layout, "
                            "but got descriptor layout ")
            << descEnc << " and shared memory layout " << nvmma;
@@ -696,7 +696,7 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   if (descEnc.getPadding() != nvmma.getPadding())
     return op->emitOpError(
         "TMA descriptor and shared memory packing must match");
-  if (descEnc.isFP6()) {
+  if (descEnc.isPaddedFp6()) {
     auto required = store ? NVMmaPadding::B6P2x16 : NVMmaPadding::B6x16P32;
     if (nvmma.getPadding() != required)
       return op->emitOpError(
@@ -1190,7 +1190,7 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
                                              Type type) {
   auto enc = dyn_cast<NVMMASharedEncodingAttr>(mem.getEncoding());
   if ((enc && enc.getPadding() == NVMmaPadding::B6P2x16) ||
-      NVMMASharedEncodingAttr::isPackedFP6(mem.getEncoding()) !=
+      NVMMASharedEncodingAttr::isPackedFp6(mem.getEncoding()) !=
           isa<Float6E2M3FNType, Float6E3M2FNType>(type))
     return op->emitOpError("FP6 MMA operands require b6x16_p32 storage and an "
                            "explicit FP6 format");
@@ -1918,7 +1918,7 @@ LogicalResult TMEMCopyOp::verify() {
   // Fp4 we could lift if we needed
   auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())) {
+  if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.isPaddedFp4())) {
     return emitOpError("The source should not be transposed or padded");
   }
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {

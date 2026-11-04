@@ -33,7 +33,7 @@ bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
     // Only 128-byte swizzling is supported for padded FP4 TMA descriptors.
     // MMA operands can still use padded layouts with smaller swizzles.
     return !nvmma.getTransposed() &&
-           (!nvmma.getFp4Padded() || nvmma.getSwizzlingByteWidth() == 128);
+           (!nvmma.isPaddedFp4() || nvmma.getSwizzlingByteWidth() == 128);
   return false;
 }
 

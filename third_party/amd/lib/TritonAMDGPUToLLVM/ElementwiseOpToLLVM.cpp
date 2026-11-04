@@ -61,7 +61,7 @@ struct PackedArithOpConversion
       packedOperands.push_back(
           packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
     Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
-                              packedOperands);
+                              packedOperands, typename LLVMOp::Properties{});
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -278,7 +278,8 @@ struct Exp2OpConversion
     if (ftz)
       return {ROCDL::ROCDLExp2::create(rewriter, loc, elemTy, operands[0])};
 
-    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0])};
+    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0],
+                                 LLVM::Exp2Op::Properties{})};
   }
 
 private:
@@ -504,6 +505,8 @@ void populateElementwiseOpToLLVMPatterns(
                                    targetInfo.getISAFamily(), benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   // ExpOpConversionApprox will try using __ocml_exp2_f32 if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
@@ -517,6 +520,9 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<ElementwiseOpConversion<math::SqrtOp, math::SqrtOp>,
+               ElementwiseOpConversion<math::RsqrtOp, math::RsqrtOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
   triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,

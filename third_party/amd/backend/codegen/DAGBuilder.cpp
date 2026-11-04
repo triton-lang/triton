@@ -12,6 +12,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -251,6 +252,12 @@ void DAGBuilder::setupAliasAnalysis() {
   // Store in member unique_ptr to ensure proper cleanup.
   BasicAA = std::make_unique<BasicAAResult>(DL, Func, *TLI, *AC);
   AA->addAAResult(*BasicAA);
+
+  // Keep in sync with createScopedNoAliasAAWrapperPass() in the MIR-to-ASM
+  // pipeline, which documents why: without it the emitted DAG carries memory
+  // edges the scheduler that compiles this MIR does not believe in.
+  ScopedAA = std::make_unique<ScopedNoAliasAAResult>();
+  AA->addAAResult(*ScopedAA);
 }
 
 SmallVector<SchedulingRegion, 8>

@@ -145,6 +145,7 @@ public:
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
+  virtual bool supportNativeBF16AtomicAdd() const { return false; }
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }

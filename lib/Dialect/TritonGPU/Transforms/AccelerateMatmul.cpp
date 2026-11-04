@@ -1119,9 +1119,11 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   Type operandElType =
       cast<RankedTensorType>(operand.getType()).getElementType();
   if (type::isFloat8(operandElType)) {
-    return FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+    return FpToFpOp::create(builder, loc, tensorPromotedType, operand,
+                            RoundingModeAttr{});
   }
-  return arith::ExtFOp::create(builder, loc, tensorPromotedType, operand);
+  return arith::ExtFOp::create(builder, loc, tensorPromotedType, operand,
+                               arith::FastMathFlagsAttr{});
 }
 
 static bool mmav2SupportsFp8Operands(int computeCapability) {

@@ -107,6 +107,9 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
+  bool supportNativeBF16AtomicAdd() const override {
+    return getComputeCapability() >= 90;
+  }
 
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {

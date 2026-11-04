@@ -165,7 +165,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
   int tileRows = 8;
   int tileCols = 8 * std::max(16, tileWidthBytes) / elemBitWidth;
-  bool isFp4Padded = shared.getFp4Padded();
+  bool isFp4Padded = shared.isPaddedFp4();
 
   std::vector<std::vector<int>> bases2D;
   for (int col = 1; col < tileCols; col *= 2) {
@@ -320,7 +320,7 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   auto tileRows = tileLayout.getOutDimSize(kRow);
   auto tileCols = tileLayout.getOutDimSize(kCol);
 
-  int packingFactor = shared.getFp4Padded() ? 2 : 1;
+  int packingFactor = shared.isPaddedFp4() ? 2 : 1;
   if (collapsedTmaShape[1] * packingFactor < tileCols ||
       collapsedTmaShape[0] < tileRows) {
     if (emitErrors) {
@@ -382,12 +382,12 @@ nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
   if (emitErrors) {
     tmaShape =
         getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
-                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getSwizzlingByteWidth(), shared.isPaddedFp4(),
                          shared.getTransposed(), /*packedSize=*/true, mode);
   } else {
     auto maybeTmaShape =
         getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
-                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getSwizzlingByteWidth(), shared.isPaddedFp4(),
                          shared.getTransposed(), /*packedSize=*/true,
                          /*emitError=*/nullptr, mode);
     if (failed(maybeTmaShape))
@@ -1318,7 +1318,7 @@ LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding) {
   // Physical byte offsets of whole atoms are linear even when individual
   // six-bit codes within an atom have no byte address.
-  if (NVMMASharedEncodingAttr::isPackedFP6(encoding))
+  if (NVMMASharedEncodingAttr::isPackedFp6(encoding))
     return nvmmaSharedToLinearLayout(
         shape, cast<NVMMASharedEncodingAttr>(encoding), TMAMode::Tiled);
   return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
@@ -1326,12 +1326,12 @@ LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
 }
 
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
-  if (NVMMASharedEncodingAttr::isPackedFP6(type.getEncoding()))
-    return toLinearLayoutIgnoringPadding(
-        dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
-        type.getEncoding());
-  return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
-                                              : toLinearLayout(type);
+  // TMEM subviews need their logical shape to trim the parent layout.
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return toLinearLayout(type);
+  auto encoding = type.getEncoding();
+  return toLinearLayoutIgnoringPadding(
+      dropPipeliningDim(type.getAllocShape(), encoding), encoding);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1440,7 +1440,7 @@ LinearLayout chooseScaledWmmaScaleLayout(
       wmmaMDim, wmmaNDim, isTransposed, dotOperandIdx);
   unsigned depth = warpSize / nonKDim;
   unsigned scaleKWidth = scaleFactor == 32 ? 4 : 8;
-  auto kSize = dotOperandShape[1];
+  auto kSize = dotOperandShape[rank - 1];
   LinearLayout tileLayout =
       LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *
       LinearLayout::identity1D(nonKDim, kLane, dimNonK) *
