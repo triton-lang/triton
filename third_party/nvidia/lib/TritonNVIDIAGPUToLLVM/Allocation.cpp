@@ -17,7 +17,6 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_ALLOCATESHAREDMEMORYNV
-#define GEN_PASS_DEF_SETMINIMUMSHAREDMEMORY
 #include "TritonNVIDIAGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
@@ -41,25 +40,6 @@ struct AllocateSharedMemoryNv
   }
 };
 
-struct SetMinimumSharedMemory
-    : public mlir::triton::impl::SetMinimumSharedMemoryBase<
-          SetMinimumSharedMemory> {
-  using SetMinimumSharedMemoryBase::SetMinimumSharedMemoryBase;
-
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (minimumSize < 0) {
-      mod.emitError("minimum shared memory size must be non-negative");
-      return signalPassFailure();
-    }
-    auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
-    int64_t sharedSize = sharedAttr ? sharedAttr.getInt() : 0;
-    if (sharedSize < minimumSize)
-      mod->setAttr("ttg.shared",
-                   IntegerAttr::get(IntegerType::get(mod.getContext(), 32),
-                                    minimumSize));
-  }
-};
 } // namespace
 
 namespace mlir::triton::nvidia_gpu {

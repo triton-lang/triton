@@ -22,8 +22,10 @@
  */
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -34,27 +36,9 @@
 namespace mlir::triton::AMD {
 namespace {
 
-static std::optional<mlir::triton::LinearLayout>
-wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
-                       const mlir::triton::LinearLayout &tileLL) {
-  llvm::SmallDenseMap<StringAttr, int64_t> shape;
-  for (auto outDim : wholeTileLL.getOutDimNames())
-    shape[outDim] = wholeTileLL.getOutDimSize(outDim);
-
-  // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
-  // when the tensor is smaller than the WMMA instruction shape.
-  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
-
-  auto quot = divideLeft(wholeTileLL, clampedTileLL);
-  if (quot.has_value())
-    return zerosLike(clampedTileLL) * *quot;
-  return {};
-}
-
 #define S(v) StringAttr::get(ctx, (v))
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::LinearEncodingAttr;
 
 Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
                       Type type, int wmmaVer, int kBase, Location loc,
@@ -72,8 +56,8 @@ Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
     // When scaleFactor == 16, scales are stored in i64
     // This only applies to scale operands, not regular dot operands
     Type targetTy = (isScale && kBase == 8) ? i64_ty : i32_ty;
-    auto elems =
-        kBase * type.getIntOrFloatBitWidth() / targetTy.getIntOrFloatBitWidth();
+    auto elems = kBase * getIntOrFloatOrPtrBitWidth(type) /
+                 targetTy.getIntOrFloatBitWidth();
     assert(elems >= 1 && "unexpected number of elements");
     if (elems == 1)
       convertedElems = tb.bitcast(rawElems, targetTy);
@@ -107,6 +91,22 @@ static int computeKPadding(int kBase, int64_t tensorK,
 
   // If tensorK is at least one k repetition tile, pad full out-of-bounds tiles.
   return kBase - kBase * tensorK / kInstrSize;
+}
+
+// Returns the number of consecutive wmma instructions that consume one chunk
+// of kWidth K registers in a lane. This is 1 unless kWidth exceeds the K
+// registers one instruction takes per lane and nonK subtile. E.g. for wmma v2
+// 16x16x16 f16 (kBase = 8) with kWidth = 16, lanes 0-15 hold k[0-15] and lanes
+// 16-31 hold k[16-31]; the first instruction takes regs 0-7 and the second
+// regs 8-15. This permutes K the same way for both operands, so the sum over
+// K is unchanged.
+static int getInstrsPerKChunk(DotOperandEncodingAttr dotEnc, int kBase) {
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
+  constexpr int wmmaTileDim = 16;
+  int nonKRepeat =
+      wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx()) / wmmaTileDim;
+  int kPerSubtile = kBase / nonKRepeat;
+  return std::max<int>(dotEnc.getKWidth() / kPerSubtile, 1);
 }
 
 // Returns a bitmask of the lane bits that will move in K direction. For WMMA
@@ -165,8 +165,23 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
 
   Value rawElems = tb.undef(vecTy);
 
-  // kIdx is expressed in "instructions"; convert to element indexing.
-  const int kElemIdx = kIdx * kInstrSize;
+  // The register layout splits kBase into nonKRepeat subtiles of kPerSubtile
+  // registers:
+  //   regs [0, kPerSubtile)             -> M=0..15
+  //   regs [kPerSubtile, 2*kPerSubtile) -> M=16..31
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
+  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
+  const int nonKTileDim = 16;
+  int nonKRepeat = nonKDim / nonKTileDim;
+  int kPerSubtile = kBase / nonKRepeat;
+
+  // kIdx is expressed in "instructions"; convert to element indexing. When a
+  // kWidth chunk spans several instructions, locate the start of the chunk;
+  // the instruction's registers are at an offset within it.
+  const int instrsPerChunk = isScale ? 1 : getInstrsPerKChunk(dotEnc, kBase);
+  assert((instrsPerChunk == 1 || kDimTensor >= instrsPerChunk * kInstrSize) &&
+         "the dot verifier requires K to cover whole kWidth chunks");
+  const int kElemIdx = (kIdx / instrsPerChunk) * instrsPerChunk * kInstrSize;
 
   // Choose which output dimension gets nonK vs K depending on opIdx.
   const int mCoord = (opIdx == 0) ? nonK : kElemIdx;
@@ -187,8 +202,10 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
 
   auto inDims = dotLayout.pseudoinvert().apply(outCoords);
 
-  const int startReg = inDims[0].second; // "register"
-  const int lane = inDims[1].second;     // "lane"
+  // inDims are ("register", "lane") of the chunk start; offset the register to
+  // this instruction's part of the chunk.
+  const int startReg = inDims[0].second + (kIdx % instrsPerChunk) * kPerSubtile;
+  const int lane = inDims[1].second;
 
   if (isScale && lane != 0) {
     assert(opSel && "opSel must be provided when isScale is true");
@@ -206,22 +223,18 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
                                     rewriter.getZeroAttr(elemTy));
   }
 
-  // The register layout splits kBase into nonKRepeat subtiles of kPerSubtile
-  // registers:
-  //   regs [0, kPerSubtile)             -> M=0..15
-  //   regs [kPerSubtile, 2*kPerSubtile) -> M=16..31
   // Padding must be applied per-subtile so each nonK half is padded
-  // independently.
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
-  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
-  const int nonKTileDim = 16;
-  int nonKRepeat = nonKDim / nonKTileDim;
-  int kPerSubtile = kBase / nonKRepeat;
+  // independently. Subtiles are a whole kWidth chunk apart when the chunk
+  // spans several instructions.
   int validKPerSubTile = validK / nonKRepeat;
+  int subTileStride = kPerSubtile * instrsPerChunk;
 
   for (int k = 0; k < kBase; ++k) {
+    int subTile = k / kPerSubtile;
     int subTilePos = k % kPerSubtile;
-    Value elem = (subTilePos < validKPerSubTile) ? elems[startReg + k] : zero;
+    Value elem = (subTilePos < validKPerSubTile)
+                     ? elems[startReg + subTile * subTileStride + subTilePos]
+                     : zero;
     rawElems = tb.insert_element(vecTy, rawElems, elem, tb.i32_val(k));
   }
 
@@ -301,7 +314,7 @@ static inline int32_t getWmmaScaleDataType(Type scaleElemType) {
   // 1: E5M3
   // 2: E4M3
   return llvm::TypeSwitch<Type, int32_t>(scaleElemType)
-      .Case<IntegerType>([](Type) { return 0; })
+      .Case<IntegerType, Float8E8M0FNUType>([](Type) { return 0; })
       .Case<Float8E4M3FNType>([](Type) { return 2; })
       .Default([](Type) { return -1; });
 }
@@ -397,6 +410,7 @@ std::optional<int> findNextM(LinearLayout repLayout, int &reg, int elemsPerVec,
 
 // Conduct the Dot conversion.
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
+                         const TargetInfo &targetInfo,
                          ConversionPatternRewriter &rewriter,
                          const LLVMTypeConverter *typeConverter) {
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
@@ -434,6 +448,14 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
            << "are supported on the current AMD GPU architecture.";
   }
 
+  amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaIntrinsic->requiredFeature)) {
+    return op.emitError("wmma intrinsic ")
+           << maybeWmmaIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch();
+  }
+
   unsigned kInstrSize = maybeWmmaIntrinsic->kDim;
 
   intrinsicName = maybeWmmaIntrinsic->name;
@@ -442,12 +464,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto rank = resShape.size();
   auto K = aTensorTy.getShape()[rank - 1];
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kInstrSize), 1u);
 
   Value loadedA = adaptor.getA();
@@ -479,14 +496,18 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             dElemsToStorePerThread &&
+         "WMMA loop stride must skip the instruction tile register bits");
 
   llvm::DenseSet<uint64_t> mnProcessed;
   int tiedGroup = 1;
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister);
        reg += dElemsToStorePerThread) {
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
@@ -494,10 +515,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
     int nextMReg = reg + dElemsToStorePerThread;
     std::optional<int> nextM;
     if (paddedOutputElemSize == 2) {
-      if (mnProcessed.count(packMN((uint32_t)m, (uint32_t)n))) {
+      if (mnProcessed.contains(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
-      nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);
+      nextM = findNextM(wmmaLL, nextMReg, dElemsToStorePerThread, m, rank);
       if (nextM.has_value()) {
         tiedGroup = 2;
         mnProcessed.insert(packMN((uint32_t)m, (uint32_t)n));
@@ -592,6 +613,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 //  types
 LogicalResult convertScaledDot(triton::DotScaledOp op,
                                triton::DotScaledOp::Adaptor adaptor,
+                               const TargetInfo &targetInfo,
                                ConversionPatternRewriter &rewriter,
                                const LLVMTypeConverter *typeConverter) {
   auto ctx = op.getContext();
@@ -656,6 +678,14 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
               "types are supported on the current AMD GPU architecture.";
   }
 
+  amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaScaleIntrinsic->requiredFeature)) {
+    return op.emitError("wmma scale intrinsic ")
+           << maybeWmmaScaleIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch();
+  }
+
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;
   auto kBaseB = maybeWmmaScaleIntrinsic->kBaseB;
 
@@ -667,12 +697,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto K = aTensorTy.getShape()[rank - 1];
   auto resShape = dTensorTy.getShape();
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();
@@ -702,12 +727,16 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             elemsPerVec &&
+         "scaled WMMA loop stride must skip the instruction tile register "
+         "bits");
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
-       reg += elemsPerVec) {
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister); reg += elemsPerVec) {
 
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
@@ -782,6 +811,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 } // namespace
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          const TargetInfo &targetInfo,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
@@ -801,11 +831,12 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
-  return convertDot(op, adaptor, rewriter, typeConverter);
+  return convertDot(op, adaptor, targetInfo, rewriter, typeConverter);
 }
 
 LogicalResult convertScaledWMMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
+                                const TargetInfo &targetInfo,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
   assert(isa<mlir::triton::gpu::LinearEncodingTrait>(
@@ -823,6 +854,6 @@ LogicalResult convertScaledWMMA(triton::DotScaledOp op,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's C operand should pass the same number of values as D.");
 
-  return convertScaledDot(op, adaptor, rewriter, typeConverter);
+  return convertScaledDot(op, adaptor, targetInfo, rewriter, typeConverter);
 }
 } // namespace mlir::triton::AMD

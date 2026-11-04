@@ -127,7 +127,7 @@ import triton
 import triton.language as tl
 import triton.profiler as proton
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 
 
 def is_cuda():
@@ -655,21 +655,14 @@ def initialize_block_scaled_amd(M, N, K, mfma_nonkdim):
 
 def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4", mfma_nonkdim=16):
 
-    def e8m0_to_f32(x):
-        x_f32 = 2**((x - 127).to(torch.float32))
-        x_f32[x_f32 == 128] = float("nan")
-        return x_f32
-
     def run_torch(x, w, x_scales, w_scales, dtype):
         # First convert the x and w inputs to f32.
         x_f32 = x.to(torch.float32)
         w_f32 = w.to(torch.float32)
         # Next convert the e8m0 scales to f32.
-        x_scales = x_scales.repeat_interleave(32, dim=1).to(torch.float32)
-        x_scales_f32 = e8m0_to_f32(x_scales)
+        x_scales_f32 = fp8e8m0_to_float32(x_scales).repeat_interleave(32, dim=1)
         x_f32 = x_f32 * x_scales_f32
-        w_scales = w_scales.repeat_interleave(32, dim=1).to(torch.float32)
-        w_scales_f32 = e8m0_to_f32(w_scales)
+        w_scales_f32 = fp8e8m0_to_float32(w_scales).repeat_interleave(32, dim=1)
         w_f32 = w_f32 * w_scales_f32
         return torch.mm(x_f32, w_f32.T).to(dtype)
 

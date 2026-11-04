@@ -9,8 +9,7 @@ import triton.language as tl
 from triton.language.random import philox
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
-from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from dataclasses import replace
 
@@ -363,31 +362,6 @@ def pad_ragged_tensor(x, x_ragged_metadata, hbm_swizzling, transpose):
     y_ragged_metadata = replace(x_ragged_metadata, slice_offs=x_ragged_metadata.block_offs(multiple) * multiple,
                                 slice_sizes_divisibility=multiple)
     return y, y_ragged_metadata
-
-
-class _WarmupTensorProxy:
-
-    def __init__(self, tensor):
-        self.tensor = tensor
-
-    def __getattr__(self, name):
-        return getattr(self.tensor, name)
-
-
-def convert_layout(tensor, layout, **layout_transformation_kwargs):
-    converted = _convert_layout(tensor, layout, **layout_transformation_kwargs)
-    if not is_compile_warmup() or converted is tensor:
-        return converted
-
-    data = tensor.storage.data
-    if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
-            or data.dtype.itemsize != 1 or not converted.storage.data.numel()):
-        return converted
-
-    transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    data = torch.empty(tensor.shape, dtype=data.dtype, device=data.device)
-    transformation.swizzle_data(_WarmupTensorProxy(data))
-    return converted
 
 
 def make_random_tensor(shape, n_slices, ragged_dim, ragged_padding, device, dtype, mxfp_dim, transpose,

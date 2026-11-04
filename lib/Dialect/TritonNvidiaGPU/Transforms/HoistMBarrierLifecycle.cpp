@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -328,7 +329,7 @@ private:
     return loop->getResults().back();
   }
 
-  // First move the phase initialization op before the outermost loop,
+  // First initialize the phase before the outermost loop,
   // then add a phase argument to each loop,
   // xor the phase after each wait,
   // and in the end thread the updated phase through the loop yields.
@@ -346,18 +347,15 @@ private:
       waits.insert(wait);
 
     OpBuilder::InsertionGuard guard(builder);
-    Operation *phaseDef = lifecycle.initialPhase.getDefiningOp();
-    Operation *outerLoop = loops.front().getOperation();
-    if (phaseDef->getBlock() != outerLoop->getBlock() ||
-        !phaseDef->isBeforeInBlock(outerLoop))
-      phaseDef->moveBefore(outerLoop);
-
     builder.setInsertionPoint(loops.front());
+    // Keep an already-dominating zero in place; otherwise hoist it.
+    Value phase = lifecycle.initialPhase;
+    if (!DominanceInfo().dominates(phase, loops.front().getOperation()))
+      phase.getDefiningOp()->moveBefore(loops.front());
     Value phaseOne =
         arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
     Operation *inval = lifecycle.invals.front().getOperation();
-    Value phase = lifecycle.initialPhase;
     for (LoopLikeOpInterface &loop : loops) {
       builder.setInsertionPoint(loop);
       if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
@@ -433,11 +431,6 @@ public:
       return;
 
     ModuleOp mod = getOperation();
-    if (getModuleTwoCTAs(mod)) {
-      assert(false &&
-             "HoistMBarrierLifecyclePass does not handle the two-CTA mode yet");
-    }
-
     int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
     if (numCTAs == 1)
       return;

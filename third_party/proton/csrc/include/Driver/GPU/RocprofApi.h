@@ -11,6 +11,9 @@
 #include "rocprofiler-sdk/hip/api_args.h"
 #include "rocprofiler-sdk/hip/runtime_api_id.h"
 #include "rocprofiler-sdk/internal_threading.h"
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING
+#include "rocprofiler-sdk/pc_sampling.h"
+#endif
 #include "rocprofiler-sdk/registration.h"
 
 namespace proton {
@@ -22,6 +25,7 @@ struct ExternLibRocprofiler : public ExternLibBase {
   static constexpr const char *name = "librocprofiler-sdk.so";
   static constexpr const char *symbolName = "rocprofiler_is_initialized";
   static constexpr const char *pathEnv = "TRITON_ROCPROFILER_SDK_LIB_PATH";
+  static constexpr const char *libraryEnv = "TRITON_ROCPROFILER_SDK_LIBRARY";
   static constexpr RetType success = ROCPROFILER_STATUS_SUCCESS;
   static inline void *lib = nullptr;
 };
@@ -91,6 +95,20 @@ rocprofiler_status_t
 queryAvailableAgents(rocprofiler_agent_version_t version,
                      rocprofiler_query_available_agents_cb_t callback,
                      size_t agentSize, void *userData);
+
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING
+template <bool CheckSuccess>
+rocprofiler_status_t queryPCSamplingAgentConfigurations(
+    rocprofiler_agent_id_t agentId,
+    rocprofiler_available_pc_sampling_configurations_cb_t cb, void *userData);
+
+template <bool CheckSuccess>
+rocprofiler_status_t configurePCSamplingService(
+    rocprofiler_context_id_t contextId, rocprofiler_agent_id_t agentId,
+    rocprofiler_pc_sampling_method_t method,
+    rocprofiler_pc_sampling_unit_t unit, uint64_t interval,
+    rocprofiler_buffer_id_t bufferId, int flags);
+#endif
 
 } // namespace rocprofiler
 

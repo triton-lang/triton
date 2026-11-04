@@ -20,6 +20,11 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
       LLVMCore
       "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
       )
+    if(UNIX AND NOT APPLE)
+      # Keep the plugin's statically linked LLVM globals private when another
+      # LLVM shared library is already loaded, as with TheRock ROCm wheels.
+      target_link_options(${plugin} PRIVATE "-Wl,-Bsymbolic")
+    endif()
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python
     # build. It is empty if building directly from the root
     # CMakeLists.txt file. Therefore if not building from Python just

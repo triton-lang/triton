@@ -396,6 +396,12 @@ public:
                         ArrayRef<std::pair<StringAttr, int32_t>> outDims,
                         bool requireSurjective);
 
+  // Factory function that gracefully fails rather than asserts if the layout is
+  // not well-formed.
+  static std::optional<LinearLayout>
+  tryCreate(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+            bool requireSurjective);
+
   // Construct a LinearLayout from an explicit list of bases.  (This constructor
   // is needed because llvm::MapVector does not have a constructor that accepts
   // an initializer_list.)
@@ -799,12 +805,6 @@ public:
   friend size_t hash_value(const LinearLayout &layout);
 
 private:
-  // Factory function that gracefully fails rather than asserts if the layout is
-  // not well-formed.
-  static std::optional<LinearLayout>
-  tryCreate(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
-            bool requireSurjective);
-
   // Constructor that does not check invariants.  Used by tryCreate.
   struct NoCheckInvariants {};
   LinearLayout(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
@@ -856,6 +856,9 @@ public:
     m_isIdentity = action.size() == inSizeLog2 &&
                    llvm::equal(action, llvm::seq<size_t>(action.size()));
   }
+
+  // Return the source column mapped to output column i.
+  size_t getSourceIndex(size_t i) const { return action[i]; }
 
   // Act on the columns of a layout
   // Examples:

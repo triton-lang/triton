@@ -39,6 +39,15 @@ from triton_kernels.tensor_details.layout import (
 from triton_kernels.testing import alloc_rand, assert_close, convert_layout
 from triton_kernels.topk import topk
 
+
+def is_cuda():
+    return torch.cuda.is_available() and triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
+def is_rubin():
+    return is_cuda() and torch.cuda.get_device_capability() == (10, 7)
+
+
 # ===-----------------------------------------------------------------------===#
 # Device Code
 # ===-----------------------------------------------------------------------===#
@@ -793,6 +802,7 @@ def make_tensor_descriptor(
         *,
         layout_block_shape: tuple[int, ...] | None = None,
         cga_layout: tuple[tuple[int, ...], ...] = (),
+        fp4_padded: bool = True,
 ):
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 
@@ -812,13 +822,20 @@ def make_tensor_descriptor(
     rank = len(layout_shape)
     if t.dtype == FP4:
         assert rank == 5
-        layout = gl.NVMMASharedLayout(
-            swizzle_byte_width=128,
-            element_bitwidth=8,
-            rank=rank,
-            fp4_padded=True,
-            cga_layout=cga_layout,
-        )
+        if fp4_padded:
+            layout = gl.NVMMASharedLayout(
+                swizzle_byte_width=128,
+                element_bitwidth=8,
+                rank=rank,
+                fp4_padded=True,
+                cga_layout=cga_layout,
+            )
+        else:
+            layout = gl.NVMMASharedLayout.get_default_for(
+                layout_shape,
+                gl.uint8,
+                cga_layout=cga_layout,
+            )
     elif t.dtype == UINT8:
         assert rank == 5
         layout = gl.NVMMASharedLayout(
@@ -836,10 +853,9 @@ def make_tensor_descriptor(
         )
     else:
         assert t.dtype == torch.float8_e4m3fn
-        layout = gl.NVMMASharedLayout(
-            swizzle_byte_width=layout_shape[-1],
-            element_bitwidth=8,
-            rank=rank,
+        layout = gl.NVMMASharedLayout.get_default_for(
+            layout_shape,
+            gl.float8e4nv,
             cga_layout=cga_layout,
         )
     return TensorDescriptor(ptr, shape, strides, desc_block_shape, layout)
@@ -850,6 +866,7 @@ class KernelConfig:
     BLOCK_M: int = 128
     BLOCK_N: int = 256
     BLOCK_K: int = 128
+    FP4_PADDED: bool = True
 
     NUM_CTAS: int = 1
     X_NUM_BUFS: int = 5
@@ -1071,9 +1088,16 @@ def _select_best_batch_config(slice_size: int) -> KernelConfig | None:
 
 def select_kernel_config(slice_size: int) -> KernelConfig:
     p = _select_best_batch_config(slice_size)
-    if p is not None:
-        return p
-    return KernelConfig()
+    if p is None:
+        p = KernelConfig()
+    if is_rubin():
+        p = replace(
+            p,
+            FP4_PADDED=False,
+            BLOCK_K=256,
+            ACC_NUM_BUFS=2 if slice_size >= 384 else p.ACC_NUM_BUFS,
+        )
+    return p
 
 
 def matmul(
@@ -1138,6 +1162,7 @@ def matmul(
         (1, p.BLOCK_K, p.BLOCK_N),
         # Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.
         cga_layout=tuple((0, 0, 0, basis[0], 0) for basis in acc_cga_layout),
+        fp4_padded=p.FP4_PADDED,
     )
     scale_desc = make_tensor_descriptor(
         b_mx_scales,

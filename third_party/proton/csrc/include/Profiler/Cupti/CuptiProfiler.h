@@ -5,20 +5,18 @@
 
 namespace proton {
 
-class CuptiProfiler : public GPUProfiler<CuptiProfiler> {
+class CuptiProfiler final : public GPUProfiler<CuptiProfiler> {
 public:
-  CuptiProfiler();
-  virtual ~CuptiProfiler();
-
-  int64_t getTimestampOffsetNs() const override { return timestampOffsetNs; }
+  ~CuptiProfiler() override;
 
 private:
-  struct CuptiProfilerPimpl;
-  int64_t timestampOffsetNs{};
-  bool isTimestampCalibrated{false};
+  friend class Singleton<CuptiProfiler>;
 
-  virtual void
-  doSetMode(const std::vector<std::string> &modeAndOptions) override;
+  CuptiProfiler();
+
+  struct CuptiProfilerPimpl;
+
+  void doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };
 
 } // namespace proton

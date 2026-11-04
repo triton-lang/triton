@@ -1,3 +1,4 @@
+// RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx950" --convert-scf-to-cf --triton-amdgpu-membar="gfx-arch=gfx950" | FileCheck %s --check-prefix=SYNC
 // RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx1250" | FileCheck %s --check-prefixes CHECK,WAVE32
 // RUN: triton-opt %s -split-input-file -convert-warp-pipeline="gfx-arch=gfx950" | FileCheck %s --check-prefixes CHECK,WAVE64
 
@@ -475,7 +476,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         scf.yield
       } {triton.warp_pipeline.stage = "stage1"}
 
-      // amdg.async_wait sits between stages and must be recognized as a barrier.
+      // The group wait marks a cluster boundary and needs a local rendezvous.
       amdg.async_wait {num_inst = 0 : i32}
 
       scf.execute_region {
@@ -775,14 +776,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // ---- Flat pipeline with pre-existing barrier between stages ----
 //
-// When an async_wait (or similar barrier op) already exists between
-// flat pipeline stages, the pass should wrap it with sched_barriers
-// instead of inserting a redundant s_barrier.
+// A group wait between flat pipeline stages gets a local rendezvous inside
+// the scheduling fences. Boundaries without a wait use the dependency result.
 //
 // Stage layout: stage0 -- async_wait -- stage1 -- (nothing) -- stage2
 //
 // Expected between stage0 and stage1:
-//   sched_barrier + async_wait + sched_barrier   (wrapped, no s_barrier)
+//   sched_barrier + async_wait + local barrier + sched_barrier
 // Expected between stage1 and stage2:
 //   sched_barrier + s_barrier + sched_barrier     (inserted, no async_wait)
 
@@ -823,12 +823,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Stage 0 ops.
 // CHECK: tt.store
 //
-// Between stage 0 and 1: existing async_wait wrapped, no s_barrier.
+// Between stage 0 and 1: the group wait and local rendezvous are fenced.
 // The per-mem-op barrier (non_mem_non_sideeffect) follows stage 0's store; the
 // cluster barrier (none) is next.
 // CHECK: rocdl.sched.barrier non_mem_non_sideeffect
 // CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: amdg.async_wait
+// CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NOT: rocdl.s.barrier
 // Stage 1 ops.
@@ -1446,3 +1447,287 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier none
 // CHECK: scf.yield
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [8], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+!root = !ttg.memdesc<512xi32, #shared, #smem, mutable>
+!stages = !ttg.memdesc<8x64xi32, #shared, #smem, mutable>
+!group = !ttg.memdesc<4x64xi32, #shared, #smem, mutable, 8x64>
+!source = !ttg.memdesc<256xi32, #shared, #smem, mutable>
+!tile = !ttg.memdesc<128xi32, #shared, #smem, mutable, 256>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+// The halves of %source are disjoint within an iteration, but its origin
+// shifts by 64 elements between iterations. The high write [128, 256) then
+// overlaps the next low read [64, 192), requiring a barrier at the loop tail,
+// not between the read and write. Three stages distinguish those placements.
+// CHECK-LABEL: tt.func @loop_varying_subslice_origin
+// CHECK: scf.for
+// CHECK: ttg.local_load
+// CHECK-NOT: ttg.barrier local
+// CHECK: ttg.local_store
+// CHECK-NOT: scf.yield
+// CHECK: ttg.barrier local
+// CHECK: scf.yield
+tt.func @loop_varying_subslice_origin(%n: i32, %initial: tensor<512xi32, #blocked>, %input: tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %allocation = ttg.local_alloc %initial : (tensor<512xi32, #blocked>) -> !root
+  %parent = ttg.memdesc_reinterpret %allocation : !root -> !stages
+  %group0 = ttg.memdesc_subslice %parent [0, 0] : !stages -> !group
+  %group1 = ttg.memdesc_subslice %parent [1, 0] : !stages -> !group
+  %source0 = ttg.memdesc_reinterpret %group0 : !group -> !source
+  %source1 = ttg.memdesc_reinterpret %group1 : !group -> !source
+  %result:2 = scf.for %i = %c0 to %n step %c1 iter_args(%source = %source0, %last = %input) -> (!source, tensor<128xi32, #blocked>) : i32 {
+    %loaded = scf.execute_region -> tensor<128xi32, #blocked> no_inline {
+      %low = ttg.memdesc_subslice %source [0] : !source -> !tile
+      %value = ttg.local_load %low : !tile -> tensor<128xi32, #blocked>
+      scf.yield %value : tensor<128xi32, #blocked>
+    } {triton.warp_pipeline.stage = "read"}
+    %next = scf.execute_region -> !source no_inline {
+      %first = arith.cmpi eq, %i, %c0 : i32
+      %selected = arith.select %first, %source1, %source0 : !source
+      scf.yield %selected : !source
+    } {triton.warp_pipeline.stage = "advance"}
+    scf.execute_region no_inline {
+      %high = ttg.memdesc_subslice %source [128] : !source -> !tile
+      ttg.local_store %input, %high : tensor<128xi32, #blocked> -> !tile
+      scf.yield
+    } {triton.warp_pipeline.stage = "write"}
+    scf.yield %next, %loaded : !source, tensor<128xi32, #blocked>
+  } {triton.warp_pipeline.pipelined_for}
+  tt.return %result#1 : tensor<128xi32, #blocked>
+}
+}
+
+// -----
+
+// The write and read use distinct slots through a stage-yielded
+// descriptor. The write-to-compute boundary needs only an s_barrier;
+// wrap-around dependencies still require a local barrier at the loop tail.
+
+#ring_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [8], order = [0]}>
+#ring_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#ring_smem = #ttg.shared_memory
+!ring = !ttg.memdesc<3x128xi32, #ring_shared, #ring_smem, mutable>
+!ring_slot = !ttg.memdesc<128xi32, #ring_shared, #ring_smem, mutable>
+!ring_reshaped = !ttg.memdesc<2x64xi32, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>, #ring_smem, mutable>
+!ring_transposed = !ttg.memdesc<64x2xi32, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>, #ring_smem, mutable>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK-LABEL: tt.func @ring_distinct_slots_loop
+// CHECK: scf.for
+// CHECK: ttg.local_store
+// CHECK-NOT: ttg.barrier local
+// CHECK: rocdl.s.barrier
+// CHECK-NEXT: rocdl.sched.barrier none
+// CHECK-NEXT: arith.addi
+// CHECK: ttg.local_load
+// CHECK: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// CHECK-NEXT: scf.yield
+tt.func @ring_distinct_slots_loop(%n: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %ring = ttg.local_alloc : () -> !ring
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%last = %input) -> (tensor<128xi32, #ring_blocked>) : i32 {
+    %view = scf.execute_region -> !ring_slot no_inline {
+      %dst = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      ttg.local_store %last, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
+      %src = ttg.memdesc_index %ring[%c0] : !ring -> !ring_slot
+      scf.yield %src : !ring_slot
+    } {triton.warp_pipeline.stage = "write"}
+    %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %s = arith.addi %last, %last : tensor<128xi32, #ring_blocked>
+      scf.yield %s : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "compute"}
+    %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %v = ttg.local_load %view : !ring_slot -> tensor<128xi32, #ring_blocked>
+      %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
+      scf.yield %r : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "read"}
+    scf.yield %loaded : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.pipelined_for}
+  tt.return %result : tensor<128xi32, #ring_blocked>
+}
+
+// Reading the written slot keeps the local RAW fence before the compute stage,
+// one stage before the read, as required by the WP schedule.
+// CHECK-LABEL: tt.func @ring_same_slot_loop
+// CHECK: scf.for
+// CHECK: ttg.local_store
+// CHECK-NOT: rocdl.s.barrier
+// CHECK: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// CHECK-NEXT: arith.addi
+// CHECK: ttg.local_load
+tt.func @ring_same_slot_loop(%n: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %ring = ttg.local_alloc : () -> !ring
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%last = %input) -> (tensor<128xi32, #ring_blocked>) : i32 {
+    %view = scf.execute_region -> !ring_slot no_inline {
+      %dst = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      ttg.local_store %last, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
+      %src = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      scf.yield %src : !ring_slot
+    } {triton.warp_pipeline.stage = "write"}
+    %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %s = arith.addi %last, %last : tensor<128xi32, #ring_blocked>
+      scf.yield %s : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "compute"}
+    %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %v = ttg.local_load %view : !ring_slot -> tensor<128xi32, #ring_blocked>
+      %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
+      scf.yield %r : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "read"}
+    scf.yield %loaded : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.pipelined_for}
+  tt.return %result : tensor<128xi32, #ring_blocked>
+}
+
+// Distinct slots remain disjoint through stage yields, reshape, and transpose.
+// The flat pipeline needs no local barrier after its entry barrier.
+// CHECK-LABEL: tt.func @ring_distinct_slots_flat
+// CHECK: ttg.barrier local
+// CHECK: amdg.cond_barrier
+// CHECK-NOT: ttg.barrier local
+// CHECK: ttg.local_load
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return
+tt.func @ring_distinct_slots_flat(%input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %ring = ttg.local_alloc : () -> !ring
+  %view = scf.execute_region -> !ring_reshaped no_inline {
+    %dst = ttg.memdesc_index %ring[%c1] : !ring -> !ring_slot
+    ttg.local_store %input, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
+    %src = ttg.memdesc_index %ring[%c0] : !ring -> !ring_slot
+    %reshaped = ttg.memdesc_reshape %src : !ring_slot -> !ring_reshaped
+    scf.yield %reshaped : !ring_reshaped
+  } {triton.warp_pipeline.stage = "write"}
+  %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+    %s = arith.addi %input, %input : tensor<128xi32, #ring_blocked>
+    scf.yield %s : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.stage = "compute"}
+  %loaded = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+    %transposed = ttg.memdesc_trans %view {order = array<i32: 1, 0>} : !ring_reshaped -> !ring_transposed
+    %restored = ttg.memdesc_trans %transposed {order = array<i32: 1, 0>} : !ring_transposed -> !ring_reshaped
+    %src = ttg.memdesc_reshape %restored : !ring_reshaped -> !ring_slot
+    %v = ttg.local_load %src : !ring_slot -> tensor<128xi32, #ring_blocked>
+    %r = arith.addi %v, %sum : tensor<128xi32, #ring_blocked>
+    scf.yield %r : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.stage = "read"}
+  tt.return %loaded : tensor<128xi32, #ring_blocked>
+}
+
+// Same-slot WAR must keep the local fence.
+// CHECK-LABEL: tt.func @ring_same_slot_war
+// CHECK: scf.for
+// CHECK: ttg.local_load
+// CHECK-NOT: rocdl.s.barrier
+// CHECK: ttg.barrier local
+// CHECK: ttg.local_store
+// CHECK: tt.return
+tt.func @ring_same_slot_war(%n: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %ring = ttg.local_alloc : () -> !ring
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%last = %input) -> (tensor<128xi32, #ring_blocked>) : i32 {
+    %view:2 = scf.execute_region -> (!ring_slot, tensor<128xi32, #ring_blocked>) no_inline {
+      %dst = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      %read = ttg.local_load %dst : !ring_slot -> tensor<128xi32, #ring_blocked>
+      %src = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      scf.yield %src, %read : !ring_slot, tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "read"}
+    %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %s = arith.addi %view#1, %last : tensor<128xi32, #ring_blocked>
+      scf.yield %s : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "compute"}
+    %result_value = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      ttg.local_store %sum, %view#0 : tensor<128xi32, #ring_blocked> -> !ring_slot
+      %r = arith.addi %sum, %sum : tensor<128xi32, #ring_blocked>
+      scf.yield %r : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "write"}
+    scf.yield %result_value : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.pipelined_for}
+  tt.return %result : tensor<128xi32, #ring_blocked>
+}
+
+// Same-slot WAW must keep the local fence.
+// CHECK-LABEL: tt.func @ring_same_slot_waw
+// CHECK: scf.for
+// CHECK: ttg.local_store
+// CHECK-NOT: rocdl.s.barrier
+// CHECK: ttg.barrier local
+// CHECK: ttg.local_store
+// CHECK: tt.return
+tt.func @ring_same_slot_waw(%n: i32, %input: tensor<128xi32, #ring_blocked>) -> tensor<128xi32, #ring_blocked> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %ring = ttg.local_alloc : () -> !ring
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%last = %input) -> (tensor<128xi32, #ring_blocked>) : i32 {
+    %view = scf.execute_region -> !ring_slot no_inline {
+      %dst = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      ttg.local_store %last, %dst : tensor<128xi32, #ring_blocked> -> !ring_slot
+      %src = ttg.memdesc_index %ring[%c2] : !ring -> !ring_slot
+      scf.yield %src : !ring_slot
+    } {triton.warp_pipeline.stage = "write"}
+    %sum = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      %s = arith.addi %last, %last : tensor<128xi32, #ring_blocked>
+      scf.yield %s : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "compute"}
+    %result_value = scf.execute_region -> tensor<128xi32, #ring_blocked> no_inline {
+      ttg.local_store %sum, %view : tensor<128xi32, #ring_blocked> -> !ring_slot
+      %r = arith.addi %sum, %sum : tensor<128xi32, #ring_blocked>
+      scf.yield %r : tensor<128xi32, #ring_blocked>
+    } {triton.warp_pipeline.stage = "write_again"}
+    scf.yield %result_value : tensor<128xi32, #ring_blocked>
+  } {triton.warp_pipeline.pipelined_for}
+  tt.return %result : tensor<128xi32, #ring_blocked>
+}
+
+
+}
+
+// -----
+
+// Membar must keep the group-wait rendezvous at the WP boundary even when
+// the next stage consumes a global-load result.
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @pipeline_wait_rendezvous
+  // SYNC-LABEL: @pipeline_wait_rendezvous
+  tt.func @pipeline_wait_rendezvous(%ptr: !tt.ptr<i32>) {
+    scf.execute_region no_inline {
+      %v = tt.load %ptr : !tt.ptr<i32>
+      tt.store %ptr, %v : !tt.ptr<i32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage0"}
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: rocdl.sched.barrier none
+    // CHECK-NEXT: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: rocdl.sched.barrier none
+    // SYNC: rocdl.sched.barrier none
+    // SYNC-NEXT: ttg.async_wait
+    // SYNC-NEXT: ttg.barrier local
+    // SYNC-NEXT: rocdl.sched.barrier none
+    // SYNC: tt.load
+    // SYNC-NOT: ttg.barrier local
+    // SYNC: arith.addi
+    scf.execute_region no_inline {
+      %v = tt.load %ptr : !tt.ptr<i32>
+      %sum = arith.addi %v, %v : i32
+      tt.store %ptr, %sum : !tt.ptr<i32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage1"}
+    tt.return
+  }
+}

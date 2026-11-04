@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import importlib
 import importlib.util
 import inspect
@@ -38,6 +39,9 @@ class GlobalVariable:
     module: ModuleType
 
 
+GlobalValueId: TypeAlias = int | tuple[str, str]
+
+
 @dataclass
 class GlobalValue:
     value: GlobalVariable | BuiltinFunctionType | FunctionType | type
@@ -50,6 +54,18 @@ class GlobalValue:
         resolve_definition: Callable[[], tuple[str, ModuleType]],
     ) -> "GlobalValue":
         assert not isinstance(value, GlobalValue), "value is already a GlobalValue"
+        if isinstance(value, functools._lru_cache_wrapper):
+            function = value.__wrapped__
+            if isinstance(function, FunctionType) and function.__qualname__ == function.__name__:
+                definition = ast.parse(inspect.getsource(function)).body[0]
+                assert isinstance(definition, ast.FunctionDef)
+                # Only unwrap when the source itself recreates the outer cache.
+                for decorator in definition.decorator_list[:1]:
+                    ref = get_reference(scoped_dict(function.__globals__), sys.modules[function.__module__],
+                                        decorator.func if isinstance(decorator, ast.Call) else decorator)
+                    if ref is not None and ref[0] in (functools.cache, functools.lru_cache):
+                        return GlobalValue(function, value)
+            raise ValueError("cache wrappers require @functools.cache or @functools.lru_cache decorator syntax")
         if isinstance(value, FunctionType) and hasattr(value, "__triton_builtin__"):
             return GlobalValue(value, value)
         if isinstance(value, FunctionType) and hasattr(value, "cls"):
@@ -82,7 +98,10 @@ class GlobalValue:
         return self.value.module
 
     @property
-    def id(self) -> int:
+    def id(self) -> GlobalValueId:
+        if isinstance(self.value, GlobalVariable):
+            # Distinct bindings can hold the same object, including interned constants.
+            return (self.value.module.__name__, self.value.name)
         return id(self.original_value)
 
     def get_contextual_defs(self) -> dict[str, Any]:
@@ -260,7 +279,7 @@ def is_ignored_decorator(
 class Reference:
     value: GlobalValue
     module: ModuleType
-    edges: ordered_set[int] | None = None
+    edges: ordered_set[GlobalValueId] | None = None
     mangled_name: str | None = None
 
 
@@ -273,13 +292,13 @@ class LocalMarker:
 class ReferenceScanner(ast.NodeVisitor):
     cur_module: ModuleType
     context: scoped_dict[str, Any]
-    references: OrderedDict[int, Reference]
+    references: OrderedDict[GlobalValueId, Reference]
     queue: list[GlobalValue]
     value_remap: dict[int, GlobalValue]
     filter: FilterFn
     rewrite_spec: RewriteSpec = field(default_factory=RewriteSpec)
 
-    edges: ordered_set[int] = field(default_factory=ordered_set[int])
+    edges: ordered_set[GlobalValueId] = field(default_factory=ordered_set[GlobalValueId])
 
     def process_reference(self, node: ast.Name | ast.Attribute, name: str, value: Any, rel_module: ModuleType) -> None:
         if isinstance(value, ModuleType | LocalMarker):
@@ -404,7 +423,7 @@ def sugar_rewrite(module: str, alias: str) -> RewriteFn:
             return None
         if not hasattr(sys.modules[module], global_value.name):
             return None
-        if id(getattr(sys.modules[module], global_value.name)) == global_value.id:
+        if getattr(sys.modules[module], global_value.name) is global_value.original_value:
             imports.add(f"import {module} as {alias}" if alias != module else f"import {module}")
             return ast.Attribute(value=ast.Name(id=alias, ctx=ast.Load()), attr=global_value.name, ctx=ast.Load())
         return None
@@ -440,7 +459,7 @@ def add_sugar_rewrites(rewrites: list[RewriteFn], translate_to_gluon: bool) -> N
 class ReferenceRewriter(ast.NodeTransformer):
     cur_module: ModuleType
     context: scoped_dict[str, Any]
-    references: OrderedDict[int, Reference]
+    references: OrderedDict[GlobalValueId, Reference]
     imports: ordered_set[str]
     filter: FilterFn
     value_remap: dict[int, GlobalValue]
@@ -655,14 +674,14 @@ def find_references(
     filter: FilterFn,
     value_remap: dict[int, GlobalValue],
     rewrite_spec: RewriteSpec | None = None,
-) -> tuple[OrderedDict[int, Reference], dict[int, ordered_set[int]]]:
-    references: OrderedDict[int, Reference] = OrderedDict()
+) -> tuple[OrderedDict[GlobalValueId, Reference], dict[GlobalValueId, ordered_set[GlobalValueId]]]:
+    references: OrderedDict[GlobalValueId, Reference] = OrderedDict()
     queue: list[GlobalValue] = []
-    graph: dict[int, ordered_set[int]] = {}
+    graph: dict[GlobalValueId, ordered_set[GlobalValueId]] = {}
     rewrite_spec = rewrite_spec or RewriteSpec()
 
     for base_value in base_values:
-        base_value = value_remap.get(base_value.id, base_value)
+        base_value = value_remap.get(id(base_value.original_value), base_value)
         queue.append(base_value)
         references[base_value.id] = Reference(base_value, base_value.module)
 
@@ -689,7 +708,7 @@ def find_references(
     return references, graph
 
 
-def mangle_reference_names(references: OrderedDict[int, Reference], filter: FilterFn) -> None:
+def mangle_reference_names(references: OrderedDict[GlobalValueId, Reference], filter: FilterFn) -> None:
     reference_names: set[str] = set()
     for reference in references.values():
         name = reference.value.name
@@ -748,7 +767,7 @@ def slice_kernel(
 ) -> str:
     rewrite_spec = rewrite_spec or RewriteSpec()
     base_values: list[GlobalValue] = [get_base_value(root_path) for root_path in root_paths]
-    base_value_ids: set[int] = set()
+    base_value_ids: set[GlobalValueId] = set()
     for leaf_path in leaf_paths or []:
         base_value = get_base_value(leaf_path)
         base_value_ids.add(base_value.id)
@@ -781,7 +800,7 @@ def slice_kernel(
         for fn in jit_functions:
             gluon_fn = getattr(module, fn.name)
             assert isinstance(gluon_fn, JITFunction)
-            value_remap[fn.id] = GlobalValue.wrap(
+            value_remap[id(fn.original_value)] = GlobalValue.wrap(
                 gluon_fn,
                 fn.name,
                 lambda: (fn.name, module),

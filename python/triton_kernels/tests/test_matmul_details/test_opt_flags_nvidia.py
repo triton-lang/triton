@@ -1,20 +1,89 @@
+from types import SimpleNamespace
+
 import pytest
 import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_cuda
 
-from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
+from triton_kernels.matmul import Epilogue, FnName, FusedActivation, PrecisionConfig, matmul, matmul_torch
+from triton_kernels.matmul_details import opt_flags
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
 from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
-from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, downcast_to_mxfp
-from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp, quantize_nvfp4_fn
+from triton_kernels.specialize import FnSpecs
+from triton_kernels.swiglu import swiglu_fn
+from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
-from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
+from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metadata_torch
 from triton_kernels.testing import assert_close
+
+
+@pytest.mark.parametrize("block_m, num_warps, occupancy, full_grid, scaled_input", [
+    (16, 4, 4, True, False),
+    (64, 4, 4, True, False),
+    (128, 4, 2, True, False),
+    (16, 8, 2, True, False),
+    (64, 8, 2, True, False),
+    (128, 8, 1, True, False),
+    (64, 8, 1, False, False),
+    (16, 4, 1, True, True),
+    (64, 8, 1, True, True),
+])
+def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device,
+                                                monkeypatch):
+    if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    torch.manual_seed(0)
+    m = block_m * torch.cuda.get_device_properties(device).multi_processor_count if full_grid else 129
+    n, k = 512, 1504
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    weight = torch.randn((n, k), device=device, dtype=torch.bfloat16).T
+    values, scales = downcast_to_mxfp(weight, torch.uint8, axis=-2)
+    b = convert_layout(wrap_torch_tensor(values, dtype=FP4), layout.make_default_matmul_mxfp4_w_layout(-2))
+    b_scale = convert_layout(wrap_torch_tensor(scales, dtype=UINT8),
+                             layout.make_default_matmul_mxfp4_w_scale_layout(-2, num_warps=num_warps))
+    a_scale = None
+    if scaled_input:
+        a, a_scale = downcast_to_mxfp(a, torch.float8_e4m3fn, axis=-1)
+        a, a_scale = wrap_torch_tensor(a), wrap_torch_tensor(a_scale)
+    config = PrecisionConfig(out_dtype=torch.bfloat16, a_mx_scale=a_scale, a_microblock_size=32, b_mx_scale=b_scale,
+                             b_microblock_size=32)
+
+    # Inspect the compiled kernel, including cache hits, rather than merely
+    # asserting that the heuristic returns a particular launch option.
+    compiled = []
+    original_run = triton.runtime.JITFunction.run
+
+    def capture_kernel(self, *args, **kwargs):
+        kernel = original_run(self, *args, **kwargs)
+        if kernel is not None and kernel.name.startswith("_matmul"):
+            compiled.append(kernel)
+        return kernel
+
+    monkeypatch.setattr(triton.runtime.JITFunction, "run", capture_kernel)
+    with scoped_opt_flags_constraints(dict(block_m=block_m, is_persistent=False, split_k=1)):
+        actual = matmul(a, b, None, precision_config=config)
+    expected = matmul_torch(a, b, None, precision_config=config)
+    assert_close(actual, expected, maxtol=3e-2)
+    assert compiled
+    for kernel in compiled:
+        threads = 32 * kernel.metadata.num_warps
+        expected_cap = 65536 // (threads * occupancy) if occupancy == 16 // num_warps else None
+        assert kernel.metadata.maxnreg == expected_cap
+        assert kernel.n_regs * threads * occupancy <= 65536
+        shared_limit = torch.cuda.get_device_properties(device).shared_memory_per_multiprocessor
+        if scaled_input:
+            # The widened RHS tile prevents the 16-warp goal even with enough registers.
+            assert kernel.metadata.shared * (16 // num_warps) > shared_limit
+        else:
+            # A small grid relaxes registers without expanding the pipeline.
+            pipeline_occupancy = occupancy if full_grid else 2
+            assert kernel.metadata.shared * pipeline_occupancy <= shared_limit
 
 
 def _make_blackwell_scale_tensor():
@@ -165,6 +234,146 @@ def test_compute_num_warps_uses_two_warp_floor():
     precision_config = PrecisionConfig()
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {}) == 2
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {"num_warps": 1}) == 1
+
+
+@pytest.mark.parametrize("block_m,num_warps,epilogue_subtile,expected_stages", [
+    (32, 4, 1, 4),
+    (128, 8, 2, 1),
+    (128, 4, 1, 3),
+    (128, 4, 2, 3),
+    (128, 4, 4, 3),
+    (64, 4, 4, 4),
+    (64, 8, 4, 3),
+])
+def test_fp4_reduction_stage_budget(monkeypatch, block_m, num_warps, epilogue_subtile, expected_stages):
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448, multi_processor_count=148))
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
+    monkeypatch.setattr(opt_flags, "cuda_capability_geq", lambda *_: True)
+    scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale)
+    flags = opt_flags.make_default_opt_flags_nvidia(
+        FP4,
+        FP4,
+        FP4,
+        precision,
+        1,
+        256,
+        512,
+        1024,
+        None,
+        True,
+        False,
+        False,
+        8,
+        False,
+        False,
+        {
+            "block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps, "epilogue_subtile":
+            epilogue_subtile, "is_persistent": True, "split_k": 1
+        },
+        torch.float32,
+        mx_block_size=16,
+        epilogue_reduction_n=2,
+    )
+    assert flags.num_stages == expected_stages
+
+
+@pytest.mark.parametrize("overrides,expected_stages", [
+    ({"epilogue_reduction_n": 1}, 1),
+    ({"epilogue_effective_itemsize": 1}, 3),
+    ({"out_dtype": BF16}, 1),
+    ({"has_y_acc_in": True}, 2),
+    ({"is_persistent": False}, 4),
+])
+def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expected_stages):
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
+    scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
+    args = {
+        "precision_config": PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale),
+        "is_persistent": True,
+        "block_m": 128,
+        "block_n": 256,
+        "block_k": 256,
+        "out_dtype": FP4,
+        "lhs_dtype": FP4,
+        "rhs_dtype": FP4,
+        "x_transpose": False,
+        "epilogue_effective_itemsize": 8,
+        "has_y_acc_in": False,
+        "mx_block_size": 16,
+        "epilogue_reduction_n": 2,
+        "epilogue_subtile": 2,
+        "num_warps": 8,
+        "occupancy_target": 1,
+    }
+    assert opt_flags_nvidia.compute_num_stages(**(args | overrides)) == expected_stages
+
+
+@pytest.mark.parametrize("block_m,swizzle_lhs_scale", [(32, False), (64, False), (128, False), (128, True)])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("epilogue_subtile", [1, 2, 4])
+def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_warps, epilogue_subtile,
+                                            swizzle_lhs_scale):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell")
+
+    torch.manual_seed(0)
+    m, n, k = 255, 512, 1024
+    a, a_scale = downcast_to_mxfp(torch.randn((m, k), device=device, dtype=torch.bfloat16), torch.uint8, axis=-1,
+                                  scale_dtype=torch.float8_e4m3fn, microblock_size=16)
+    b, b_scale = downcast_to_mxfp(
+        torch.randn((n, k), device=device, dtype=torch.bfloat16).T * 0.01, torch.uint8, axis=-2,
+        scale_dtype=torch.float8_e4m3fn, microblock_size=16)
+    a, b = wrap_torch_tensor(a, dtype=FP4), wrap_torch_tensor(b, dtype=FP4)
+    a_scale, b_scale = wrap_torch_tensor(a_scale), wrap_torch_tensor(b_scale)
+    if swizzle_lhs_scale:
+        a_scale = convert_layout(a_scale, BlackwellActMXScaleLayout(None))
+    b_scale = convert_layout(b_scale, BlackwellMXScaleLayout())
+    c_scale = torch.empty((m, n // 2 // NVFP_BLOCK_SIZE.value), device=device, dtype=torch.float8_e4m3fn)
+    precision = PrecisionConfig(
+        a_mx_scale=a_scale,
+        b_mx_scale=b_scale,
+        c_mx_scale=c_scale,
+        a_microblock_size=16,
+        b_microblock_size=16,
+        c_microblock_size=16,
+        c_value_pack_factor=2,
+        out_dtype=torch.uint8,
+    )
+    activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.0, 7.0))
+    epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn, (), ()), effective_itemsize=8)
+    constraints = {
+        "block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps, "epilogue_subtile":
+        epilogue_subtile, "is_persistent": True, "split_k": 1
+    }
+    with scoped_opt_flags_constraints(constraints | {"num_stages": 1}):
+        expected = matmul(a, b, None, precision_config=precision, fused_activation=activation, epilogue=epilogue)
+    expected_scale = c_scale.clone()
+    c_scale.fill_(float("nan"))
+
+    launches = []
+    original_run = triton.runtime.JITFunction.run
+
+    def capture(kernel, *args, **kwargs):
+        result = original_run(kernel, *args, **kwargs)
+        if result.name.startswith("_p_matmul"):
+            launches.append(result.metadata)
+        return result
+
+    monkeypatch.setattr(triton.runtime.JITFunction, "run", capture)
+    with scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, precision_config=precision, fused_activation=activation, epilogue=epilogue)
+    torch.cuda.synchronize()
+    assert launches
+    assert all(launch.shared <= torch.cuda.get_device_properties(0).shared_memory_per_block_optin
+               for launch in launches)
+    assert torch.equal(actual, expected)
+    assert torch.equal(c_scale.view(torch.uint8), expected_scale.view(torch.uint8))
 
 
 def test_matmul_blackwell_scale_small_n(device):

@@ -31,6 +31,9 @@ public:
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
+  // Map a `!tt.ptr` address space to this backend's LLVM address space.
+  virtual unsigned getPtrAddressSpace(triton::PtrAddrSpace space) const = 0;
+
   virtual int getIndexPtrAddrSpace() const = 0;
 
   virtual ~TargetInfoBase() = default;

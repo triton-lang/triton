@@ -1,13 +1,56 @@
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 from triton_kernels.matmul_details._common import _matmul_flops_and_bytes_from_slices, matmul_launch_metadata
+from triton_kernels.matmul_details._common import make_matmul_repr
 from triton_kernels.proton_opts import launch_metadata_allow_sync, set_launch_metadata_allow_sync
 
 
 class _Kernel:
     name = "_p_matmul_test"
     num_stages = 4
+
+
+def _matmul_name(signature):
+    constants = {
+        "stride_y_n": 1,
+        "stride_x_k": 1,
+        "stride_w_n": 1,
+        "BLOCK_M": 128,
+        "BLOCK_N": 256,
+        "BLOCK_K": 128,
+        "SPLIT_K": 1,
+    }
+    specialization = SimpleNamespace(signature=signature, constants=constants)
+    return make_matmul_repr("_matmul", [0, 1, 2])(specialization)
+
+
+@pytest.mark.parametrize(
+    ("signature", "expected_dtypes"),
+    [
+        ({"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "*u8"}, "bf16xmxfp4xbf16"),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "tensordesc<u8[128,4]>"},
+            "bf16xmxfp4xbf16",
+        ),
+        ({"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "*fp8e4nv"}, "bf16xnvfp4xbf16"),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "tensordesc<fp8e4nv[128,4]>"},
+            "bf16xnvfp4xbf16",
+        ),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*u8", "XMxScale": "*fp8e4nv", "WMxScale": "*fp8e4nv"},
+            "bf16xnvfp4xnvfp4",
+        ),
+        ({"Y": "*u8", "X": "*bf16", "W": "*bf16", "YActualScale": "*fp8e4nv"}, "nvfp4xbf16xbf16"),
+        ({"Y": "*bf16", "X": "*fp8e4nv", "W": "*fp16"}, "bf16xfp8e4nvxfp16"),
+    ],
+)
+def test_matmul_repr_names_operand_dtypes(signature, expected_dtypes):
+    name = _matmul_name(signature)
+    assert name == f"_matmul_NNN_{expected_dtypes}_128x256x128x1"
 
 
 def _old_flops_and_bytes(args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size):
@@ -316,3 +359,49 @@ def test_matmul_flops_and_bytes_from_slices_handles_large_slice_count():
 
     torch.testing.assert_close(actual[f"flops{nbits}"].cpu(), expected[f"flops{nbits}"].cpu(), rtol=0, atol=0)
     torch.testing.assert_close(actual["bytes"].cpu(), expected["bytes"].to(torch.int64).cpu(), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("ragged_dimension", [None, "M", "K"])
+@pytest.mark.parametrize("n_reduce_shards", [1, 2])
+@pytest.mark.parametrize("activation_reduction", [1, 2])
+@pytest.mark.parametrize("has_local_output", [False, True])
+@pytest.mark.parametrize("allow_sync", [False, True])
+def test_matmul_launch_metadata_fused_comm_output_bytes(ragged_dimension, n_reduce_shards, activation_reduction,
+                                                        has_local_output, allow_sync):
+    if not allow_sync and ragged_dimension is not None and not torch.cuda.is_available():
+        pytest.skip("Asynchronous ragged metadata requires CUDA")
+    device = "cuda" if not allow_sync and ragged_dimension is not None else "cpu"
+    slice_sizes = None if ragged_dimension is None else torch.tensor([3, 0, 5], dtype=torch.int32, device=device)
+    n_tokens, N, K = 8, 16, 8
+    M = 4 if ragged_dimension == "K" else n_tokens
+    batch_size = 3 if ragged_dimension == "K" else 1
+    X = torch.empty((M, K), dtype=torch.float16, device=device)
+    W = torch.empty((3, K, N) if ragged_dimension == "M" else (K, N), dtype=torch.float16, device=device)
+    output_n = N // activation_reduction
+    Y = torch.empty((batch_size, M * n_reduce_shards, output_n) if has_local_output else (0, ), dtype=torch.float16,
+                    device=device)
+    args = _metadata_args(
+        ragged_dimension=ragged_dimension,
+        M=None if ragged_dimension == "M" else M,
+        N=N,
+        K=K,
+        X=X,
+        Y=Y,
+        W=W,
+        slice_sizes=slice_sizes,
+        batch_size=batch_size,
+    )
+    args.update(pYPtrs=torch.empty(n_reduce_shards, dtype=torch.uint64,
+                                   device=device), ACTIVATION_REDUCTION_N=activation_reduction, Y_VALUE_PACK_FACTOR=1,
+                n_reduce_shards=n_reduce_shards, SPLIT_K=1)
+    expected_output_bytes = batch_size * M * n_reduce_shards * output_n * 2
+    expected_weight_bytes = 2 * K * N * 2 if ragged_dimension == "M" else K * N * 2
+    expected_bytes = X.numel() * 2 + expected_weight_bytes + expected_output_bytes
+    previous_allow_sync = launch_metadata_allow_sync()
+    try:
+        set_launch_metadata_allow_sync(allow_sync)
+        actual = matmul_launch_metadata(None, _Kernel(), args)
+    finally:
+        set_launch_metadata_allow_sync(previous_allow_sync)
+    assert actual["bytes"] == expected_bytes
+    assert actual["flops16"] == 2 * M * N * K

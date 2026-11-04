@@ -108,9 +108,13 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: %[[PID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %{{.*}}, %[[PID_PTR]] : i32, !llvm.ptr<1>
 
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_XCC_ID, 0, 4)", "=s"  : () -> i32
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
-  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
+  // hwreg(HW_REG_XCC_ID, 0, 4), hwreg(HW_REG_HW_ID, 8, 4), hwreg(HW_REG_HW_ID, 13, 3)
+  // CHECK-DAG: %[[XCC_REG:.*]] = llvm.mlir.constant(6164 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[XCC_REG]]) : (i32) -> i32
+  // CHECK-DAG: %[[CU_REG:.*]] = llvm.mlir.constant(6660 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[CU_REG]]) : (i32) -> i32
+  // CHECK-DAG: %[[SE_REG:.*]] = llvm.mlir.constant(4932 : i32) : i32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[SE_REG]]) : (i32) -> i32
   // CHECK-DAG: %[[SMID_OFFSET:.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %{{.*}}, %[[SMID_PTR]] : i32, !llvm.ptr<1>
@@ -126,13 +130,15 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.return
 
   // GFX1250-LABEL: convert_smem_initialize
-  // gfx1250 remapped the hwreg id space, so processorId reads wave placement
+  // CDNA5 remapped the hwreg id space, so processorId reads wave placement
   // from WAVE_HW_ID1 (hwreg 23) for WGP/SA and from
   // s_sendmsg_rtn(MSG_RTN_GET_SE_AID_ID == 135) for SE/XCC, instead of the CDNA
   // HW_REG_XCC_ID / HW_REG_HW_ID registers.
   // GFX1250-DAG: %[[SEAID_MSG:.*]] = llvm.mlir.constant(135 : i32) : i32
   // GFX1250-DAG: llvm.call_intrinsic "llvm.amdgcn.s.sendmsg.rtn.i32"(%[[SEAID_MSG]]) : (i32) -> i32
-  // GFX1250-DAG: llvm.inline_asm{{.*}}"s_getreg_b32 $0, hwreg(HW_REG_WAVE_HW_ID1)", "=s"
+  // hwreg(HW_REG_WAVE_HW_ID1, 0, 32)
+  // GFX1250-DAG: %[[HWID1_REG:.*]] = llvm.mlir.constant(63511 : i32) : i32
+  // GFX1250-DAG: llvm.call_intrinsic "llvm.amdgcn.s.getreg"(%[[HWID1_REG]]) : (i32) -> i32
   // GFX1250-DAG: %[[MSG:.*]] = llvm.mlir.constant(131 : i32) : i32
   // GFX1250-DAG: %[[INIT_TIME_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.sendmsg.rtn.i64"(%[[MSG]]) : (i32) -> i64
   // GFX1250-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
@@ -178,7 +184,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
-    // gfx1250: llvm.readcyclecounter lowers to s_get_shader_cycles_u64.
+    // On CDNA5, llvm.readcyclecounter lowers to s_get_shader_cycles_u64.
     // GFX1250-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
     // GFX1250-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]

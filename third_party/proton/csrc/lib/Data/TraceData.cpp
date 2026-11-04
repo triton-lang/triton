@@ -53,7 +53,7 @@ public:
     void addChild(const Context &context, size_t id) { children[context] = id; }
 
     bool hasChild(const Context &context) const {
-      return children.find(context) != children.end();
+      return children.contains(context);
     }
 
     size_t getChild(const Context &context) const {
@@ -152,9 +152,7 @@ public:
     return nextEventId++;
   }
 
-  bool hasEvent(size_t eventId) {
-    return traceEvents.find(eventId) != traceEvents.end();
-  }
+  bool hasEvent(size_t eventId) { return traceEvents.contains(eventId); }
 
   Event &getEvent(size_t eventId) {
     auto it = traceEvents.find(eventId);
@@ -255,7 +253,7 @@ void TraceData::addMetrics(
   auto &event = currentTrace->getEvent(eventId);
   auto &flexibleMetrics = event.metricSet.flexibleMetrics;
   for (auto [metricName, metricValue] : metrics) {
-    if (flexibleMetrics.find(metricName) == flexibleMetrics.end()) {
+    if (!flexibleMetrics.contains(metricName)) {
       flexibleMetrics.emplace(metricName,
                               FlexibleMetric(metricName, metricValue));
     } else {
@@ -366,6 +364,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
             timestampOffsetNs);
         auto launchEventId = events.at(eventId).parentEventId;
+        // Uncaptured graph kernels are recorded under an untimed graph launch
+        // op whose parent is the CPU scope active at replay.
+        if (auto it = events.find(launchEventId);
+            it != events.end() && !isGraphLinked &&
+            it->second.cpuStartTimeNs == 0)
+          launchEventId = it->second.parentEventId;
         kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                             contexts, startTimeNs, endTimeNs,
                                             launchEventId, isGraphLinked);

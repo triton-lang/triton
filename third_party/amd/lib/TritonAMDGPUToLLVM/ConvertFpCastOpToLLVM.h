@@ -1,5 +1,5 @@
-#ifndef TRITON_THIRD_PARTY_AMD_LIB_CONVERTFPCASTOPTOLLVM_H_
-#define TRITON_THIRD_PARTY_AMD_LIB_CONVERTFPCASTOPTOLLVM_H_
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTFPCASTOPTOLLVM_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTFPCASTOPTOLLVM_H_
 
 #include "mlir/Transforms/DialectConversion.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/TargetFeatures.h"
@@ -17,4 +17,4 @@ SmallVector<Value> convertFp32ToF16rtne(Location loc,
                                         amdgpu::ISAFamily isaFamily);
 } // namespace mlir::triton::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_CONVERTFPCASTOPTOLLVM_H_
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTFPCASTOPTOLLVM_H_

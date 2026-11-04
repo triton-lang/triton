@@ -6,6 +6,7 @@
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h" // TODO(fywkevin): move Utility.h to include/
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/NVPTXAddrSpace.h"
 
 namespace mlir::triton::proton::gpu::NVIDIA {
 
@@ -42,12 +43,7 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   // globaltimer is a 64-bit global clock counter in nanoseconds.
   // Reference:
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef globalTimeIntrinsicName = "llvm.nvvm.read.ptx.sreg.globaltimer";
-  Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
-                            rewriter, loc, globalTimeIntrinsicName, i64_ty, {})
-                            .getResult(0);
-  return globalTimeVal;
+  return NVVM::GlobalTimerOp::create(rewriter, loc, i64_ty);
 }
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
@@ -66,6 +62,19 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
                              "and GlobalMemorySpace for now");
   }
   return spaceId;
+}
+
+unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
+  switch (space) {
+  case triton::PtrAddrSpace::Global:
+  // Global memory read-only marking is not carried via a different LLVM
+  // address space. We channel it through other mechanisms.
+  case triton::PtrAddrSpace::Constant:
+    return llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL;
+  case triton::PtrAddrSpace::Descriptor:
+    return llvm::NVPTXAS::ADDRESS_SPACE_GENERIC;
+  }
+  llvm_unreachable("unknown PtrAddrSpace");
 }
 
 int TargetInfo::getIndexPtrAddrSpace() const {
