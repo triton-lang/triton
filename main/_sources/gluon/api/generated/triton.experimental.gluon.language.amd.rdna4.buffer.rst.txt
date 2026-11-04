@@ -1,0 +1,32 @@
+﻿triton.experimental.gluon.language.amd.rdna4.buffer
+===================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.rdna4.buffer
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   make_buffer_descriptor
+   load
+   store
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   buffer_descriptor
+   buffer_descriptor_type
+
+
+
+

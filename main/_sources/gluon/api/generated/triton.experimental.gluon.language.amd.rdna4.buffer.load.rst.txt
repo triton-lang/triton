@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.rdna4.buffer.load
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.rdna4.buffer
+
+.. autofunction:: load

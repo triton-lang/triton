@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.buffer.load
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5.buffer
+
+.. autofunction:: load

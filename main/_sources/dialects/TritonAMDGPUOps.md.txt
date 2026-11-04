@@ -62,6 +62,8 @@ to by the memory descriptor instead of a distributed tensor.
 Contiguity is the maximum number of elements that can be stored in a single vector with
 the given layout and mask.
 This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.
+`scope` makes the stored data available at that scope (it is not atomic and
+orders nothing).
 
 Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
@@ -71,6 +73,7 @@ Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -140,8 +143,11 @@ it sends an "LDS atomic arrive" to signal its completion.
 partial TDM copy: bit `n` (LSB = warp 0) means warp `n` carries a
 real descriptor; bits above `num_warps - 1` must be zero. Same data
 lands in shared memory either way: `K = popcount(hint)` active warps
-cover the block, while inactive warps still issue the TDM instruction
-with a null descriptor.
+cover the block, while inactive warps still issue the TDM instruction.
+Without a barrier, inactive warps use a null descriptor (`pred = 0`).
+With a barrier, they retain the descriptor's predicate and use a NOP
+descriptor (`tile_dim0 = 0`, workgroup mask cleared), so they copy no
+data but still arrive at the barrier when the predicate is enabled.
 
 For "all warps participate", omit the attribute (preferred) or pass
 a full bitmask `K = num_warps`; an explicit `warp_used_hint = 0` is
@@ -163,6 +169,9 @@ per-warp offset and active-mask predicate fall out of the same
 PartitionedSharedEncoding additionally requires `K = popcount(hint)`
 to be a multiple of `numLogicalPieces` (the hinted path doesn't
 support multi-instruction slicing).
+`cachePolicy` and `scope` set the cache hints and coherence scope of the
+access like they do for buffer ops; they can't be combined with a
+non-default `cache` modifier, which implies its own scope.
 
 Traits: `GlobalToLocalCopyTrait`
 
@@ -174,6 +183,19 @@ Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
 <tr><td><code>warp_used_hint</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::triton::amdgpu::CachePolicyGfx12Attr</td><td><details><summary></summary>{{% markdown %}}
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -213,6 +235,9 @@ The descriptor must be positioned beforehand by
 amdg.update_tensor_descriptor; this op applies only the per-warp distribution.
 The operation can also take an optional 64bit LDS barrier address, in which case
 it sends an "LDS atomic arrive" to signal its completion.
+`cachePolicy` and `scope` set the cache hints and coherence scope of the
+access like they do for buffer ops; they can't be combined with a
+non-default `cache` modifier, which implies its own scope.
 
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
@@ -221,6 +246,19 @@ Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::triton::amdgpu::CachePolicyGfx12Attr</td><td><details><summary></summary>{{% markdown %}}
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -254,6 +292,9 @@ member provides a tensor descriptor, destination shared-memory descriptor,
 and `warp_used_hint`.  Member hints must be legal and pairwise disjoint.
 Descriptors carry tile position and predicate state; destinations remain
 op-level operands.
+`cachePolicy` and `scope` set the cache hints and coherence scope of the
+access like they do for buffer ops; they can't be combined with a
+non-default `cache` modifier, which implies its own scope.
 
 Traits: `GlobalToLocalCopyTrait`, `SameVariadicOperandSize`
 
@@ -265,6 +306,19 @@ Interfaces: `InferTypeOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>warp_used_hints</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::triton::amdgpu::CachePolicyGfx12Attr</td><td><details><summary></summary>{{% markdown %}}
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -308,10 +362,31 @@ The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
 (global offset / column via add_offsets, bounds, pred); this op only supplies the
 per-instruction row slices (src_row_indices) and the LDS destination, and inherits
 `pred` from the descriptor.
+`cachePolicy` and `scope` set the cache hints and coherence scope of the
+access like they do for buffer ops.
 
 Traits: `GlobalToLocalCopyTrait`
 
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::triton::amdgpu::CachePolicyGfx12Attr</td><td><details><summary></summary>{{% markdown %}}
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
 
 #### Operands:
 
@@ -408,8 +483,29 @@ its own LDS, so the dst_row_indices must be distributed across CTAs the same way
 the source rows (the block bases of both layouts must have the same dim0 components).
 If the source is split across CTAs along columns, those CTAs write to the same rows
 and must hold the same indices.
+`cachePolicy` and `scope` set the cache hints and coherence scope of the
+access like they do for buffer ops.
 
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::triton::amdgpu::CachePolicyGfx12Attr</td><td><details><summary></summary>{{% markdown %}}
+    Cache hints for gfx12 (RDNA4 and CDNA5) buffer memory accesses.
+
+    Only the temporal hint (TH) is held here. The coherence scope (SCOPE)
+    comes from the op's `scope` attribute. This attribute is a performance
+    hint and has no memory-ordering or coherence semantics.
+
+    - `temporal`: how long the data is expected to stay in the caches:
+      `regular`, `none` (not expected to be reused), `high` (expected to be
+      reused), or, for loads only, `last_use` (the last read of the data,
+      which the caches can drop).
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
 
 #### Operands:
 

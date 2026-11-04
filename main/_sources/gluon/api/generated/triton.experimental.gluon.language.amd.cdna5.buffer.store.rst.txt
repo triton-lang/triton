@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna5.buffer.store
+=========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5.buffer
+
+.. autofunction:: store
