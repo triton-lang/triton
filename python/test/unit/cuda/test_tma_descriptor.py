@@ -116,34 +116,37 @@ def test_ragged_tma(dtype):
 
 
 @triton.jit
-def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr):
-    codes = to_fp6(tl.load(src + tl.arange(0, 128)), FORMAT)
+def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr, BLOCK_M: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_M * 128)
+    codes = to_fp6(tl.load(src + offsets), FORMAT)
     tl.static_assert(codes.dtype == tl.uint8)
-    tl.store(raw + tl.arange(0, 128), codes)
+    tl.store(raw + offsets, codes)
     if desc is None:
-        desc = tl.make_tensor_descriptor(dst, [3, 256], [192, 1], [1, 128], fp6_format=FORMAT)
-    desc.store([1, 128], codes[None, :])
+        desc = tl.make_tensor_descriptor(dst, [BLOCK_M + 2, 256], [192, 1], [BLOCK_M, 128], fp6_format=FORMAT)
+    desc.store([1, 128], codes.reshape(BLOCK_M, 128))
 
 
+@pytest.mark.parametrize("block_m", [1, 2, 16, 128, 256])
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("host", [False, True], ids=["device", "host"])
-def test_fp6_tma_store_padded_bytes(fmt, dtype, host, with_allocator):
+def test_fp6_tma_store_padded_bytes(block_m, fmt, dtype, host, with_allocator):
     if not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
         pytest.skip("FP6 stores require SM100 or SM103")
-    codes = torch.arange(128, device="cuda", dtype=torch.int32) % 64
+    codes = torch.randint(0, 64, (block_m * 128, ), device="cuda", dtype=torch.int32)
+    codes[:128] = torch.arange(128, device="cuda") % 64
     x = fp6_values(fmt, codes).to(dtype)
     # Check the halfway tie and the next representable input above it.
     midpoint = x[1] / 2
     x[0], x[2] = midpoint, torch.nextafter(midpoint, x[1])
     x[1], x[32] = 100, -0.0
     codes[1], codes[2] = 31, 1
-    initial = torch.randint(0, 64, (3, 256), device="cuda", dtype=torch.int32)
+    initial = torch.randint(0, 64, (block_m + 2, 256), device="cuda", dtype=torch.int32)
     buf = pack_fp6(initial)
-    initial[1, 128:] = codes
-    desc = TensorDescriptor.from_tensor(buf, [1, 128], fp6_format=fmt) if host else None
-    raw = torch.empty(128, device="cuda", dtype=torch.uint8)
-    kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt)
+    initial[1:-1, 128:] = codes.reshape(block_m, 128)
+    desc = TensorDescriptor.from_tensor(buf, [block_m, 128], fp6_format=fmt) if host else None
+    raw = torch.empty_like(codes, dtype=torch.uint8)
+    kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt, block_m)
     torch.testing.assert_close(raw, codes.byte())
     torch.testing.assert_close(buf, pack_fp6(initial))
     assert f"cvt.rn.satfinite.{fmt}x2.f32" in kernel.asm["ptx"]
