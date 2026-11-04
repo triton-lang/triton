@@ -734,8 +734,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           Value affineOffset, uint64_t maskSpanAffineOffset,
           Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
           Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          LowerLdStCallback lowerInst);
+          const TargetInfoBase &targetInfo, int maxVecElems,
+          bool allowPermutation, LowerLdStCallback lowerInst);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>

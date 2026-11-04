@@ -604,7 +604,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemBases, paddingShifts,
               affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
               /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-              vec, lowerInstForwardMulticastMask);
+              vec, /*allowPermutation=*/false, lowerInstForwardMulticastMask);
     return success();
   }
 

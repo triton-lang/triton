@@ -555,11 +555,10 @@ LogicalResult AsyncSharedStoreOp::verify() {
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
   auto kBlock = StringAttr::get(getContext(), "block");
   auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
-  std::optional<int> maybeMaxVecElems;
-  if (isPaddedEncoding(dstTy.getEncoding()))
-    maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
-  auto vectorization =
-      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
+  auto padded = gpu::getPaddedEncoding(dstTy.getEncoding());
+  int maxVecElems = padded ? padded.getMinInterval() : 128 / bitwidth;
+  auto vectorization = largestVectorisation(getContext(), cvt, maxVecElems,
+                                            /*allowPermutation=*/!padded);
   unsigned elemsPerVec = vectorization.first;
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "

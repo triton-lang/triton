@@ -333,8 +333,8 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
          "register layout must have a register dim");
   auto regNoBroadcast = actionRemoveBroadcastedRegs(reg).apply(reg);
   auto regToShared = regNoBroadcast.invertAndCompose(smem);
-  auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, regToShared, bitwidth);
+  auto [elemsPerVec, permutation] = largestVectorisation(
+      ctx, regToShared, 128 / bitwidth, /*allowPermutation=*/true);
   regNoBroadcast = permutation.apply(regNoBroadcast);
 
   int32_t vecSize = elemsPerVec;

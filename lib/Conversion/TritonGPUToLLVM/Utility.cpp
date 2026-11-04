@@ -833,8 +833,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           Value affineOffset, uint64_t maskSpanAffineOffset,
           Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
           Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          LowerLdStCallback lowerInst) {
+          const TargetInfoBase &targetInfo, int maxVecElems,
+          bool allowPermutation, LowerLdStCallback lowerInst) {
   assert(!smemBases.empty() && "smemBases cannot be empty");
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -872,7 +872,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   cvt = cvt.sublayout(inDimNames, outDims);
 
   auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
+      largestVectorisation(ctx, cvt, maxVecElems, allowPermutation);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -1056,11 +1056,11 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
 
   // Extract padding info from padded encoding (standalone or inside
   // partitioned)
-  std::optional<int> maybeMaxVecElems;
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  auto padded = triton::gpu::getPaddedEncoding(srcTy.getEncoding());
+  int maxVecElems = padded ? padded.getMinInterval() : 128 / bitwidth;
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
-  if (triton::gpu::isPaddedEncoding(srcTy.getEncoding())) {
-    maybeMaxVecElems = triton::gpu::getMinInterval(srcTy.getEncoding());
-    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  if (padded) {
     paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
   }
@@ -1074,7 +1074,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                    paddingShifts, affineOffset, maskSpanAffineOffset,
                    affineBlockOffset, maskSpanAffineBlock, laneId, warpId,
-                   rewriter, targetInfo, maybeMaxVecElems, lowerInst);
+                   rewriter, targetInfo, maxVecElems,
+                   /*allowPermutation=*/!padded, lowerInst);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
@@ -2231,6 +2232,7 @@ SmallVector<Value> broadcastTensorResult(Operation *op,
   assert(!uniqueResultVals.empty());
   auto tensorTy = cast<RankedTensorType>(op->getResult(0).getType());
   Type valueElemTy = uniqueResultVals.front().getType();
+  int maxVecElems = 128 / getIntOrFloatOrPtrBitWidth(valueElemTy);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto kOffset = str_attr("offset");
@@ -2264,7 +2266,7 @@ SmallVector<Value> broadcastTensorResult(Operation *op,
             /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
             /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
             /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-            /*maybeMaxVecElems=*/{},
+            maxVecElems, /*allowPermutation=*/true,
             makeSharedStoreEmitter(targetInfo, threadPred));
   if (crossCTA)
     targetInfo.clusterBarrier(loc, rewriter, op);
@@ -2275,8 +2277,8 @@ SmallVector<Value> broadcastTensorResult(Operation *op,
                    /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
                    /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
                    /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter,
-                   targetInfo,
-                   /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
+                   targetInfo, maxVecElems, /*allowPermutation=*/true,
+                   makeSharedLoadEmitter(targetInfo));
 }
 
 void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,

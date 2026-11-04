@@ -1134,7 +1134,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
               /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
               /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
-              warpId, rewriter, targetInfo, maxVec, emitCpAsync);
+              warpId, rewriter, targetInfo, maxVec, /*allowPermutation=*/false,
+              emitCpAsync);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),

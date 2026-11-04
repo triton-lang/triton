@@ -169,11 +169,13 @@ LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
 // order.
 LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 
-// Given a distributed into shmem layout, return the largest vectorisation
-// that can be used to lower the layout via ld/st.
-std::pair<int, ColumnAction>
-largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     std::optional<int> maybeMaxVecElems = std::nullopt);
+// Return the largest shared load/store width up to maxVecElems and the
+// register permutation it requires. Clearing allowPermutation preserves
+// register order.
+std::pair<int, ColumnAction> largestVectorisation(MLIRContext *ctx,
+                                                  const LinearLayout &cvt,
+                                                  int maxVecElems,
+                                                  bool allowPermutation);
 
 // Match tile over cvt's input domain and return the repetition offsets in cvt's
 // coordinates, with the matched input bases set to zero. The full tile's output
