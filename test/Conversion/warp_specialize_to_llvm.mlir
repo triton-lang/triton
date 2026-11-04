@@ -65,7 +65,6 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   // AMD: bb{{[0-9]+}}:
   // AMD-NEXT: rocdl.barrier
 
-  // Check that named barriers are used and that we have the correct counts.
   // AMD: rocdl.s.barrier.join [[NBAR2]]
   // AMD-NEXT: rocdl.s.barrier.signal.var [[NBAR2]] member_cnt = 4
   // AMD-NEXT: rocdl.s.barrier.wait id = 1
