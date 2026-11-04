@@ -45,6 +45,22 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
   tt.return %0 : tensor<16x1xi32, #layout_2d>
 }
 
+// CHECK-LABEL: @test_1d_reversed
+tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: [[FLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
+  // CHECK-NEXT: [[FIRST_SCAN:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 [[FLIPPED]], i32 1, i32 0)
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: [[UNFLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
+  // CHECK-NEXT: ret i32 [[UNFLIPPED]]
+  %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%arg1: i32, %arg2: i32):
+    %1 = arith.addi %arg1, %arg2 : i32
+    tt.scan.return %1 : i32
+  }) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
+  tt.return %0 : tensor<8xi32, #layout>
+}
+
 // This just prevents the test functions from being DCE'd.
 tt.func public @anchor(%ptr: !llvm.ptr, %arg0: !llvm.struct<(i32)>, %arg1: !llvm.struct<(i32, i32)>, %arg2: !llvm.struct<(i32)>) {
   %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.struct<(i32)> to tensor<8xi32, #layout>
@@ -61,6 +77,10 @@ tt.func public @anchor(%ptr: !llvm.ptr, %arg0: !llvm.struct<(i32)>, %arg1: !llvm
   %7 = tt.call @test_2d_grouped(%6) : (tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d>
   %8 = builtin.unrealized_conversion_cast %7 : tensor<16x1xi32, #layout_2d> to !llvm.struct<(i32)>
   llvm.store volatile %8, %ptr : !llvm.struct<(i32)>, !llvm.ptr
+
+  %9 = tt.call @test_1d_reversed(%0) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
+  %10 = builtin.unrealized_conversion_cast %9 : tensor<8xi32, #layout> to !llvm.struct<(i32)>
+  llvm.store volatile %10, %ptr : !llvm.struct<(i32)>, !llvm.ptr
 
   tt.return
 }

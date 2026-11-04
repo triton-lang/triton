@@ -29,11 +29,9 @@ struct CircularStoreOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
     auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
-
+        lowerCircularStore(op, adaptor.getSegment(), adaptor.getCounter(),
+                           adaptor.getDynamicScopeId(), rewriter);
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for
@@ -42,9 +40,9 @@ struct CircularStoreOpConversion
       mlir::LLVM::AMD::llStore(rewriter, loc, dataPack.ptr, dataPack.record,
                                dataPack.isWriter);
     } else if (addrSpace == 3) {
-      targetInfo.getTritonTargetInfo().storeDShared(
-          rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
-          dataPack.isWriter);
+      targetInfo.getTritonTargetInfo().storeDShared(rewriter, loc, dataPack.ptr,
+                                                    Value(), dataPack.record,
+                                                    dataPack.isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }

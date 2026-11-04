@@ -3,8 +3,6 @@ add_triton_library(TritonAMDGPUToLLVM
     AtomicRMWOpsEmitter.cpp
     AllocateSharedMemory.cpp
     BufferOpsEmitter.cpp
-    OffsetUniformitySplit.cpp
-    UniformityAnalysis.cpp
     TensorPtrOpsToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ConvertWarpPipeline.cpp
@@ -18,17 +16,16 @@ add_triton_library(TritonAMDGPUToLLVM
     ElementwiseOpToLLVM.cpp
     FuncOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    GCNAsmFormat.cpp
     HistogramOpToLLVM.cpp
+    Membar.cpp
+    ScheduleMembar.cpp
     TritonGPUToLLVM.cpp
     BuiltinFuncToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
     SPMDOpToLLVM.cpp
-    SchedInstructions.cpp
     Fp4ToFpOpToLLVM.cpp
     MembarUtility.cpp
-    ScalarizePackedFOps.cpp
     TDMUtility.cpp
     BarrierOpToLLVM.cpp
     WarpIdOpToLLVM.cpp
@@ -44,6 +41,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonInstrumentToLLVM
     TritonAMDGPUIR
     TritonAMDAnalysis
+    TritonAMDUtils
     LLVMCore
     LLVMPasses
     LLVMSupport

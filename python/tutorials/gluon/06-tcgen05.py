@@ -179,7 +179,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
     acc_tmem_layout: gl.constexpr = TensorMemoryLayout(
-        tmem_block.value,
+        tmem_block,
         col_stride=32 // d_desc.dtype.primitive_bitwidth,
     )
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
@@ -190,7 +190,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     if LHS_IN_TMEM:
         # When the LHS operand is fp16 or fp8, it is packed in TMEM.
         lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(
-            tmem_block.value,
+            tmem_block,
             col_stride=1,
         )
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
@@ -249,7 +249,7 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
     acc = acc_tmem.load()
     d_smem.store(acc)
     fence_async_shared()
-    tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)
+    tma.async_store(d_desc, [0, 0], d_smem)
     tma.store_wait(pendings=0)
 
 
@@ -353,7 +353,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 
@@ -592,7 +592,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     ub = ub_tmem.load()
     c_smem.store(ub.to(dtype))
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
 
     # Wait VBN, VB epilogue
     mbarrier.wait(vb_bar, epilogue_phase)
@@ -600,7 +600,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     tma.store_wait(pendings=0)
     c_smem.store(vb.to(dtype))
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m + BLOCK_M, off_n], c_smem)
+    tma.async_store(c_desc, [off_m + BLOCK_M, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 

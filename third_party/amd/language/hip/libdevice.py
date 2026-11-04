@@ -2,6 +2,24 @@ from triton.language import core
 
 
 @core.extern
+def clz(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__ockl_clz_u32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ockl_clz_u64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic).to(core.int32, _semantic=_semantic)
+
+
+@core.extern
+def popc(arg0, _semantic=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__ockl_popcount_u32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ockl_popcount_u64", core.dtype("int32")),
+        }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def abs(arg0, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0], {
@@ -459,15 +477,6 @@ def fmod(arg0, arg1, _semantic=None):
         "", "", [arg0, arg1], {
             (core.dtype("fp32"), core.dtype("fp32")): ("__ocml_fmod_f32", core.dtype("fp32")),
             (core.dtype("fp64"), core.dtype("fp64")): ("__ocml_fmod_f64", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
-def fma(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__ocml_fma_f32", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__ocml_fma_f64", core.dtype("fp64")),
         }, is_pure=True, _semantic=_semantic)
 
 

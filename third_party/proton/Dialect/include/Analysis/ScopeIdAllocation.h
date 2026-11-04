@@ -3,7 +3,8 @@
 
 #include "mlir/IR/Operation.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Analysis/Utility.h"
+#include "triton/Analysis/CallGraph.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include <cstddef>
@@ -26,10 +27,9 @@ public:
   explicit ScopeIdAllocation(FunctionOpInterface op) : funcOp(op) { run(); }
 
   ScopeId getOpScopeId(Operation *op) const {
-    if (auto recordOp = dyn_cast<RecordOp>(op)) {
-      return opToIdMap.lookup(recordOp);
-    }
-    llvm_unreachable("unexpected operation type");
+    assert((isa<RecordOp, AllocateEventOp>(op)) &&
+           "operation does not have a static scope id");
+    return opToIdMap.lookup(op);
   }
 
   ScopeIdName getScopeIdNames() const {

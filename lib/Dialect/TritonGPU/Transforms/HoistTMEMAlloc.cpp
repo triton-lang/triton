@@ -68,7 +68,13 @@ public:
     if (valueFromTMEM == kUnknown) {
       return failure();
     }
+    // The store predicate is a scalar i1, so only a uniform condition can be
+    // folded into it. A splatted condition is uniform; use its scalar source.
     Value pred = select.getCondition();
+    if (auto splat = pred.getDefiningOp<tt::SplatOp>())
+      pred = splat.getSrc();
+    if (!pred.getType().isInteger(1))
+      return failure();
     // In case the false operand is overwriting, we need to negate the predicate
     // (owerwrite when select would be false)
     if (valueFromTMEM == kTrue) {
@@ -274,6 +280,11 @@ public:
     Value init = alloc.getSrc();
     if (!init)
       return failure();
+    while (auto cvt = init.getDefiningOp<ConvertLayoutOp>()) {
+      if (!init.hasOneUse())
+        return failure();
+      init = cvt.getSrc();
+    }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
     if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
       return failure();
@@ -634,6 +645,16 @@ struct HoistTMEMAlloc
   void runOnOperation() override {
     ModuleOp m = getOperation();
     if (!postPipeline) {
+      // Forward TMEM loads before hoisting turns allocation initializers into
+      // explicit stores.
+      mlir::RewritePatternSet forwardingPatterns(&getContext());
+      forwardingPatterns.add<TMEMLoadForwarding>(&getContext());
+      if (failed(applyPatternsGreedily(getOperation(),
+                                       std::move(forwardingPatterns)))) {
+        signalPassFailure();
+        return;
+      }
+
       SmallVector<ttng::MMAv5OpInterface> mmaOps;
       m.walk([&](ttng::MMAv5OpInterface mmaOp) { mmaOps.push_back(mmaOp); });
       for (auto mmaOp : mmaOps) {

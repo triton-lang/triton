@@ -3,6 +3,24 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Set bits select lane, warp, and CTA coordinates that must be zero.
+def ThreadDomainAttr : TritonGPU_Attr<"ThreadDomain", "thread_domain"> {
+  let mnemonic = "thread_domain";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp,
+                        DefaultValuedParameter<"uint32_t", "0">:$block);
+  let assemblyFormat = "`<` $lane `,` $warp (`,` $block^)? `>`";
+  let extraClassDeclaration = [{
+    bool isFull() const { return !(getLane() | getWarp() | getBlock()); }
+    bool hasSameWarpAndBlock(ThreadDomainAttr other) const {
+      return getWarp() == other.getWarp() && getBlock() == other.getBlock();
+    }
+    bool hasMasksWithin(uint32_t lane, uint32_t warp, uint32_t block) const {
+      return !(getLane() & ~lane) && !(getWarp() & ~warp) &&
+             !(getBlock() & ~block);
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -162,7 +180,9 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
         // This packs a few rows together for small K
         int perPhase = std::max<int>(1024 / (bitwidth * K), 1);
 
-        int mmaStride = 8;
+        // FP64 MMAv2 uses an m8n8k4 tile rather than the m16n8 tile used by
+        // the other MMAv2 variants.
+        int mmaStride = bitwidth == 64 ? 4 : 8;
         int vec = 4 * kWidth;
         // needsTrans is equiv. to flipping the opIdx
         if (needTrans)
@@ -184,7 +204,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth);
     }]>,
 
@@ -194,10 +214,14 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool":$needTrans), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth, needTrans);
     }]>,
   ];
+
+  let extraClassDeclaration = [{
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+  }];
 
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
@@ -319,6 +343,8 @@ For identity mappings a short form based on order and shape is used to increase 
     // Returns the total number of elements including padding given the input
     // tensor shape.
     int64_t getPaddedSize(ArrayRef<int64_t> shape) const;
+
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
@@ -384,6 +410,8 @@ def PartitionedSharedEncodingAttr
     unsigned getNumLogicalPieces() const {
       return getNumPartitions() * getNumGroups();
     }
+
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -455,36 +483,21 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
-        auto shapePerCTA = getShapePerCTA(CGALayout.getCTASplitNum(), shape);
-        int32_t swizzlingByteWidth = 0;
-        unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
-        int packingFactor = fp4Padded ? 2 : 1;
-
-        // get proper shared memory swizzling mode from the contiguous dimension
-        // size of the origin blocked layout.
-        auto contigDimSizeInByte = shapePerCTA[order[0]] * packingFactor * eleBitWidth / 8;
-        if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
-          swizzlingByteWidth = 128;
-        } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
-          swizzlingByteWidth = 64;
-        } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
-          swizzlingByteWidth = 32;
-        } else {
-          swizzlingByteWidth = 0;
-        }
-        int flattenOutterDim = 1;
-        for (int i = 1; i < shapePerCTA.size(); i++) {
-          flattenOutterDim *= shapePerCTA[order[i]];
-        }
-        if (shapePerCTA.size() < 2 || flattenOutterDim < 8) {
-          swizzlingByteWidth = 0;
-        }
+        unsigned eleBitWidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
+        unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
+            shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    /// Choose the largest swizzle supported by the shape and element bit width,
+    /// or zero for shapes that cannot use swizzling.
+    static unsigned getDefaultSwizzlingByteWidth(
+        ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+        CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
+
     int getPerPhase() const;
     int getMaxPhase() const;
     int getVec() const;
@@ -509,7 +522,7 @@ current block number: 0, 1, 2.. maxPhase-1, 0, 1, 2 ...
 
 This layout is used to reduce bank conflicts in cases where shared memory writes
 and reads are performed on layouts with different order. It's meant for hardware
-without native shared memory tranpose support.
+without native shared memory transpose support.
 
 Swizzling pattern affects only 2 fastest dimensions of a tensor.
 In the following text these two dimensions are called row and column:
@@ -527,7 +540,7 @@ Swizzling pattern is following:
 
 Let's consider an element with logical coordinates = (inRowId, inColId).
 For simplicity, we do not vectorize memory in examples,
-i.e. vec == 1 and layout swizzles inidividual elements.
+i.e. vec == 1 and layout swizzles individual elements.
 For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
 
 Swizzled coordinates within memory object are (outRowId, outColId):
@@ -588,6 +601,9 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
     "CGAEncodingAttr":$CGALayout
   );
 
+  let extraClassDeclaration = [{
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+  }];
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -885,7 +901,7 @@ for
         remainingCTAs /= CTAsPerCGA[i];
       }
 
-      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
+      CTAsPerCGA[CTAOrder.back()] *= remainingCTAs; // wrap at CTA level
 
       CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);
@@ -906,7 +922,6 @@ available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
 - `version`: The GPU architecture:
-  - 1: gfx908: CDNA1
   - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
@@ -1053,6 +1068,7 @@ w2 w2 w3 w3
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
 
     // Check if tilesPerWarp is 1 in every dimension.
     bool hasUnitTilesPerWarp() const;
@@ -1081,7 +1097,7 @@ It is characterized by the following parameters:
 - `version` indicates the GPU architecture:
   - 1: RDNA3; e.g., gfx1100, gfx1101
   - 2: RDNA4; e.g., gfx1200, gfx1201
-  - 3: gfx1250
+  - 3: CDNA5; e.g., gfx1250
 - `ctaLayout` indicates the warp layout in the block. This is a generalization
    compared to previous warp layout representation using warpsPerCTA and tilesPerWarp
    parameters.
@@ -1167,7 +1183,7 @@ Row |
 Example 2:
 This example illustrates the purpose of the ctaLayout parameter.
 ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
-Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
+Previously, this information was encoded using warpsPerCTA and tilesPerWarp parameters.
 For instance, a configuration with 4 warps, represented as:
 
 warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
@@ -1211,7 +1227,7 @@ warpsPerCTA  = [2, 2], tilesPerWarp = [2, 2]
 but with a different ordering of repetitions.
 
 The motivation for this broader formulation comes from the need to describe swizzled warp
-layouts, which help avoid LDS partition conflicts on architectures such as gfx1250.
+layouts, which help avoid LDS partition conflicts on architectures such as CDNA5.
 A valid example of such swizzled configuration is:
 
 ctaLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
@@ -1223,7 +1239,7 @@ w2 w3
 w0 w1 <- first tile computed by w1
 w2 w3
 
-Note that ctaLayout naturally composes with layout definied on a single WMMA tile
+Note that ctaLayout naturally composes with layout defined on a single WMMA tile
 to form final WMMA layout.
 
 wmmaLayout = tileLayout * ctaLayout
@@ -1245,6 +1261,7 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
     LinearLayout getTileLayout(unsigned rank) const;
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
@@ -1276,48 +1293,13 @@ An encoding for tensors that have been produced by tensor cores.
 It is characterized by two parameters:
 - A 'versionMajor' which specifies the generation the tensor cores
   whose output is being partitioned:
-  - 1 for first-gen tensor cores (Volta), and
-  - 2 for second-gen tensor cores (Turing/Ampere).
+  - 2 for second-gen tensor cores (Turing/Ampere), and
+  - 3 for Hopper tensor cores.
+  First-gen tensor cores (Volta, versionMajor = 1) are no longer supported
+  and are rejected by the attribute verifier.
 - A 'versionMinor' which indicates the specific layout of a tensor core
-  generation, e.g. for Volta, there might be multiple kinds of layouts
-  annotated by 0,1,2 and so on.
+  generation.
 - A `blockTileSize` to indicate how data should be partitioned between warps.
-
-// -------------------------------- version = 1 --------------------------- //
-
-For first-gen tensor cores, the implicit warpTileSize is [16, 16].
-Note: the layout is different from the recommended in PTX ISA
-https://docs.nvidia.com/cuda/parallel-thread-execution/index.html
-(mma.884 section, FP32 accumulator).
-
-For example, when versionMinor=1, the matrix L corresponding to
-blockTileSize=[32,16] is:
-
-                               warp 0
---------------------------------/\-------------------------------
-[ 0   0   2   2   8   8   10  10   0   0   2   2   8   8   10  10 ]
-[ 1   1   3   3   9   9   11  11   1   1   3   3   9   9   11  11 ]
-[ 0   0   2   2   8   8   10  10   0   0   2   2   8   8   10  10 ]
-[ 1   1   3   3   9   9   11  11   1   1   3   3   9   9   11  11 ]
-[ 4   4   6   6   12  12  14  14   4   4   6   6   12  12  14  14 ]
-[ 5   5   7   7   13  13  15  15   5   5   7   7   13  13  15  15 ]
-[ 4   4   6   6   12  12  14  14   4   4   6   6   12  12  14  14 ]
-[ 5   5   7   7   13  13  15  15   5   5   7   7   13  13  15  15 ]
-[ 16  16  18  18  20  20  22  22   16  16  18  18  20  20  22  22 ]
-[ 17  17  19  19  21  21  23  23   17  17  19  19  21  21  23  23 ]
-[ 16  16  18  18  20  20  22  22   16  16  18  18  20  20  22  22 ]
-[ 17  17  19  19  21  21  23  23   17  17  19  19  21  21  23  23 ]
-[ 24  24  26  26  28  28  30  30   24  24  26  26  28  28  30  30 ]
-[ 25  25  27  27  29  29  31  31   25  25  27  27  29  29  31  31 ]
-[ 24  24  26  26  28  28  30  30   24  24  26  26  28  28  30  30 ]
-[ 25  25  27  27  29  29  31  31   25  25  27  27  29  29  31  31 ]
-
-                          warp 1 = warp0 + 32
---------------------------------/\-------------------------------
-[ 32  32  34  34  40  40  42  42   32  32  34  34  40  40  42  42 ]
-[ 33  33  35  35  41  41  43  43   33  33  35  35  41  41  43  43 ]
-[ ............................................................... ]
-
 
 // -------------------------------- version = 2 --------------------------- //
 
@@ -1371,8 +1353,10 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
   }];
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -1480,7 +1464,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
         return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       unsigned kWidth = std::max(32 / bitwidth, 1u);
       return $_get(context, opIdx, parent, kWidth);
     }]>

@@ -29,21 +29,15 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertWarpPipelinePass(StringRef gfxArch);
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPUConvertWarpSpecializeToLLVMPass(StringRef gfxArch);
-void runScalarizePackedFOpsPass(llvm::Function &F);
 
 } // namespace mlir::triton::AMD
 
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz, bool cuMode);
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertBuiltinFuncToLLVMPass(StringRef gfxArch, bool ftz);
-std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPUInsertInstructionSchedHintsPass(StringRef variant);
-std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(StringRef gfxArch,
-                                                 int32_t numStages);
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createAllocateAMDGPUSharedMemoryPass(StringRef arch);

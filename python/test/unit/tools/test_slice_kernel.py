@@ -42,6 +42,41 @@ def assert_code_equal(actual: str, expected: str) -> None:
     assert lhs == rhs
 
 
+@pytest.mark.parametrize("decorator", ["lru_cache", "lru_cache()", "lru_cache(maxsize=2, typed=True)", "cache"])
+@pytest.mark.parametrize("entrypoint", ["cached", "kernel"])
+def test_slice_kernel_cached_function(tmp_path, decorator, entrypoint):
+    _, mod = _make_package(
+        tmp_path, {
+            "helpers.py":
+            """
+            def payload(value):
+                return [value + 1]
+        """,
+            "kernel_mod.py":
+            f"""
+            from functools import cache, lru_cache
+            from .helpers import payload
+
+            @{decorator}
+            def cached(value):
+                return payload(value)
+
+            def kernel(value):
+                return cached(value)
+        """,
+        })
+    source = slice_kernel([f"{mod('kernel_mod')}:{entrypoint}"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    function = namespace[entrypoint]
+    first = function(4)
+    assert first == [5]
+    assert function(4) is first
+    assert function(5) == [6]
+    assert namespace["cached"].cache_info().hits == 1
+    assert namespace["cached"].cache_info().misses == 2
+
+
 def test_slice_kernel_basic_module_slicing(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
@@ -160,6 +195,78 @@ def helper() -> int:
 
 def kernel() -> int:
     return helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_does_not_treat_base_python_site_packages_as_stdlib_in_venv(tmp_path, monkeypatch):
+    fake_base_stdlib = tmp_path / "base" / "lib" / "python3.12"
+    fake_base_site_packages = fake_base_stdlib / "site-packages"
+    fake_venv_site_packages = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    fake_base_site_packages.mkdir(parents=True)
+    fake_venv_site_packages.mkdir(parents=True)
+    pkg, mod = _make_package(
+        fake_base_site_packages,
+        {
+            "helpers.py":
+            """
+                def helper() -> int:
+                    return 7
+            """,
+            "kernel_mod.py":
+            """
+                from .helpers import helper
+
+                def kernel() -> int:
+                    return helper()
+            """,
+        },
+    )
+
+    original_get_paths = sysconfig.get_paths
+
+    def fake_get_paths():
+        paths = original_get_paths().copy()
+        paths["stdlib"] = str(fake_base_stdlib)
+        paths["platstdlib"] = str(fake_base_stdlib)
+        paths["purelib"] = str(fake_venv_site_packages)
+        paths["platlib"] = str(fake_venv_site_packages)
+        return paths
+
+    monkeypatch.setattr(sysconfig, "get_paths", fake_get_paths)
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+def helper() -> int:
+    return 7
+
+
+def kernel() -> int:
+    return helper()
+    """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_preserves_gluon_builtin_sugar(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "kernel_mod.py":
+            """
+                import triton.experimental.gluon.language as gl
+
+                def kernel() -> None:
+                    gl.static_assert(True)
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton"], target=TranslatorTarget.GENERIC)
+    expected = R"""
+import triton.experimental.gluon.language as gl
+
+def kernel() -> None:
+    gl.static_assert(True)
     """
     assert_code_equal(output, expected)
 
@@ -285,8 +392,20 @@ import triton.experimental.gluon as gluon
 
 @gluon.jit
 def squeeze(x, dim: gl.constexpr):
-    gl.static_assert(x.shape[dim] == 1)
-    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:dim] + x.shape[dim + 1:]))
+    '''
+    Removes a length-1 dimension from :code:`x` at index :code:`dim`.
+
+    The selected dimension must have length 1 (checked at compile time). This is
+    the inverse of :func:`unsqueeze`.
+
+    :param x: the input tensor
+    :param dim: the index of the dimension to remove
+    :type dim: int
+    '''
+    gl.static_assert(-len(x.shape) <= dim and dim < len(x.shape))
+    _dim: gl.constexpr = dim + len(x.shape) if dim < 0 else dim
+    gl.static_assert(x.shape[_dim] == 1)
+    return triton.tools.triton_to_gluon_translator.common_helpers.reset_to_default_layout(x.reshape(x.shape[:_dim] + x.shape[_dim + 1:]))
 
 
 @gluon.jit(repr=lambda _: 'custom_kernel_name')
@@ -478,6 +597,35 @@ def helper() -> None:
 def kernel() -> None:
     helper()
     """
+    assert_code_equal(output, expected)
+
+
+def test_slice_kernel_module_level_imported_value_alias(tmp_path):
+    pkg, mod = _make_package(
+        tmp_path,
+        {
+            "lib_foo.py":
+            """
+                VALUE = {"key": 7}
+            """,
+            "kernel_mod.py":
+            """
+                from .lib_foo import VALUE as ALIASED_VALUE
+
+                def kernel() -> int:
+                    return ALIASED_VALUE["key"]
+            """,
+        },
+    )
+
+    output = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    expected = R'''
+VALUE = {"key": 7}
+
+
+def kernel() -> int:
+    return VALUE["key"]
+    '''
     assert_code_equal(output, expected)
 
 
@@ -840,3 +988,68 @@ def test_slice_kernel_public_imports():
     assert callable(translate_paths)
     assert callable(convert_triton_to_gluon)
     assert callable(convert_host_descriptor)
+
+
+@pytest.mark.parametrize("value", ["32", "None", "True", "'shared'"])
+@pytest.mark.parametrize("imported", [False, True])
+def test_slice_kernel_global_aliases(tmp_path, value, imported):
+    _, mod = _make_package(
+        tmp_path, {
+            "constants.py":
+            f"BASE = {value}",
+            "kernel_mod.py":
+            f"""
+            {"from .constants import BASE as SOURCE" if imported else f"SOURCE = {value}"}
+            ALIAS: object = SOURCE
+            FINAL = ALIAS
+
+            def kernel(value=FINAL):
+                return value, SOURCE, ALIAS, FINAL
+        """,
+        })
+    original = importlib.import_module(mod("kernel_mod"))
+    source = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["kernel"]() == original.kernel()
+    assert namespace["kernel"]("override") == original.kernel("override")
+
+
+def test_slice_kernel_global_alias_leaf(tmp_path):
+    _, mod = _make_package(
+        tmp_path, {
+            "constants.py":
+            "VALUE = 32",
+            "kernel_mod.py":
+            """
+            from .constants import VALUE
+            COPIED = VALUE
+
+            def kernel():
+                return VALUE, COPIED
+        """,
+        })
+    source = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"],
+                          leaf_paths=[f"{mod('constants')}:VALUE"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["kernel"]() == (32, 32)
+    importlib.import_module(mod("constants")).VALUE = 64
+    assert namespace["kernel"]() == (64, 32)
+
+
+def test_slice_kernel_rejects_assigned_cache(tmp_path):
+    _, mod = _make_package(
+        tmp_path, {
+            "kernel_mod.py":
+            """
+            import functools
+
+            def raw(value):
+                return value
+
+            cached = functools.cache(raw)
+        """,
+        })
+    with pytest.raises(ValueError, match="cache wrappers require .* decorator syntax"):
+        slice_kernel([f"{mod('kernel_mod')}:cached"], ["triton", "torch"], target=TranslatorTarget.GENERIC)

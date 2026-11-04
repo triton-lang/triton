@@ -120,7 +120,6 @@ protected:
 /*static*/ MLIRContext InferLayoutTest::ctx;
 
 void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
-                 std::optional<BlockedEncodingAttr> expectedDstEnc,
                  DialectInferLayoutInterface *inferLayout,
                  bool longErrors = true) {
 
@@ -136,7 +135,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
     result = inferLayout->inferReshapeOpEncoding(
         srcTy.getShape(), srcTy.getEncoding(), dstTy.getShape(), inferredEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
   }
 
   // We expect the reshape to succeed as long as the inputs have the same
@@ -161,7 +160,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
     Attribute inferredSrcEnc;
     auto result = inferLayout->inferReshapeOpEncoding(
         dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
     EXPECT_TRUE(succeeded(result))
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -210,13 +209,8 @@ TEST_P(InferReshapeOpEncodingTest, DoIt) {
   if (!dst)
     FAIL() << "Could not parse destination type: " << dstTyStr;
 
-  std::optional<BlockedEncodingAttr> expectedDstEnc;
-  if (auto dstEnc = cast<RankedTensorType>(dst).getEncoding()) {
-    expectedDstEnc = cast<BlockedEncodingAttr>(dstEnc);
-  }
-
   testReshape(cast<RankedTensorType>(src), cast<RankedTensorType>(dst),
-              expectedDstEnc, inferLayout, /*longErrors=*/true);
+              inferLayout, /*longErrors=*/true);
 }
 
 // A testcase of {a, b, c} means:
@@ -290,7 +284,10 @@ INSTANTIATE_TEST_SUITE_P(
          R"(T<16x2xf32, #B<{spt=[1,2], tpw=[32,1], wpc=[2,1], ord=[1,0]}>>)"},
 
         {R"(T<2x1x2xf32, #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>>)",
-         R"(T<2x2xf32,   #B<{spt=[2,1],   tpw=[2,2],   wpc=[4,8],   ord=[1,0]}>>)"},
+         R"(T<2x2xf32, #ttg.slice<{dim = 1, parent = #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>}>>)"},
+
+        {R"(T<2xi32, #B<{spt=[1], tpw=[32], wpc=[4], ord=[0], CGALayout=[[1],[0]]}>>)",
+         "T<2x1xi32>"},
     })));
 
 class Fp4ToFpOpTest : public ::testing::Test {
@@ -436,8 +433,7 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       Attribute reshapedEnc;
       result = inferLayout->inferReshapeOpEncoding(
-          transShape, transEnc, newShape, reshapedEnc,
-          /*allowReorder=*/false, std::nullopt);
+          transShape, transEnc, newShape, reshapedEnc, std::nullopt);
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr
@@ -454,6 +450,47 @@ public:
 protected:
   MLIRContext ctx;
 };
+
+TEST_F(LinearEncodingTest, MaybeLinearToCGAEncodingAttr) {
+  auto s = [&](StringRef name) { return StringAttr::get(&ctx, name); };
+  auto dim0 = s("dim0"), dim1 = s("dim1");
+  LinearLayout cga({{s("block"), {{1, 0}, {0, 1}}}}, {dim0, dim1});
+  LinearLayout cta({{s("offset"), {{1, 0}, {2, 0}, {1, 1}, {0, 2}}}},
+                   {dim0, dim1});
+  auto result = maybeLinearToCGAEncodingAttr(cta * cga);
+  ASSERT_TRUE(succeeded(result));
+  EXPECT_EQ(result->getLinearLayout(), cga);
+}
+
+TEST_F(LinearEncodingTest, MaybeLinearToCGAEncodingAttrRejectsInvalidFactors) {
+  auto s = [&](StringRef name) { return StringAttr::get(&ctx, name); };
+  // A block bit lies below a register bit, so no CTA * CGA factorization
+  // exists.
+  LinearLayout interleaved({{s("register"), {{1}, {4}}}, {s("block"), {{2}}}},
+                           {s("dim0")});
+  EXPECT_TRUE(failed(maybeLinearToCGAEncodingAttr(interleaved)));
+
+  // A block basis overlaps the intra-CTA bits, so division fails.
+  LinearLayout overlapping({{s("offset"), {{1}}}, {s("block"), {{3}}}},
+                           {s("dim0")});
+  EXPECT_TRUE(failed(maybeLinearToCGAEncodingAttr(overlapping)));
+
+  // Division succeeds, but the quotient is not a valid CGA encoding.
+  LinearLayout swizzled({{s("offset"), {{1}}}, {s("block"), {{6}, {4}}}},
+                        {s("dim0")});
+  EXPECT_TRUE(failed(maybeLinearToCGAEncodingAttr(swizzled)));
+}
+
+TEST_F(LinearEncodingTest, MaybeLinearToCGAEncodingAttrPreservesBroadcastBits) {
+  auto s = [&](StringRef name) { return StringAttr::get(&ctx, name); };
+  LinearLayout layout(
+      {{s("register"), {{1}, {2}, {4}}}, {s("block"), {{0}, {8}, {0}, {16}}}},
+      {s("dim0")});
+  auto result = maybeLinearToCGAEncodingAttr(layout);
+  ASSERT_TRUE(succeeded(result));
+  LinearLayout expected({{s("block"), {{0}, {1}, {0}, {2}}}}, {s("dim0")});
+  EXPECT_EQ(result->getLinearLayout(), expected);
+}
 
 TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
   // Define a tensor shape

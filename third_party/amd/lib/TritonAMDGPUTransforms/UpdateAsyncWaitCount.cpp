@@ -20,7 +20,7 @@
 // number of hardware instructions/intrinsics corresponding to the outstanding
 // async operations. For waits that carry async tokens, the pass walks the
 // def-use chains of each token and sums the number of async intrinsics
-// oustanding excluding the producer of the async token. Tokens may be copied
+// outstanding excluding the producer of the async token. Tokens may be copied
 // across loop boundaries (e.g., passed as loop initial arguments and yielded
 // from the loop body); in such cases, the pass takes the minimum count across
 // the possible paths. The final wait count is the minimum over all tokens and
@@ -36,12 +36,11 @@
 //   registers since we do not control the vectorization (llvm can change it).
 //   Therefore interleaving direct-to-lds and loads to registers will produce
 //   conservative waits.
-// - On GFX1250 the number of (multicast) async_load and async_stores. On
-//   GFX1250 those are out of order with register loads so we will not get
+// - On CDNA5 the number of (multicast) async_load and async_stores. On
+//   CDNA5 those are out of order with register loads so we will not get
 //   conservative waits.
-// For amdg.tdm_async_wait we only count TDM ops. Each tdm_load/store will
-// produce exactly one instruction so it directly correlates with OP at TGGIR
-// level.
+// For amdg.tdm_async_wait we only count TDM ops, then translate each op to the
+// number of TDM intrinsics emitted by lowering.
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
@@ -66,9 +65,7 @@ int getNumberOfAsyncCopyInstructions(RankedTensorType globalType,
                                      bool isStore) {
   LinearLayout globalLayout = tt::gpu::toLinearLayout(globalType);
   triton::LinearLayout sharedLayout =
-      triton::gpu::isPaddedEncoding(sharedType.getEncoding())
-          ? paddedLinearLayout(sharedType)
-          : toLinearLayout(sharedType);
+      triton::gpu::toLinearLayoutIgnoringPadding(sharedType);
   LinearLayout globalToSharedLayout =
       globalLayout.invertAndCompose(sharedLayout);
 
@@ -370,7 +367,7 @@ void updateWaitCount(WaitType waitOp,
     // tokens
     for (auto token : waitOp.getOperands()) {
       // Traverse def chain from waitOp to the producer of the token and count
-      // the minumum number of vmcnt instructions
+      // the minimum number of vmcnt instructions
       auto tokenWaitCnt =
           deduceMinCountOnDefChain(token, waitOp, computeCountForOp);
       waitCnt = std::min(waitCnt, tokenWaitCnt);
@@ -425,7 +422,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
   void runOnOperation() override {
     TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
-    if (!targetFeatures.isCDNA() && !targetFeatures.isGFX1250()) {
+    if (!targetFeatures.isCDNA() && !targetFeatures.isCDNA5()) {
       return;
     }
 
@@ -436,7 +433,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     // intrinsics. Keep the ttg.async_wait ops unchanged (they track
     // commit groups) and lower them directly to wait_asyncmark later.
     if (!targetFeatures.useAsyncMarks()) {
-      // GFX1250 (and future arches without asyncmark) use instruction counting.
+      // CDNA5 (and future arches without asyncmark) use instruction counting.
       SmallVector<ttg::AsyncWaitOp> waitOps;
       getOperation()->walk(
           [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
@@ -461,7 +458,9 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       }
     }
 
-    // amdgpu.AsyncTDMWait should only count async tdm ops
+    // amdgpu.AsyncTDMWait should only count async tdm ops. Fused TDM copies are
+    // explicit IR operations by this point, so the count mirrors LLVM lowering
+    // directly.
     SmallVector<triton::amdgpu::AsyncTDMWait> waitTDMOps;
     getOperation()->walk([&](triton::amdgpu::AsyncTDMWait waitOp) {
       waitTDMOps.push_back(waitOp);
@@ -479,10 +478,14 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
         if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
           auto smemTy = copyOp.getResult().getType();
           int numWarps = ttg::lookupNumWarps(op);
+          // warp_used_hint changes descriptor layout, not the number of static
+          // TDM instructions. Count the sequence sized by numWarps.
           auto [_, numInstr] =
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
                   smemTy.getShape(), numWarps, smemTy.getEncoding());
           return numInstr;
+        } else if (isa<AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
+          return 1;
         } else if (auto copyOp = dyn_cast<AsyncTDMCopyLocalToGlobalOp>(op)) {
           auto smemTy = copyOp.getSrc().getType();
           int numWarps = ttg::lookupNumWarps(op);
@@ -493,7 +496,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
         } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
           auto rowIndicesType =
               cast<RankedTensorType>(op->getOperandTypes()[1]);
-          return mlir::LLVM::AMD::getTDMGatherScatterInstrinsicCount(
+          return mlir::LLVM::AMD::getTDMGatherScatterIntrinsicCount(
               rowIndicesType);
         } else {
           return 0;

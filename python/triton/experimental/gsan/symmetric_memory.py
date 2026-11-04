@@ -22,8 +22,10 @@ import torch.distributed as dist
 import torch.distributed.distributed_c10d as c10d
 
 from . import _stream_sync
-from ._allocator import (create_mem_pool, export_allocation_handles, export_runtime_state_handle, free_allocation,
-                         import_allocation_handles, import_runtime_state_handle)
+from ._allocator import (ShareableHandleType, configure as _configure, create_mem_pool, export_allocation_handles,
+                         export_allocation_memhandle_regions, export_runtime_state_handle, free_allocation,
+                         import_allocation_handles, import_runtime_state_handle, _resolve_shadow_granularity,
+                         is_write_once_allocation)
 from ._utils import uint8_cuda_tensor_from_ptr
 
 _RendezvousCacheKey: TypeAlias = tuple[int, int, int]
@@ -40,9 +42,8 @@ def _normalize_size(size: tuple[object, ...]) -> tuple[int, ...]:
 
 
 @functools.lru_cache()
-def _get_mem_pool(device_index: int):
-    _ = device_index
-    return create_mem_pool()
+def _get_mem_pool(shadow_granularity: int, write_once: bool):
+    return create_mem_pool(shadow_granularity=shadow_granularity, write_once=write_once)
 
 
 @atexit.register
@@ -50,7 +51,13 @@ def _clear_mem_pool_cache() -> None:
     _get_mem_pool.cache_clear()
 
 
-def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> torch.Tensor:
+def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | None = None,
+          shadow_granularity: int | None = None, write_once: bool = False) -> torch.Tensor:
+    """Allocates symmetric storage using the requested GSan shadow granularity.
+
+    See :func:`triton.experimental.gsan.create_mem_pool` for access restrictions.
+    """
+    shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
     shape = _normalize_size(size)
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -65,7 +72,7 @@ def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | 
     device_index = torch.cuda.current_device() if dev.index is None else dev.index
     dev = torch.device("cuda", device_index)
 
-    with torch.cuda.use_mem_pool(_get_mem_pool(device_index)):
+    with torch.cuda.use_mem_pool(_get_mem_pool(shadow_granularity, write_once), device=device_index):
         return torch.empty(shape, dtype=dtype, device=dev)
 
 
@@ -75,6 +82,17 @@ def _resolve_group(group) -> tuple[dist.ProcessGroup, str]:
     if isinstance(group, str):
         return c10d._resolve_process_group(group), group
     raise TypeError(f"rendezvous: unsupported group type: {type(group)}")
+
+
+def configure(group, *, rng_seed: int | None = None, clock_buffer_size: int | None = None):
+    process_group, _ = _resolve_group(group)
+    _configure(
+        device_ranks={torch.cuda.current_device(): dist.get_rank(process_group)},
+        num_devices=dist.get_world_size(process_group),
+        rng_seed=rng_seed,
+        clock_buffer_size=clock_buffer_size,
+        handle_type=ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+    )
 
 
 def _send_fds(
@@ -136,6 +154,9 @@ def _import_peer_ptrs(
                 peer_shadow_fd,
                 int(metas[peer]["alloc_size"]),
                 device_index,
+                ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+                write_once=metas[peer]["write_once"],
+                shadow_granularity=metas[peer]["shadow_granularity"],
             )
             peer_ptrs[peer] = ptr
             if peer_runtime_state_fd is not None:
@@ -146,8 +167,9 @@ def _import_peer_ptrs(
                 import_runtime_state_handle(
                     peer_runtime_state_fd,
                     int(peer_runtime_state_alloc_size),
-                    int(metas[peer]["device_index"]),
+                    peer,
                     device_index,
+                    ShareableHandleType.POSIX_FILE_DESCRIPTOR,
                 )
     except Exception:
         for peer, ptr in enumerate(peer_ptrs):
@@ -175,7 +197,9 @@ class GSanSymmetricMemoryHandle:
         device_index: int,
         buffer_size: int,
         peer_ptrs: tuple[int, ...],
-        peer_device_indices: tuple[int, ...],
+        peer_offsets: tuple[int, ...],
+        barrier_tensor: torch.Tensor | None = None,
+        barrier_handle: GSanSymmetricMemoryHandle | None = None,
         cache_key: _RendezvousCacheKey | None = None,
     ):
         self._group = group
@@ -184,7 +208,10 @@ class GSanSymmetricMemoryHandle:
         self._device_index = device_index
         self._buffer_size = buffer_size
         self._peer_ptrs = tuple(peer_ptrs)
-        self._peer_device_indices = tuple(int(v) for v in peer_device_indices)
+        self._peer_offsets = tuple(peer_offsets)
+        self._barrier_tensor = barrier_tensor
+        self._barrier_handle = barrier_handle
+        self._barrier_epoch = 0
         self._cache_key = cache_key
         self._closed = False
 
@@ -203,8 +230,12 @@ class GSanSymmetricMemoryHandle:
             raise NotImplementedError("Only channel=0 is supported in GSan symmetric memory.")
         _ = timeout_ms
         if self._world_size > 1:
-            dist.barrier(group=self._group)
-            _stream_sync.synchronize_process_group_barrier(self._device_index, self._peer_device_indices)
+            if self._barrier_handle is None:
+                raise RuntimeError("GSan symmetric-memory barrier counter is unavailable.")
+            counters = self._barrier_handle.get_buffer(0, (self._world_size, ), torch.int32)
+            self._barrier_epoch += 1
+            _stream_sync.synchronize_process_group_barrier(counters, self._rank, self._barrier_epoch, self._world_size)
+            torch.cuda.synchronize(self._device_index)
             dist.barrier(group=self._group)
 
     def get_buffer(
@@ -229,7 +260,7 @@ class GSanSymmetricMemoryHandle:
             raise ValueError(
                 f"Requested slice ({offset_bytes + req_bytes} bytes) exceeds buffer size {self._buffer_size} bytes.")
 
-        base_ptr = self._peer_ptrs[rank]
+        base_ptr = self._peer_ptrs[rank] + self._peer_offsets[rank]
         if base_ptr == 0:
             raise RuntimeError(f"Peer rank {rank} has no mapped buffer.")
 
@@ -243,6 +274,8 @@ class GSanSymmetricMemoryHandle:
         for rank, ptr in enumerate(self._peer_ptrs):
             if rank != self._rank:
                 free_allocation(ptr, self._device_index)
+        if self._barrier_handle is not None:
+            self._barrier_handle.close()
         if self._cache_key is not None:
             _RENDEZVOUS_CACHE.pop(self._cache_key)
 
@@ -281,7 +314,7 @@ _RENDEZVOUS_CACHE: weakref.WeakValueDictionary[_RendezvousCacheKey,
 _RUNTIME_BOOTSTRAP_CACHE: dict[_RuntimeBootstrapCacheKey, set[int]] = {}
 
 
-def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
+def rendezvous(tensor: torch.Tensor, group, *, _create_barrier: bool = True) -> GSanSymmetricMemoryHandle:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError("rendezvous: tensor must be a torch.Tensor")
     if tensor.device.type != "cuda":
@@ -317,7 +350,7 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
             device_index=device_index,
             buffer_size=buffer_size,
             peer_ptrs=(base_ptr, ),
-            peer_device_indices=(int(device_index), ),
+            peer_offsets=(0, ),
             cache_key=cache_key,
         )
         _RENDEZVOUS_CACHE[cache_key] = handle
@@ -332,14 +365,19 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
     }
 
     with contextlib.ExitStack() as stack:
-        real_fd, shadow_fd, alloc_size = export_allocation_handles(base_ptr)
+        write_once = is_write_once_allocation(base_ptr)
+        real_fd, shadow_fd, alloc_size, shadow_granularity = export_allocation_handles(
+            base_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR, include_granularity=True, write_once=write_once)
+        allocation_base, _, _, _ = export_allocation_memhandle_regions(base_ptr)
+        allocation_offset = base_ptr - allocation_base
 
         stack.callback(os.close, real_fd)
         stack.callback(os.close, shadow_fd)
         runtime_state_fd: int | None = None
         runtime_state_alloc_size: int | None = None
         if peers_needing_runtime_bootstrap:
-            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(int(device_index))
+            runtime_state_fd, runtime_state_alloc_size = export_runtime_state_handle(
+                int(device_index), ShareableHandleType.POSIX_FILE_DESCRIPTOR)
             stack.callback(os.close, runtime_state_fd)
 
         local_meta = {
@@ -350,6 +388,9 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
             "device_index": int(device_index),
             "nbytes": buffer_size,
             "alloc_size": int(alloc_size),
+            "write_once": write_once,
+            "shadow_granularity": shadow_granularity,
+            "allocation_offset": allocation_offset,
             "runtime_state_alloc_size": (None if runtime_state_alloc_size is None else int(runtime_state_alloc_size)),
         }
 
@@ -357,7 +398,6 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
         dist.all_gather_object(metas, local_meta, group=process_group)
 
         first = metas[0]
-        seen_device_indices: set[int] = set()
         for i, meta in enumerate(metas):
             if meta["hostname"] != first["hostname"]:
                 raise RuntimeError(
@@ -371,16 +411,11 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
                 raise RuntimeError("rendezvous: all ranks must use tensors with identical byte size.")
             if meta["alloc_size"] != first["alloc_size"]:
                 raise RuntimeError("rendezvous: all ranks must use identical GSan allocation sizes.")
-            peer_device_index = int(meta["device_index"])
-            if peer_device_index in seen_device_indices:
-                raise RuntimeError(
-                    "rendezvous: all ranks must use unique CUDA device indices within the process group.")
-            seen_device_indices.add(peer_device_index)
+            if meta["allocation_offset"] < 0 or meta["allocation_offset"] + meta["nbytes"] > meta["alloc_size"]:
+                raise RuntimeError("rendezvous: tensor storage exceeds its GSan allocation.")
             runtime_meta_size = meta["runtime_state_alloc_size"]
             if runtime_meta_size is not None and int(runtime_meta_size) <= 0:
                 raise RuntimeError("rendezvous: runtime_state_alloc_size must be > 0 when provided.")
-        peer_device_indices = tuple(int(meta["device_index"]) for meta in metas)
-
         token_holder = [uuid.uuid4().hex if rank == 0 else None]
         dist.broadcast_object_list(token_holder, group=process_group, group_src=0)
         token = str(token_holder[0])
@@ -465,6 +500,14 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
         if peers_needing_runtime_bootstrap:
             runtime_bootstrapped_peers.update(peers_needing_runtime_bootstrap)
 
+    barrier_tensor = None
+    barrier_handle = None
+    if _create_barrier:
+        barrier_tensor = empty((world_size, ), dtype=torch.int32, device=tensor.device)
+        barrier_tensor.zero_()
+        torch.cuda.synchronize(device_index)
+        barrier_handle = rendezvous(barrier_tensor, process_group, _create_barrier=False)
+
     handle = GSanSymmetricMemoryHandle(
         group=process_group,
         rank=rank,
@@ -472,7 +515,9 @@ def rendezvous(tensor: torch.Tensor, group) -> GSanSymmetricMemoryHandle:
         device_index=device_index,
         buffer_size=buffer_size,
         peer_ptrs=peer_ptrs,
-        peer_device_indices=peer_device_indices,
+        peer_offsets=tuple(0 if peer == rank else int(meta["allocation_offset"]) for peer, meta in enumerate(metas)),
+        barrier_tensor=barrier_tensor,
+        barrier_handle=barrier_handle,
         cache_key=cache_key,
     )
     _RENDEZVOUS_CACHE[cache_key] = handle

@@ -1,11 +1,20 @@
 import functools
 import os
+import platform
 import subprocess
 import triton
 from pathlib import Path
 from triton import knobs
+from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    decompose_descriptor,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 from triton.runtime import _allocation
 from triton.runtime.build import compile_module_from_src
 
@@ -19,51 +28,9 @@ ARG_TUPLE = None
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
-    import platform
-    if platform.system() != 'Linux':
+    if platform.system() != "Linux":
         return None
-
-    # Use dl_iterate_phdr to walk through the list of shared libraries at runtime.
-    # See https://www.man7.org/linux/man-pages/man3/dl_iterate_phdr.3.html for details.
-
-    import ctypes
-    from ctypes import c_char, c_int, c_size_t, c_void_p, c_char_p, POINTER
-
-    class DlPhdrInfo(ctypes.Structure):
-        _fields_ = [
-            ('dlpi_addr', c_void_p),
-            ('dlpi_name', c_char_p),
-            # We don't care about the remaining fields.
-        ]
-
-    # callback_t must use POINTER(c_char) to avoid copying.
-    callback_t = ctypes.CFUNCTYPE(c_int, POINTER(DlPhdrInfo), POINTER(c_size_t), POINTER(c_char))
-
-    # Load libc and get the dl_iterate_phdr symbol.
-    try:
-        dl_iterate_phdr = ctypes.CDLL('libc.so.6').dl_iterate_phdr
-    except Exception:
-        return None
-    # argtypes must use c_char_p to accept create_string_buffer.
-    dl_iterate_phdr.argtypes = [callback_t, c_char_p]
-    dl_iterate_phdr.restype = c_int
-
-    max_path_length = 4096
-    path = ctypes.create_string_buffer(max_path_length + 1)
-
-    # Define callback to get the loaded dylib path.
-    def callback(info, size, data):
-        dlpi_name = info.contents.dlpi_name
-        p = Path(os.fsdecode(dlpi_name))
-        if lib_name in p.name:
-            # Found the dylib; get its path.
-            ctypes.memmove(data, dlpi_name, min(max_path_length, len(dlpi_name)))
-            return 1
-        return 0
-
-    if dl_iterate_phdr(callback_t(callback), path):
-        return os.fsdecode(ctypes.string_at(path))
-    return None
+    return amd.find_loaded_library(lib_name)
 
 
 @functools.lru_cache()
@@ -72,24 +39,51 @@ def _get_path_to_hip_runtime_dylib():
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     if env_libhip_path := knobs.amd.libhip_path:
-        if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
+        if Path(env_libhip_path).name.startswith(lib_name) and os.path.isfile(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
 
-    # If the shared object is already mmapped to address space, use it.
+    # A TheRock installation is a coherent SDK and must take precedence over
+    # system ROCm. Do not silently mix it with a different HIP runtime that was
+    # loaded earlier in the process.
+    try:
+        import rocm_sdk
+
+        therock_libhip_path = str(rocm_sdk.find_libraries("amdhip64")[0])
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
+        therock_libhip_path = None
+    if therock_libhip_path is not None:
+        mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
+        if mmapped_path and not os.path.samefile(mmapped_path, therock_libhip_path):
+            raise RuntimeError(f"TheRock provides '{therock_libhip_path}', but a different HIP runtime "
+                               f"'{mmapped_path}' is already loaded; refusing to mix ROCm installations")
+        return therock_libhip_path
+
+    # If the shared object is already mmapped to address space, use it. This
+    # also matches explicitly versioned names.
     mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
     if mmapped_path:
         if os.path.exists(mmapped_path):
             return mmapped_path
         raise RuntimeError(f"memory mapped '{mmapped_path}' in process does not point to a valid {lib_name}")
 
+    # In each location, prefer explicitly versioned names to pin the major
+    # version.
+    lib_names = [f"{lib_name}.7", f"{lib_name}.6", lib_name]
+
     paths = []
 
+    def find_in_dir(d):
+        for name in lib_names:
+            f = os.path.join(d, name)
+            if os.path.exists(f):
+                return f
+            paths.append(f)
+        return None
+
     # Check backend
-    local_lib = os.path.join(os.path.dirname(__file__), "lib", lib_name)
-    if os.path.exists(local_lib):
-        return local_lib
-    paths.append(local_lib)
+    if f := find_in_dir(os.path.join(os.path.dirname(__file__), "lib")):
+        return f
 
     import site
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
@@ -100,36 +94,28 @@ def _get_path_to_hip_runtime_dylib():
     if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
         site_packages = [user_site] + site_packages
     for path in site_packages:
-        path = os.path.join(path, "torch", "lib", lib_name)
-        if os.path.exists(path):
-            return path
-        paths.append(path)
+        if f := find_in_dir(os.path.join(path, "torch", "lib")):
+            return f
 
     # Then try to see if developer provides a HIP runtime dynamic library using LD_LIBARAY_PATH.
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
     if env_ld_library_path:
         for d in env_ld_library_path.split(":"):
-            f = os.path.join(d, lib_name)
-            if os.path.exists(f):
+            if f := find_in_dir(d):
                 return f
-            paths.append(f)
 
     # HIP_PATH should point to HIP SDK root if set
     env_hip_path = os.getenv("HIP_PATH")
     if env_hip_path:
-        hip_lib_path = os.path.join(env_hip_path, "lib", lib_name)
-        if os.path.exists(hip_lib_path):
-            return hip_lib_path
-        paths.append(hip_lib_path)
+        if f := find_in_dir(os.path.join(env_hip_path, "lib")):
+            return f
 
     # if available, `hipconfig --path` prints the HIP SDK root
     try:
         hip_root = subprocess.check_output(["hipconfig", "--path"]).decode().strip()
         if hip_root:
-            hip_lib_path = os.path.join(hip_root, "lib", lib_name)
-            if os.path.exists(hip_lib_path):
-                return hip_lib_path
-            paths.append(hip_lib_path)
+            if f := find_in_dir(os.path.join(hip_root, "lib")):
+                return f
     except (subprocess.CalledProcessError, FileNotFoundError):
         # hipconfig may not be available
         pass
@@ -137,27 +123,24 @@ def _get_path_to_hip_runtime_dylib():
     # ROCm lib dir based on env var
     env_rocm_path = os.getenv("ROCM_PATH")
     if env_rocm_path:
-        rocm_lib_path = os.path.join(env_rocm_path, "lib", lib_name)
-        if os.path.exists(rocm_lib_path):
-            return rocm_lib_path
-        paths.append(rocm_lib_path)
+        if f := find_in_dir(os.path.join(env_rocm_path, "lib")):
+            return f
 
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
-    for loc in locs:
-        if os.path.exists(loc):
-            return loc
-        paths.append(loc)
+    for name in lib_names:
+        locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith("/" + name)]
+        for loc in locs:
+            if os.path.exists(loc):
+                return loc
+            paths.append(loc)
 
     # As a last resort, guess if we have it in some common installation path.
-    common_install_path = os.path.join('/opt/rocm/lib/', lib_name)
-    if os.path.exists(common_install_path):
-        return common_install_path
-    paths.append(common_install_path)
+    if f := find_in_dir("/opt/rocm/lib/"):
+        return f
 
     raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
@@ -212,34 +195,13 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
 def annotate_arguments(signature):
@@ -275,7 +237,6 @@ def make_tensordesc_arg(arg, tensordesc_metadata, base_args):
     strides = arg.strides
     base = arg.base.data_ptr()
 
-    assert "elem_bits" in tensordesc_metadata and "block_size" in tensordesc_metadata
     elem_bits = tensordesc_metadata["elem_bits"]
     block_size = tensordesc_metadata["block_size"]
     pad_interval, pad_amount = 0, 0
@@ -315,16 +276,15 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
+        signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
+        tensordesc_abi = TensorDescABI.HIP_TDM if tensordesc_meta else TensorDescABI.DECOMPOSED
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.kernel_signature = utils.build_signature_metadata(
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.warp_size = metadata.warp_size
         # Check if cooperative groups are supported on the device.
@@ -384,10 +344,19 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        import ctypes
+
         try:
-            import torch
-            return torch.cuda.is_available() and (torch.version.hip is not None)
-        except ImportError:
+            libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
+            # AMD's reference for querying compute-capable devices:
+            # https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___device.html
+            get_device_count = libhip.hipGetDeviceCount
+            get_device_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
+            get_device_count.restype = ctypes.c_int
+            count = ctypes.c_int()
+            status = get_device_count(ctypes.byref(count))
+            return status == 0 and count.value > 0
+        except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
             return False
 
     def map_python_to_cpp_type(self, ty: str) -> str:

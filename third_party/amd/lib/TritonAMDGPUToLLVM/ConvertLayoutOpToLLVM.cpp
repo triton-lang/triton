@@ -4,9 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
-using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::ConvertLayoutOp;
-using ::triton::gpu::LinearEncodingAttr;
 
 namespace {
 
@@ -29,22 +27,28 @@ public:
 
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
-    if (!cvtNeedsWarpShuffle(srcTy, dstTy))
-      return failure();
-
-    MLIRContext *ctx = op.getContext();
+    auto *ctx = op.getContext();
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
+    auto srcLayout =
+        triton::gpu::toLinearLayout(srcTy).removeZeroBasesAlongDim(kReg);
+    auto dstLayout =
+        triton::gpu::toLinearLayout(dstTy).removeZeroBasesAlongDim(kReg);
+    auto conversion = minimalCvtLayout(srcLayout, dstLayout);
+    if (llvm::to_vector(conversion.getOutDimNames()) !=
+            SmallVector<StringAttr, 2>{kReg, kLane} ||
+        !cvtNeedsWarpShuffle(op))
+      return failure();
 
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
-    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
+    auto [pReg, shuffleMap, mixedTranspositions, nPack] =
+        getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
 
     if (mixedTranspositions.size() != 1)
       return failure();
     auto t = mixedTranspositions[0];
-    auto [rBit, lBit] = t.transposition;
+    auto [rBit, lBit] = std::pair{t.regBit, t.dstLane};
 
     // Following `transferWithinWarp` and `getWarpLayoutConvertDecomposition`,
     // an intra-warp layout conversion can be described as a permutation of
@@ -71,9 +75,9 @@ public:
     }
 
     bool isSingleTransposition =
-        mlir::triton::squareSublayoutIsIdentity(pLane, kLane);
+        mlir::triton::squareSublayoutIsIdentity(shuffleMap, kLane);
 
-    const auto &laneBases = pLane.getBases().lookup(kLane);
+    const auto &laneBases = shuffleMap.getBases().lookup(kLane);
     auto next = [&](size_t b) { return llvm::Log2_32(laneBases[b][0]); };
     for (size_t b = 0; b < laneBases.size(); ++b) {
       if (b == 4 || b == 5)
@@ -104,29 +108,11 @@ public:
       return ret;
     };
 
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    // Handle broadcasting in registers.
-    auto srcLL = triton::gpu::toLinearLayout(srcTy);
-    auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
-    inVals = rmSrc.apply(inVals);
-    // The input values may require broadcasting so that the conversion can be
-    // described as a permutation. This does not cost anything for simple cases.
-    int regDim = inVals.size();
-    int pRegDim = pReg.getInDimSize(kReg);
-    if (pRegDim > regDim) {
-      SmallVector<Value> original(inVals.begin(), inVals.end());
-      inVals.clear();
-      inVals.reserve(pRegDim);
-      while (inVals.size() < pRegDim)
-        inVals.append(original.begin(), original.end());
-      regDim = pRegDim;
-    }
-
-    // Apply pReg.
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    int regDim = pReg.getInDimSize(kReg);
     SmallVector<Value> newInVals(regDim);
-    for (const auto &[i, v] : llvm::enumerate(inVals))
-      newInVals[pReg.apply({{kReg, i}})[0].second] = v;
+    for (int i = 0; i < regDim; ++i)
+      newInVals[pReg.apply({{kReg, i}})[0].second] = inVals[i % inVals.size()];
     inVals = std::move(newInVals);
 
     // Handle register packing.
@@ -214,7 +200,7 @@ public:
       }
       if (bitwidth < bitsPerVecElem) {
         llvm::for_each(unpackedVals, [&](Value &v) {
-          v = b.trunc(int_ty(bitwidth), v);
+          v = b.trunc(int_ty(bitwidth), v, LLVM::IntegerOverflowFlags::nuw);
           if (elemTy != int_ty(bitwidth))
             v = b.bitcast(v, elemTy);
         });
@@ -238,26 +224,17 @@ public:
         if (isa<LLVM::LLVMPointerType>(elemTy))
           v = b.inttoptr(elemTy, v);
         if (bitwidth < 32)
-          v = b.trunc(int_ty(bitwidth), v);
+          v = b.trunc(int_ty(bitwidth), v, LLVM::IntegerOverflowFlags::nuw);
         if (!isa<IntegerType>(elemTy))
           v = b.bitcast(v, elemTy);
       });
     }
 
-    // Handle broadcasting in registers.
-    // The `factors` produce output values which may contain broadcasting.
-    // This needs to be removed before using `broadcastAs` to get the correct
-    // broadcasting as expected by the original destination layout.
-    auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    auto rmDst = actionRemoveBroadcastedRegs(dstLL);
-    auto strippedDst = rmDst.apply(dstLL);
-    outVals.resize(strippedDst.getInDimSize(kReg));
+    // Drop registers introduced only to pad the permutation.
+    outVals.resize(dstLayout.getInDimSize(kReg));
 
-    if (!rmDst.isIdentity())
-      outVals = broadcastAs(outVals, dstLL);
-
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -339,7 +316,7 @@ public:
   // Converts full layout mapping to more convenient form.
   // Mapping each output register byte to some input byte:
   // regContents[output reg no][output reg byte no] -> ByteLocation(input
-  // regiser no, byte index in this register)
+  // register no, byte index in this register)
   static std::vector<std::array<ByteLocation, regBytes>>
   generateDstRegContents(const std::vector<int> &fullLayout) {
     int numRegs = fullLayout.size() / regBytes;
@@ -363,7 +340,7 @@ public:
   static std::vector<Value>
   repackInputToRegisters(Location loc, OpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter) {
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     auto numRegs = inVals.size() / regBytes;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::vector<Value> srcRegs(numRegs);
@@ -675,8 +652,8 @@ public:
         outVals[regIdx * regBytes + elem] = unpacked[elem];
       }
     }
-    return packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                          op.getType());
+    return packUniqueTensorElements(loc, getTypeConverter(), outVals, rewriter,
+                                    op.getType());
   }
 
   void transferWithVPerm(ConvertLayoutOp op, const LinearLayout &conversion,
@@ -721,10 +698,13 @@ public:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-
     auto ctx = op.getContext();
     StringAttr kRegister = mlir::StringAttr::get(ctx, "register");
+    auto srcLayout =
+        triton::gpu::toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout =
+        triton::gpu::toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
@@ -750,7 +730,7 @@ public:
     for (const auto &base : conversion.getBases().at(kRegister)) {
       assert(base.size() == 1);
       // Currently swizzled distributed layouts are forbidden.
-      // This is a safety check in case such layouts are permited.
+      // This is a safety check in case such layouts are permitted.
       // Main concern is processFourWayDependencies function.
       // It assumes each src byte is paired with at most one src byte,
       // which is not true for broadcasted + swizzled layouts.

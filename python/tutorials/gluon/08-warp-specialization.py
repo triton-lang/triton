@@ -103,7 +103,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # mbarrier.arrive(bar, count=1)
 #
 # mbarrier.wait(bar, phase=0)  # in partition B
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# tma.async_store(desc, [0, 0], smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory store and the TMA store.
@@ -174,7 +174,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         # Wait for the compute partition to produce c.
         mbarrier.wait(c_ready_bar, phase)
         yoff = i * YBLOCK
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
+        tma.async_store(c_desc, [xoff, yoff], c_buf)
 
         tma.store_wait(outstanding_stores)
         c_empty_bar = c_empty_bars.index((i - outstanding_stores) % num_buffers)
@@ -521,7 +521,6 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
         # the TMEM loads with the SMEM stores to avoid spilling.
         mbarrier.wait(acc_ready_bars.index(acc_state.index), acc_state.phase)
         acc = p.acc_bufs.index(acc_state.index).load()
-        acc_state = acc_state.next()
 
         accs = _split_n(acc, p.SUBTILE_FACTOR)
         for i in gl.static_range(len(accs)):
@@ -532,7 +531,8 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
             if i == 0:
                 mbarrier.arrive(acc_empty_bars.index(acc_state.index), count=1)
             fence_async_shared()
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
+        acc_state = acc_state.next()
     # Overlap the last store with the wait, then wait for the last store here.
     tma.store_wait(pendings=0)
 

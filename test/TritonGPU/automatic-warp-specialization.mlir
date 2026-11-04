@@ -392,3 +392,123 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// AutomaticWS partitions one CLC While and emits a single physical CLC issue.
+#clc_aws_oper = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#clc_aws_acc = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#clc_aws_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#clc_aws_shared_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#clc_aws_smem = #ttg.shared_memory
+#clc_aws_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#clc_aws_response = #ttg.linear<{register = [[1]], lane = [[0], [0], [0], [0], [0]], warp = [[0], [0]], block = []}>
+#clc_aws_response_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // BASE-LABEL: @clc_while_aws
+  tt.func @clc_while_aws(
+      %a_desc: !tt.tensordesc<128x64xf16, #clc_aws_shared>,
+      %b_desc: !tt.tensordesc<128x64xf16, #clc_aws_shared>,
+      %out: !tt.ptr<i32>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c6 = arith.constant 6 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %pid0 = tt.get_program_id x : i32
+    // BASE: ttg.warp_specialize
+    // BASE: default
+    // BASE: ttng.clc_load_result
+    // BASE: ttng.clc_get_program_id
+    // BASE-NOT: ttng.clc_try_cancel
+    // BASE: partition0
+    // BASE: ttng.clc_load_result
+    // BASE: ttng.clc_get_program_id
+    // BASE-NOT: ttng.clc_try_cancel
+    // BASE: partition1
+    // BASE: ttng.clc_load_result
+    // BASE: ttng.clc_get_program_id
+    // BASE-NOT: ttng.clc_try_cancel
+    // BASE: partition2
+    // BASE: ttng.clc_try_cancel
+    // BASE-NOT: ttng.clc_try_cancel
+    // BASE: ttng.clc_load_result
+    // BASE: ttng.clc_get_program_id
+    scf.while (%pid = %pid0, %has_work = %true) : (i32, i1) -> (i32, i1) {
+      scf.condition(%has_work) %pid, %has_work : i32, i1
+    } do {
+    ^bb0(%pid: i32, %has_work: i1):
+      %response = ttng.clc_try_cancel_sync : tensor<2xi64, #clc_aws_response>
+      %response_smem = ttg.local_alloc %response {alignment = 16 : i32} : (tensor<2xi64, #clc_aws_response>) -> !ttg.memdesc<2xi64, #clc_aws_response_shared, #clc_aws_smem, mutable>
+      scf.for %k = %c0 to %c6 step %c1 : i32 {
+        %a = tt.descriptor_load %a_desc[%pid, %k] : !tt.tensordesc<128x64xf16, #clc_aws_shared> -> tensor<128x64xf16, #clc_aws_oper>
+        %b = tt.descriptor_load %b_desc[%pid, %k] : !tt.tensordesc<128x64xf16, #clc_aws_shared> -> tensor<128x64xf16, #clc_aws_oper>
+        %a_s = ttg.local_alloc %a : (tensor<128x64xf16, #clc_aws_oper>) -> !ttg.memdesc<128x64xf16, #clc_aws_shared, #clc_aws_smem>
+        %b_s0 = ttg.local_alloc %b : (tensor<128x64xf16, #clc_aws_oper>) -> !ttg.memdesc<128x64xf16, #clc_aws_shared, #clc_aws_smem>
+        %b_s = ttg.memdesc_trans %b_s0 {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #clc_aws_shared, #clc_aws_smem> -> !ttg.memdesc<64x128xf16, #clc_aws_shared_t, #clc_aws_smem>
+        %acc_mem, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #clc_aws_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+        %mma = ttng.tc_gen5_mma %a_s, %b_s, %acc_mem[%acc_tok], %false, %true : !ttg.memdesc<128x64xf16, #clc_aws_shared, #clc_aws_smem>, !ttg.memdesc<64x128xf16, #clc_aws_shared_t, #clc_aws_smem>, !ttg.memdesc<128x128xf32, #clc_aws_tmem, #ttng.tensor_memory, mutable>
+        %value, %load_tok = ttng.tmem_load %acc_mem[%mma] : !ttg.memdesc<128x128xf32, #clc_aws_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #clc_aws_acc>
+        "consume"(%value) : (tensor<128x128xf32, #clc_aws_acc>) -> ()
+      } {tt.warp_specialize, tt.num_stages = 2 : i32}
+      %out_ptr = tt.addptr %out, %pid : !tt.ptr<i32>, i32
+      tt.store %out_ptr, %pid : !tt.ptr<i32>
+      %raw = ttng.clc_load_result %response_smem : !ttg.memdesc<2xi64, #clc_aws_response_shared, #clc_aws_smem, mutable> -> i128
+      %next_has_work = ttng.clc_is_canceled %raw : i128 -> i1
+      %next_pid = scf.if %next_has_work -> i32 {
+        %stolen = ttng.clc_get_program_id %raw, x : i128 -> i32
+        scf.yield %stolen : i32
+      } else {
+        scf.yield %pid : i32
+      }
+      scf.yield %next_pid, %next_has_work : i32, i1
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#blockedA = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+#blockedC = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Keep the regular MMA self-dependency when automatic specialization is skipped.
+  // CLEAN-LABEL: @two_cta_no_auto_warp_specialization
+  // CLEAN-NOT: ttg.warp_specialize
+  // BASE: ttng.tc_gen5_mma {{.*}}tt.self_latency = 1 : i32
+  // BASE: tt.warp_specialize
+  // PIPELINE: ttng.arrive_barrier
+  // PIPELINE: ttng.wait_barrier
+  // CLEAN: tt.return
+  tt.func @two_cta_no_auto_warp_specialization(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %av = tt.descriptor_load %a[%c0, %c0] : !tt.tensordesc<512x64xf16, #sharedA> -> tensor<512x64xf16, #blockedA>
+      %as = ttg.local_alloc %av : (tensor<512x64xf16, #blockedA>) -> !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>
+      %bv = tt.descriptor_load %b[%c0, %c0] : !tt.tensordesc<64x128xf16, #sharedB> -> tensor<64x128xf16, #blockedB>
+      %bs = ttg.local_alloc %bv : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+      %mma = ttng.tc_gen5_mma %as, %bs, %acc[%tok], %false, %true {two_ctas} : !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %odd = arith.andi %i, %c1 : i32
+      %read = arith.cmpi eq, %odd, %c0 : i32
+      %done = scf.if %read -> !ttg.async.token {
+        %v, %load = ttng.tmem_load %acc[%mma] : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #blockedC>
+        "use"(%v) : (tensor<512x128xf32, #blockedC>) -> ()
+        scf.yield %load : !ttg.async.token
+      } else {
+        scf.yield %mma : !ttg.async.token
+      }
+      scf.yield %done : !ttg.async.token
+    } {tt.warp_specialize, tt.num_stages = 3 : i32}
+    tt.return
+  }
+}

@@ -19,6 +19,7 @@ using mlir::getElementTypeOrSelf;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversion;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
+using mlir::triton::gpu::ElementwiseToIntrinsicOpConversion;
 using mlir::triton::gpu::getFunctionType;
 using mlir::triton::gpu::MultipleOperandsRange;
 using triton::amdgpu::ISAFamily;
@@ -55,36 +56,19 @@ struct PackedArithOpConversion
     if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
 
-    Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
-    Value vb = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
-    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb);
+    SmallVector<Value> packedOperands;
+    for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
+      packedOperands.push_back(
+          packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
+    Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
+                              packedOperands, typename LLVMOp::Properties{});
     return unpackLLVector(loc, vr, rewriter);
-  }
-};
-
-struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
-
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
-                                 operands[0][1])};
   }
 };
 
 struct FMulOpConversion
     : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-
-  explicit FMulOpConversion(LLVMTypeConverter &typeConverter,
-                            ModuleAxisInfoAnalysis &axisAnalysisPass,
-                            ISAFamily isaFamily,
-                            PatternBenefit benefit = patternBenefitDefault)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        isaFamily(isaFamily) {}
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
   SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -93,30 +77,12 @@ struct FMulOpConversion
     auto lhsElemTy = getElementTypeOrSelf(op.getLhs());
     auto rhsElemTy = getElementTypeOrSelf(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      if (triton::amdgpu::isRDNA(isaFamily)) {
-        // To avoid casting to/from fp32, we compute a dot product with one
-        // element of each vector set to zero.
-        auto b = TritonLLVMOpBuilder(loc, rewriter);
-        Value aVal = packLLVector(
-            loc, ValueRange{operands[0][0], b.bf16_val(0.0)}, rewriter);
-        Value bVal = packLLVector(
-            loc, ValueRange{operands[0][1], b.bf16_val(0.0)}, rewriter);
-        return {LLVM::createLLVMIntrinsicCallOp(
-                    rewriter, loc, "llvm.amdgcn.fdot2.bf16.bf16", bf16_ty,
-                    ValueRange{aVal, bVal, b.bf16_val(0.0)})
-                    ->getResult(0)};
-      } else {
-        return {
-            EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-      }
+      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
     } else {
       return {LLVM::FMulOp::create(rewriter, loc, elemTy, operands[0][0],
                                    operands[0][1])};
     }
   }
-
-private:
-  ISAFamily isaFamily;
 };
 
 struct FAddOpConversion
@@ -312,7 +278,8 @@ struct Exp2OpConversion
     if (ftz)
       return {ROCDL::ROCDLExp2::create(rewriter, loc, elemTy, operands[0])};
 
-    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0])};
+    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0],
+                                 LLVM::Exp2Op::Properties{})};
   }
 
 private:
@@ -412,7 +379,7 @@ struct SqrtOpConversion
     }
 
     // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
-    // 1ULP accuracy and flushs denorms.
+    // 1ULP accuracy and flushes denorms.
     Value intrinsicsOutput =
         ROCDL::ROCDLSqrt::create(rewriter, loc, elemTy, scaledSrc);
 
@@ -499,8 +466,8 @@ void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    const TargetInfo &targetInfo, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfo &targetInfo,
+    PatternBenefit benefit) {
 
   // fmin (return NaN if either op is NaN)
   patterns.add<ElementwiseOpConversion<arith::MinimumFOp, LLVM::MinimumOp>>(
@@ -510,24 +477,28 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.amdgcn.fdiv.fast", benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
-  if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
-    auto gfx1250Benefit = benefit.getBenefit() + 1;
+  if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
+    auto cdna5Benefit = benefit.getBenefit() + 1;
     patterns.add<PackedArithOpConversion<arith::SubFOp, LLVM::FSubOp>>(
-        typeConverter, axisInfoAnalysis, gfx1250Benefit);
+        typeConverter, axisInfoAnalysis, cdna5Benefit);
     patterns.add<PackedArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
-        typeConverter, axisInfoAnalysis, gfx1250Benefit);
+        typeConverter, axisInfoAnalysis, cdna5Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
-        typeConverter, axisInfoAnalysis, gfx1250Benefit);
+        typeConverter, axisInfoAnalysis, cdna5Benefit);
+    patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
+        typeConverter, axisInfoAnalysis, cdna5Benefit);
   }
 
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis,
-                                 targetInfo.getISAFamily(), benefit);
+  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,
@@ -549,12 +520,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
-  triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-  bool hwNanPropagationSupported = targetInfo.supportMaximumMinimum();
-  triton::populateMinMaxFOpToLLVMPattern(typeConverter, patterns,
-                                         axisInfoAnalysis,
-                                         hwNanPropagationSupported, benefit);
+  triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                              axisInfoAnalysis, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
                                         axisInfoAnalysis, targetInfo, benefit);
 }

@@ -10,6 +10,18 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
+// Compute B.invertAndCompose(A), mapping bits broadcast by A in localDims to
+// the corresponding input bits without changing the composition.
+[[nodiscard]] LinearLayout
+invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
+                      ArrayRef<StringAttr> localDims);
+
+// Map registers to shared addresses for a store. Extra high register bits
+// repeat the source values across the remaining CTA replicas.
+[[nodiscard]] LinearLayout
+invertAndComposeStore(const LinearLayout &sharedLayout,
+                      const LinearLayout &regLayout);
+
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).
@@ -59,32 +71,18 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 //   L(register=2) = 1
 //   L(lane=1) = 2
 //   L(lane=2) = 0
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters = true);
+LinearLayout ensureLayoutNotLargerThan(const LinearLayout &layout,
+                                       llvm::ArrayRef<StringAttr> dimNames,
+                                       llvm::ArrayRef<int64_t> shape,
+                                       bool broadcastRegisters = true);
 
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
-
-inline LinearLayout
-ensureLayoutNotSmallerThan(const LinearLayout &layout,
-                           const llvm::ArrayRef<StringAttr> dimNames,
-                           const llvm::ArrayRef<int64_t> shape) {
-  llvm::SmallDenseMap<StringAttr, int64_t> namedDims;
-  for (auto [dimName, length] : llvm::zip_equal(dimNames, shape))
-    namedDims[dimName] = length;
-  assert(namedDims.size() == shape.size() && "duplicate dimension names given");
-  return ensureLayoutNotSmallerThan(layout, namedDims);
-}
+// For each output dimension d, ensure the layout's output size is at least
+// shape[d] by growing inDim. Repetitions follow the layout's output dimension
+// order, from minor to major.
+LinearLayout ensureLayoutNotSmallerThan(const LinearLayout &layout,
+                                        llvm::ArrayRef<StringAttr> dimNames,
+                                        llvm::ArrayRef<int64_t> shape,
+                                        StringAttr inDim);
 
 // Return a vector of the standard out dimension names for tensor layouts. These
 // are "dim0", "dim1", etc.
@@ -105,6 +103,35 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
 // bases set to 0.
 LinearLayout zerosLike(const LinearLayout &layout);
 
+// Return the output bits touched by `inDims` in `outDim`.
+uint32_t getOutputBasisMask(const LinearLayout &layout,
+                            ArrayRef<StringAttr> inDims, StringAttr outDim);
+
+// Return a mask of the bases in `inDim` that touch any of `outDims`. Bit i is
+// set exactly when the i-th input basis has a nonzero component in at least one
+// selected output dimension.
+uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
+                           ArrayRef<StringAttr> outDims);
+
+struct IdentityFactor {
+  int32_t size;
+  LinearLayout quotient;
+};
+
+// Factor the largest identity1D(size, inDim, outDim) prefix from `layout`,
+// considering power-of-two sizes through `maxSize`.
+IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
+                                           StringAttr inDim, StringAttr outDim,
+                                           int32_t maxSize);
+
+// Rename input and output dimensions simultaneously without changing their
+// order. Every old name must exist and the final names in each domain must be
+// unique.
+LinearLayout renameLinearLayoutDims(
+    const LinearLayout &layout,
+    ArrayRef<std::pair<StringAttr, StringAttr>> inDimRenames,
+    ArrayRef<std::pair<StringAttr, StringAttr>> outDimRenames);
+
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) may be divisible by B
 // It's not always true that the action returned by this function will
@@ -119,7 +146,8 @@ ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
 
 std::pair<int64_t, ColumnAction>
 actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
-                      uint64_t maskSpanOffsets, int64_t regsPerInst);
+                      uint64_t maskSpanOffsets, uint64_t maskSpanBlocks,
+                      int64_t regsPerInst);
 
 // For a layout A with A.hasInDim(kReg), repeat the values so that they have
 // the same broadcasting as layout
@@ -147,6 +175,11 @@ std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
                      std::optional<int> maybeMaxVecElems = std::nullopt);
 
+// Match tile over cvt's input domain and return the repetition offsets in cvt's
+// coordinates, with the matched input bases set to zero. The full tile's output
+// extents must fit in cvt, and its bases outside the view still reserve output
+// bits that repetitions cannot use.
+//
 // Close cousin of doing zerosLike(tile) * divideLeft(cvt, tile)
 // This one is a tad more general in the sense that it allows to divide
 //  cvt:

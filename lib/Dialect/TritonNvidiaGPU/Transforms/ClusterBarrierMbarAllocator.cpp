@@ -23,13 +23,6 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace {
 
-bool atomicNeedsClusterBarrier(Operation *op) {
-  if (!isa<AtomicCASOp, AtomicRMWOp>(op) || op->getResult(0).use_empty() ||
-      isa<RankedTensorType>(op->getResult(0).getType()))
-    return false;
-  return gpu::lookupNumCTAs(op) > 1;
-}
-
 struct ClusterBarrierMbarAllocatorPass
     : public impl::TritonNvidiaGPUClusterBarrierMbarAllocatorPassBase<
           ClusterBarrierMbarAllocatorPass> {
@@ -39,19 +32,6 @@ struct ClusterBarrierMbarAllocatorPass
 };
 
 } // namespace
-
-bool needsClusterBarrier(Operation *op) {
-  if (isa<ClusterBarrierOp>(op))
-    return true;
-  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
-                         gpu::toLinearLayout(cvt.getType()), kBlock);
-  }
-  if (auto reduce = dyn_cast<ReduceOp>(op))
-    return !ReduceOpHelper(reduce).isReduceWithinCTA();
-  return atomicNeedsClusterBarrier(op);
-}
 
 void runClusterBarrierMbarAllocator(ModuleOp mod) {
   auto funcs = mod.getOps<triton::FuncOp>();
@@ -80,7 +60,7 @@ void runClusterBarrierMbarAllocator(ModuleOp mod) {
     auto [it, inserted] = regionOffsets.try_emplace(region);
     if (inserted) {
       it->second = builder.getI32IntegerAttr(nextOffset);
-      nextOffset += 16;
+      nextOffset += kClusterBarrierMbarAllocationSize;
     }
     op->setAttr(kClusterBarrierMbarOffsetAttrName, it->second);
   });

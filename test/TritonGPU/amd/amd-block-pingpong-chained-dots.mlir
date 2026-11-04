@@ -12,34 +12,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK: scf.for
   // CHECK-NEXT: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster1
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster2
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield
@@ -67,6 +67,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %17 = ttg.async_commit_group tokens %16
       scf.yield %12, %6, %14, %arg19, %17, %arg21, %15, %11, %9 : tensor<128x16xf32, #mma>, tensor<128x16xf32, #mma>, tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, !ttg.async.token, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.memdesc<64x16xf16, #shared, #smem, mutable>
     }
+    scf.for %i = %c0_i32 to %arg1 step %arg2 : i32 {
+      %scaled0 = tt.dot_scaled %arg10, %arg7, %arg4 lhs = fp16 rhs = fp16 {fastMath = false} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      %scaled1 = tt.dot_scaled %arg10, %arg7, %arg4 lhs = fp16 rhs = fp16 {fastMath = false} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+    }
     ttg.local_dealloc %1 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
     ttg.local_dealloc %0 : !ttg.memdesc<2x64x16xf16, #shared, #smem, mutable>
     tt.return %5#0 : tensor<128x16xf32, #mma>
@@ -86,32 +90,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NOT: rocdl.s
   // CHECK: scf.for
   // CHECK: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster1
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster2
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
   // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield

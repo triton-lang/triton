@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -14,17 +15,17 @@ using namespace mlir::triton::gpu;
 namespace {
 // Validates that the tensor descriptor's strides and shared layout are
 // compatible with TDM. Requirements:
-//  - The shared order must be [rank-1, rank-2, ..., 0].
+//  - Non-unit block dimensions must be in reverse-rank shared order.
 //  - All stride-1 dimensions must be consecutive trailing dims.
 LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
                                             Attribute sharedEnc,
                                             ArrayRef<int64_t> shape,
                                             ValueRange strides) {
-  int rank = shape.size();
   auto sharedOrder = triton::gpu::getOrder(
       cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shape);
-  SmallVector<unsigned> expectedOrder(llvm::reverse(llvm::seq<unsigned>(rank)));
-  if (sharedOrder != ArrayRef(expectedOrder)) {
+  // Unit block dimensions do not affect the physical shared layout.
+  llvm::erase_if(sharedOrder, [&](unsigned dim) { return shape[dim] == 1; });
+  if (!llvm::is_sorted(sharedOrder, std::greater<unsigned>{})) {
     return op.emitError() << "requires shared order [rank-1, rank-2, ..., 0]";
   }
 
@@ -51,6 +52,11 @@ struct MakeTensorDescOpConversion
   LogicalResult
   matchAndRewrite(triton::MakeTensorDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getPadding() != PaddingOption::PAD_ZERO) {
+      return op.emitError()
+             << "Padding with non-zero in TDM is not supported on CDNA5.";
+    }
+
     auto loc = op.getLoc();
     auto basePtr = adaptor.getBase();
     auto tensorShape = adaptor.getShape();
@@ -63,6 +69,23 @@ struct MakeTensorDescOpConversion
       return rewriter.notifyMatchFailure(
           op, "Descriptor has no shared memory layout assigned.");
     }
+    auto blockShape = tensorDescTy.getShape();
+    if (blockShape.empty() || blockShape.size() > 5)
+      return op.emitOpError("TDM supports 1D to 5D descriptors");
+    if (llvm::any_of(blockShape, [](int64_t size) {
+          return size <= 0 || size > std::numeric_limits<uint16_t>::max();
+        }))
+      return op.emitOpError(
+          "TDM block dimensions must be positive and at most 65535");
+    auto shared = dyn_cast<SharedEncodingTrait>(sharedEnc);
+    if (!shared ||
+        cast<LayoutEncodingTrait>(sharedEnc).getRank() != blockShape.size())
+      return op.emitOpError("TDM descriptor shared layout rank must match "
+                            "the descriptor rank");
+    unsigned bitWidth =
+        getIntOrFloatOrPtrBitWidth(tensorDescTy.getElementType());
+    if (bitWidth != 8 && bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
+      return op.emitOpError("TDM requires 8-, 16-, 32-, or 64-bit elements");
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (auto padEnc = getPaddedEncoding(sharedEnc)) {
@@ -71,11 +94,19 @@ struct MakeTensorDescOpConversion
             op, "NYI: Multiple interval-padding pairs in TDM.");
       padInterval = padEnc.getIntervals()[0];
       padAmount = padEnc.getPaddings()[0];
+      uint64_t intervalBits = uint64_t(padInterval) * bitWidth;
+      uint64_t paddingBits = uint64_t(padAmount) * bitWidth;
+      if (intervalBits % 32 || paddingBits % 32 || intervalBits / 32 < 2 ||
+          intervalBits / 32 > 256 || paddingBits / 32 < 1 ||
+          paddingBits / 32 > 128)
+        return op.emitOpError(
+            "TDM padding must use a dword-aligned interval "
+            "of 2 to 256 dwords and amount of 1 to 128 dwords");
     }
 
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
-    SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
+
     auto shapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, blockShape);
 
     if (failed(validateStridesAndSharedOrder(op, sharedEnc, shapePerCTA,
@@ -119,48 +150,22 @@ struct UpdateTensorDescriptorOpConversion
         getTypeConverter()->convertType(tensorDescTy.getElementType());
     SmallVector<int64_t> blockShape = to_vector(tensorDescTy.getShape());
 
-    if (blockShape.size() != 2) {
-      return rewriter.notifyMatchFailure(
-          op, "UpdateTensorDescriptorOp lowering currently supports 2D only");
-    }
-
-    // Unpack the input descriptor into vector groups (group0: <4 x i32>,
-    // group1: <8 x i32> for 2D).
+    // Unpack the input descriptor into vector groups: 2 (1D-2D) or 4 (3D-5D).
     SmallVector<Value> groups =
         mlir::LLVM::AMD::unpackTDMDescriptor(rewriter, loc, adaptor.getDesc());
-    assert(groups.size() == 2 && "2D descriptor expects 2 vector groups");
-    Value group0 = groups[0];
-    Value group1 = groups[1];
 
     SmallVector<Value> addOffsets = llvm::to_vector(adaptor.getAddOffsets());
     SmallVector<Value> setBounds = llvm::to_vector(adaptor.getSetBounds());
-
-    Value destPtr;
-    if (op.getDest()) {
-      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-          loc, adaptor.getDest(), elementType, rewriter);
-      destPtr = smemObj.getBase();
-    }
-    Value barrierPtr;
-    if (op.getBarrier()) {
-      auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-          loc, adaptor.getBarrier(),
-          getTypeConverter()->convertType(
-              op.getBarrier().getType().getElementType()),
-          rewriter);
-      barrierPtr = smemObj.getBase();
-    }
     Value pred = adaptor.getPred();
 
     mlir::LLVM::AMD::updateTensorDescriptor(
-        rewriter, loc, elementType, blockShape, group0, group1, addOffsets,
-        setBounds, destPtr, pred, barrierPtr);
+        rewriter, loc, elementType, blockShape, groups, addOffsets, setBounds,
+        pred, op.getClampBounds());
 
     // Re-pack the mutated groups back into the flat MLIR struct that
     // matches convertTensorDescType / the host-side TDMDescriptor ABI.
-    SmallVector<Value> mutated = {group0, group1};
     SmallVector<Value> scalars =
-        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, mutated);
+        mlir::LLVM::AMD::scalarizeTDMDescriptor(rewriter, loc, groups);
     Value newDesc = packLLElements(loc, getTypeConverter(), scalars, rewriter,
                                    tensorDescTy);
 

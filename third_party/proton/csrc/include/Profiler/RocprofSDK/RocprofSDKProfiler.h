@@ -5,16 +5,18 @@
 
 namespace proton {
 
-class RocprofSDKProfiler : public GPUProfiler<RocprofSDKProfiler> {
+class RocprofSDKProfiler final : public GPUProfiler<RocprofSDKProfiler> {
 public:
-  RocprofSDKProfiler();
-  virtual ~RocprofSDKProfiler();
+  ~RocprofSDKProfiler() override;
 
   struct RocprofSDKProfilerPimpl;
 
 private:
-  virtual void
-  doSetMode(const std::vector<std::string> &modeAndOptions) override;
+  friend class Singleton<RocprofSDKProfiler>;
+
+  RocprofSDKProfiler();
+
+  void doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };
 
 } // namespace proton

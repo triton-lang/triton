@@ -13,7 +13,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @test_gather_i32
 // CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I32]]}>>
 // CHECK: ttg.local_alloc
-// CHECK: amdg.async_tdm_gather {{.*}} pred = %{{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I32]]
+// CHECK: amdg.update_tensor_descriptor %{{.*}} add_offsets = [%c0_i32, %{{.*}}] pred = %{{.*}} {clamp_bounds}
+// CHECK: amdg.async_tdm_gather %{{.*}}[%{{.*}}] to %{{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I32]]
 // CHECK: amdg.async_tdm_wait {num = 0 : i32}
 // CHECK: ttg.local_load
 tt.func public @test_gather_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc>,
@@ -38,7 +39,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @test_gather_i16
 // CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I16]]}>>
 // CHECK: ttg.local_alloc
-// CHECK: amdg.async_tdm_gather {{.*}} pred = %{{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I16]]
+// CHECK: amdg.update_tensor_descriptor %{{.*}} add_offsets = [%c0_i32, %{{.*}}] pred = %{{.*}} {clamp_bounds}
+// CHECK: amdg.async_tdm_gather %{{.*}}[%{{.*}}] to %{{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_I16]]
 // CHECK: amdg.async_tdm_wait {num = 0 : i32}
 // CHECK: ttg.local_load
 tt.func public @test_gather_i16(%desc: !tt.tensordesc<1x32xi8, #padded_desc16>,
@@ -64,7 +66,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @test_scatter_i32
 // CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I32]]}>>
 // CHECK: ttg.local_alloc {{.*}} : (tensor<32x32xi8
-// CHECK: amdg.async_tdm_scatter {{.*}} from {{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I32]]
+// CHECK: amdg.update_tensor_descriptor %{{.*}} add_offsets = [%c0_i32, %{{.*}}] {clamp_bounds}
+// CHECK: amdg.async_tdm_scatter %{{.*}}[%{{.*}}] from %{{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I32]]
 // CHECK: amdg.async_tdm_wait {num = 0 : i32}
 // CHECK-NOT: ttg.local_load
 tt.func public @test_scatter_i32(%desc: !tt.tensordesc<1x32xi8, #padded_desc_s>,
@@ -90,7 +93,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @test_scatter_i16
 // CHECK: ttg.convert_layout %{{.*}} -> tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I16]]}>>
 // CHECK: ttg.local_alloc {{.*}} : (tensor<32x32xi8
-// CHECK: amdg.async_tdm_scatter {{.*}} from {{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I16]]
+// CHECK: amdg.update_tensor_descriptor %{{.*}} add_offsets = [%c0_i32, %{{.*}}] {clamp_bounds}
+// CHECK: amdg.async_tdm_scatter %{{.*}}[%{{.*}}] from %{{.*}} : tensor<32xi16, #ttg.slice<{dim = 0, parent = #[[$AMD_IDX_S_I16]]
 // CHECK: amdg.async_tdm_wait {num = 0 : i32}
 // CHECK-NOT: ttg.local_load
 tt.func public @test_scatter_i16(%desc: !tt.tensordesc<1x32xi8, #padded_desc_s16>,

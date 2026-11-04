@@ -26,6 +26,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -33,6 +34,7 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -48,6 +50,221 @@ using namespace mlir::triton::gpu;
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
+
+static LogicalResult verifyTcgen05Target(Operation *op) {
+  auto targetInfo =
+      TargetInfoBase::fromModuleOp(op->getParentOfType<ModuleOp>());
+  if (targetInfo && !targetInfo->supportsTcgen05())
+    return op->emitOpError("requires tcgen05 support");
+  return success();
+}
+
+// -- PackedArithOp --
+namespace {
+constexpr llvm::StringLiteral Half = "hb";
+constexpr llvm::StringLiteral X2 = "fhb";
+constexpr llvm::StringLiteral Alternate = "542u";
+constexpr llvm::StringLiteral AlternateResult = "54";
+
+struct PackedArithSignatureRule {
+  llvm::StringLiteral operations;
+  StringRef resultTypes;
+  StringRef operandTypes[3];
+  llvm::StringLiteral modifiers;
+  unsigned operandSuffixes;
+};
+} // namespace
+
+static const PackedArithTypeInfo &getPackedArithTypeInfo(Type elementType) {
+  static const struct {
+    TypeID type;
+    PackedArithTypeInfo info;
+  } types[] = {
+      {TypeID::get<Float32Type>(), {"f32x2", 2, 64, 'f'}},
+      {TypeID::get<Float16Type>(), {"f16x2", 2, 32, 'h'}},
+      {TypeID::get<BFloat16Type>(), {"bf16x2", 2, 32, 'b'}},
+      {TypeID::get<Float8E5M2Type>(), {"e5m2x4", 4, 32, '5'}},
+      {TypeID::get<Float8E4M3FNType>(), {"e4m3x4", 4, 32, '4'}},
+      {TypeID::get<IntegerType>(), {"e2m1x4", 4, 16, '2'}},
+      {TypeID::get<Float8E8M0FNUType>(), {"ue8m0x4", 4, 32, 'u'}},
+  };
+  for (const auto &type : types)
+    if (elementType.getTypeID() == type.type)
+      return type.info;
+  llvm_unreachable("unsupported packed arithmetic element type");
+}
+
+static FailureOr<PackedArithInstructionSpec>
+resolvePackedArithInstructionSpec(PackedArithOp op) {
+  auto kind = op.getOpKind();
+  const auto *result = &getPackedArithTypeInfo(op.getType().getElementType());
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  for (Value operand : op.getOperands())
+    operands.push_back(&getPackedArithTypeInfo(
+        cast<RankedTensorType>(operand.getType()).getElementType()));
+
+  // clang-format off
+  static constexpr PackedArithSignatureRule signatures[] = {
+      // operations       result           operands                     modifiers  suffixes
+      {"add sub mul",    X2,              {"=", "="},                  "",        0},
+      {"fma",            X2,              {"=", "=", "="},             "rn",      0},
+      {"min max",        Half,            {"=", "="},                  "",        0},
+      {"add sub",        "f",             {Half, "f"},                 "",        2},
+      {"add sub",        "h",             {"f", "f"},                  "rz.ftz",  2},
+      {"add sub",        "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            "h",             {"f", "f"},                  "ftz.rz",  2},
+      {"mul",            "b",             {"f", "f"},                  "rz",      2},
+      {"mul",            Half,            {"=", "!"},                  "",        2},
+      {"fma",            "f",             {Half, "f", "f"},            "rn",      3},
+      {"add sub",        AlternateResult, {Alternate, "="},            "",        1},
+      {"mul",            AlternateResult, {Alternate, Alternate},      "",        2},
+      {"fma",            AlternateResult, {Alternate, Alternate, "="}, "",        2},
+  };
+  // clang-format on
+
+  auto matches = [result](StringRef types, const PackedArithTypeInfo *info) {
+    if (types == "=")
+      return info == result;
+    if (types == "!")
+      return info != result && Half.contains(info->kind);
+    return types.contains(info->kind);
+  };
+  for (const PackedArithSignatureRule &signature : signatures) {
+    if (!StringRef(signature.operations)
+             .contains(stringifyPackedArithOpKind(kind)) ||
+        !matches(signature.resultTypes, result))
+      continue;
+    auto types = ArrayRef(signature.operandTypes).take_front(operands.size());
+    if (!llvm::all_of(llvm::zip_equal(operands, types), [&](auto pair) {
+          return matches(std::get<1>(pair), std::get<0>(pair));
+        }))
+      continue;
+    return PackedArithInstructionSpec{result, std::move(operands),
+                                      signature.modifiers,
+                                      signature.operandSuffixes};
+  }
+  return failure();
+}
+
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op) {
+  auto spec = resolvePackedArithInstructionSpec(op);
+  assert(succeeded(spec) && "expected a verified packed arithmetic operation");
+  return std::move(*spec);
+}
+
+static std::optional<unsigned> inferPackedArithFp4Axis(PackedArithOp op) {
+  auto resultShape = op.getType().getShape();
+  std::optional<unsigned> axis;
+  for (Value operand : op.getOperands()) {
+    auto type = cast<RankedTensorType>(operand.getType());
+    if (!type.getElementType().isInteger(8))
+      continue;
+    if (type.getRank() != resultShape.size())
+      return std::nullopt;
+    auto shape = type.getShape();
+    auto [sourceDim, resultDim] = llvm::mismatch(shape, resultShape);
+    if (sourceDim == shape.end())
+      return std::nullopt;
+    unsigned differing = std::distance(shape.begin(), sourceDim);
+    if (2 * *sourceDim != *resultDim ||
+        !llvm::equal(shape.drop_front(differing + 1),
+                     resultShape.drop_front(differing + 1)) ||
+        (axis && *axis != differing))
+      return std::nullopt;
+    axis = differing;
+  }
+  return axis;
+}
+
+unsigned getPackedArithFp4Axis(PackedArithOp op) {
+  auto axis = inferPackedArithFp4Axis(op);
+  assert(axis && "expected a verified packed arithmetic operation with an "
+                 "FP4 operand");
+  return *axis;
+}
+
+LogicalResult PackedArithOp::verify() {
+  unsigned expectedOperands = getOpKind() == PackedArithOpKind::FMA ? 3 : 2;
+  if (getNumOperands() != expectedOperands)
+    return emitOpError() << stringifyPackedArithOpKind(getOpKind())
+                         << " expects " << expectedOperands
+                         << " operands but got " << getNumOperands();
+
+  auto tensorType = getResult().getType();
+  const auto &resultInfo = getPackedArithTypeInfo(tensorType.getElementType());
+  if (!isa_and_nonnull<DistributedEncodingTrait>(tensorType.getEncoding()))
+    return emitOpError("requires a distributed tensor layout");
+
+  auto instruction = resolvePackedArithInstructionSpec(*this);
+  if (failed(instruction)) {
+    auto diag = emitOpError()
+                << "unsupported " << stringifyPackedArithOpKind(getOpKind())
+                << " signature " << resultInfo.suffix << " <- (";
+    llvm::interleaveComma(getOperands(), diag, [&](Value operand) {
+      diag << getPackedArithTypeInfo(
+                  cast<RankedTensorType>(operand.getType()).getElementType())
+                  .suffix;
+    });
+    return diag << ")";
+  }
+
+  std::optional<unsigned> fp4Axis = inferPackedArithFp4Axis(*this);
+  if (!fp4Axis && llvm::any_of(instruction->operands,
+                               [](auto *info) { return info->isFP4(); }))
+    return emitOpError("requires every fp4 operand to have the result shape "
+                       "with the same single dimension halved");
+
+  unsigned packWidth = resultInfo.lanes;
+  unsigned resultRegisters = getUniqueElemsPerThread(tensorType);
+  if (resultRegisters < packWidth || resultRegisters % packWidth != 0)
+    return emitOpError() << "result layout must provide a multiple of "
+                         << packWidth << " unique elements per thread";
+
+  Attribute canonicalFp4Encoding;
+  if (fp4Axis) {
+    auto *dialect =
+        tensorType.getEncoding()
+            .getDialect()
+            .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+    if (dialect &&
+        failed(dialect->inferFp4ToFpOpEncoding(
+            tensorType.getShape(), *fp4Axis, tensorType.getEncoding(),
+            canonicalFp4Encoding, /*fwdInference=*/false, std::nullopt)))
+      canonicalFp4Encoding = {};
+  }
+
+  for (auto [index, operand] : llvm::enumerate(getOperands())) {
+    auto operandType = cast<RankedTensorType>(operand.getType());
+    const auto &operandInfo = *instruction->operands[index];
+    if (operandInfo.isFP4()) {
+      if (!isa_and_nonnull<DistributedEncodingTrait>(
+              operandType.getEncoding()) ||
+          !canonicalFp4Encoding ||
+          !areLayoutsEquivalent(
+              operandType.getShape(),
+              cast<LayoutEncodingTrait>(canonicalFp4Encoding),
+              cast<LayoutEncodingTrait>(operandType.getEncoding())))
+        return emitOpError() << "fp4 operand " << index
+                             << " must have a layout compatible with the "
+                                "result";
+      continue;
+    }
+    if (operandType.getShape() != tensorType.getShape())
+      return emitOpError() << "operand " << index
+                           << " must have the result shape "
+                           << tensorType.getShape() << ", but got "
+                           << operandType.getShape();
+    if (!isa_and_nonnull<LayoutEncodingTrait>(operandType.getEncoding()) ||
+        !areLayoutsEquivalent(
+            tensorType.getShape(),
+            cast<LayoutEncodingTrait>(operandType.getEncoding()),
+            cast<LayoutEncodingTrait>(tensorType.getEncoding())))
+      return emitOpError() << "operand " << index
+                           << " must have a layout equivalent to the result";
+  }
+
+  return success();
+}
 
 // -- WarpGroupDotOp --
 LogicalResult WarpGroupDotOp::inferReturnTypes(
@@ -131,9 +348,9 @@ void WarpGroupDotOp::getEffects(
   auto &a = getAMutable();
   auto &b = getBMutable();
   if (isa<MemDescType>(a.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &a, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&a, SharedKind::Async));
   if (isa<MemDescType>(b.get().getType()))
-    effects.emplace_back(MemoryEffects::Read::get(), &b, SharedMemory::get());
+    effects.push_back(makeShared<MemoryEffects::Read>(&b, SharedKind::Async));
 }
 
 bool WarpGroupDotOp::needsPartialAccumulator() {
@@ -167,8 +384,6 @@ LogicalResult WarpGroupDotWaitOp::verify() {
 
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   auto barrierTy = cast<MemDescType>(getAlloc().getType());
@@ -185,22 +400,59 @@ LogicalResult InitBarrierOp::verify() {
 TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- InvalBarrierOp --
-LogicalResult InvalBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
+TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
+
+static LogicalResult verifyBarrierFromCTA(Operation *op, Value barrier,
+                                          std::optional<uint32_t> fromCTA) {
+  if (!fromCTA)
+    return success();
+
+  auto barrierTy = cast<MemDescType>(barrier.getType());
+  uint32_t numCTAs = gpu::lookupNumCTAs(op);
+  if (*fromCTA >= numCTAs)
+    return op->emitOpError("fromCTA must be in the range [0, num_ctas - 1]");
+
+  auto expectedCGALayout =
+      CGAEncodingAttr::get1DLayout(op->getContext(), numCTAs);
+  if (barrierTy.getRank() != 1 || barrierTy.getNumElements() != numCTAs ||
+      getCGALayout(barrierTy.getEncoding()) != expectedCGALayout)
+    return op->emitOpError("fromCTA requires a 1D barrier with one element "
+                           "per CTA and canonical CGA layout");
   return success();
 }
 
-TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
+template <typename BarrierOp>
+static LogicalResult canonicalizeBarrierFromCTA(BarrierOp op,
+                                                PatternRewriter &rewriter) {
+  if (op.getFromCTA() != gpu::lookupNumCTAs(op) - 1)
+    return failure();
+  rewriter.modifyOpInPlace(op, [&] { op.setFromCTAAttr(IntegerAttr()); });
+  return success();
+}
 
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+  if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
     return failure();
+  if (getPerWarp()) {
+    int numWarps = gpu::lookupNumWarps(*this);
+    if (numWarps <= 1 || getSize() % numWarps != 0)
+      return emitOpError("per_warp requires multiple warps and size divisible "
+                         "by the warp count");
+  }
   return success();
 }
 
+LogicalResult BarrierExpectOp::canonicalize(BarrierExpectOp op,
+                                            PatternRewriter &rewriter) {
+  if (succeeded(eraseIfPredicateIsFalse(op, rewriter)))
+    return success();
+  return canonicalizeBarrierFromCTA(op, rewriter);
+}
+
 TypedValue<MemDescType> BarrierExpectOp::getBarrier() { return getAlloc(); }
+
+bool BarrierExpectOp::isPerWarp() { return getPerWarp(); }
 
 Value BarrierExpectOp::getPredicateOperand() { return getPred(); }
 
@@ -213,10 +465,12 @@ Type BarrierExpectOp::getPredicateOperandTypeLike() {
 }
 
 // -- WaitBarrierOp --
-LogicalResult WaitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+LogicalResult WaitBarrierOp::canonicalize(WaitBarrierOp op,
+                                          PatternRewriter &rewriter) {
+  // Dependencies keep allocations live even when the wait is predicated off.
+  if (!op.getDeps().empty())
     return failure();
-  return success();
+  return eraseIfPredicateIsFalse(op, rewriter);
 }
 
 TypedValue<MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
@@ -231,16 +485,46 @@ Type WaitBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
+static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
+                                            CGAEncodingAttr expectedCGALayout,
+                                            StringRef barrierName);
+
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  if (getPerWarp() && gpu::lookupNumWarps(*this) <= 1)
+    return emitOpError("per_warp requires multiple warps");
+  if (isMulticast()) {
+    int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
+    if (numCTAs <= 1)
+      return emitOpError("multicast arrive requires num_ctas > 1");
+    if (getMulticastCTA() > static_cast<uint32_t>(numCTAs - 1))
+      return emitOpError("multicastCTA exceeds numCTAs - 1");
+    auto expectedCGALayout =
+        CGAEncodingAttr::get1DLayout(getContext(), numCTAs);
+    if (failed(verifyBarrierCGALayout(*this, getAlloc(), expectedCGALayout,
+                                      "multicast barrier")))
+      return failure();
+  }
+  if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
+    return failure();
+  if (isMulticast() && getFromCTA() &&
+      *getFromCTA() != gpu::lookupNumCTAs(getOperation()) - 1)
+    return emitOpError("fromCTA cannot be combined with multicast arrive");
   return success();
 }
 
+LogicalResult ArriveBarrierOp::canonicalize(ArriveBarrierOp op,
+                                            PatternRewriter &rewriter) {
+  if (succeeded(eraseIfPredicateIsFalse(op, rewriter)))
+    return success();
+  return canonicalizeBarrierFromCTA(op, rewriter);
+}
+
 TypedValue<MemDescType> ArriveBarrierOp::getBarrier() { return getAlloc(); }
+
+bool ArriveBarrierOp::isPerWarp() { return getPerWarp(); }
 
 Value ArriveBarrierOp::getPredicateOperand() { return getPred(); }
 
@@ -262,18 +546,15 @@ LogicalResult AsyncSharedStoreOp::verify() {
   if (failed(triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
                                               getDst().getType())))
     return failure();
-  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
-    return failure();
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
-  auto sharedLayout = isPaddedEncoding(dstTy.getEncoding())
-                          ? paddedLinearLayout(dstTy)
-                          : toLinearLayout(dstTy);
-  auto cvt = regLayout.invertAndCompose(sharedLayout);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
+  auto kBlock = StringAttr::get(getContext(), "block");
+  auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
   std::optional<int> maybeMaxVecElems;
   if (isPaddedEncoding(dstTy.getEncoding()))
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
@@ -300,24 +581,6 @@ static LogicalResult verifyClusterIsMultiCTA(Operation *op) {
 // -- FenceMBarrierInitReleaseClusterOp --
 LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return verifyClusterIsMultiCTA(getOperation());
-}
-
-static LogicalResult verifyClusterSyncOp(Operation *op) {
-  if (failed(verifyClusterIsMultiCTA(op)))
-    return failure();
-  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
-    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
-  return success();
-}
-
-// -- ClusterArriveOp --
-LogicalResult ClusterArriveOp::verify() {
-  return verifyClusterSyncOp(getOperation());
-}
-
-// -- ClusterWaitOp --
-LogicalResult ClusterWaitOp::verify() {
-  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterBarrierOp --
@@ -392,9 +655,9 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
   if (twoCTAsAttr.getValue()) {
     auto kBlock = StringAttr::get(ctx, "block");
     auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-    auto layout = LinearLayout::zeros1D(2, kBlock, dim) *
-                  LinearLayout::identity1D(numCTAs / 2, kBlock, dim);
-    auto twoCTACGALayout = CGAEncodingAttr::get(ctx, std::move(layout));
+    auto twoCTACGALayout = CGAEncodingAttr::get(
+        ctx, LinearLayout::zeros1D(2, kBlock, dim) *
+                 LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
     if (actualCGALayout == twoCTACGALayout)
       return success();
     return op->emitOpError() << "TMA barrier cga_layout must be "
@@ -409,10 +672,12 @@ static LogicalResult verifyTMABarrierLayout(Operation *op, Value barrier) {
 }
 
 static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
-                                       Attribute enc) {
-  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(enc);
+                                       MemDescType memDesc) {
+  auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(memDesc.getEncoding());
   if (!nvmma)
     return op->emitOpError("TMA descriptor must have NVMMA shared layout");
+  if (nvmma.getRank() != memDesc.getRank())
+    return op->emitOpError("TMA shared memory and layout ranks must match");
   auto descEnc =
       dyn_cast_if_present<NVMMASharedEncodingAttr>(desc.getSharedLayout());
   // NOTE: Cannot do descEnc != enc as the encodings may differ in rank for
@@ -427,6 +692,15 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
+  auto splits = getCTASplitNum(nvmma);
+  // Gather/scatter get row positions from the x-offsets layout.
+  unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
+  for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)
+    if (memDesc.getDimSize(dim) < splits[dim])
+      return op->emitOpError(
+                 "TMA shared-memory shape must cover every CTA split")
+             << ": dimension " << dim << " has size " << memDesc.getDimSize(dim)
+             << " but " << splits[dim] << " CTA splits";
   return success();
 }
 
@@ -434,14 +708,24 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
                                           TensorDescInterface desc,
                                           TypedValue<MemDescType> barrier,
                                           MemDescType resultType) {
-  if (failed(verifyBarrierType(op, barrier.getType())))
-    return failure();
   if (failed(verifyTMABarrierLayout(op, barrier)))
     return failure();
   if (!resultType.getMutableMemory())
     return op->emitOpError("cannot store into immutable memory");
-  if (failed(verifyTMAEncoding(op, desc, resultType.getEncoding())))
+  if (failed(verifyTMAEncoding(op, desc, resultType)))
     return failure();
+  auto block = StringAttr::get(op->getContext(), "block");
+  uint32_t barrierMask =
+      toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
+  auto shape =
+      dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
+  auto allocation = toLinearLayout(resultType);
+  for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size && (bit || barrierMask > 1))
+        return op->emitOpError(
+            "TMA destination and completion barrier must belong to the same "
+            "CTA or a CTA pair");
   return success();
 }
 
@@ -453,7 +737,15 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  return verifyTMAEncoding(op, desc.getType(), srcEnc);
+  auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
+  auto allocation = toLinearLayout(srcType);
+  auto block = StringAttr::get(op->getContext(), "block");
+  for (const auto &basis : allocation.getBases().lookup(block))
+    for (auto [component, size] : llvm::zip_equal(basis, shape))
+      if (component >= size)
+        return op->emitOpError(
+            "source subview may have an origin in another CTA");
+  return verifyTMAEncoding(op, desc.getType(), srcType);
 }
 
 static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
@@ -475,11 +767,6 @@ static LogicalResult verifyAsyncTMAGatherScatterOp(Operation *op,
   if (memDescType.getElementType() != blockType.getElementType())
     return op->emitOpError("result tensor element type must match block (")
            << blockType.getElementType() << "), but got " << memDescType;
-
-  ArrayRef<int64_t> allocShape = memDescType.getAllocShape();
-  if (allocShape.size() < 2 ||
-      memDescType.getShape() != allocShape.take_back(2))
-    return op->emitOpError("memdesc shape must match alloc shape");
 
   auto xOffsetsType = cast<RankedTensorType>(indicesType);
   if (xOffsetsType.getEncoding()) {
@@ -585,8 +872,43 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
   llvm_unreachable("unknown descriptor reduce kind");
 }
 
+static LogicalResult verifyTMACachePolicy(Operation *op, Attribute attr) {
+  if (attr) {
+    if (auto policy = dyn_cast<triton::CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return op->emitOpError("TMA operations do not support cache modifiers");
+    } else if (auto policy = dyn_cast<CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return op->emitOpError("TMA operations do not support cache modifiers");
+      if (policy.getL1() != CacheEvictionPriority::NONE)
+        return op->emitOpError(
+            "TMA operations do not support L1 eviction policies");
+      if (policy.getL2PrefetchSize())
+        return op->emitOpError(
+            "TMA operations do not support L2 prefetch size");
+    } else {
+      return op->emitOpError("unsupported TMA cache policy attribute ") << attr;
+    }
+  }
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
+LogicalResult
+AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
+                                          PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  // Do not silently accept obsolete attributes in generic textual IR.
+  if ((*this)->hasAttr("cache") || (*this)->hasAttr("evict"))
+    return emitOpError(
+        "use cachePolicy instead of legacy cache/evict attributes");
+  if (getIsVolatile())
+    return emitOpError("volatile TMA loads are not supported");
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);
@@ -619,6 +941,8 @@ Type AsyncTMACopyGlobalToLocalOp::getPredicateOperandTypeLike() {
 
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   // Store ops only support TILED mode
   if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
                                   /*isIm2Col=*/false)))
@@ -649,7 +973,14 @@ LogicalResult AsyncTMAReduceOp::verify() {
 }
 
 // -- AsyncTMAGatherOp --
+LogicalResult AsyncTMAGatherOp::canonicalize(AsyncTMAGatherOp op,
+                                             PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
 LogicalResult AsyncTMAGatherOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
                                   resultType)))
@@ -677,6 +1008,8 @@ Type AsyncTMAGatherOp::getPredicateOperandTypeLike() {
 
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto srcType = getSrc().getType();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
@@ -803,13 +1136,9 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
 }
 
 LogicalResult TCGen5MMAOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   for (auto barrier : getBarriers()) {
-    auto barrierTy = cast<MemDescType>(barrier.getType());
-    if (failed(verifyBarrierType(*this, barrierTy)))
-      return failure();
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
@@ -819,12 +1148,14 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
-  if (getA().getType().getRank() != 2)
-    return emitOpError("LHS operand must have a rank-2 tensor");
-  if (getB().getType().getRank() != 2)
-    return emitOpError("RHS operand must have a rank-2 tensor");
-  if (getD().getType().getRank() != 2)
-    return emitOpError("Return operand must have a rank-2 tensor");
+  auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
+  int64_t minK = kind == MMADTypeKind::tf32  ? 8
+                 : kind == MMADTypeKind::f16 ? 16
+                                             : 32;
+  int64_t k = getA().getType().getDimSize(1);
+  if (k < minK)
+    return emitOpError("K dimension must be at least ")
+           << minK << " for " << atype << " operands, but got " << k;
 
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
@@ -835,27 +1166,20 @@ LogicalResult TCGen5MMAOp::verify() {
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
     return emitOpError("RHS operand must have a NVMMAShared encoding");
   auto retType = getD().getType();
-  auto retEnc = dyn_cast<TensorMemoryEncodingAttr>(retType.getEncoding());
-  if (!retEnc)
-    return emitOpError("Return operand must have a TensorMemory encoding");
+  auto retEnc = cast<TensorMemoryEncodingAttr>(retType.getEncoding());
 
   // Check colStride of TMEM operands
   if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
     if (tmem.getColStride() != 1)
       return emitOpError("The col stride of the LHS operand must be 1");
+    if (tmem.getFp4Padded())
+      return emitOpError(
+          "fp4_padded tensor memory LHS is only supported by scaled MMA");
   }
   if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
     return emitOpError("The col stride of the return operand must be 32 / ")
            << retType.getElementTypeBitWidth() << " but got "
            << retEnc.getColStride();
-  // The maximum size of a MMA instruction is 128x256
-  auto ctaShape = getShapePerCTA(retEnc.getCGALayout().getCTASplitNum(),
-                                 retType.getShape());
-  auto instrSizeN = std::min<unsigned>(retEnc.getBlockN(), ctaShape[1]);
-  if (instrSizeN > 256)
-    return emitOpError("The block size of the return operand must be less than "
-                       "or equal to 256");
-
   auto aCGA = getCGALayout(aEnc).getLinearLayout();
   auto bCGA = getCGALayout(bEnc).getLinearLayout();
   auto outDims = standardOutDimNames(getContext(), 2);
@@ -870,51 +1194,11 @@ LogicalResult TCGen5MMAOp::verify() {
 
   auto kBlock = StringAttr::get(getContext(), "block");
   if (getTwoCtas()) {
-    if (bCGA.getBasis(kBlock, 0) != ArrayRef{0, 1}) {
+    if (bCGA.getBasis(kBlock, 0) != ArrayRef{0, 1} &&
+        bCGA.getBasis(kBlock, 0) != ArrayRef{0, 0}) {
       return emitOpError("twoCTA mode expects the first basis of the "
-                         "cga_layout of the RHS to be [0, 1]");
+                         "cga_layout of the RHS to be [0, 1] or [0, 0]");
     }
-    // [Note: numRepN > 1 and two_ctas]
-    // Consider, just as an example, num_ctas=16, and a huge tile of shape
-    // MNK = 512x64x2048
-    // This is an example of layout with numRepN=2 and two_ctas=true:
-    // Layout RHS:
-    // #ttg.memdesc<64x2048xf16,
-    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
-    //                      elementBitWidth = 16,
-    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
-    //
-    // As a LinearLayout:
-    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
-    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
-    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
-    //
-    // The issue is that the data from the CTA1 should be next to that of the
-    // first part of the instruction. Now, the max instruction size is 128x256,
-    // so the layout we should use is
-    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
-    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
-    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
-    // (note how we swapped the bases [0, 256] and [0, 128])
-    // The issue with this layout is that it breaks the invariant that the
-    // CGALayout splits the CGA tile into contiguous CTA tiles,
-    // i.e. total_layout = cta_layout * cga_layout.
-    // This is used all over the place, to the point that for all legacy layouts
-    // we represent the CGALayout as the `cga_layout` we have to multiply on the
-    // right.
-    // We could allow with a bit of effort SharedLinearLayouts that did not
-    // divide on the right by a CGALayout, but for now we throw a lovely error.
-    auto dCGA = getCGALayout(retEnc).getLinearLayout();
-    auto nPerCTA = retType.getDimSize(1) / dCGA.getOutDimSize(outDims[1]);
-    if (nPerCTA > 256)
-      return emitOpError(
-          "We don't allow to emit more than one mma instruction along N. "
-          "Reduce the block or increase the number of warps or CTAs along N");
-  }
-  if (retEnc.getTwoCTAs() != getTwoCtas()) {
-    return emitOpError("The returned value's encoding must have twoCTA=")
-           << getTwoCtas() << " to be used in a "
-           << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
   }
   if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
     if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
@@ -956,18 +1240,18 @@ void TCGen5MMAOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
@@ -1032,13 +1316,17 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
 // -- TCGen5CommitOp --
+LogicalResult TCGen5CommitOp::canonicalize(TCGen5CommitOp op,
+                                           PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
 LogicalResult TCGen5CommitOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   auto numDescs = getDescs().size();
   if (numDescs > 4)
     return emitOpError("expected 0 to 4 descriptors, got ") << numDescs;
-  auto barrierTy = getBarrier().getType();
-  if (failed(verifyBarrierType(*this, barrierTy)))
-    return failure();
   if (failed(verifyCompletionBarrierLayout(getOperation(), getBarrier())))
     return failure();
   return success();
@@ -1080,14 +1368,89 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
-LogicalResult TCGen5MMAScaledOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
+static bool isScaledMMATransposed(MemDescType type, bool isLhs) {
+  auto shared = getNvmmaSmemAttrs(type);
+  return shared && (isLhs ? shared->transposed : !shared->transposed);
+}
+
+static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
+                                            TensorMemoryEncodingAttr encoding,
+                                            ScaleDotElemType aType,
+                                            ScaleDotElemType bType) {
+  if (aType == ScaleDotElemType::E2M1) {
+    if (!elementType.isInteger(8) && !isa<PackedFloat4E2M1Type>(elementType))
+      return op->emitOpError("expected e2m1 LHS operand to have i8 storage");
+    if (encoding.getFp4Padded() &&
+        !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                            bType))
+      return op->emitOpError("can only use fp4_padded LHS when RHS is float8");
+    if (llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                           bType) &&
+        !encoding.getFp4Padded())
+      return op->emitOpError(
+          "expected e2m1 LHS operand to be fp4_padded when RHS is float8");
+    return success();
   }
+
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(elementType)) {
+    if (!llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
+                            aType)) {
+      return op->emitOpError(
+          "expected float8 LHS operand to have e4m3 or e5m2 format");
+    }
+    return success();
+  }
+
+  return op->emitOpError("unsupported LHS operand type for scaled MMA");
+}
+
+static LogicalResult verifyScaleEncoding(TCGen5MMAScaledOp op,
+                                         MemDescType scaleType, bool isA) {
+  if (!isa<TensorMemorySpaceAttr>(scaleType.getMemorySpace()))
+    return success();
+  auto shapePerCTA = getShapePerCTA(scaleType);
+  assert(shapePerCTA.size() >= 2);
+  int64_t rowsPerCTA = shapePerCTA[shapePerCTA.size() - 2];
+  int64_t scalesPerCTA = shapePerCTA.back();
+  // The ordering is relevant only when there are multiple 128x4 scale blocks
+  // from both MN and K dimensions.
+  bool isOrderRelevant = rowsPerCTA > 128 && scalesPerCTA > 4;
+  auto encoding =
+      dyn_cast<TensorMemoryScalesEncodingAttr>(scaleType.getEncoding());
+  if (!encoding) {
+    if (!isOrderRelevant)
+      return success();
+    return op.emitOpError() << (isA ? "A" : "B")
+                            << " scales in tensor memory must use "
+                               "#ttng.tensor_memory_scales_encoding";
+  }
+  if (!isOrderRelevant &&
+      encoding.getBlockRepOrder() == TensorMemoryScalesBlockRepOrder::MN_THEN_K)
+    return success();
+
+  auto aScaleType = cast<MemDescType>(op.getAScale().getType());
+  auto bScaleType = cast<MemDescType>(op.getBScale().getType());
+  auto expectedOrder = getTensorMemoryScalesBlockRepOrder(
+      op.getOperation(), isA, op.getAType(), op.getBType(),
+      aScaleType.getElementType(), bScaleType.getElementType());
+  if (encoding.getBlockRepOrder() != expectedOrder) {
+    StringRef operandName = isA ? "A" : "B";
+    StringRef expectedOrderName =
+        expectedOrder == TensorMemoryScalesBlockRepOrder::K_THEN_MN ? "kThenMn"
+                                                                    : "mnThenK";
+    return op.emitOpError()
+           << operandName
+           << " scales in tensor memory must use "
+              "#ttng.tensor_memory_scales_encoding<blockRepOrder = "
+           << expectedOrderName << ">";
+  }
+  return success();
+}
+
+LogicalResult TCGen5MMAScaledOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   for (auto barrier : getBarriers()) {
-    auto barrierTy = cast<MemDescType>(barrier.getType());
-    if (failed(verifyBarrierType(*this, barrierTy)))
-      return failure();
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
@@ -1098,13 +1461,68 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
-  auto enc = dyn_cast<TensorMemoryEncodingAttr>(getD().getType().getEncoding());
-  if (!enc) {
-    return emitOpError(
-        "expected accumulator layout to be a TensorMemoryLayout");
-  }
+  auto enc = cast<TensorMemoryEncodingAttr>(getD().getType().getEncoding());
   if (enc.getBlockM() != 128)
     return emitOpError("only supports instruction shape blockM=128");
+  if (auto lhsEnc =
+          dyn_cast<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
+    if (failed(verifyScaledLHSOperand(getOperation(),
+                                      getA().getType().getElementType(), lhsEnc,
+                                      getAType(), getBType())))
+      return failure();
+  }
+  auto aScaleType = cast<MemDescType>(getAScale().getType());
+  auto bScaleType = cast<MemDescType>(getBScale().getType());
+  int64_t k = getBlockK();
+  int64_t minK = 32;
+  if (getAType() == ScaleDotElemType::E2M1 &&
+      getBType() == ScaleDotElemType::E2M1) {
+    // Match getMXFPKind in MMAv5.cpp: only mxf8f6f4 supports transpose.
+    bool transposed = isScaledMMATransposed(getA().getType(), /*isLhs=*/true) ||
+                      isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
+    bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
+                   isa<Float8E4M3FNType>(bScaleType.getElementType());
+    bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
+                   bScaleType.getElementType().isInteger(8) &&
+                   aScaleType.getShape().back() * 16 == k &&
+                   bScaleType.getShape().back() * 16 == k;
+    if (transposed && (isUE4M3 || isUE5M3))
+      return emitOpError("mxf4nvf4 does not support transposed operands");
+    minK = transposed ? 32 : 64;
+  }
+  if (k < minK)
+    return emitOpError("K dimension must be at least ")
+           << minK << " for this scaled MMA, but got " << k;
+
+  if (failed(verifyScaleEncoding(*this, aScaleType, /*isA=*/true)) ||
+      failed(verifyScaleEncoding(*this, bScaleType, /*isA=*/false)))
+    return failure();
+
+  unsigned mmaSizeN = getMMAv5InstructionN(getD().getType());
+  // A padded accumulator has no CGA split along N.
+  if (isa<TensorMemorySpaceAttr>(bScaleType.getMemorySpace()) &&
+      mmaSizeN > getD().getType().getDimSize(1) &&
+      mmaSizeN > bScaleType.getDimSize(0)) {
+    if (bScaleType.getRank() != 2)
+      return emitOpError("expected rank-2 B scales for MMA with padded N");
+    if (bScaleType.getDimSize(0) != bScaleType.getAllocShape()[0])
+      return emitOpError(
+          "cannot expand the row dimension of a B scale subview");
+    auto dims = standardOutDimNames(getContext(), 2);
+    auto scaleEncoding = bScaleType.getEncoding();
+    auto allocShape =
+        dropPipeliningDim(bScaleType.getAllocShape(), scaleEncoding);
+    auto expectedType =
+        MemDescType::get({mmaSizeN, allocShape[1]}, bScaleType.getElementType(),
+                         scaleEncoding, bScaleType.getMemorySpace());
+    if (getTmemAllocSizes(bScaleType).numRows <
+            getTmemAllocSizes(expectedType).numRows ||
+        ensureLayoutNotLargerThan(toLinearLayout(expectedType), dims,
+                                  allocShape) !=
+            toLinearLayout(allocShape, scaleEncoding))
+      return emitOpError("B scale layout does not reserve the rows required by "
+                         "the MMA instruction");
+  }
   return success();
 }
 
@@ -1121,75 +1539,40 @@ void TCGen5MMAScaledOp::getEffects(
                        TensorMemory::get());
 
   if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
-    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
 
   } else {
     effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
                          TensorMemory::get());
   }
-  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
-                       SharedMemory::get());
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
                        TensorMemory::get());
   for (auto &barrierMutable : getBarriersMutable())
-    effects.emplace_back(MemoryEffects::Write::get(), &barrierMutable,
-                         SharedMemory::get());
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
-  auto aKdim = aShape[aShape.size() - 1];
-  auto bKdim = bShape[aShape.size() - 2];
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
-    aKdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1 && !transB)
+  auto aKdim = getBlockK();
+  auto bShape = getB().getType().getShape();
+  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
+  auto bKdim = bShape[bShape.size() - 2];
+  if (getBType() == ScaleDotElemType::E2M1 && !transB)
     bKdim *= 2;
 
   return aKdim == bKdim;
 }
 
 bool TCGen5MMAScaledOp::verifyOutputDims() {
-  auto aShape = this->getA().getType().getShape();
-  auto bShape = this->getB().getType().getShape();
-  auto cShape = this->getD().getType().getShape();
-  auto oMdim = cShape[cShape.size() - 2];
-  auto oNdim = cShape[cShape.size() - 1];
-
-  int aMdim = aShape[aShape.size() - 2];
-  int bNdim = bShape[bShape.size() - 1];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
-  if (this->getAType() == ScaleDotElemType::E2M1 && transA)
-    aMdim *= 2;
-  if (this->getBType() == ScaleDotElemType::E2M1 && transB)
-    bNdim *= 2;
-
-  if (aMdim != oMdim || bNdim != oNdim)
-    return false;
-  return true;
+  auto shape = getD().getType().getShape();
+  int aMdim = getBlockM();
+  int bNdim = getBlockN();
+  return aMdim == shape[shape.size() - 2] && bNdim == shape.back();
 }
 
 Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
@@ -1242,11 +1625,7 @@ Type TCGen5MMAScaledOp::getPredicateOperandTypeLike() {
 int64_t TCGen5MMAScaledOp::getBlockM() {
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockM = shape[shape.size() - 2];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
   if (this->getAType() == ScaleDotElemType::E2M1 && transA)
     blockM *= 2;
   return blockM;
@@ -1255,11 +1634,7 @@ int64_t TCGen5MMAScaledOp::getBlockM() {
 int64_t TCGen5MMAScaledOp::getBlockN() {
   ArrayRef<int64_t> shape = getB().getType().getShape();
   int64_t blockN = shape[shape.size() - 1];
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
+  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
   if (this->getBType() == ScaleDotElemType::E2M1 && transB)
     blockN *= 2;
   return blockN;
@@ -1268,11 +1643,7 @@ int64_t TCGen5MMAScaledOp::getBlockN() {
 int64_t TCGen5MMAScaledOp::getBlockK() {
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockK = shape[shape.size() - 1];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
   return blockK;
@@ -1299,6 +1670,11 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
 
+// -- TMEMWaitOp --
+LogicalResult TMEMWaitOp::verify() {
+  return verifyTcgen05Target(getOperation());
+}
+
 // -- TMEMStoreOp --
 static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
@@ -1321,7 +1697,14 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   return diag;
 }
 
+LogicalResult TMEMStoreOp::canonicalize(TMEMStoreOp op,
+                                        PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
 LogicalResult TMEMStoreOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
@@ -1345,6 +1728,8 @@ Type TMEMStoreOp::getPredicateOperandTypeLike() { return getPred().getType(); }
 
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
     return emitOpError("source must be a tensor memory buffer.");
@@ -1381,29 +1766,10 @@ LogicalResult TMEMLoadOp::verify() {
 
   // Validate reduction conditions
   if (redOp) {
-    auto regTy = getType();
-    auto memTy = getSrc().getType();
     auto maxnreg = getContextualMaxNReg(*this);
-    auto encodingInfoOr = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
-    if (failed(encodingInfoOr))
-      return emitOpError("failed to compute TMEM encoding info");
-
-    if (encodingInfoOr->unpacked)
-      return emitOpError(
-          "tmem_load reduction requires packed format (unpacked=false)");
-
-    // Verify that N dimension is in registers entirely, and is not sharded
-    // across threads. This could be relaxed in the future to only reduce the
-    // kReg bases along N then cross-warp/block reduction becomes needed.
-    auto kReg = StringAttr::get(regTy.getContext(), "register");
-    int dimM = 0, dimN = 1;
-    auto regDims =
-        toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
-    if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
-        regDims[dimM] != 1) {
-      return emitOpError("tmem_load reduction with N dimension sharded across "
-                         "threads is not supported.");
-    }
+    if (!supportsTMemLoadReduce(getType(), getSrc().getType(), maxnreg,
+                                [&]() { return emitOpError(); }))
+      return failure();
   }
 
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
@@ -1411,6 +1777,8 @@ LogicalResult TMEMLoadOp::verify() {
 
 // -- TMEMAllocOp --
 LogicalResult TMEMAllocOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
           getType().getEncoding()))
     return emitOpError("should use tensor memory encoding");
@@ -1439,7 +1807,19 @@ void TMEMAllocOp::getEffects(
 }
 
 // -- TMEMCopyOp --
+Value TMEMCopyOp::getPredicateOperand() { return getPred(); }
+
+void TMEMCopyOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TMEMCopyOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 LogicalResult TMEMCopyOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   if (!isa<triton::gpu::SharedMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
     return emitOpError("The source must be a shared memory buffer");
@@ -1497,9 +1877,18 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Source layout should be swizzled.");
     }
     // When we lift this, we should make sure we handle unpacked cleanly
-    if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
+    if (getIntOrFloatOrPtrBitWidth(srcTy.getElementType()) != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
+    auto kCol = StringAttr::get(getContext(), "col");
+    auto colBases = tmemLl.getBases().lookup(kCol);
+    auto firstHole = llvm::find_if(colBases, [](ArrayRef<int32_t> basis) {
+      return llvm::all_of(basis,
+                          [](int32_t component) { return component == 0; });
+    });
+    if (std::distance(colBases.begin(), firstHole) < 2)
+      return emitOpError("The destination must have at least 128 contiguous "
+                         "bits per TMEM row.");
   }
   // Given that we want to support flexible input SMEM shapes, kinds of shape
   // checking we can do here are limited. For simplicity, shape checking is
@@ -1509,21 +1898,14 @@ LogicalResult TMEMCopyOp::verify() {
 
 // -- TMEMSubSliceOp --
 LogicalResult TMEMSubSliceOp::verify() {
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
-  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      srcTy.getEncoding());
-  if (!encoding)
+  if (!isa<TensorMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("The source must be a tensor memory buffer.");
-  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-      dstTy.getEncoding());
-  if (!dstEncoding)
+  if (!isa<TensorMemorySpaceAttr>(dstTy.getMemorySpace()))
     return emitOpError("The destination must be a tensor memory buffer.");
-  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
-      dstEncoding.getCGALayout() != encoding.getCGALayout() ||
-      dstEncoding.getColStride() != encoding.getColStride())
-    return emitOpError("The destination must have the same block size and "
-                       "CTASplit size as the source.");
   if (srcTy.getElementType() != dstTy.getElementType())
     return emitOpError(
         "The source and result must have the same element type.");
@@ -1531,31 +1913,88 @@ LogicalResult TMEMSubSliceOp::verify() {
     return emitOpError("The source and result must have the same encoding.");
   if (srcTy.getAllocShape() != dstTy.getAllocShape())
     return emitOpError("The source and result must have the same alloc shape.");
-  if (srcTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (dstTy.getRank() != 2)
-    return emitOpError("The result must be a 2D tensor memory buffer.");
-  if (dstTy.getDimSize(0) != srcTy.getDimSize(0))
-    return emitOpError("The result must have the same number of rows as the "
-                       "source.");
-  auto offset = getN();
-  if (offset & (dstTy.getDimSize(1) - 1)) {
-    return emitError("The split offset may not touch the tile");
-  }
-  if (offset >= srcTy.getDimSize(1)) {
+  if (srcTy.getRank() != dstTy.getRank() ||
+      (srcTy.getRank() != 2 && srcTy.getRank() != 3))
+    return emitOpError("The source and result must both be 2D or 3D tensor "
+                       "memory buffers.");
+  auto dim = getDim();
+  if (dim < 0 || dim >= srcTy.getRank())
+    return emitOpError("The slice dimension must be within the descriptor "
+                       "rank.");
+  for (int axis = 0; axis < srcTy.getRank(); ++axis)
+    if (axis != dim && dstTy.getDimSize(axis) != srcTy.getDimSize(axis))
+      return emitOpError("The result must have the same size as the source in "
+                         "the dimensions that are not being sliced.");
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto offset = getOffset();
+  if (offset < 0 || int64_t(offset) + dstShape[dim] > srcShape[dim]) {
     return emitError("The split offset may not exceed the source shape");
   }
+
+  if (srcTy.getRank() == 3 && dim == 0)
+    return success();
+
+  srcShape = dropPipeliningDim(srcShape, srcTy.getEncoding());
+  dstShape = dropPipeliningDim(dstShape, dstTy.getEncoding());
+  dim -= srcTy.getRank() - srcShape.size();
+  auto srcLL = toLinearLayout(srcTy);
+  if (offset & (dstShape[dim] - 1)) {
+    // An unaligned slice can carry through the logical bits between its
+    // lowest set offset bit and the highest bit changed by the slice. For
+    // example, an N-slice at offset 208 with size 256 spans [208, 463], so
+    // it needs consecutive [0, 16], [0, 32], ..., [0, 256] bases in one
+    // physical TMEM address dimension. The other set offset bits contribute
+    // only to the translated base pointer.
+    unsigned firstBit = llvm::countr_zero(static_cast<uint32_t>(offset));
+    uint64_t last = uint64_t(offset) + dstShape[dim] - 1;
+    unsigned lastBit = llvm::Log2_64(uint64_t(offset) ^ last);
+    unsigned numBits = lastBit - firstBit + 1;
+    auto hasContiguousBases = [&](StringAttr inDim) {
+      const auto &bases = srcLL.getBases().lookup(inDim);
+      for (unsigned start = 0; start + numBits <= bases.size(); ++start) {
+        bool contiguous = true;
+        for (unsigned bit = 0; bit < numBits; ++bit) {
+          const auto &basis = bases[start + bit];
+          contiguous &= basis[1 - dim] == 0 &&
+                        basis[dim] == (int64_t{1} << (firstBit + bit));
+        }
+        if (contiguous)
+          return true;
+      }
+      return false;
+    };
+    auto kRow = StringAttr::get(getContext(), "row");
+    auto kCol = StringAttr::get(getContext(), "col");
+    if (!hasContiguousBases(kRow) && !hasContiguousBases(kCol))
+      return emitError("The split offset may not touch the tile");
+  }
+  auto isTrimmed = [&](ArrayRef<int32_t> basis) {
+    return basis[dim] >= dstShape[dim];
+  };
+  auto kBlock = StringAttr::get(getContext(), "block");
+  if (llvm::any_of(srcLL.getBases().lookup(kBlock), isTrimmed))
+    return emitOpError("The result may not be sliced across CTAs.");
+
+  auto dims = standardOutDimNames(getContext(), 2);
+  auto logical = static_cast<int32_t>(offset);
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffset = {
+      {dims[0], dim == 0 ? logical : 0}, {dims[1], dim == 1 ? logical : 0}};
+  auto rowCol = srcLL.pseudoinvert().apply(logicalOffset);
+  if (uint64_t(rowCol[1].second) * srcTy.getElementTypeBitWidth() % 32 != 0)
+    return emitOpError(
+        "The split offset must be 32-bit aligned in tensor memory.");
 
   return success();
 }
 
 void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
-                           Value alloc, int offset, int size) {
+                           Value alloc, int offset, int size, int dim) {
   auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape(allocTy.getShape());
-  shape.back() = size;
+  shape[dim] = size;
   auto subsliceType = allocTy.cloneWith(shape, allocTy.getElementType());
-  build(builder, state, subsliceType, alloc, offset);
+  build(builder, state, subsliceType, alloc, offset, dim);
 }
 
 // -- TensormapCreateOp --
@@ -1576,6 +2015,18 @@ LogicalResult TensormapCreateOp::verify() {
   return success();
 }
 
+// -- CLCTryCancelSyncOp --
+LogicalResult CLCTryCancelSyncOp::verify() {
+  auto tensorType = dyn_cast<RankedTensorType>(getResponse().getType());
+  if (!tensorType || tensorType.getRank() != 1)
+    return emitOpError("response must be a rank-one tensor");
+  if (tensorType.getShape() != ArrayRef<int64_t>{2})
+    return emitOpError("response must have shape [2]");
+  if (!tensorType.getElementType().isInteger(64))
+    return emitOpError("response element type must be i64");
+  return success();
+}
+
 // -- CLCTryCancelOp --
 static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
   auto int_ty = dyn_cast<IntegerType>(desc.getElementType());
@@ -1591,6 +2042,10 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
                              "single dimension equal to 2, but got "
                           << desc.getShape() << ".";
   }
+  if (!isContiguousSharedMemoryLayout(desc))
+    return emitError(loc)
+           << "CLC result buffer must have a contiguous shared-memory layout "
+              "without subviews";
   auto cgaLayout = getCGALayout(layout);
   auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
   if (!llvm::all_of(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
@@ -1606,8 +2061,6 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
 
 LogicalResult CLCTryCancelOp::verify() {
   if (failed(verifyCLCResultMemdesc(getLoc(), getResult().getType())))
-    return failure();
-  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
     return failure();
   return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }
