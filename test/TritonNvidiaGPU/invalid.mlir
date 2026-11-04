@@ -2281,3 +2281,33 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
   tt.return
 }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#weak = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 8], [4, 16], [8, 0]]}, alignment = 8>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+!b = !ttg.memdesc<16x32xf16, #weak, #ttg.shared_memory>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  tt.func @wgmma_underaligned_rhs(%a: tensor<64x16xf16, #a>, %b: !b, %c: tensor<64x32xf32, #mma>) {
+    // expected-error @below {{requires at least 16-byte alignment for 16-bit elements, but the shared layout provides 8}}
+    %d = ttng.warp_group_dot %a, %b, %c : tensor<64x16xf16, #a> * !b -> tensor<64x32xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#weak = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 8], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 8>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x16xf16, #weak, #ttg.shared_memory>
+!b = !ttg.memdesc<16x64xf16, #shared, #ttg.shared_memory>
+!d = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @mma_underaligned_lhs(%a: !a, %b: !b, %d: !d, %pred: i1) {
+    // expected-error @below {{requires at least 16-byte alignment for 16-bit elements, but the shared layout provides 8}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred : !a, !b, !d
+    tt.return
+  }
+}

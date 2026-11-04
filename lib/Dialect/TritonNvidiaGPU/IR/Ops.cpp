@@ -304,6 +304,13 @@ LogicalResult WarpGroupDotOp::verify() {
           getB().getType().getEncoding()))
     return emitOpError("WGMMA B operand must have NVMMA shared layout");
 
+  if (auto aType = dyn_cast<MemDescType>(getA().getType()))
+    if (failed(gpu::verifySharedMemoryAccessAlignment(*this, aType, 16)))
+      return failure();
+  if (failed(
+          gpu::verifySharedMemoryAccessAlignment(*this, getB().getType(), 16)))
+    return failure();
+
   auto numWarps = gpu::lookupNumWarps(getOperation());
   if (numWarps % 4)
     return emitOpError("WGMMA requires num_warps to be divisible by 4");

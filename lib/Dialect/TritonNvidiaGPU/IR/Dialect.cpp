@@ -553,6 +553,12 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   if (encoding.getFp4Padded())
     return op->emitOpError("accumulator layout must not be fp4_padded");
 
+  for (auto operandType : {aType, bType}) {
+    if (isa<gpu::SharedMemorySpaceAttr>(operandType.getMemorySpace()) &&
+        failed(gpu::verifySharedMemoryAccessAlignment(op, operandType, 16)))
+      return failure();
+  }
+
   if (aType.getElementType().isF32()) {
     auto aAttrs = isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
                       aType.getEncoding())
