@@ -3,13 +3,13 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_gfx1250
+from triton._internal_testing import is_hip_cdna5
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 def supports_tensor_descriptor():
     # AMD GPUs with tensor ops support
-    return is_hip_gfx1250() and hasattr(tl, "make_tensor_descriptor")
+    return is_hip_cdna5() and hasattr(tl, "make_tensor_descriptor")
 
 
 @triton.jit
@@ -84,7 +84,7 @@ def _run_kernel(x, y, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm='device'):
 @pytest.mark.parametrize("M,N,K", [(256, 256, 512)])
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64), (128, 128, 128)])
 @pytest.mark.parametrize("use_tdm", ['device', 'host'])
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="TDM is only tested on CDNA5.")
 def test_gemm_fp16(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, use_tdm):
     x = torch.randn(M, K, dtype=torch.float16).cuda()
     y = torch.randn(K, N, dtype=torch.float16).cuda()

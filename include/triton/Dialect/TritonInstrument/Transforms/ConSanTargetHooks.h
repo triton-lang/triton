@@ -31,6 +31,7 @@ struct MemEffectsOpInfo {
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    AsyncCopies,
   };
   struct Effects {
     struct StaticSharedBuffer {
@@ -106,6 +107,8 @@ struct WaitOpInfo {
   int pendingCount;
   bool transferWrites;
   bool transferReads;
+  // If true, the wait also completes accesses not yet committed to a group.
+  bool includeStaged = false;
 };
 
 struct AsyncProxyFenceInfo {
@@ -134,8 +137,7 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
+  virtual SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
@@ -145,6 +147,8 @@ public:
   virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
     return false;
   }
+
+  virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
 
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
@@ -189,8 +193,7 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
     return {};
   }
 
@@ -239,9 +242,6 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
       name.str());
   return info;
 }
-
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

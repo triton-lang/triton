@@ -2,7 +2,6 @@ from contextlib import nullcontext
 import pytest
 import torch
 import triton
-import triton.language as tl
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -111,32 +110,3 @@ def test_ragged_tma(dtype):
     res3 = torch.all(dst[y_off + x_size:y_off + y_size] == 0.0).item()
 
     assert [res0, res1, res2, res3] == [True, True, True, True]
-
-
-def test_tma_descriptor_round_f32_to_tf32():
-
-    @triton.jit
-    def kernel(desc, out_ptr):
-        block = desc.load([0, 0])
-        idx = tl.arange(0, 16)[None, :]
-        tl.store(out_ptr + idx, block)
-
-    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
-        bits = x.view(torch.int32)
-        bits_i64 = bits.to(torch.int64) & 0xFFFFFFFF
-        exp_mask = 0x7F800000
-        is_special = (bits_i64 & exp_mask) == exp_mask
-        round_bias = ((bits_i64 >> 13) & 1) + 0x00000FFF
-        rounded = (bits_i64 + round_bias) & 0xFFFFE000
-        out_bits = torch.where(is_special, bits_i64, rounded)
-        return (out_bits & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
-
-    device = "cuda"
-    torch.manual_seed(17)
-    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
-    out = torch.empty_like(inp)
-    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
-    kernel[(1, )](desc, out)
-
-    expected = round_to_tf32(inp)
-    torch.testing.assert_close(out, expected, rtol=0, atol=0)

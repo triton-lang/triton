@@ -1,9 +1,9 @@
 #define __HIP_PLATFORM_AMD__
-#include <hip/hip_runtime.h>
-#include <hip/hip_runtime_api.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -419,7 +419,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipSymbolTable.hipGetErrorString(code);
         char err[TRITON_HIP_MSG_BUFF_SIZE] = {0};
-        snprintf(err, sizeof(err), "%s Code: %d, Messsage: %s", prefix, code,
+        snprintf(err, sizeof(err), "%s Code: %d, Message: %s", prefix, code,
                  str);
         PyGILState_STATE gil_state;
         gil_state = PyGILState_Ensure();

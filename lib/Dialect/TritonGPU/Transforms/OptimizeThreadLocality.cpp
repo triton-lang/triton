@@ -21,77 +21,6 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZETHREADLOCALITY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-namespace {
-// Change the destination layout of reshape ops allowing reorder when used by a
-// reduction in order to minimize the amount of cross thread communication for
-// the reduction.
-struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
-  OptimizeReshapeLayoutPattern(MLIRContext *context)
-      : OpRewritePattern<ReshapeOp>(context, 1) {}
-
-  LogicalResult matchAndRewrite(ReshapeOp viewOp,
-                                PatternRewriter &rewriter) const override {
-    if (!viewOp.getAllowReorder())
-      return failure();
-    std::optional<int> reductionAxis;
-    for (Operation *user : viewOp.getResult().getUsers()) {
-      if (auto reduceOp = dyn_cast<triton::ReduceOp>(user)) {
-        if (reductionAxis) {
-          if (reductionAxis != reduceOp.getAxis())
-            return failure();
-        } else {
-          reductionAxis = reduceOp.getAxis();
-        }
-      }
-    }
-    if (!reductionAxis)
-      return failure();
-    RankedTensorType tensorType = viewOp.getType();
-    if (auto blocked =
-            mlir::dyn_cast<BlockedEncodingAttr>(tensorType.getEncoding())) {
-      // If the layout already has all the elements along the reduction
-      // dimension in the same thread we can skip.
-      if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
-          blocked.getWarpsPerCTA()[*reductionAxis] == 1 &&
-          blocked.getCGALayout().getCTAsPerCGA()[*reductionAxis] == 1)
-        return failure();
-    }
-    ArrayRef<int64_t> shape = tensorType.getShape();
-    SmallVector<unsigned> order;
-    for (int i : triton::gpu::getOrder(tensorType)) {
-      if (i != *reductionAxis)
-        order.push_back(i);
-    }
-    // Make the reduction axis last so that elements won't be distributed
-    // amongst threads along this dimension.
-    order.push_back(*reductionAxis);
-    SmallVector<unsigned> sizePerThread(shape.size(), 1);
-    auto mod = viewOp->getParentOfType<ModuleOp>();
-    int numWarps = lookupNumWarps(viewOp);
-    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
-    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
-    auto encoding =
-        BlockedEncodingAttr::get(viewOp.getContext(), shape, sizePerThread,
-                                 order, numWarps, threadsPerWarp, numCTAs);
-    if (encoding == tensorType.getEncoding())
-      return failure();
-    RankedTensorType newType =
-        RankedTensorType::get(shape, tensorType.getElementType(), encoding);
-    if (triton::gpu::isExpensiveView(viewOp.getSrc().getType(), newType))
-      return failure();
-    rewriter.setInsertionPointAfter(viewOp);
-    rewriter.modifyOpInPlace(viewOp, [&]() {
-      viewOp.getResult().setType(newType);
-      viewOp.setEfficientLayout(true);
-    });
-    auto cvt = ConvertLayoutOp::create(rewriter, viewOp.getLoc(), tensorType,
-                                       viewOp.getResult());
-    rewriter.replaceAllUsesExcept(viewOp.getResult(), cvt.getResult(), cvt);
-    return success();
-  }
-};
-} // namespace
-
 // This function considers a gather op in isolation and attempts to determine
 // whether an optimized layout can be applied to the source and index tensors.
 static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
@@ -245,9 +174,8 @@ class TritonGPUOptimizeThreadLocalityPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    // First try to optimize the layout of views and gathers.
+    // First try to optimize the layout of gathers.
     mlir::RewritePatternSet layoutPatterns(&getContext());
-    layoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
     layoutPatterns.add<OptimizeGatherLayoutPattern>(&getContext());
     if (mlir::applyPatternsGreedily(mod, std::move(layoutPatterns)).failed()) {
       signalPassFailure();
@@ -284,7 +212,7 @@ class TritonGPUOptimizeThreadLocalityPass
       if (!reduce->hasOneUse())
         return;
       Operation *user = *(reduce->getUsers().begin());
-      if (!user->hasOneUse())
+      if (user->getNumOperands() != 2 || !user->hasOneUse())
         return;
       OpOperand &yieldOpOperand = *(user->getUses().begin());
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
@@ -301,6 +229,12 @@ class TritonGPUOptimizeThreadLocalityPass
       auto oldAccum = forOp.getInitArgs()[argNum];
       auto cstOp = oldAccum.getDefiningOp<arith::ConstantOp>();
       if (!cstOp)
+        return;
+      // The rewrite re-homes the accumulator into a thread-local partial that
+      // is only merged back after the loop, so an in-loop use of the
+      // accumulator other than the update would observe the partial state
+      // instead of the running value.
+      if (!forOp.getRegionIterArgs()[argNum].hasOneUse())
         return;
       reduceOps.insert(reduce);
     });
@@ -333,15 +267,13 @@ class TritonGPUOptimizeThreadLocalityPass
       auto blockArg = dyn_cast<BlockArgument>(accumOperand);
       auto blockArgNum = blockArg.getArgNumber();
       auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      auto *initOperand = forOp.getTiedLoopInit(blockArg);
+      if (!initOperand)
+        continue;
+      auto loopResult = forOp.getTiedLoopResult(initOperand);
+      auto resultIndex = loopResult.getResultNumber();
       // get oldAccum
-      auto oldAccum =
-          forOp.getInitArgs()[blockArgNum - forOp.getNumInductionVars()];
-      // get old loop user
-      Value loopResult =
-          forOp.getResult(blockArgNum - forOp.getNumInductionVars());
-      assert(loopResult.hasOneUse());
-      OpOperand &loopUse = *(loopResult.getUses().begin());
-      Operation *loopUser = loopUse.getOwner();
+      auto oldAccum = initOperand->get();
       // get old loop yield
       auto oldYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       // create newAccum initialization
@@ -368,8 +300,8 @@ class TritonGPUOptimizeThreadLocalityPass
       // incorporate the original accumulator value into the final result
       auto finalOp = incorporateOriginalAccumulatorValue(builder, oldUpdate,
                                                          cvtLayout, oldAccum);
-      // Replace the old loop user with the final result
-      loopUser->setOperand(loopUse.getOperandNumber(), finalOp->getResult(0));
+      // Replace all uses of the old loop result with the final result.
+      newLoop.getResult(resultIndex).replaceAllUsesWith(finalOp->getResult(0));
 
       // cleanup
       oldYield.erase();

@@ -7,6 +7,18 @@
 // RUN: not triton-opt %t/private-amd-cluster-arrive.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-arrive.mlir --check-prefix=AMD-ARRIVE
 // RUN: not triton-opt %t/private-amd-cluster-wait.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-wait.mlir --check-prefix=AMD-WAIT
 // RUN: not triton-opt %t/private-cross-cta-scratch.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-cross-cta-scratch.mlir --check-prefix=CROSS-CTA
+// RUN: not triton-opt %t/missing-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/missing-target.mlir --check-prefix=MISSING-TARGET
+// RUN: not triton-opt %t/unsupported-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/unsupported-target.mlir --check-prefix=UNSUPPORTED-TARGET
+
+//--- missing-target.mlir
+
+// MISSING-TARGET: ConSan requires a ttg.target module attribute
+module {}
+
+//--- unsupported-target.mlir
+
+// UNSUPPORTED-TARGET: unsupported ConSan target 'cpu'
+module attributes {ttg.target = "cpu"} {}
 
 //--- missing.mlir
 

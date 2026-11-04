@@ -28,7 +28,7 @@ void init_triton_analysis(py::module_ &m) {
       .def(py::init<mlir::ModuleOp>());
   py::class_<mlir::ModuleMembarAnalysis>(m, "membar")
       .def(py::init<mlir::ModuleAllocation &>())
-      .def("run", &mlir::ModuleMembarAnalysis::run);
+      .def("run", [](mlir::ModuleMembarAnalysis &analysis) { analysis.run(); });
 }
 
 void init_triton_passes_common(py::module_ &m) {
@@ -89,6 +89,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_allocate_warp_groups",
                             createTritonGPUAllocateWarpGroups, bool);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory", createAllocateSharedMemory);
+  ADD_PASS_WRAPPER_0("add_optimize_thread_regions",
+                     createTritonGPUOptimizeThreadRegions);
   ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
                      createTritonGPUGlobalScratchAllocationPass);
   ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",

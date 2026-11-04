@@ -1,8 +1,7 @@
-#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/MemoryFrontier.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -31,7 +30,7 @@ uint8_t getProxyFenceScope(Operation *op) {
   return cluster ? kClusterScope : kCTAScope;
 }
 
-using BufferAccess = BufferRegionAccess;
+using BufferAccess = const BufferRegionFootprint *;
 
 struct ProxyBlockInfo {
   using Frontier = ScopedMemoryFrontier<uint8_t>;
@@ -68,9 +67,8 @@ struct ProxyFenceFunctionAnalysis
     : public PostOrderFunctionAnalysis<ProxyBlockInfo> {
   using FuncMapT = PostOrderFunctionAnalysis<ProxyBlockInfo>::FuncMapT;
 
-  ProxyFenceFunctionAnalysis(FunctionOpInterface function,
-                             BufferRegionAnalysis &regions, uint8_t scopes)
-      : function(function), regions(regions), scopes(scopes) {}
+  ProxyFenceFunctionAnalysis(BufferRegionAnalysis &regions, uint8_t scopes)
+      : regions(regions), scopes(scopes) {}
 
   void applyEffects(Operation *op, const ProxyBlockInfo &effects,
                     ProxyBlockInfo &state, OpBuilder &builder) {
@@ -98,14 +96,16 @@ struct ProxyFenceFunctionAnalysis
     }
 
     if (auto call = dyn_cast<CallOpInterface>(op)) {
-      auto callee = cast<FunctionOpInterface>(call.resolveCallable());
-      ProxyBlockInfo effects = funcMap->lookup(callee);
-      for (auto *frontier : {&effects.generic, &effects.async})
-        frontier->transformAccesses([&](BufferAccess access) {
-          return regions.translateToCallsite(std::move(access), call, function,
-                                             callee);
-        });
-      applyEffects(op, effects, *state, *builder);
+      auto effects = getCallSummary(
+          call, *funcMap,
+          [&](ProxyBlockInfo &effects, FunctionOpInterface callee) {
+            for (auto *frontier : {&effects.generic, &effects.async})
+              frontier->transformAccesses([&](BufferAccess access) {
+                return regions.translateToCallsite(access, call, callee);
+              });
+          });
+      if (effects)
+        applyEffects(op, *effects, *state, *builder);
       return;
     }
 
@@ -118,31 +118,21 @@ struct ProxyFenceFunctionAnalysis
       uint8_t accessScopes = async ? getProxyFenceScope(op) : scopes;
       ProxyBlockInfo::Frontier &frontier =
           async ? effects.async : effects.generic;
-      for (BufferAccess region : regions.getAccessRegions(access.value)) {
-        if (access.isRead)
-          frontier.addRead(region, accessScopes);
-        if (access.isWrite)
-          frontier.addWrite(std::move(region), accessScopes);
-      }
+      BufferAccess footprint = regions.getFootprint(access.value);
+      if (access.isRead)
+        frontier.addRead(footprint, accessScopes);
+      if (access.isWrite)
+        frontier.addWrite(footprint, accessScopes);
     }
 
-    if (auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size")) {
-      uint32_t base =
-          op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
-      uint32_t size = sizeAttr.getInt();
-      BufferRegionView scratch{{base, size, {}}, base};
-      scratch.allocationFrame = regions.getOperationId(function.getOperation());
-      AddressSet addresses = AddressSet::fromRange(base, size);
-      unsigned numCTAs = hasCrossCTAScratch(op) ? gpu::lookupNumCTAs(op) : 1;
-      for (unsigned cta = 0; cta < numCTAs; ++cta)
-        scratch.region.ctaAddresses.emplace_back(cta, addresses);
+    if (op->hasAttr("allocation.size")) {
+      BufferAccess scratch = regions.getScratchFootprint(op);
       effects.generic.addRead(scratch, scopes);
-      effects.generic.addWrite(std::move(scratch), scopes);
+      effects.generic.addWrite(scratch, scopes);
     }
     applyEffects(op, effects, *state, *builder);
   }
 
-  FunctionOpInterface function;
   BufferRegionAnalysis &regions;
   uint8_t scopes;
 };
@@ -174,15 +164,9 @@ struct ProxyFenceInsertionPass
     if (failed(solver->initializeAndRun(module)))
       return signalPassFailure();
 
-    CallGraph<ProxyBlockInfo> callGraph(module);
-    CallGraph<ProxyBlockInfo>::FuncDataMapT summaries;
-    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [](CallOpInterface, FunctionOpInterface) {},
-        [&](FunctionOpInterface function) {
-          if (summaries.try_emplace(function).second)
-            ProxyFenceFunctionAnalysis(function, *regions, scopes)
-                .run(function, summaries);
-        });
+    ProxyFenceFunctionAnalysis::runModule(module, [&](FunctionOpInterface) {
+      return ProxyFenceFunctionAnalysis(*regions, scopes);
+    });
   }
 };
 

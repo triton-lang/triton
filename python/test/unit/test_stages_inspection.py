@@ -5,6 +5,32 @@ import pathlib
 import hashlib
 import pytest
 from triton._internal_testing import is_cuda
+from triton._instrumentation import instrument, is_enabled, register_instrumentation, unregister_instrumentation
+
+
+def test_instrumentation_mode():
+    options = {"instrumentation_mode": "gsan,consan"}
+
+    assert is_enabled(options, "consan")
+    assert not is_enabled(options, "proton")
+
+
+def test_dynamic_instrumentation_and_dialect_loading():
+    calls = []
+
+    assert not instrument("context", point="load-dialects", backend="test")
+    register_instrumentation(point="load-dialects", backend="test", callback=lambda context: calls.append(
+        ("dialects", context)))
+    register_instrumentation(point="ttgpuir-to-llvmir", backend="test", callback=lambda _pm: calls.append("passes"))
+    try:
+        assert instrument("context", point="load-dialects", backend="test")
+        assert instrument("pm", point="ttgpuir-to-llvmir", backend="test", context="module-context")
+        assert calls == [("dialects", "context"), ("dialects", "module-context"), "passes"]
+    finally:
+        unregister_instrumentation(point="load-dialects", backend="test")
+        unregister_instrumentation(point="ttgpuir-to-llvmir", backend="test")
+
+    assert not instrument("context", point="load-dialects", backend="test")
 
 
 @pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")
