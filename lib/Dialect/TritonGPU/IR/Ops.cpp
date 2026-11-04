@@ -691,6 +691,20 @@ OpFoldResult MemDescReinterpretOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+static LogicalResult verifyReinterpretAlignment(MemDescReinterpretOp op) {
+  auto src = op.getSrc().getType();
+  if (!isa<SharedMemorySpaceAttr>(src.getMemorySpace()))
+    return success();
+  unsigned srcAlignment = getSharedMemoryViewAlignment(src);
+  unsigned dstAlignment = getSharedMemoryViewAlignment(op.getType());
+  if (dstAlignment > srcAlignment)
+    return op.emitOpError()
+           << "result view requires " << dstAlignment
+           << "-byte origin alignment, but the source guarantees "
+           << srcAlignment;
+  return success();
+}
+
 LogicalResult MemDescReinterpretOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
@@ -809,7 +823,7 @@ LogicalResult MemDescReinterpretOp::verify() {
   // A complete layout tile, including a slice only along the pipeline
   // dimension, owns every byte in its allocation regardless of zero bases.
   if (!srcIsLayoutSubview)
-    return success();
+    return verifyReinterpretAlignment(*this);
 
   // Remember that we disallow dstTy that's a subview.
   // A destination without a subview owns its entire physical allocation, even
@@ -857,7 +871,7 @@ LogicalResult MemDescReinterpretOp::verify() {
                        << contiguousUnits
                        << (srcIsTmem ? " contiguous columns available)"
                                      : " contiguous bytes available)");
-  return success();
+  return verifyReinterpretAlignment(*this);
 }
 
 // LocalAllocOp
