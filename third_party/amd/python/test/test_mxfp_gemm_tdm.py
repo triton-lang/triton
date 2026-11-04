@@ -270,6 +270,7 @@ def run_mxfp_gemm(
     num_warps: int,
     group_size_m: int,
     transpose_b: bool = True,
+    num_stages: int = 2,
     benchmark_mode: str = None,
     benchmark_num_iters: int = 32,
 ):
@@ -350,6 +351,7 @@ def run_mxfp_gemm(
         group_size_m,  #
         transpose_b,  #
         num_warps=num_warps,  #
+        num_stages=num_stages,  #
     )
 
     if benchmark_mode == 'eager':
@@ -405,6 +407,7 @@ def main():
     parser.add_argument('--dtype_b', type=str, default='float8_e5m2', choices=['float4', 'float8_e5m2', 'float8_e4m3'])
     parser.add_argument('--num_warps', type=int, default=4, help='Number of warps')
     parser.add_argument('--group_size_m', type=int, default=8, help='Number of programs per group')
+    parser.add_argument('--num_stages', type=int, default=2, help='Pipeliner stages')
     parser.add_argument('--benchmark_mode', type=str, default='none', choices=['none', 'eager'],
                         help="Timing method. 'eager' uses triton.testing.do_bench; 'none' disables timing.")
     parser.add_argument('--benchmark_num_iters', type=int, default=32, help='Number of iterations (rep) for do_bench')
@@ -423,6 +426,7 @@ def main():
         num_warps=args.num_warps,  #
         group_size_m=args.group_size_m,  #
         transpose_b=True,  #
+        num_stages=args.num_stages,  #
         benchmark_mode=None if args.benchmark_mode == 'none' else args.benchmark_mode,  #
         benchmark_num_iters=args.benchmark_num_iters,  #
     )

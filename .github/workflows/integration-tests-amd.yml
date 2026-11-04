@@ -376,6 +376,9 @@ jobs:
             third_party/amd/python/test/test_gluon_cdna5_consan.py
           k_gluon_skip="(test_tensor_descriptor_load_store_nd_with_padding and int32-64-1)"
           k_gluon_skip+=" or (test_cache_modifier and tdm_load_store_roundtrip_kernel)"
+          # Known emulator issues with TDM mbarrier completion and redundant warps.
+          k_gluon_skip+=" or test_tdm_mbarrier_last_load_covers_prior"
+          k_gluon_skip+=" or (test_tdm_gather_scatter_mbarrier_count and (redundant_single_chunk or redundant_multichunk))"
           run_rocjitsu_pytest 64 1 \
             third_party/amd/python/test/test_gluon_cdna5.py \
             -k "not test_runtime_tensor_copy and not ($k_gluon_skip)"

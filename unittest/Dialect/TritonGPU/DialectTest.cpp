@@ -285,6 +285,9 @@ INSTANTIATE_TEST_SUITE_P(
 
         {R"(T<2x1x2xf32, #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>>)",
          R"(T<2x2xf32, #ttg.slice<{dim = 1, parent = #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>}>>)"},
+
+        {R"(T<2xi32, #B<{spt=[1], tpw=[32], wpc=[4], ord=[0], CGALayout=[[1],[0]]}>>)",
+         "T<2x1xi32>"},
     })));
 
 class Fp4ToFpOpTest : public ::testing::Test {
