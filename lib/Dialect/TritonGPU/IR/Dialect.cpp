@@ -4852,6 +4852,10 @@ unsigned triton::gpu::getMaxAlignedSharedBytes(MemDescType type) {
   return maxBytes;
 }
 
+unsigned triton::gpu::getMaxAlignedSharedElements(MemDescType type) {
+  return getMaxAlignedSharedBytes(type) / (type.getElementTypeBitWidth() / 8);
+}
+
 LogicalResult
 triton::gpu::verifySharedMemoryAccessAlignment(Operation *op, MemDescType type,
                                                unsigned requiredBytes) {

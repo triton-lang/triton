@@ -1056,12 +1056,13 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   auto [maskSpanAffineOffset, maskSpanAffineBlock] =
       smemObj.getMaskSpanOffsetsAndBlocks(memDescTy);
 
-  // Extract padding info from padded encoding (standalone or inside
-  // partitioned)
-  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  unsigned bitwidth = memDescTy.getElementTypeBitWidth();
   auto padded = triton::gpu::getPaddedEncoding(memDescTy.getEncoding());
-  maxVecElems = std::min<int>(maxVecElems, padded ? padded.getMinInterval()
-                                                  : 128 / bitwidth);
+  if (!padded)
+    maxVecElems = std::min<int>(maxVecElems, 128 / bitwidth);
+
+  maxVecElems = std::min<int>(
+      maxVecElems, triton::gpu::getMaxAlignedSharedElements(memDescTy));
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (padded) {
     paddingShifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,

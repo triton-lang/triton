@@ -517,12 +517,11 @@ public:
                                                srcTy.getElementTypeBitWidth(),
                                                /*offsetInBytes=*/true);
 
+    unsigned maxBytes = triton::gpu::getMaxAlignedSharedBytes(srcTy);
     for (const auto &ldsParams : ldsParamsVec) {
-      if (triton::gpu::isPaddedEncoding(srcTy.getEncoding()) &&
-          triton::gpu::getMinInterval(srcTy.getEncoding()) <
-              ldsParams.instBitWidth / bitWidth) {
+      // Each issuing lane reads one contiguous, naturally aligned LDS vector.
+      if (ldsParams.instBitWidth / 8 > maxBytes)
         continue;
-      }
 
       SmallVector<Value> values;
       auto result =
