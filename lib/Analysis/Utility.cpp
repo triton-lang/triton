@@ -486,21 +486,24 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   unsigned registerWords = numSegments * independentRegs * words;
   unsigned laneWords = numSegments * words / scanLanes;
 
-  const auto &source =
-      intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
-  uint64_t sourceLaneMask = getInputBasisMask(source, kLane, {axisDim});
-  uint64_t totalsLaneMask =
-      getInputBasisMask(*interWarpTotalsLayout, kLane, {axisDim});
   if (registerWords <= maxRegisterWords)
     interWarpScanType = InterWarpScanType::Registers;
   else if (laneWords <= maxLaneWords)
     interWarpScanType = InterWarpScanType::Warp;
-  // Stream large tables whose segment prefixes are held in registers.
-  else if (sourceLaneMask == totalsLaneMask)
-    interWarpScanType = InterWarpScanType::Grouped;
-  else
-    interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
-                                    : InterWarpScanType::Registers;
+  else {
+    const auto &source =
+        intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
+    uint64_t sourceLaneMask = getInputBasisMask(source, kLane, {axisDim});
+    uint64_t totalsLaneMask =
+        getInputBasisMask(*interWarpTotalsLayout, kLane, {axisDim});
+    // Unmerged lane contributions correspond to independent segments.
+    // TODO(Keren): relax the constraint.
+    if (sourceLaneMask == totalsLaneMask)
+      interWarpScanType = InterWarpScanType::Grouped;
+    else
+      interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
+                                      : InterWarpScanType::Registers;
+  }
 
   unsigned next = 1;
   if (interWarpScanType == InterWarpScanType::Warp)
