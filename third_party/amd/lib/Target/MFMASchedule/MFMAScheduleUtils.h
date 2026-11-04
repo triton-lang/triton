@@ -2,7 +2,7 @@
 //
 // Instruction classification and the MFMA cycle table used by both LLVM-IR
 // scheduling passes of this library: the MFMA <-> memory interleave
-// (MFMASchedule.cpp) and the MFMA <-> VALU co-execution declaration
+// (MFMAMemSchedule.cpp) and the MFMA <-> VALU co-execution declaration
 // (MFMAVALUSchedule.cpp).
 //
 //===----------------------------------------------------------------------===//

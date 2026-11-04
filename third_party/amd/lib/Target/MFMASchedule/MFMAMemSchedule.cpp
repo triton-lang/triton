@@ -1,4 +1,4 @@
-//===- MFMASchedule.cpp - MFMA <-> memory interleave for CDNA3/4 ----------===//
+//===- MFMAMemSchedule.cpp - MFMA <-> memory interleave for CDNA3/4 -------===//
 //
 // An opt-in LLVM-IR pass that interleaves the MFMAs of a matrix-core hot loop
 // with the memory operations that are independent of them, so the matrix unit
@@ -27,7 +27,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MFMASchedule.h"
+#include "MFMAMemSchedule.h"
 #include "MFMAScheduleUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -48,7 +48,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "tritonamdgpu-mfma-schedule"
+#define DEBUG_TYPE "tritonamdgpu-mfma-mem-schedule"
 
 namespace {
 
@@ -469,7 +469,7 @@ private:
 
 namespace mlir::triton::AMD {
 
-bool runMFMASchedulePass(llvm::Function &F, llvm::StringRef Arch) {
+bool runMFMAMemSchedulePass(llvm::Function &F, llvm::StringRef Arch) {
   if (F.isDeclaration())
     return false;
 

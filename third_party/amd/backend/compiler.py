@@ -852,7 +852,7 @@ class HIPBackend(BaseBackend):
 
         # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
         if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
-            amd.add_mfma_schedule_pass(kernel_fn, options.arch)
+            amd.add_mfma_mem_schedule_pass(kernel_fn, options.arch)
         if options.arch == "gfx950":
             amd.add_mfma_valu_schedule_pass(kernel_fn)
 

@@ -3,7 +3,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
-#include "amd/lib/Target/MFMASchedule/MFMASchedule.h"
+#include "amd/lib/Target/MFMASchedule/MFMAMemSchedule.h"
 #include "amd/lib/Target/MFMASchedule/MFMAVALUSchedule.h"
 #include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
@@ -575,9 +575,9 @@ void init_triton_amd(py::module_ &m) {
       // hold the GIL meanwhile.
       py::call_guard<py::gil_scoped_release>());
 
-  m.def("add_mfma_schedule_pass",
+  m.def("add_mfma_mem_schedule_pass",
         [](llvm::Function *fn, const std::string &arch) -> bool {
-          return mlir::triton::AMD::runMFMASchedulePass(*fn, arch);
+          return mlir::triton::AMD::runMFMAMemSchedulePass(*fn, arch);
         });
   m.def("add_mfma_valu_schedule_pass", [](llvm::Function *fn) -> bool {
     return mlir::triton::AMD::runMFMAVALUSchedulePass(*fn);
