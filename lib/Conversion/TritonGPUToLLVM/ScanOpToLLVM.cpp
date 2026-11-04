@@ -188,7 +188,7 @@ private:
       int distance = offset * numRegs;
       auto upDistance =
           getShuffleUpDistance(layout, inverseLayout, axis, numSegments,
-                               reverse ? distance : -distance);
+                               reverse ? -distance : distance);
       Value lane;
       if (!upDistance) {
         auto source = coords;
@@ -501,7 +501,7 @@ private:
   getShuffleUpDistance(const LinearLayout &layout,
                        const LinearLayout &inverseLayout, unsigned axis,
                        unsigned segmentsPerScan, int distance) {
-    if (distance >= 0 || unsigned(-distance) >= segmentsPerScan)
+    if (distance <= 0 || unsigned(distance) >= segmentsPerScan)
       return std::nullopt;
     auto *ctx = layout.getInDimNames().begin()->getContext();
     auto kLane = StringAttr::get(ctx, "lane");
@@ -512,7 +512,7 @@ private:
     auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
     const auto &bases = inverseLayout.getBases().lookup(axisDim);
     unsigned laneDim = inverseLayout.getOutDimIndex(kLane);
-    unsigned first = llvm::Log2_32(-distance);
+    unsigned first = llvm::Log2_32(distance);
     unsigned stride = bases[first][laneDim];
     if (!llvm::isPowerOf2_32(stride))
       return std::nullopt;
@@ -590,7 +590,7 @@ private:
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
     SmallVector<ScanCarry> carries;
     auto upDistance = getShuffleUpDistance(segmentLayout, inverse, op.getAxis(),
-                                           segmentsPerScan, reverse ? 1 : -1);
+                                           segmentsPerScan, reverse ? -1 : 1);
     for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, segmentLayout,
                                       {{kReg, b.i32_val(r)},
