@@ -4,6 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import fp6_values, pack_fp6, is_cuda
+from triton.backends.nvidia.compiler import get_ptx_version_from_options
 from triton.language.extra.cuda import to_fp6
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -149,7 +150,10 @@ def test_fp6_tma_store_padded_bytes(block_m, fmt, dtype, host, with_allocator):
     kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt, block_m)
     torch.testing.assert_close(raw, codes.byte())
     torch.testing.assert_close(buf, pack_fp6(initial))
-    assert f"cvt.rn.satfinite.{fmt}x2.f32" in kernel.asm["ptx"]
+    src = "f32"
+    if get_ptx_version_from_options(kernel.metadata, kernel.metadata.target.arch) >= 91:
+        src = {torch.float16: "f16x2", torch.bfloat16: "bf16x2", torch.float32: "f32"}[dtype]
+    assert f"cvt.rn.satfinite.{fmt}x2.{src}" in kernel.asm["ptx"]
     assert "cp.async.bulk.tensor.2d.global.shared" in kernel.asm["ptx"]
     if host:
         assert kernel.metadata.global_scratch_size == 0
