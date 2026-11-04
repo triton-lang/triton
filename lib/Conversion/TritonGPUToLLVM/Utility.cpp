@@ -1029,9 +1029,10 @@ SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt, // Map from registers to offset[, partition]
                ArrayRef<Value> valsArray, // Input for store, empty for load
-               Type llvmElemTy, triton::gpu::MemDescType srcTy,
+               Type llvmElemTy, triton::gpu::MemDescType memDescTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
-               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst) {
+               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst,
+               int maxVecElems) {
 
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
@@ -1042,26 +1043,28 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy,
-                                  smemObj, rewriter, targetInfo, lowerInst);
+    auto outVals =
+        lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, memDescTy,
+                       smemObj, rewriter, targetInfo, lowerInst, maxVecElems);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
     return outVals;
   }
   auto [affineOffset, affineBlockOffset] =
-      smemObj.getShmemOffsetAndBlock(loc, rewriter, srcTy);
+      smemObj.getShmemOffsetAndBlock(loc, rewriter, memDescTy);
   auto [maskSpanAffineOffset, maskSpanAffineBlock] =
-      smemObj.getMaskSpanOffsetsAndBlocks(srcTy);
+      smemObj.getMaskSpanOffsetsAndBlocks(memDescTy);
 
   // Extract padding info from padded encoding (standalone or inside
   // partitioned)
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
-  auto padded = triton::gpu::getPaddedEncoding(srcTy.getEncoding());
-  int maxVecElems = padded ? padded.getMinInterval() : 128 / bitwidth;
+  auto padded = triton::gpu::getPaddedEncoding(memDescTy.getEncoding());
+  maxVecElems = std::min<int>(maxVecElems, padded ? padded.getMinInterval()
+                                                  : 128 / bitwidth);
   SmallVector<std::pair<unsigned, unsigned>> paddingShifts;
   if (padded) {
-    paddingShifts = getPaddedSharedShifts(srcTy.getEncoding(), bitwidth,
+    paddingShifts = getPaddedSharedShifts(memDescTy.getEncoding(), bitwidth,
                                           /*offsetInBytes=*/true);
   }
 
