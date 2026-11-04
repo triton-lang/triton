@@ -258,3 +258,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#mixed = #ttg.amd_wmma<{version = 3, ctaLayout = {register = [[3, 0]], warp = [[2, 0]]}, isTranspose = false, instrShape = [16, 16, 32]}>
+#piece = #ttg.shared_linear<{offset = [[16, 0], [0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}, alignment = 16>
+#shared = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #piece}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The CTA register basis advances 48 rows: one offset step and a change of partition.
+  // COMMON-LABEL: @local_load_store_across_partitions
+  // COMMON-COUNT-16: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // COMMON-COUNT-16: llvm.store {{.*}} <alignment = 4> : vector<1xi32>, !llvm.ptr<3>
+  tt.func private @local_load_store_across_partitions(%mem: !ttg.memdesc<64x16xi32, #shared, #smem, mutable>, %val: tensor<64x16xi32, #mixed>) -> tensor<64x16xi32, #mixed> {
+    %old = ttg.local_load %mem : !ttg.memdesc<64x16xi32, #shared, #smem, mutable> -> tensor<64x16xi32, #mixed>
+    ttg.local_store %val, %mem : tensor<64x16xi32, #mixed> -> !ttg.memdesc<64x16xi32, #shared, #smem, mutable>
+    tt.return %old : tensor<64x16xi32, #mixed>
+  }
+}

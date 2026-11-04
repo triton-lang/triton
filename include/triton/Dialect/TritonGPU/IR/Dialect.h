@@ -445,6 +445,17 @@ bool isPaddedEncoding(Attribute encoding);
 // wrapped in partitioned).
 unsigned getMinInterval(Attribute encoding);
 
+// Maximum naturally aligned transfer width for this view, in bytes.
+unsigned getMaxAlignedSharedBytes(MemDescType type);
+
+// The same bound in whole elements.
+// Zero means that even one element exceeds the guaranteed alignment.
+unsigned getMaxAlignedSharedElements(MemDescType type);
+
+// Check the layout's alignment for a naturally aligned shared-memory access.
+LogicalResult verifySharedMemoryAccessAlignment(Operation *op, MemDescType type,
+                                                unsigned requiredBytes);
+
 } // namespace mlir::triton::gpu
 
 namespace llvm {

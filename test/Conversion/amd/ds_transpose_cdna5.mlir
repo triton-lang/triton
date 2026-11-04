@@ -10,6 +10,7 @@
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #padding = #ttg.padded_shared<[512:+16] {order = [0, 1], shape = [128, 64]}>
 #padding_vec1 = #ttg.padded_shared<[1:+4] {order = [0, 1], shape = [128, 64]}>
+#padding_align8 = #ttg.padded_shared<[512:+4] {order = [0, 1], shape = [128, 64]}>
 #smem = #ttg.shared_memory
 
 // Partitioned shared: inner padded tiles.
@@ -172,13 +173,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
-  //  CHECK-LABEL: ds_transpose_padding_interval_too_small
-  tt.func @ds_transpose_padding_interval_too_small(%arg0: !ttg.memdesc<128x64xf16, #padding_vec1, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+  // CHECK-LABEL: ds_transpose_padded_fallbacks
+  tt.func @ds_transpose_padded_fallbacks(%arg0: !ttg.memdesc<128x64xf16, #padding_vec1, #smem, mutable>, %arg1: !ttg.memdesc<128x64xf16, #padding_align8, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // CHECK-NOT: ds.load.tr16.b128
     %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xf16, #padding_vec1, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
 
+    // The second layout has contiguous vectors but only 8-byte alignment.
+    %2 = ttg.local_load %arg1 : !ttg.memdesc<128x64xf16, #padding_align8, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    %sum = arith.addf %1, %2 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
     %ptr1 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
-    tt.store %ptr1, %1 : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
+    tt.store %ptr1, %sum : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma_b16, kWidth = 8}>>
     tt.return
   }
 

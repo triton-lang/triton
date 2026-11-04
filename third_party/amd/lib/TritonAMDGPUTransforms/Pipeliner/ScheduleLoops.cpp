@@ -168,7 +168,8 @@ static bool isCoalesced(RankedTensorType loadType,
   // auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
 
   // auto [contigPerThreadLL, permutation] =
-  //     largestVectorisation(ctx, invertedLL, bitwidth, std::nullopt);
+  //     largestVectorisation(ctx, invertedLL, 128 / bitwidth,
+  //     /*allowPermutation=*/true);
 
   const unsigned targetContigPerThread =
       targetLLAttr.getContigPerThread()[contigDim];

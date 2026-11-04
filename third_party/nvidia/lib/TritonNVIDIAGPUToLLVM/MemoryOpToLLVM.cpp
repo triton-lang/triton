@@ -82,9 +82,11 @@ LogicalResult lowerLdStMatrix(
   auto *ctx = loc.getContext();
   assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
          "expected register broadcasting to be removed by the caller");
-  if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding())) {
+  auto encoding = dyn_cast<SharedEncodingTrait>(memDescType.getEncoding());
+  // Matrix instructions require 16-byte row alignment.
+  if (!encoding || isa<PaddedSharedEncodingAttr>(encoding) ||
+      getMaxAlignedSharedBytes(memDescType) < 16)
     return failure();
-  }
   if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(memDescType).second !=
       0) {
     return failure();
@@ -326,7 +328,8 @@ struct AsyncSharedStoreOpConversion
       return {};
     };
     lowerLocalLdSt(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,
-                   rewriter, targetInfo, emitStore);
+                   rewriter, targetInfo, emitStore,
+                   /*maxVecElems=*/128 / dstTy.getElementTypeBitWidth());
     rewriter.eraseOp(op);
     return success();
   }

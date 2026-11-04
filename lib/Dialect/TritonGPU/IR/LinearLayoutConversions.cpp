@@ -1,3 +1,4 @@
+#include <numeric>
 #include <vector>
 
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -1321,6 +1322,75 @@ LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
   return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
                                               : toLinearLayout(type);
+}
+
+std::pair<uint64_t, uint64_t> getMaskSpanOffsetsAndBlocks(MemDescType type) {
+  auto ctx = type.getContext();
+  auto encoding = type.getEncoding();
+  auto shape = dropPipeliningDim(type.getShape(), encoding);
+  auto allocShape = dropPipeliningDim(type.getAllocShape(), encoding);
+
+  // A full layout tile has no affine offset.
+  if (allocShape == shape) {
+    return {0, 0};
+  }
+  auto totalLl = toLinearLayoutIgnoringPadding(allocShape, type.getEncoding());
+  // Map from dimNames to offset, block
+  auto invLl = totalLl.pseudoinvert();
+  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+  for (auto dim : standardOutDimNames(ctx, shape.size())) {
+    logicalOffsets.push_back({dim, 0});
+  }
+
+  uint64_t offsetMask = 0;
+  uint64_t blockMask = 0;
+  for (auto [dim, shapes] : llvm::enumerate(llvm::zip(shape, allocShape))) {
+    auto [shape, allocShape] = shapes;
+    for (int j = llvm::Log2_32(shape); j < llvm::Log2_32(allocShape); ++j) {
+      logicalOffsets[dim].second = 1 << j;
+      auto offsetAndBlock = invLl.apply(logicalOffsets);
+      offsetMask |= offsetAndBlock[0].second;
+      blockMask |= offsetAndBlock[1].second;
+    }
+    // Reset the offset for the next dimension
+    logicalOffsets[dim].second = 0;
+  }
+  return {offsetMask, blockMask};
+}
+
+unsigned getSharedMemoryViewAlignment(MemDescType type) {
+  auto enc = cast<SharedEncodingTrait>(type.getEncoding());
+  auto padded = getPaddedEncoding(enc);
+  uint64_t originBits = getMaskSpanOffsetsAndBlocks(type).first;
+  auto layoutShape = dropPipeliningDim(type.getAllocShape(), enc);
+  auto stages = type.getShape().drop_back(layoutShape.size());
+  auto allocStages = type.getAllocShape().drop_back(layoutShape.size());
+  // Indexing erases the stage dimension. An opaque single-stage descriptor
+  // can therefore point into any stage of a multi-buffered allocation.
+  uint64_t lastStage =
+      allocStages.empty() ? UINT64_MAX : product(allocStages) - product(stages);
+  if (lastStage) {
+    auto allocation = toLinearLayoutIgnoringPadding(layoutShape, enc);
+    uint64_t stride =
+        allocation.getInDimSize(StringAttr::get(type.getContext(), "offset"));
+    originBits |= stride;
+    if (padded)
+      for (unsigned interval : padded.getIntervals())
+        if (interval > stride && interval / stride <= lastStage)
+          originBits |= interval;
+  }
+
+  uint64_t elemBytes = type.getElementTypeBitWidth() / 8;
+  unsigned alignment = enc.getAlignment();
+  for (; originBits && alignment > 1; originBits &= originBits - 1) {
+    int64_t offset = int64_t{1} << llvm::countr_zero(originBits);
+    // Between padding boundaries, doubling an offset doubles its physical
+    // displacement, so the stage stride and the larger intervals suffice.
+    if (padded)
+      offset = padded.getPaddedSize({offset + 1}) - 1;
+    alignment = std::gcd<uint64_t>(alignment, offset * elemBytes);
+  }
+  return alignment;
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

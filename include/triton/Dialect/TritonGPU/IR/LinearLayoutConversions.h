@@ -69,6 +69,13 @@ LinearLayout toLinearLayoutIgnoringPadding(MemDescType type);
 LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding);
 
+// Unpadded offset and CTA bits that can vary with a descriptor's subslice
+// origin.
+std::pair<uint64_t, uint64_t> getMaskSpanOffsetsAndBlocks(MemDescType type);
+
+// Guaranteed byte alignment of the physical origin of a shared-memory view.
+unsigned getSharedMemoryViewAlignment(MemDescType type);
+
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //

@@ -785,7 +785,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // CHECK-LABEL: padded_shared_layout_vectorization
 // CHECK-NOT: llvm.load
-// CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<8xf16>
+// CHECK-COUNT-2: llvm.load {{.*}} !llvm.ptr<3> -> vector<4xf16>
 // CHECK-NOT: llvm.load
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -846,7 +846,8 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // CHECK: %[[SUBSLICE_CST2:.+]] = llvm.mlir.constant(2 : i32)
     // CHECK: %[[SUBSLICE_CST6:.+]] = llvm.mlir.constant(6 : i32)
     // CHECK: %[[SUBSLICE_CST0:.+]] = llvm.mlir.constant(0 : i32)
-    // CHECK: llvm.store {{.*}} : vector<8xf16>, !llvm.ptr<3>
+    // Odd rows start eight bytes past a 16-byte boundary.
+    // CHECK-COUNT-2: llvm.store {{.*}} : vector<4xf16>, !llvm.ptr<3>
     // CHECK-NOT: llvm.store
     %0 = ttg.local_alloc %arg0 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
     %1 = ttg.memdesc_subslice %0 [16, 0]  : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 32x32>

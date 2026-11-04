@@ -151,8 +151,8 @@ protected:
 
     // Remove broadcasting
     regToShared = actionRemoveBroadcastedRegs(regToShared).apply(regToShared);
-    auto [elemsPerVec, permutation] =
-        largestVectorisation(ctx, regToShared, bitwidth);
+    auto [elemsPerVec, permutation] = largestVectorisation(
+        ctx, regToShared, 128 / bitwidth, /*allowPermutation=*/true);
     regToShared = permutation.apply(regToShared);
 
     int vectorisation = llvm::divideCeil(bitwidth * elemsPerVec, 32);
@@ -219,8 +219,8 @@ protected:
 
     // Remove broadcasting
     regToShared = actionRemoveBroadcastedRegs(regToShared).apply(regToShared);
-    auto [elemsPerVec, permutation] =
-        largestVectorisation(ctx, regToShared, bitwidth);
+    auto [elemsPerVec, permutation] = largestVectorisation(
+        ctx, regToShared, 128 / bitwidth, /*allowPermutation=*/true);
     regToShared = permutation.apply(regToShared);
 
     int vectorisation = llvm::divideCeil(bitwidth * elemsPerVec, 32);

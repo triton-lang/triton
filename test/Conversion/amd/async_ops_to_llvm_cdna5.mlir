@@ -370,15 +370,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: %[[NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
     // CHECK-NEXT: %[[OOB_LDS:.*]] = llvm.inttoptr %[[NEG1]] :
-    // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[OOB_LDS]]
+    // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{[^, ]+}}, %[[REAL_LDS:[^, ]+]], %[[OOB_LDS]]
     // CHECK-NEXT: rocdl.global.load.async.to.lds{{.*}} %{{.*}}, %[[LDS_PTR]],
 
     // CHECK: %[[INV_MASK:.*]] = llvm.icmp "ne" %{{.*}}, %{{.*}} : i1
-    // CHECK: %[[OTHER_NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
-    // CHECK-NEXT: %[[OTHER_OOB_LDS:.*]] = llvm.inttoptr %[[OTHER_NEG1]] :
-    // CHECK-NEXT: %[[OTHER_LDS_PTR:.*]] = llvm.select %[[INV_MASK]], %{{.*}}, %[[OTHER_OOB_LDS]]
-    // CHECK: llvm.store %{{.*}}, %[[OTHER_LDS_PTR]]
+    // CHECK: llvm.cond_br %[[INV_MASK]], ^[[FILL:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+    // CHECK: ^[[FILL]]:
+    // CHECK: llvm.store %{{.*}}, %[[REAL_LDS]]
+    // CHECK: llvm.br ^[[DONE]]
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<4x32x!tt.ptr<f32>, #blocked> -> <4x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]], block = []}, alignment = 4>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "hip:gfx1250"} {
+  // CHECK-LABEL: @async_copy_weakly_aligned_fill
+  tt.func public @async_copy_weakly_aligned_fill(%src: tensor<64x!tt.ptr<f64>, #blocked> {tt.divisibility = dense<16> : tensor<1xi32>, tt.contiguity = dense<2> : tensor<1xi32>}, %pred: i1) {
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<64xf64, #shared, #smem, mutable>
+    %mask = tt.splat %pred : i1 -> tensor<64xi1, #blocked>
+    %fill = arith.constant dense<1.0> : tensor<64xf64, #blocked>
+    // Even one f64 exceeds the guaranteed alignment. The fill uses align 4.
+    // CHECK: rocdl.global.load.async.to.lds.b128
+    // CHECK: llvm.store {{.*}} <alignment = 4> : vector<2xf64>, !llvm.ptr<3>
+    // CHECK-NOT: llvm.store
+    %token = ttg.async_copy_global_to_local %src, %dst mask %mask other %fill : tensor<64x!tt.ptr<f64>, #blocked> -> <64xf64, #shared, #smem, mutable>
     tt.return
   }
 }

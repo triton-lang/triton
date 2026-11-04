@@ -201,7 +201,8 @@ struct ConvertLayoutOpConversion
       lowerLdSt(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                 /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                 /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0,
-                laneId, warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
+                laneId, warpId, rewriter, targetInfo, 128 / bitwidth,
+                /*allowPermutation=*/true,
                 makeSharedStoreEmitter(targetInfo, b.true_val()));
       emitBarrier();
       // Load
@@ -209,7 +210,8 @@ struct ConvertLayoutOpConversion
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
           /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-          /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
+          128 / bitwidth, /*allowPermutation=*/true,
+          makeSharedLoadEmitter(targetInfo));
       llvm::append_range(outVals, tileOutVals);
     }
 

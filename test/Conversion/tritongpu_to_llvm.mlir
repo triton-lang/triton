@@ -3074,6 +3074,36 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#pair = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#scalar = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#padded = #ttg.padded_shared<[64:+1] {offset = [[1], [2], [4], [8], [16], [32], [64]], block = []}>
+#align4 = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 4>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Padding moves the second 64-element slice to byte 260.
+  // CHECK-LABEL: @local_load_store_padded_slice
+  // CHECK-COUNT-2: llvm.load {{.*}} <alignment = 4> : !llvm.ptr<3> -> i32
+  // CHECK-COUNT-2: llvm.store {{.*}} <alignment = 4> : vector<1xi32>, !llvm.ptr<3>
+  tt.func private @local_load_store_padded_slice(%mem: !ttg.memdesc<128xi32, #padded, #smem, mutable>, %val: tensor<64xi32, #pair>) -> tensor<64xi32, #pair> {
+    %slice = ttg.memdesc_subslice %mem[64] : !ttg.memdesc<128xi32, #padded, #smem, mutable> -> !ttg.memdesc<64xi32, #padded, #smem, mutable, 128>
+    %old = ttg.local_load %slice : !ttg.memdesc<64xi32, #padded, #smem, mutable, 128> -> tensor<64xi32, #pair>
+    ttg.local_store %val, %slice : tensor<64xi32, #pair> -> !ttg.memdesc<64xi32, #padded, #smem, mutable, 128>
+    tt.return %old : tensor<64xi32, #pair>
+  }
+
+  // Four-byte alignment permits scalar i32 accesses for this matrix-shaped layout.
+  // CHECK-LABEL: @local_load_store_align4
+  // CHECK: llvm.load {{.*}} <alignment = 4> : !llvm.ptr<3> -> i32
+  // CHECK: llvm.store {{.*}} <alignment = 4> : vector<1xi32>, !llvm.ptr<3>
+  tt.func private @local_load_store_align4(%mem: !ttg.memdesc<32xi32, #align4, #smem, mutable>, %val: tensor<32xi32, #scalar>) -> tensor<32xi32, #scalar> {
+    %old = ttg.local_load %mem : !ttg.memdesc<32xi32, #align4, #smem, mutable> -> tensor<32xi32, #scalar>
+    ttg.local_store %val, %mem : tensor<32xi32, #scalar> -> !ttg.memdesc<32xi32, #align4, #smem, mutable>
+    tt.return %old : tensor<32xi32, #scalar>
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: abs_is_int_min_poison

@@ -1250,3 +1250,81 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+// -----
+
+#vector = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#padded1 = #ttg.padded_shared<[32:+1] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
+#padded8 = #ttg.padded_shared<[32:+8] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
+#broadcast_pair = #ttg.linear<{register = [[0], [1]], lane = [[2], [4], [8], [16], [32]], warp = [[64], [128]], block = [[0]]}>
+#inactive_padding = #ttg.padded_shared<[256:+2] {offset = [[1], [2], [4], [8], [16], [32], [64], [128]], block = [[0]]}>
+#prefix_padding = #ttg.padded_shared<[64:+1] {offset = [[1], [2], [4], [8], [16], [32], [64]], block = [[0]]}>
+#row4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#row_padding = #ttg.padded_shared<[64:+1, 128:+2] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0]], block = [[0, 0]]}>
+#perm8 = #ttg.linear<{register = [[4], [1], [2]], lane = [[8], [16], [32], [64], [128]], warp = [[256], [512]], block = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // RUBIN-LABEL: @async_shared_store_padded
+  // RUBIN-COUNT-8: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // RUBIN-COUNT-2: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // RUBIN-NOT: st.async
+  // RUBIN: llvm.return
+  tt.func public @async_shared_store_padded(%src: tensor<1024xi32, #vector8>, %dst1: !ttg.memdesc<1024xi32, #padded1, #smem, mutable>, %dst8: !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst1, %mbarrier : tensor<1024xi32, #vector8> -> !ttg.memdesc<1024xi32, #padded1, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src, %dst8, %mbarrier : tensor<1024xi32, #vector8> -> !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_inactive_padding
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  tt.func public @async_shared_store_inactive_padding(%src: tensor<256xf16, #vector>, %dst: !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #vector> -> !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // The two distinct FP16 values fit in a single store after register deduplication.
+  // CHECK-LABEL: @async_shared_store_broadcast_registers
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-NOT: st.async
+  // CHECK: llvm.return
+  tt.func public @async_shared_store_broadcast_registers(%src: tensor<256xf16, #broadcast_pair>, %dst: !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #broadcast_pair> -> !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // Both slices have the same type. The slice at byte 260 only supports b32.
+  // CHECK-LABEL: @async_shared_store_padded_slices
+  // CHECK-COUNT-4: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-NOT: st.async
+  // CHECK: llvm.return
+  tt.func public @async_shared_store_padded_slices(%src: tensor<32xi32, #vector>, %dst: !ttg.memdesc<128xi32, #prefix_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    %prefix = ttg.memdesc_subslice %dst[0] : !ttg.memdesc<128xi32, #prefix_padding, #smem, mutable> -> !ttg.memdesc<32xi32, #prefix_padding, #smem, mutable, 128>
+    %shifted = ttg.memdesc_subslice %dst[64] : !ttg.memdesc<128xi32, #prefix_padding, #smem, mutable> -> !ttg.memdesc<32xi32, #prefix_padding, #smem, mutable, 128>
+    ttng.async_shared_store %src, %prefix, %mbarrier : tensor<32xi32, #vector> -> !ttg.memdesc<32xi32, #prefix_padding, #smem, mutable, 128>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src, %shifted, %mbarrier : tensor<32xi32, #vector> -> !ttg.memdesc<32xi32, #prefix_padding, #smem, mutable, 128>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // A view of this type may start at column 64, after one i32 of padding.
+  // CHECK-LABEL: @async_shared_store_combined_padding
+  // CHECK-COUNT-4: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  tt.func public @async_shared_store_combined_padding(%src: tensor<2x4xi32, #row4>, %dst: !ttg.memdesc<2x128xi32, #row_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    %rows = ttg.memdesc_subslice %dst[0, 0] : !ttg.memdesc<2x128xi32, #row_padding, #smem, mutable> -> !ttg.memdesc<2x4xi32, #row_padding, #smem, mutable, 2x128>
+    ttng.async_shared_store %src, %rows, %mbarrier : tensor<2x4xi32, #row4> -> !ttg.memdesc<2x4xi32, #row_padding, #smem, mutable, 2x128>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_permuted_registers
+  // CHECK-COUNT-2: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // CHECK-COUNT-8: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK-NOT: st.async
+  // CHECK: llvm.return
+  tt.func public @async_shared_store_permuted_registers(%src: tensor<1024xi32, #perm8>, %plain: !ttg.memdesc<1024xi32, #shared, #smem, mutable>, %padded: !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %plain, %mbarrier : tensor<1024xi32, #perm8> -> !ttg.memdesc<1024xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src, %padded, %mbarrier : tensor<1024xi32, #perm8> -> !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}

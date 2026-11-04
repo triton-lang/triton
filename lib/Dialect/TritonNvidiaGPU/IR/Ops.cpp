@@ -304,6 +304,13 @@ LogicalResult WarpGroupDotOp::verify() {
           getB().getType().getEncoding()))
     return emitOpError("WGMMA B operand must have NVMMA shared layout");
 
+  if (auto aType = dyn_cast<MemDescType>(getA().getType()))
+    if (failed(gpu::verifySharedMemoryAccessAlignment(*this, aType, 16)))
+      return failure();
+  if (failed(
+          gpu::verifySharedMemoryAccessAlignment(*this, getB().getType(), 16)))
+    return failure();
+
   auto numWarps = gpu::lookupNumWarps(getOperation());
   if (numWarps % 4)
     return emitOpError("WGMMA requires num_warps to be divisible by 4");
@@ -549,22 +556,27 @@ LogicalResult AsyncSharedStoreOp::verify() {
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
+  auto encoding = dyn_cast<gpu::SharedEncodingTrait>(dstTy.getEncoding());
+  if (!encoding)
+    return emitOpError("requires a shared-memory destination");
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
-  auto regLayout = toLinearLayout(srcTy);
+  auto kRegister = StringAttr::get(getContext(), "register");
+  auto regLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
   auto kBlock = StringAttr::get(getContext(), "block");
   auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
-  std::optional<int> maybeMaxVecElems;
-  if (isPaddedEncoding(dstTy.getEncoding()))
-    maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
-  auto vectorization =
-      largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
-  unsigned elemsPerVec = vectorization.first;
-  if (elemsPerVec * bitwidth < 32)
-    return emitOpError("requires a layout vectorizing stores to at least 32 "
-                       "bits");
-  return success();
+  unsigned maxVecElems =
+      std::min(128u / bitwidth, gpu::getMaxAlignedSharedElements(dstTy));
+  if (maxVecElems > 0) {
+    auto [elemsPerVec, _] =
+        largestVectorisation(getContext(), cvt, maxVecElems,
+                             /*allowPermutation=*/!isPaddedEncoding(encoding));
+    if (elemsPerVec * bitwidth >= 32)
+      return success();
+  }
+  return emitOpError(
+      "requires a layout vectorizing stores to at least 32 bits");
 }
 
 TypedValue<MemDescType> AsyncSharedStoreOp::getBarrier() {

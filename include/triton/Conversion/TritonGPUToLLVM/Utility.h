@@ -16,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -734,17 +735,19 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           Value affineOffset, uint64_t maskSpanAffineOffset,
           Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
           Value warpId, RewriterBase &rewriter,
-          const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          LowerLdStCallback lowerInst);
+          const TargetInfoBase &targetInfo, int maxVecElems,
+          bool allowPermutation, LowerLdStCallback lowerInst);
 
-// Lower local_load/local_store via ld.shared/st.shared
+// Combine the instruction's maximum element count with the shared layout's
+// limit. Unpadded accesses also have the usual 128-bit cap.
 SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt,          // Map from registers to offset
                ArrayRef<Value> valsArray, // Input for store, empty for load
-               Type llvmElemTy, triton::gpu::MemDescType srcTy,
+               Type llvmElemTy, triton::gpu::MemDescType memDescTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
-               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst);
+               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst,
+               int maxVecElems = std::numeric_limits<int>::max());
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);

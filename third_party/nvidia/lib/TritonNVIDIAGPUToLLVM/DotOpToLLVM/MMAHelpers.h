@@ -97,9 +97,7 @@ public:
     assert(instrShape.size() == 2);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Due to having a 16B alignment, we can compute the offsets in 128b
-    // elements
-    // TODO We should assert in the verifier that the alignment is at least 16B
+    // Matrix descriptors encode the verified shared address in 16-byte units.
     smemBase = b.ptrtoint(i32_ty, smemBase);
     Value baseSrcb128 = b.lshr(smemBase, b.i32_val(4));
 

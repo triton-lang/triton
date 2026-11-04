@@ -26,8 +26,13 @@ LogicalResult CircularStoreOp::verify() {
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   int numWarps = getTotalNumWarps(mod);
   int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
-  if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
+  int segmentBytes = bufferSizeInBytes / segmentNum;
+  if (!llvm::isPowerOf2_32(segmentBytes))
     return emitOpError("profiling buffer segment size must be power of 2");
+  if (segmentBytes < getBytesPerClockEntry())
+    return emitOpError() << "profiling buffer segment must hold at least "
+                         << getBytesPerClockEntry()
+                         << " bytes for a clock entry";
 
   if (static_cast<bool>(getScopeIdAttr()) ==
       static_cast<bool>(getDynamicScopeId()))
