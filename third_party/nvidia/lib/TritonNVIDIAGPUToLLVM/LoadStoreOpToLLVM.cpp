@@ -1316,7 +1316,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto layouts = ttng::getTMAMessageLayouts(smemTy, tmaMode);
     auto &msgToShared = layouts.messageToShared;
     auto &msgToOffset = layouts.messageToOffset;
-    auto smemLayout = ttg::toLinearLayout(smemTy);
+    auto smemLayout = ttg::toLinearLayoutIgnoringPadding(smemTy);
 
     auto kMsg = str_attr("msg");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);

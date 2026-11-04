@@ -787,7 +787,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_unsigned
+    UnitAttr:$is_unsigned,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$a_type,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$b_type
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -799,7 +801,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$is_unsigned)>
+      CArg<"bool", "false">:$is_unsigned,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$a_type,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$b_type)>
   ];
 
   let assemblyFormat = [{
@@ -809,6 +813,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
+  let extraClassDeclaration = [{
+    Type getAElementType();
+    Type getBElementType();
+  }];
   let hasVerifier = 1;
 }
 
