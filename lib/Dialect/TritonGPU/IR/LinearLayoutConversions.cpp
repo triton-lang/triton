@@ -1326,12 +1326,12 @@ LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
 }
 
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
-  if (NVMMASharedEncodingAttr::isPackedFp6(type.getEncoding()))
-    return toLinearLayoutIgnoringPadding(
-        dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
-        type.getEncoding());
-  return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
-                                              : toLinearLayout(type);
+  // TMEM subviews need their logical shape to trim the parent layout.
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return toLinearLayout(type);
+  auto encoding = type.getEncoding();
+  return toLinearLayoutIgnoringPadding(
+      dropPipeliningDim(type.getAllocShape(), encoding), encoding);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
