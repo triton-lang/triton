@@ -556,17 +556,23 @@ LogicalResult AsyncSharedStoreOp::verify() {
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
+  auto encoding = dyn_cast<gpu::SharedEncodingTrait>(dstTy.getEncoding());
+  if (!encoding)
+    return emitOpError("requires a shared-memory destination");
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
   auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
   auto kBlock = StringAttr::get(getContext(), "block");
   auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
-  auto padded = gpu::getPaddedEncoding(dstTy.getEncoding());
-  int maxVecElems = padded ? padded.getMinInterval() : 128 / bitwidth;
-  auto vectorization = largestVectorisation(getContext(), cvt, maxVecElems,
-                                            /*allowPermutation=*/!padded);
-  unsigned elemsPerVec = vectorization.first;
+  unsigned maxVecElems =
+      std::min(128u / bitwidth, gpu::getMaxAlignedSharedElements(dstTy));
+  bool allowPermutation = !isPaddedEncoding(dstTy.getEncoding());
+  int elemsPerVec = maxVecElems > 0
+                        ? largestVectorisation(getContext(), cvt, maxVecElems,
+                                               allowPermutation)
+                              .first
+                        : 0;
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "
                        "bits");

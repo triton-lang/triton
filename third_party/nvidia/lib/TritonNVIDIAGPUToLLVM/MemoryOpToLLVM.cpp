@@ -328,7 +328,8 @@ struct AsyncSharedStoreOpConversion
       return {};
     };
     lowerLocalLdSt(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,
-                   rewriter, targetInfo, emitStore);
+                   rewriter, targetInfo, emitStore,
+                   /*maxVecElems=*/128 / dstTy.getElementTypeBitWidth());
     rewriter.eraseOp(op);
     return success();
   }
