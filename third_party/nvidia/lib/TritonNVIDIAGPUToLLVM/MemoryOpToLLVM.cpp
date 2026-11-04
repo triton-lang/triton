@@ -299,9 +299,7 @@ struct AsyncSharedStoreOpConversion
       unsigned storeBitwidth = std::max(32u, elemBitwidth);
       unsigned elemsPerStore = storeBitwidth / elemBitwidth;
       unsigned storeVec = vecTy.getNumElements() / elemsPerStore;
-      std::string constraint = storeBitwidth == 64 ? "l" : "r";
-
-      SmallVector<std::pair<Value, std::string>> storeValues;
+      SmallVector<Value> storeValues;
       for (unsigned i = 0; i < storeVec; ++i) {
         auto elems = values.slice(idx + i * elemsPerStore, elemsPerStore);
         Value value = elems.front();
@@ -312,17 +310,23 @@ struct AsyncSharedStoreOpConversion
           value = b.ptrtoint(int_ty(storeBitwidth), value);
         else if (!elemTy.isInteger())
           value = b.bitcast(value, int_ty(storeBitwidth));
-        storeValues.emplace_back(value, constraint);
+        storeValues.push_back(value);
       }
 
-      if (storeVec == 1 && !threadPred) {
-        LLVM::createLLVMIntrinsicCallOp(
-            rewriter, storeLoc, "llvm.nvvm.st.async", TypeRange{},
-            {dst, storeValues.front().first, mbarrier});
+      unsigned totalBitwidth = storeBitwidth * storeVec;
+      if (!threadPred && totalBitwidth <= 64) {
+        Value storeValue = storeValues.front();
+        if (storeVec > 1)
+          storeValue = b.bitcast(packLLVector(storeLoc, storeValues, rewriter),
+                                 int_ty(totalBitwidth));
+        LLVM::createLLVMIntrinsicCallOp(rewriter, storeLoc,
+                                        "llvm.nvvm.st.async", TypeRange{},
+                                        {dst, storeValue, mbarrier});
         return {};
       }
 
-      // The intrinsic does not support predicated or vector stores.
+      // Use vector PTX for 128-bit transfers and preserve instruction
+      // predicates.
       PTXBuilder ptxBuilder;
       auto &store = ptxBuilder.create("st.async")
                         ->o("weak")
@@ -331,10 +335,15 @@ struct AsyncSharedStoreOpConversion
                         .v(storeVec, /*predicate=*/storeVec > 1)
                         .b(storeBitwidth);
       auto *dstOperand = ptxBuilder.newAddrOperand(dst, "r");
-      auto *valueOperand =
-          storeVec == 1
-              ? ptxBuilder.newOperand(storeValues.front().first, constraint)
-              : ptxBuilder.newListOperand(storeValues);
+      std::string constraint = storeBitwidth == 64 ? "l" : "r";
+      PTXBuilder::Operand *valueOperand;
+      if (storeVec == 1) {
+        valueOperand = ptxBuilder.newOperand(storeValues.front(), constraint);
+      } else {
+        valueOperand = ptxBuilder.newListOperand();
+        for (Value word : storeValues)
+          valueOperand->listAppend(ptxBuilder.newOperand(word, constraint));
+      }
       auto *barrierOperand = ptxBuilder.newAddrOperand(mbarrier, "r");
       store(dstOperand, valueOperand, barrierOperand)
           .maybePredicate(threadPred, "b");

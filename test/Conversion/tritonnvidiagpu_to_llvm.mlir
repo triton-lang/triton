@@ -1258,6 +1258,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 #scalar = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #vector = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
@@ -1275,11 +1276,34 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @async_shared_store_vector
-  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // CHECK: llvm.bitcast {{.*}} : vector<2xi32> to i64
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i64, !llvm.ptr<7>) -> ()
   // ASYNC-STORE-PTX-LABEL: async_shared_store_vector(
-  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // ASYNC-STORE-PTX: st.async.shared::cluster.mbarrier::complete_tx::bytes.b64
   tt.func public @async_shared_store_vector(%src: tensor<256xi32, #vector>, %dst: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xi32, #vector> -> !ttg.memdesc<256xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_128
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_128(
+  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  tt.func public @async_shared_store_vector_128(%src32: tensor<512xi32, #vector4>, %src64: tensor<256xf64, #vector>, %dst32: !ttg.memdesc<512xi32, #shared, #smem, mutable>, %dst64: !ttg.memdesc<256xf64, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src32, %dst32, %mbarrier : tensor<512xi32, #vector4> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src64, %dst64, %mbarrier : tensor<256xf64, #vector> -> !ttg.memdesc<256xf64, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_predicated
+  // CHECK-NOT: llvm.call_intrinsic "llvm.nvvm.st.async"
+  // CHECK: "@$4 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_predicated(
+  // ASYNC-STORE-PTX: @%p{{[0-9]+}} st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  tt.func public @async_shared_store_vector_predicated(%src: tensor<128xi32, #vector>, %dst: !ttg.memdesc<128xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #vector> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
