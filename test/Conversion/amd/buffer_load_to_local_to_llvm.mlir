@@ -435,3 +435,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#padded = #ttg.padded_shared<[256:+1] {order = [0], shape = [256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: @buffer_load_to_padded_stage
+  tt.func public @buffer_load_to_padded_stage(%base: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %pred: i1) {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x256xi32, #padded, #smem, mutable>
+    %c1 = arith.constant 1 : i32
+    %stage = ttg.memdesc_index %alloc[%c1] : !ttg.memdesc<2x256xi32, #padded, #smem, mutable> -> !ttg.memdesc<256xi32, #padded, #smem, mutable>
+    %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked>
+    %mask = tt.splat %pred : i1 -> tensor<256xi1, #blocked>
+    %fill = arith.constant dense<7> : tensor<256xi32, #blocked>
+    // Stage one starts at byte 1028. The 16-byte DMA and fill have only 4-byte LDS alignment.
+    // GFX950: %[[WIDTH:.*]] = llvm.mlir.constant(16 : i32)
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, %[[WIDTH]],
+    // GFX950: llvm.store {{.*}}alignment = 4{{.*}} : vector<4xi32>, !llvm.ptr<3>
+    // GFX950-NOT: llvm.store
+    // GFX942 cannot issue this 16-byte-per-lane DMA.
+    // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
+    // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
+    %token = amdg.buffer_load_to_local %base[%offsets] mask=%mask other=%fill into %stage : !tt.ptr<i32>[tensor<256xi32, #blocked>] tensor<256xi32, #blocked> -> <256xi32, #padded, #smem, mutable>
+    tt.return
+  }
+}

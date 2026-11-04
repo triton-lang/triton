@@ -610,8 +610,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
 
   void emitOtherStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter, VectorType vecTy,
-                      Value mask, ArrayRef<Value> otherElems, Value shmemAddr,
-                      Value laneId, bool requiresSrcPtrSwizzling,
+                      MemDescType dstTy, Value mask, ArrayRef<Value> otherElems,
+                      Value shmemAddr, Value laneId,
+                      bool requiresSrcPtrSwizzling,
                       Value swizzleLaneOffset) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     Value storeVal = packElementRangeIntoVector(rewriter, typeConverter, loc,
@@ -626,19 +627,17 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         ldsAddr = b.gep(ptrTy, vecTy, ldsAddr, swizzleLaneOffset);
     }
 
-    // For architectures supporting scattering to LDS we mask without a branch
-    // so we also mask the local writes by selecting OOB LDS address to avoid
-    // adding a branch just for other writes
-    if (targetInfo.supportsDirectToLdsScatter()) {
-      auto invMask = b.icmp_ne(mask, b.true_val());
-      ldsAddr = selectLdsAddressForPredicate(b, invMask, shmemAddr);
-      // Set the mask to false since we mask via the LDS address. False mask
-      // means that others values are written to LDS, see icmp_ne below
-      mask = b.false_val();
-    }
-
-    llStore(rewriter, loc, ldsAddr, storeVal, b.icmp_ne(mask, b.true_val()),
-            CacheModifier::NONE, targetInfo.requiresAliasInfoForAsyncOps());
+    // The fill is an ordinary LLVM store. Keep its real address and predicate,
+    // and only promise alignment guaranteed by the shared-memory layout.
+    unsigned storeBytes =
+        vecTy.getNumElements() * (dstTy.getElementTypeBitWidth() / 8);
+    unsigned alignment = std::min(storeBytes, getMaxAlignedSharedBytes(dstTy));
+    auto [storeBlock, afterStore] =
+        emitBranch(rewriter, loc, b.icmp_ne(mask, b.true_val()));
+    auto store = b.store(storeVal, ldsAddr, alignment);
+    if (targetInfo.requiresAliasInfoForAsyncOps())
+      AMD::addLocalLoadNoAliasScope(store);
+    rewriter.setInsertionPointToStart(afterStore);
   }
 };
 
@@ -1010,7 +1009,7 @@ struct BufferLoadToLocalOpConversion
         rewriter.setInsertionPointToStart(afterLoadBlock);
 
         if (hasOther) {
-          emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy,
+          emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, dstTy,
                          maskElem, otherElems, shmemAddr, laneId,
                          requiresSrcPtrSwizzling, swizzleLaneOffset);
         }
@@ -1168,9 +1167,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       }
 
       if (hasOther) {
-        emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, maskElem,
-                       otherElems, shmemAddr, laneId, requiresSrcPtrSwizzling,
-                       swizzleLaneOffset);
+        emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy, dstTy,
+                       maskElem, otherElems, shmemAddr, laneId,
+                       requiresSrcPtrSwizzling, swizzleLaneOffset);
       }
 
       return {};
