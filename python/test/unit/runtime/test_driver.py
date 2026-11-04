@@ -1,5 +1,8 @@
 import os
+import signal
+import subprocess
 import sys
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -600,3 +603,115 @@ def test_wrap_tensordesc_is_noop_without_tensordesc():
 
     wrapped = wrap_handle_tensordesc_impl(launcher, {0: "i32", 1: ("i64", "constexpr")}, None, lambda *_: [])
     assert wrapped is launcher
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_concurrent_cleans_process_group_on_startup_failure(tmp_path, monkeypatch):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = "import pathlib, time; time.sleep(1); pathlib.Path(%r).touch()" % str(survived)
+    leader = ("import pathlib, subprocess, sys, time; "
+              "p = subprocess.Popen([sys.executable, '-c', %r]); "
+              "pathlib.Path(%r).write_text(str(p.pid)); time.sleep(30)" % (worker, str(ready)))
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "first process did not start its worker"
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    commands = [([sys.executable, "-c", leader], str(tmp_path), os.environ.copy()),
+                ([str(tmp_path / "does-not-exist")], str(tmp_path), os.environ.copy())]
+    try:
+        with pytest.raises(FileNotFoundError):
+            _test_runner._concurrent(commands)
+        assert len(processes) == 1 and processes[0].returncode is not None
+        time.sleep(1.2)
+        assert not survived.exists(), "worker survived its test runner"
+    finally:
+        if processes and processes[0].poll() is None:
+            processes[0].kill()
+            processes[0].wait()
+        # The worker exits after writing its marker even on the broken baseline.
+        if ready.exists() and not survived.exists():
+            time.sleep(1.2)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_concurrent_cleans_children_when_wait_raises(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        if len(processes) == 1:
+            real_wait = process.wait
+            calls = 0
+
+            def fail_once(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise RuntimeError("wait failed")
+                return real_wait(*args, **kwargs)
+
+            process.wait = fail_once
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    command = ([sys.executable, "-c", "import time; time.sleep(30)"], str(tmp_path), os.environ.copy())
+    try:
+        with pytest.raises(RuntimeError, match="wait failed"):
+            _test_runner._concurrent([command, command])
+        assert len(processes) == 2
+        assert all(process.returncode is not None for process in processes)
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+def test_concurrent_keeps_success_status_and_signal_handlers(tmp_path):
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    command = ([sys.executable, "-c", "pass"], str(tmp_path), os.environ.copy())
+    assert _test_runner._concurrent([command, command]) == 0
+    assert {sig: signal.getsignal(sig) for sig in before} == before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_concurrent_cleans_group_when_runner_receives_sigterm(tmp_path):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = f"import pathlib, time; time.sleep(2); pathlib.Path({str(survived)!r}).touch()"
+    dash_c = "-c"
+    leader = ("import os, pathlib, subprocess, sys, time; "
+              f"p = subprocess.Popen([sys.executable, {dash_c!r}, {worker!r}]); "
+              f"pathlib.Path({str(ready)!r}).write_text(str(os.getpid()) + \" \" + str(p.pid)); time.sleep(4)")
+    command = ("import os, sys; from triton import _test_runner; "
+               f"_test_runner._concurrent([([sys.executable, {dash_c!r}, {leader!r}], "
+               "os.getcwd(), os.environ.copy())])")
+    runner = subprocess.Popen([sys.executable, "-c", command], cwd=tmp_path, env=os.environ.copy())
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists() and runner.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "runner did not start its worker"
+        runner.send_signal(signal.SIGTERM)
+        assert runner.wait(timeout=10) == 128 + signal.SIGTERM
+        time.sleep(2.2)
+        assert not survived.exists(), "worker survived the terminated runner"
+    finally:
+        if runner.poll() is None:
+            runner.kill()
+            runner.wait()
+        # The leader and worker are bounded even if the assertion fails.
+        if ready.exists() and not survived.exists():
+            time.sleep(4.2)

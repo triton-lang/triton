@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -85,8 +86,39 @@ def _run(command, *, phase=None, num_gpus=None, cwd=ROOT, environment=None, time
 
 
 def _concurrent(commands):
-    processes = [subprocess.Popen(command, cwd=cwd, env=environment) for command, cwd, environment in commands]
-    return max(process.wait() for process in processes)
+    processes = []
+    previous_handlers = {}
+
+    def terminate_runner(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    # The children run in their own sessions so cleanup can also stop pytest
+    # workers. Preserve normal termination when the CLI receives these signals.
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                previous = signal.getsignal(sig)
+                if previous == signal.SIG_DFL:
+                    previous_handlers[sig] = previous
+                    signal.signal(sig, terminate_runner)
+        for command, cwd, environment in commands:
+            processes.append(subprocess.Popen(command, cwd=cwd, env=environment, start_new_session=True))
+        return max(process.wait() for process in processes)
+    except BaseException:
+        # Signal all owned groups before reaping leaders so their process-group
+        # IDs cannot be reused while cleanup is in progress.
+        for process in processes:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        for process in processes:
+            process.wait()
+        raise
+    finally:
+        for sig, previous in previous_handlers.items():
+            signal.signal(sig, previous)
 
 
 def _capability():
