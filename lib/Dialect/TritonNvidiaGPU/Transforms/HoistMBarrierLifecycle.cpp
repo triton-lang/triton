@@ -236,9 +236,9 @@ private:
     // predicated.
     Value nextPhase =
         arith::XOrIOp::create(builder, wait.getLoc(), phase, phaseOne);
-    if (Value pred = wait.getPred(); pred && !matchPattern(pred, m_One()))
-      nextPhase = arith::SelectOp::create(builder, wait.getLoc(), pred,
-                                          nextPhase, phase);
+    if (Value pred = wait.getPred())
+      nextPhase = builder.createOrFold<arith::SelectOp>(wait.getLoc(), pred,
+                                                        nextPhase, phase);
     return nextPhase;
   }
 
