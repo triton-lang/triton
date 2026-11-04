@@ -857,7 +857,15 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
          "smemBases size must match partition dimension size");
   bool isPartitioned = smemBases.size() > 1;
 
-  // Extract the partition sublayout before stripping it for vectorization.
+  // All elements of a vector must address the same shared-memory partition.
+  auto [elemsPerVec, permutation] =
+      largestVectorisation(ctx, cvt, maxVecElems, allowPermutation);
+
+  cvt = permutation.apply(cvt);
+  if (isStore) {
+    vals = permutation.apply(vals);
+  }
+
   auto inDimNames = to_vector(cvt.getInDimNames());
   LinearLayout partitionLayout;
   Value basesVec;
@@ -866,18 +874,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
     basesVec = LLVM::buildBasePtrVector(loc, rewriter, smemBases);
   }
 
-  // Strip kPartition output for vectorization analysis.
+  // Offset arithmetic uses the selected partition base.
   SmallVector<StringAttr> outDims = to_vector(cvt.getOutDimNames());
   llvm::erase(outDims, kPartition);
   cvt = cvt.sublayout(inDimNames, outDims);
-
-  auto [elemsPerVec, permutation] =
-      largestVectorisation(ctx, cvt, maxVecElems, allowPermutation);
-
-  cvt = permutation.apply(cvt);
-  if (isStore) {
-    vals = permutation.apply(vals);
-  }
 
   auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
   auto quot = divideLeft(cvt, tile);
@@ -894,7 +894,6 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   reps = permStrides.apply(reps);
 
   if (isPartitioned) {
-    partitionLayout = permutation.apply(partitionLayout);
     partitionLayout = permStrides.apply(partitionLayout);
   }
   if (isStore) {
