@@ -41,6 +41,45 @@ def test_kwargs(use_cuda_graph: bool, device: str):
     assert len(_kernel.cache) == 2
 
 
+@pytest.mark.parametrize("change_dtypes", [False, True])
+@pytest.mark.parametrize("optional_tensor", [False, True])
+def test_dtype_key_tracks_argument_names(change_dtypes, optional_tensor):
+    first = torch.empty(0, dtype=torch.float16)
+    second = None if optional_tensor else torch.empty(0, dtype=torch.float32)
+    benchmarked = []
+    launched = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, x, y, BLOCK, **kwargs):
+            launched.append((x, BLOCK))
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        x, block = launched[-1]
+        best_block = 1 if x is not None and x.dtype == torch.float16 else 2
+        benchmarked.append(block)
+        return [float(block != best_block)] * 3
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(), ["x", "y"], [triton.Config({"BLOCK": 1}), triton.Config({"BLOCK": 2})], [], None, None,
+        do_bench=do_bench)
+
+    tuner.run(x=first, y=second)
+    assert tuner.best_config.kwargs["BLOCK"] == 1
+
+    if change_dtypes:
+        tuner.run(y=first, x=second)
+    else:
+        tuner.run(y=second, x=first)
+
+    assert tuner.best_config.kwargs["BLOCK"] == (2 if change_dtypes else 1)
+    assert len(benchmarked) == (4 if change_dtypes else 2)
+
+
 def test_no_do_bench(device: str):
     M, N = 1024, 16
     src = torch.randn(M * N, device=device)
