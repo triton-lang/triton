@@ -6,7 +6,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 def TTG_NVMmaPadding : I32EnumAttr<"NVMmaPadding", "NVIDIA shared memory packing", [
     I32EnumAttrCase<"None", 0, "none">,
-    I32EnumAttrCase<"FP4", 1, "fp4">,
+    I32EnumAttrCase<"Fp4", 1, "fp4">,
     I32EnumAttrCase<"B6x16P32", 2, "b6x16_p32">,
     I32EnumAttrCase<"B6P2x16", 3, "b6p2x16">
   ]> {

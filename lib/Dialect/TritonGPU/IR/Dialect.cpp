@@ -2620,7 +2620,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<NVMMASharedEncodingAttr>(
       parser.getContext(), swizzlingByteWidth, transposed, elementBitWidth,
-      fp4Padded ? NVMmaPadding::FP4 : padding, *CGALayout);
+      fp4Padded ? NVMmaPadding::Fp4 : padding, *CGALayout);
 }
 
 void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -2628,9 +2628,9 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
           << "swizzlingByteWidth = " << getSwizzlingByteWidth() //
           << ", transposed = " << getTransposed()               //
           << ", elementBitWidth = " << getElementBitWidth();
-  if (isFP6())
+  if (isPaddedFp6())
     printer << ", padding = \"" << stringifyNVMmaPadding(getPadding()) << "\"";
-  if (getFp4Padded()) {
+  if (isPaddedFp4()) {
     // Print only in this case to reduce the noise for the more common case.
     printer << ", fp4Padded = true";
   }
@@ -3714,8 +3714,8 @@ struct TritonGPUInferLayoutInterface
     if (expected == got) {
       return success();
     }
-    if (!expected || !got || NVMMASharedEncodingAttr::isPackedFP6(expected) ||
-        NVMMASharedEncodingAttr::isPackedFP6(got))
+    if (!expected || !got || NVMMASharedEncodingAttr::isPackedFp6(expected) ||
+        NVMMASharedEncodingAttr::isPackedFp6(got))
       return failure();
 
     auto expectedLL =
@@ -4639,8 +4639,8 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
                                        LayoutEncodingTrait rhs) {
   if (lhs == rhs)
     return true;
-  if (NVMMASharedEncodingAttr::isPackedFP6(lhs) ||
-      NVMMASharedEncodingAttr::isPackedFP6(rhs))
+  if (NVMMASharedEncodingAttr::isPackedFp6(lhs) ||
+      NVMMASharedEncodingAttr::isPackedFp6(rhs))
     return false;
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);

@@ -488,7 +488,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
                      "unsigned":$elementBitWidth, "bool":$fp4Padded,
                      "CGAEncodingAttr":$CGALayout), [{
       return get(context, swizzlingByteWidth, transposed, elementBitWidth,
-                 fp4Padded ? NVMmaPadding::FP4 : NVMmaPadding::None, CGALayout);
+                 fp4Padded ? NVMmaPadding::Fp4 : NVMmaPadding::None, CGALayout);
     }]>,
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -510,11 +510,11 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
         CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
 
-    bool getFp4Padded() const { return getPadding() == NVMmaPadding::FP4; }
-    bool isFP6() const {
+    bool isPaddedFp4() const { return getPadding() == NVMmaPadding::Fp4; }
+    bool isPaddedFp6() const {
       return getPadding() == NVMmaPadding::B6x16P32 || getPadding() == NVMmaPadding::B6P2x16;
     }
-    static bool isPackedFP6(Attribute encoding) {
+    static bool isPackedFp6(Attribute encoding) {
       auto mma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
       return mma && mma.getPadding() == NVMmaPadding::B6x16P32;
     }

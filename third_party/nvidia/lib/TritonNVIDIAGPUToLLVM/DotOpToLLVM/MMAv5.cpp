@@ -836,8 +836,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
   if (!targetFeatures.supports4xFp4Tcgen05MMA() || hasFp4PaddedOperand ||
-      NVMMASharedEncodingAttr::isPackedFP6(aTensorTy.getEncoding()) ||
-      NVMMASharedEncodingAttr::isPackedFP6(bTensorTy.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFp6(aTensorTy.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFp6(bTensorTy.getEncoding()) ||
       // We need to disable MMA_K = 128 for NVFP4 on Rubin when MMA_N < 128,
       // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering

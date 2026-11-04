@@ -105,7 +105,7 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   bool fp4Padded = isFp4Padded(encoding);
 
   auto mma = dyn_cast_if_present<gpu::NVMMASharedEncodingAttr>(encoding);
-  if (mma && mma.isFP6())
+  if (mma && mma.isPaddedFp6())
     return TMA_B6X16_P32;
   if (fp4Padded)
     return TMA_B4X16_P64;
@@ -153,7 +153,7 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   auto encoding = op.getType().getSharedLayout();
   auto mmaEncoding =
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
-  bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
+  bool fp4Padded = mmaEncoding && mmaEncoding.isPaddedFp4();
 
   auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getType().getShape());
   // MakeTensorDescOp creates tiled descriptors (not im2col)

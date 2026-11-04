@@ -241,7 +241,7 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto cgaBases = getCgaLayoutBases(cgaLayout);
     return getLayoutClass("NVMMASharedLayout")(
         nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
-        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.getFp4Padded(),
+        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.isPaddedFp4(),
         cgaBases,
         nvmma.getPadding() == ttg::NVMmaPadding::None
             ? py::none()
