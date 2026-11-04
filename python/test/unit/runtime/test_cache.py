@@ -513,6 +513,81 @@ def test_local_shadows_global():
     kernel[(1, )]()
 
 
+def test_vararg_shadows_global(monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", lambda: None)
+
+    @triton.jit
+    def kernel(first, *GLOBAL):
+        return first + GLOBAL[0]
+
+    assert kernel.cache_key
+    assert not kernel.used_global_vals
+
+
+@pytest.mark.parametrize("reference",
+                         ["literal", "argument", "local", "empty_named_expression", "filtered_named_expression"])
+def test_empty_comprehension_tracks_global(reference, monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr(17))
+
+    @triton.jit
+    def literal():
+        [GLOBAL for GLOBAL in ()]
+        return GLOBAL
+
+    @triton.jit
+    def argument(values: tl.constexpr):
+        [GLOBAL for GLOBAL in values]
+        return GLOBAL
+
+    @triton.jit
+    def local():
+        values = ()
+        [GLOBAL for GLOBAL in values]
+        return GLOBAL
+
+    @triton.jit
+    def empty_named_expression():
+        [(GLOBAL := value) for value in ()]
+        return GLOBAL
+
+    @triton.jit
+    def filtered_named_expression():
+        [(GLOBAL := value) for value in (1, 2) if False]
+        return GLOBAL
+
+    kernel = {
+        "literal": literal, "argument": argument, "local": local, "empty_named_expression": empty_named_expression,
+        "filtered_named_expression": filtered_named_expression
+    }[reference]
+    original = kernel.cache_key
+    assert any(name == "GLOBAL" for name, _ in kernel.used_global_vals)
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr(29))
+    kernel.hash = None
+    assert kernel.cache_key != original
+
+
+@pytest.mark.parametrize("reference", ["boolean", "conditional"])
+def test_skipped_named_expression_tracks_global(reference, monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr(17))
+
+    @triton.jit
+    def boolean():
+        False and (GLOBAL := 1)
+        return GLOBAL
+
+    @triton.jit
+    def conditional():
+        (GLOBAL := 1) if False else 0
+        return GLOBAL
+
+    kernel = {"boolean": boolean, "conditional": conditional}[reference]
+    original = kernel.cache_key
+    assert any(name == "GLOBAL" for name, _ in kernel.used_global_vals)
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr(29))
+    kernel.hash = None
+    assert kernel.cache_key != original
+
+
 def test_keyword_only_shadows_global(monkeypatch):
     monkeypatch.setitem(globals(), "GLOBAL", 42)
 
