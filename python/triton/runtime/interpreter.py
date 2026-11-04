@@ -1381,6 +1381,9 @@ def _implicit_cvt(arg):
             raise ValueError(f"Unsupported integer value {arg}")
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
+    if isinstance(arg, float):
+        handle = TensorHandle(np.array([arg], dtype=np.float32), tl.float32)
+        return tl.tensor(handle, tl.float32)
     if hasattr(arg, "data_ptr"):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)

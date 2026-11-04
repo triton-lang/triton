@@ -8,6 +8,21 @@ import triton.language as tl
 from triton.runtime import interpreter
 
 
+@pytest.mark.parametrize("value, expected_fp32", [
+    (1.0, 1.0),
+    (1.00000001, 1.0),
+    (1.0000001, 1.0000001192092896),
+    (0.99999999, 1.0),
+    (2.0, 2.0),
+])
+def test_implicit_cvt_float_rounds_to_fp32(value, expected_fp32):
+    result = interpreter._implicit_cvt(value)
+    assert isinstance(result, tl.tensor)
+    assert result.dtype == tl.float32
+    assert result.handle.data.dtype == np.float32
+    np.testing.assert_equal(result.handle.data[0], np.float32(expected_fp32))
+
+
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
     base = np.uint64(array.ctypes.data)
     offsets = np.arange(array.size, dtype=np.uint64) * np.uint64(array.itemsize)
