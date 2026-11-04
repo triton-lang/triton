@@ -649,6 +649,18 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     }
     dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, std::move(dst));
     return success();
+  } else if (isa<PartitionedSharedEncodingAttr>(srcEnc)) {
+    // The generic path below wraps the reshaped layout in a shared_linear
+    // encoding, which has no "partition" input, so the partition would be
+    // silently dropped. Rebuild a partitioned encoding from it instead.
+    auto dstLL = reshapeLayout(ctx, toLinearLayout(srcShape, srcEnc), dstShape);
+    auto alignment = cast<SharedEncodingTrait>(srcEnc).getAlignment();
+    auto partitioned =
+        linearLayoutToPartitionedShared(ctx, dstLL, dstShape, alignment);
+    if (!partitioned)
+      return failure();
+    dstEnc = partitioned;
+    return success();
   }
 
   // Generic LL case
@@ -671,7 +683,8 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
   if (Attribute srcEnc = srcTy.getEncoding()) {
     if (failed(inferMemDescReshapeOpEncoding(srcTy.getShape(), srcEnc, dstShape,
                                              dstEncoding)))
-      return failure();
+      return emitOptionalError(loc, "cannot express the shared encoding of "
+                                    "the reshaped memdesc");
   }
 
   SmallVector<int64_t> dstAllocShape =

@@ -1139,3 +1139,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Flattening a column-partitioned buffer whose pieces are column-major puts the
+// group bit (the row) at the bottom of the address; a partitioned layout needs
+// the group bits on top.
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#cols = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner}>
+#flat = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reshape_partitioned_flat_col_major(%d: !ttg.memdesc<2x64xf16, #cols, #smem, mutable>) {
+    // expected-error @below {{cannot express the shared encoding of the reshaped memdesc}}
+    %0 = ttg.memdesc_reshape %d : !ttg.memdesc<2x64xf16, #cols, #smem, mutable> -> !ttg.memdesc<128xf16, #flat, #smem, mutable>
+    tt.return
+  }
+}

@@ -1190,6 +1190,61 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(localLayout, partitioned.getCGALayout(), shape);
 }
 
+// partitionedSharedToLinearLayout returns localLayout * partLayout * extension,
+// all three along the partition dim d:
+//   localLayout: (offset, block) -> one piece, pieceSize long along d
+//   partLayout:  identity1D(numPartitions, "partition", d)
+//   extension:   identity1D(numGroups, "offset", d)
+// The product stacks partLayout above localLayout and extension above both, so
+// partition basis 0 is pieceSize along d, numPartitions is the size of the
+// "partition" input, numGroups is what remains of d, and extension's bases are
+// the last log2(numGroups) offset bases. The bases left over are localLayout.
+PartitionedSharedEncodingAttr
+linearLayoutToPartitionedShared(MLIRContext *ctx, const LinearLayout &ll,
+                                ArrayRef<int64_t> shape, int32_t alignment) {
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto kPartition = StringAttr::get(ctx, "partition");
+  auto partBases = ll.getBases().lookup(kPartition);
+  if (partBases.empty())
+    return {};
+  auto d = llvm::find_if(partBases[0], [](int32_t c) { return c != 0; });
+  if (d == partBases[0].end())
+    return {};
+  unsigned dim = d - partBases[0].begin();
+  int64_t pieceSize = *d;
+  unsigned numPartitions = ll.getInDimSize(kPartition);
+  int64_t groupSize = pieceSize * numPartitions;
+  if (!llvm::isPowerOf2_64(pieceSize) || shape[dim] < groupSize)
+    return {};
+  unsigned numGroups = shape[dim] / groupSize;
+  auto offsetBases = ll.getBases().lookup(kOffset);
+  unsigned numGroupBits = llvm::Log2_32(numGroups);
+  if (offsetBases.size() < numGroupBits)
+    return {};
+  offsetBases.resize(offsetBases.size() - numGroupBits);
+  LinearLayout::BasesT localBases;
+  localBases[kOffset] = std::move(offsetBases);
+  localBases[kBlock] = ll.getBases().lookup(kBlock);
+  SmallVector<std::pair<StringAttr, int32_t>> pieceDims;
+  for (auto [k, name] : llvm::enumerate(standardOutDimNames(ctx, shape.size())))
+    pieceDims.push_back(
+        {name, static_cast<int32_t>(k == dim ? pieceSize : shape[k])});
+  // Fails if a basis falls outside the piece or the piece is not covered.
+  auto localLayout = LinearLayout::tryCreate(std::move(localBases), pieceDims,
+                                             /*requireSurjective=*/true);
+  if (!localLayout)
+    return {};
+  auto result = PartitionedSharedEncodingAttr::get(
+      ctx, numPartitions, numGroups, dim,
+      SharedLinearEncodingAttr::get(ctx, std::move(*localLayout), alignment));
+  // toLinearLayout rebuilds localLayout * partLayout * extension. It equals ll
+  // only if the partition and group bases have the form read above.
+  if (toLinearLayout(shape, result) != ll)
+    return {};
+  return result;
+}
+
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                                               Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
