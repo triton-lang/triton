@@ -449,7 +449,7 @@ tt.func @must_barrier_remsi_loop_carried_future_disjoint_cf(%cst: tensor<128x128
     // CHECK-NEXT: ttg.local_load
     %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
 
-    %w_sum = arith.addi %phase, %c1_i32 overflow<nsw> : i32
+    %w_sum = arith.addi %phase, %c1_i32 : i32
     %w_idx = arith.remsi %w_sum, %c4_i32 : i32
     %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     // CHECK-NOT: ttg.barrier local
@@ -1115,6 +1115,45 @@ tt.func @slot_index_add_nsw(%x: i32, %v: tensor<128x32xf16, #AL>) {
   ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
   tt.return
 }
+
+// x % 4 and (x + 5) % 4 with an unflagged addition. A wrap changes the sum by
+// 2^32, a multiple of 4, so the slots differ (0 vs 1 mod 4) even at overflow.
+// CHECK-LABEL: slot_index_add_pow2_modulus_may_overflow
+tt.func @slot_index_add_pow2_modulus_may_overflow(%x: i32, %v: tensor<128x32xf16, #AL>) {
+  %c4_i32 = arith.constant 4 : i32
+  %c5_i32 = arith.constant 5 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable>
+  %i = arith.remsi %x, %c4_i32 : i32
+  %x5 = arith.addi %x, %c5_i32 : i32
+  %j = arith.remsi %x5, %c4_i32 : i32
+  %si = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_load
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_store
+  %r = ttg.local_load %si : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+  ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  tt.return
+}
+
+// x % 4 and (x + 4) % 4 are the same slot, wrap or not. The exemption only
+// drops the overflow proof; the WAR barrier must stay.
+// CHECK-LABEL: slot_index_add_pow2_modulus_same_slot
+tt.func @slot_index_add_pow2_modulus_same_slot(%x: i32, %v: tensor<128x32xf16, #AL>) {
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable>
+  %i = arith.remsi %x, %c4_i32 : i32
+  %x4 = arith.addi %x, %c4_i32 : i32
+  %j = arith.remsi %x4, %c4_i32 : i32
+  %si = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  %r = ttg.local_load %si : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+  ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  tt.return
+}
 }
 
 // -----
@@ -1148,6 +1187,43 @@ tt.func @carried_view_counter_may_overflow(%A: !tt.ptr<f16>, %ub: i32) {
     %ld = amdg.buffer_load_to_local %A[%offset] into %w : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
     %cn0 = arith.addi %c, %c_max : i32
     %cn = arith.remsi %cn0, %c3_i32 : i32
+    scf.yield %cn, %w : i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// The same carried view with four slots and remsi(c + 2147483645, 4), i.e.
+// c + 1 (mod 4). The addition overflows i32 when c = 3, but by 2^32, a multiple
+// of 4: c runs 0, 1, 2, 3, 0, ... either way. The read slot (c + 3) mod 4 never
+// meets the refilled slot c mod 4, so no WAR barrier is needed.
+// CHECK-LABEL: carried_view_pow2_counter_may_overflow
+tt.func @carried_view_pow2_counter_may_overflow(%A: !tt.ptr<f16>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c_step = arith.constant 2147483645 : i32
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable>
+  %s3 = ttg.memdesc_index %alloc[%c3_i32] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %res:2 = scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%c = %c0_i32, %r = %s3) -> (i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>) : i32 {
+    %cw = arith.addi %c, %c4_i32 : i32
+    %wi = arith.remsi %cw, %c4_i32 : i32
+    %w = ttg.memdesc_index %alloc[%wi] : !ttg.memdesc<4x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: amdg.buffer_load_to_local
+    %v = ttg.local_load %r : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    %ld = amdg.buffer_load_to_local %A[%offset] into %w : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+    %cn0 = arith.addi %c, %c_step : i32
+    %cn = arith.remsi %cn0, %c4_i32 : i32
     scf.yield %cn, %w : i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
   }
   tt.return

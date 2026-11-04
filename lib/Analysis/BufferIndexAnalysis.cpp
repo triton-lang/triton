@@ -8,6 +8,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/CheckedArithmetic.h"
+#include "llvm/Support/MathExtras.h"
 #include <optional>
 
 namespace mlir {
@@ -84,7 +85,8 @@ std::optional<int64_t> getConstantIntValue(Value v) {
   return std::nullopt;
 }
 
-BufferIndexExpr analyzeBufferIndex(Value indexValue);
+BufferIndexExpr analyzeBufferIndex(Value indexValue,
+                                   bool underPow2Modulus = false);
 std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp);
 
 using SignedRange = std::pair<int64_t, int64_t>;
@@ -303,16 +305,22 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
 // An addi is split into base + constant only when it cannot overflow (nsw, or
 // a range proof); a wrapped sum is not base + constant modulo N. Anything else
 // stays an opaque base, which only ever compares equal to itself.
-BufferIndexExpr analyzeBufferIndex(Value indexValue) {
+//
+// `underPow2Modulus` is set when the caller reduces the result by remsi with a
+// power-of-two modulus. A wrap changes the sum by a multiple of 2^width, which
+// that modulus divides, so the residue of base + constant survives any wrap and
+// the addi can be split without an overflow proof.
+BufferIndexExpr analyzeBufferIndex(Value indexValue, bool underPow2Modulus) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
 
   if (auto addOp = indexValue.getDefiningOp<arith::AddIOp>()) {
     auto composeWithConstant = [&](Value nonConst,
                                    int64_t constant) -> BufferIndexExpr {
-      if (!isAddWithoutSignedOverflow(addOp, nonConst, constant))
+      if (!underPow2Modulus &&
+          !isAddWithoutSignedOverflow(addOp, nonConst, constant))
         return BufferIndexExpr{indexValue, 0};
-      auto baseExpr = analyzeBufferIndex(nonConst);
+      auto baseExpr = analyzeBufferIndex(nonConst, underPow2Modulus);
       // (x mod N) + C is not represented as (base, offset, mod); keep the
       // full addi as the expression root.
       auto offset = llvm::checkedAdd(baseExpr.constantOffset, constant);
@@ -335,7 +343,8 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   // N must be a positive compile-time constant.
   if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
     if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs());
+      auto result = analyzeBufferIndex(remOp.getLhs(),
+                                       llvm::isPowerOf2_64(uint64_t(*mod)));
       // Nested modulus: keep the full remsi as the expression root.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};

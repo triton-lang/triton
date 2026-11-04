@@ -32,7 +32,10 @@ struct BufferIndexExpr;
 ///   1. integer constants,
 ///   2. `arith.addi` with one constant operand, only if it cannot overflow:
 ///      the op is `nsw`, or the other operand's range proves it (constants,
-///      `remsi` by N, the wrap below, and loop arguments bounded by those),
+///      `remsi` by N, the wrap below, and loop arguments bounded by those).
+///      Under `remsi` by a power of two any such addition is accepted: a
+///      wrap changes the sum by a multiple of 2^width, which leaves its
+///      residue modulo the power of two unchanged,
 ///   3. `arith.remsi` with a positive constant modulus,
 ///   4. the pipeliner's select/cmpi one-step wrap:
 ///        select(cmpi sge(base + 1, N), 0, base + 1)

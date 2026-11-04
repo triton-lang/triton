@@ -2245,7 +2245,7 @@ tt.func @shared_buffer_index_structured_backedge(%input: tensor<128xi32, #writer
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
   // CHECK: cf.cond_br
   scf.for %i = %c0 to %ub step %c1 : i32 {
-    %next = arith.addi %i, %c1 overflow<nsw> : i32
+    %next = arith.addi %i, %c1 : i32
     %read_index = arith.remsi %i, %c2 : i32
     %write_index = arith.remsi %next, %c2 : i32
     // CHECK: ttg.memdesc_index
