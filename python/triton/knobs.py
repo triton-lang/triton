@@ -290,6 +290,11 @@ class base_knobs:
     def reset(self: knobs_type) -> knobs_type:
         for knob in self.knob_descriptors.keys():
             delattr(self, knob)
+
+        # `instrumentation_mode` and `listener` are plain fields, not `env_base`
+        # descriptors, so the loop above never touches them -- clear them directly.
+        self.__dict__.pop("instrumentation_mode", None)
+        self.__dict__.pop("listener", None)
         return self
 
     @contextmanager

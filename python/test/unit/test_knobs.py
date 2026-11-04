@@ -70,6 +70,30 @@ def test_knobs_utils(fresh_knobs) -> None:
     }
 
 
+def test_reset_clears_plain_fields(fresh_knobs) -> None:
+    # `instrumentation_mode` and `listener` are plain fields, not `env_base`
+    # descriptors (unlike the synthetic knobs in test_knobs_utils above), so
+    # `knob_descriptors` doesn't see them. reset() must still clear them.
+    default_mode = fresh_knobs.compilation.instrumentation_mode
+    assert fresh_knobs.compilation.listener is None
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    sentinel = object()
+    fresh_knobs.compilation.listener = sentinel
+
+    reset_copy = fresh_knobs.compilation.copy().reset()
+    assert reset_copy.instrumentation_mode == default_mode
+    assert reset_copy.listener is None
+
+    # The original (not reset) object keeps its overrides -- copy() didn't alias it.
+    assert fresh_knobs.compilation.instrumentation_mode == "fpsan"
+    assert fresh_knobs.compilation.listener is sentinel
+
+    # autotuning.listener is the same kind of plain, non-descriptor field.
+    fresh_knobs.autotuning.listener = sentinel
+    assert fresh_knobs.autotuning.copy().reset().listener is None
+
+
 def _register_pressure_scheduler_kernel():
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler
