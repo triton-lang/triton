@@ -438,9 +438,7 @@ class ClcTileSchedulerConsumer:
         pid_m = ((packed_pid >> 32) & 0xFFFFFFFF).to(gl.int32)
         pid_n = (packed_pid & 0xFFFFFFFF).to(gl.int32)
         has_work = clc_res.is_canceled()
-        tile_id = self.tile_id
-        if has_work:
-            tile_id = clc_res.program_id(0)
+        tile_id = clc_res.program_id(0)
         return ClcTileSchedulerConsumer(
             has_work,
             tile_id,
@@ -668,11 +666,8 @@ def mma_scaled_clc_partition(p):
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
         has_work = clc_res.is_canceled()
-        pid_m = gl.to_tensor(0)
-        pid_n = gl.to_tensor(0)
-        if has_work:
-            tile_id = clc_res.program_id(0)
-            pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
+        tile_id = clc_res.program_id(0)
+        pid_m, pid_n = _planar_snake(tile_id, num_pid_m, num_pid_n, p.MINOR_DIM, p.GRID_TILE_WIDTH)
         packed_pid = (pid_m.to(gl.int64) << 32) | (pid_n.to(gl.int64) & 0xFFFFFFFF)
         planar_slot = p.clc_planar_pid_buffers.index(state.index)
         planar_layout: gl.constexpr = gl.BlockedLayout([1], [32], [gl.num_warps()], [0],
