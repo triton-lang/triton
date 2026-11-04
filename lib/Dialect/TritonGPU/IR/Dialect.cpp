@@ -4837,3 +4837,31 @@ unsigned triton::gpu::getMinInterval(Attribute encoding) {
   assert(padded && "expected padded encoding or partitioned wrapping padded");
   return padded.getMinInterval();
 }
+
+unsigned triton::gpu::getMaxAlignedSharedBytes(MemDescType type) {
+  unsigned bitwidth = type.getElementTypeBitWidth();
+  assert(bitwidth >= 8 && bitwidth % 8 == 0);
+  unsigned maxBytes = getSharedMemoryViewAlignment(type);
+  if (auto padded = getPaddedEncoding(type.getEncoding())) {
+    // A view or buffer stage may start after any padding boundary.
+    unsigned maxElems = std::min(padded.getMinInterval(),
+                                 *llvm::min_element(padded.getPaddings()));
+    maxBytes =
+        std::min<uint64_t>(maxBytes, uint64_t{maxElems} * (bitwidth / 8));
+  }
+  return maxBytes;
+}
+
+LogicalResult
+triton::gpu::verifySharedMemoryAccessAlignment(Operation *op, MemDescType type,
+                                               unsigned requiredBytes) {
+  if (!isa<SharedEncodingTrait>(type.getEncoding()))
+    return op->emitOpError("requires a shared-memory encoding");
+  unsigned layoutBytes = getMaxAlignedSharedBytes(type);
+  if (layoutBytes < requiredBytes)
+    return op->emitOpError()
+           << "requires at least " << requiredBytes << "-byte alignment for "
+           << type.getElementTypeBitWidth()
+           << "-bit elements, but the shared layout provides " << layoutBytes;
+  return success();
+}

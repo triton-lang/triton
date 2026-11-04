@@ -1139,3 +1139,81 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#reg = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#weak = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @underaligned_local_load(%mem: !ttg.memdesc<32xi32, #weak, #ttg.shared_memory, mutable>) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    %result = ttg.local_load %mem : !ttg.memdesc<32xi32, #weak, #ttg.shared_memory, mutable> -> tensor<32xi32, #reg>
+    tt.return
+  }
+}
+
+// -----
+
+#reg = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#weak = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @underaligned_local_store(%value: tensor<32xi32, #reg>, %mem: !ttg.memdesc<32xi32, #weak, #ttg.shared_memory, mutable>) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    ttg.local_store %value, %mem : tensor<32xi32, #reg> -> !ttg.memdesc<32xi32, #weak, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#reg = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#weak = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @underaligned_initialized_alloc(%value: tensor<32xi32, #reg>) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    %mem = ttg.local_alloc %value : (tensor<32xi32, #reg>) -> !ttg.memdesc<32xi32, #weak, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+!buffer = !ttg.memdesc<32xi32, #shared, #ttg.shared_memory, mutable>
+!vec = tensor<32xi32, #layout>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @underaligned_local_gather(%src: !buffer, %idx: !vec) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    %v = ttg.local_gather %src[%idx] {axis = 0 : i32} : !buffer, !vec -> !vec
+    tt.return
+  }
+}
+
+// -----
+
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+!buffer = !ttg.memdesc<32xi32, #shared, #ttg.shared_memory, mutable>
+!vec = tensor<32xi32, #layout>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @underaligned_local_scatter(%dst: !buffer, %idx: !vec, %v: !vec) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    ttg.local_scatter %dst[%idx], %v {axis = 0 : i32} : !buffer, !vec, !vec
+    tt.return
+  }
+}
+
+// -----
+
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16]], block = []}, alignment = 2>
+!buffer = !ttg.memdesc<32xi32, #shared, #ttg.shared_memory, mutable>
+!vec = tensor<32xi32, #layout>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @underaligned_local_atomic_scatter(%dst: !buffer, %idx: !vec, %v: !vec) {
+    // expected-error @+1 {{requires at least 4-byte alignment for 32-bit elements, but the shared layout provides 2}}
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%idx], %v {axis = 0 : i32} : (!buffer, !vec, !vec) -> !vec
+    tt.return
+  }
+}

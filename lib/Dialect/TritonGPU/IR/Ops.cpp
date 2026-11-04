@@ -949,10 +949,10 @@ LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy) {
   return verifyMemoryOpTypes(op, cast<RankedTensorType>(src.getType()), dstTy);
 }
 
-static LogicalResult verifySharedMemoryRank(Operation *op,
-                                            RankedTensorType type,
-                                            MemDescType memdesc,
-                                            StringRef regName) {
+static LogicalResult verifySharedMemoryAccessLayout(Operation *op,
+                                                    RankedTensorType type,
+                                                    MemDescType memdesc,
+                                                    StringRef regName) {
   auto enc = dyn_cast<LayoutEncodingTrait>(memdesc.getEncoding());
   if (!enc)
     return op->emitOpError("expected memdesc to have a shared memory encoding");
@@ -961,14 +961,15 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
            << " has rank " << type.getRank()
            << " but memdesc encoding has rank " << enc.getRank();
   }
-  return success();
+  return verifySharedMemoryAccessAlignment(
+      op, memdesc, memdesc.getElementTypeBitWidth() / 8);
 }
 
 LogicalResult LocalAllocOp::verify() {
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
-  if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
-                                                getType(), "source")))
+  if (getSrc() && failed(verifySharedMemoryAccessLayout(
+                      *this, getSrc().getType(), getType(), "source")))
     return failure();
   return verifyAllocOp(*this, getSrc(), getType());
 }
@@ -977,16 +978,16 @@ LogicalResult LocalAllocOp::verify() {
 LogicalResult LocalStoreOp::verify() {
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
-                                    getDst().getType(), "source")))
+  if (failed(verifySharedMemoryAccessLayout(*this, getSrc().getType(),
+                                            getDst().getType(), "source")))
     return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getDst().getType());
 }
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
-  if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
-                                    "result")))
+  if (failed(verifySharedMemoryAccessLayout(*this, getType(),
+                                            getSrc().getType(), "result")))
     return failure();
   return verifyMemoryOpTypes(*this, getSrc().getType(), getType());
 }
@@ -1035,7 +1036,8 @@ LogicalResult LocalGatherOp::verify() {
     return emitError("indices and result must have the same layout");
   }
 
-  return success();
+  return verifySharedMemoryAccessAlignment(*this, srcTy,
+                                           srcTy.getElementTypeBitWidth() / 8);
 }
 
 // LocalScatterOp
@@ -1083,7 +1085,8 @@ LogicalResult LocalScatterOp::verify() {
     return emitError("values element type must match destination element type");
   }
 
-  return success();
+  return verifySharedMemoryAccessAlignment(*this, dstTy,
+                                           dstTy.getElementTypeBitWidth() / 8);
 }
 
 // LocalAtomicScatterRMWOp
@@ -1134,7 +1137,7 @@ LogicalResult LocalAtomicScatterRMWOp::verify() {
     return emitError("indices must have integer element type");
   }
 
-  if (failed(verifySharedMemoryRank(*this, valuesTy, dstTy, "values")))
+  if (failed(verifySharedMemoryAccessLayout(*this, valuesTy, dstTy, "values")))
     return failure();
 
   // Verify values, indices, and mask have the same shape/rank.
