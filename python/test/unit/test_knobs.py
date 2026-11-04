@@ -537,6 +537,8 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
     assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
 
+    fresh_knobs.amd.use_buffer_ops = True
+
     with fresh_knobs.amd.scope():
         # Use the environment
         del fresh_knobs.amd.use_buffer_atomics
@@ -557,6 +559,8 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
 def test_use_buffer_ops_is_read_once(fresh_knobs, monkeypatch):
     # use_buffer_ops is read at import time, only refresh_knobs() re-reads it
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS", raising=False)
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.amd.use_buffer_ops
 
     monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
