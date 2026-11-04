@@ -4,7 +4,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import default_alloc_fn, is_hip_cdna5
+from triton._internal_testing import is_hip_cdna5
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
@@ -14,8 +14,6 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 def test_tensor_descriptor_reduce_two_tiles(descriptor, rank, device):
     if not is_hip_cdna5():
         pytest.skip('CDNA5 TDM reduction emulation')
-
-    triton.set_allocator(default_alloc_fn)
 
     @triton.jit
     def kernel(src, out, out_desc, SHAPE: tl.constexpr, STRIDES: tl.constexpr):
@@ -38,8 +36,6 @@ def test_tensor_descriptor_reduce_two_tiles(descriptor, rank, device):
 def test_tensor_descriptor_reduce_tdm_neighbors(descriptor, device):
     if not is_hip_cdna5():
         pytest.skip('CDNA5 TDM reduction emulation')
-
-    triton.set_allocator(default_alloc_fn)
 
     @triton.jit
     def kernel(src_desc, dst_desc, src, dst, result, COUNT):
@@ -74,8 +70,6 @@ def test_tensor_descriptor_reduce_tdm_neighbors(descriptor, device):
 def test_tensor_descriptor_reduce_strided_bounds(descriptor, offset, device):
     if not is_hip_cdna5():
         pytest.skip('CDNA5 TDM reduction emulation')
-
-    triton.set_allocator(default_alloc_fn)
 
     @triton.jit
     def kernel(desc, ptr, OFFSET: tl.constexpr):
