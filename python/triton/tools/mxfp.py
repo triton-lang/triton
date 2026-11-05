@@ -6,6 +6,8 @@ align with the opencompute (OCP) microscaling (MX) specification.
 Reference: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
+import math
+
 import torch
 
 
@@ -249,8 +251,14 @@ class MXScaleTensor:
         """
         bias = 127
 
-        min_exponent = 0 if low is None else max(0, int(torch.log2(torch.tensor(low))) + bias)
-        max_exponent = 254 if high is None else min(254, max(0, int(torch.log2(torch.tensor(high))) + bias))
+        if low is None:
+            min_exponent = 0
+        else:
+            min_exponent = max(0, math.ceil(math.log2(low)) + bias)
+        if high is None:
+            max_exponent = 254
+        else:
+            max_exponent = min(254, max(0, math.floor(math.log2(high)) + bias))
         assert min_exponent <= max_exponent, "Low must be less than or equal to high"
 
         E = torch.randint(min_exponent, max_exponent + 1, size=self.size, dtype=torch.uint8, device=self.device)
