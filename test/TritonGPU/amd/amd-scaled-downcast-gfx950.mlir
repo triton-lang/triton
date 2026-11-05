@@ -15,7 +15,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %scale: tensor<1x64xi8, #scale>,
       %output: tensor<1x256x!tt.ptr<i8>, #blocked>) {
     // CHECK-LABEL: llvm.func @scaled_downcast_fp4
-    // CHECK: %[[CVT0:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> {{.*}}[0] : i32
+    // CHECK: %[[UNDEF:.+]] = llvm.mlir.undef : i32
+    // CHECK: %[[CVT0:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[UNDEF]][0] : i32
     // CHECK: %[[CVT1:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[CVT0]][1] : i32
     // CHECK: %[[CVT2:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[CVT1]][2] : i32
     // CHECK: %[[CVT3:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[CVT2]][3] : i32

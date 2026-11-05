@@ -158,7 +158,8 @@ struct ScaledDowncastFp4OpPattern
       // one byte of an i32 result. `byteSel` selects the byte to store into.
       for (int i = 0; i < numOutputBytes; i += 4) {
         int groupSize = std::min<int>(4, numOutputBytes - i);
-        Value packed = b.i32_val(0);
+        // Start from undef: every extracted byte is written by an intrinsic.
+        Value packed = b.undef(i32_ty);
         for (int byteSel = 0; byteSel < groupSize; ++byteSel) {
           int idx = i + byteSel;
           Value low = inputVals[2 * idx];
