@@ -24,6 +24,8 @@
 // RUN: triton-opt %t/parallel-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=COLUMNS
 // RUN: triton-opt %t/parallel-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=COLUMNS
 
+// RUN: triton-opt %t/register-predicates.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize --cse | FileCheck %s --check-prefix=REGISTER-PREDICATES
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -564,6 +566,40 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
     tt.scan.return %sum : f32
   }) : (tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals>
   tt.return %result : tensor<128x8xf32, #parallel_totals>
+}
+
+}
+
+//--- register-predicates.mlir
+
+#two_values = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// All segments select their prefixes with the same three warp predicates.
+// REGISTER-PREDICATES-LABEL: llvm.func {{.*}}@test_scan_register_predicates(
+// REGISTER-PREDICATES-COUNT-3: llvm.icmp "ule"
+// REGISTER-PREDICATES-NOT: llvm.icmp "ule"
+// REGISTER-PREDICATES: llvm.return
+tt.func private @test_scan_register_predicates(%arg: tensor<128x32xi32, #two_values>) -> tensor<128x32xi32, #two_values> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<128x32xi32, #two_values>) -> tensor<128x32xi32, #two_values>
+  tt.return %result : tensor<128x32xi32, #two_values>
+}
+
+// All segments select their prefixes with the same three warp predicates.
+// REGISTER-PREDICATES-LABEL: llvm.func {{.*}}@test_scan_register_predicates_reverse(
+// REGISTER-PREDICATES-COUNT-3: llvm.icmp "uge"
+// REGISTER-PREDICATES-NOT: llvm.icmp "uge"
+// REGISTER-PREDICATES: llvm.return
+tt.func private @test_scan_register_predicates_reverse(%arg: tensor<128x32xi32, #two_values>) -> tensor<128x32xi32, #two_values> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<128x32xi32, #two_values>) -> tensor<128x32xi32, #two_values>
+  tt.return %result : tensor<128x32xi32, #two_values>
 }
 
 }
