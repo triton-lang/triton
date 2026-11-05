@@ -32,10 +32,31 @@ tt.func @load_false_mask_with_other(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
 // CHECK-LABEL: @load_true_mask
 // CHECK-NEXT: %[[VALUE:.*]] = tt.load %arg0 : !tt.ptr<i32>
 // CHECK-NEXT: tt.return %[[VALUE]] : i32
-tt.func @load_true_mask(%ptr: !tt.ptr<i32>) -> i32 {
+tt.func @load_true_mask(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
   %true = arith.constant true
-  %value = tt.load %ptr, %true : !tt.ptr<i32>
+  %value = tt.load %ptr, %true, %other : !tt.ptr<i32>
   tt.return %value : i32
+}
+
+// -----
+
+// CHECK-LABEL: @fold_true_masks
+// CHECK-NEXT: %[[VAL:.*]] = tt.atomic_load acquire, gpu, %arg0 : (tensor<4x!tt.ptr<i32>>) -> tensor<4xi32>
+// CHECK-NEXT: %[[OLD:.*]] = tt.atomic_rmw add, relaxed, gpu, %arg0, %[[VAL]] : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>) -> tensor<4xi32>
+// CHECK-NEXT: %[[MASKED:.*]] = tt.atomic_rmw add, relaxed, gpu, %arg0, %[[OLD]], %arg1 : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+// CHECK-NEXT: %[[BINS:.*]] = tt.histogram %[[MASKED]] : tensor<4xi32> -> tensor<4xi32>
+// CHECK-NEXT: tt.atomic_store release, gpu, %arg0, %[[BINS]] : tensor<4x!tt.ptr<i32>>
+// CHECK-NEXT: tt.store %arg0, %[[MASKED]] : tensor<4x!tt.ptr<i32>>
+// CHECK-NEXT: tt.return
+tt.func @fold_true_masks(%ptrs: tensor<4x!tt.ptr<i32>>, %mask: tensor<4xi1>) {
+  %all = arith.constant dense<true> : tensor<4xi1>
+  %val = tt.atomic_load acquire, gpu, %ptrs, %all : (tensor<4x!tt.ptr<i32>>, tensor<4xi1>) -> tensor<4xi32>
+  %old = tt.atomic_rmw add, relaxed, gpu, %ptrs, %val, %all : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+  %masked = tt.atomic_rmw add, relaxed, gpu, %ptrs, %old, %mask : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+  %bins = tt.histogram %masked, %all : tensor<4xi32> -> tensor<4xi32>
+  tt.atomic_store release, gpu, %ptrs, %bins, %all : tensor<4x!tt.ptr<i32>>
+  tt.store %ptrs, %masked, %all : tensor<4x!tt.ptr<i32>>
+  tt.return
 }
 
 // -----

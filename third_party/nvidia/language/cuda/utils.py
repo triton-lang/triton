@@ -68,8 +68,8 @@ def max_xorsign_abs_f32(a, b, propagate_nan: core.constexpr = core.PropagateNan.
 @core.extern
 def f32_to_e2m1x2_satfinite(hi, lo, _semantic=None):
     """Round two float32 values to finite E2M1, with hi in the high nibble."""
-    return core.extern_elementwise("", "", [hi, lo], {
-        (core.float32, core.float32): ("llvm.nvvm.ff.to.e2m1x2.rn.satfinite", core.uint16),
+    return core.extern_elementwise("", "", [hi, lo, False], {
+        (core.float32, core.float32, core.int1): ("llvm.nvvm.ff.to.e2m1x2.rn.satfinite", core.uint16),
     }, is_pure=True, _semantic=_semantic)
 
 

@@ -159,13 +159,18 @@ def _mxfp4_maximum_code(values):
 
 
 @triton.jit
-def nvfp4_to_mxfp8_tile(values, scales):
+def nvfp4_to_mxfp8_tile(values, scales, tensor_scale=None):
+    # Absorb the outer row scale before rounding to MXFP8. The result carries
+    # only E4M3 values and E8M0 block scales, with no remaining NVFP4 scale.
+    scales = scales.to(tl.float32)
+    if tensor_scale is not None:
+        scales *= tensor_scale.to(tl.float32)[:, None]
     # FP4 magnitude codes are ordered. Reduce before decoding so scale selection
     # does not duplicate the full activation decode in a second register layout.
     maximum_code = _mxfp4_maximum_code(values.reshape(values.shape[0], scales.shape[1], 8))
     maximum_bits = (maximum_code << 22) + 0x3F000000
     maximum = tl.where(maximum_code < 2, maximum_code.to(tl.float32) * 0.5, maximum_bits.to(tl.float32, bitcast=True))
-    maximum *= tl.abs(scales.to(tl.float32))
+    maximum *= tl.abs(scales)
     maximum = tl.max(maximum.reshape(values.shape[0], scales.shape[1] // 2, 2), 2)
     dequant_scale = maximum / 448.0
     scale_bits = (dequant_scale.to(tl.uint32, bitcast=True) + 0x007FFFFF) & 0x7F800000
@@ -174,14 +179,13 @@ def nvfp4_to_mxfp8_tile(values, scales):
 
     # The MX scale is a power of two, so folding its inverse into each NVFP4
     # block scale preserves FP32 rounding while avoiding per-value scale work.
-    block_scale = scales.to(tl.float32).reshape(values.shape[0], scales.shape[1] // 2, 2)
+    block_scale = scales.reshape(values.shape[0], scales.shape[1] // 2, 2)
     block_scale = (block_scale * inverse_scale[:, :, None]).reshape(values.shape[0], scales.shape[1], 1)
     # Raw FP4 values fit exactly in FP16; promote before any scale arithmetic.
     # This also lets the compiler use matrix loads for the packed input tile.
     decoded = _upcast_mxfp4_values(values, tl.float16).to(tl.float32)
     decoded = decoded.reshape(values.shape[0], scales.shape[1], 16)
     quantized = (decoded * block_scale).reshape(values.shape[0], values.shape[1] * 2).to(tl.float8e4nv)
-    # Outer tensor/row scales remain in the matmul epilogue.
     return quantized, (scale_bits >> 23).to(tl.uint8)
 
 

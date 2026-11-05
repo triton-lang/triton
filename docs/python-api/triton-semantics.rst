@@ -29,6 +29,13 @@ When an operation involves a tensor and a scalar:
 2. If the scalar is of a higher kind, we choose the lowest dtype in which it fits among ``int32`` < ``uint32`` < ``int64`` < ``uint64`` for ints and ``float32`` < ``float64`` for floats. Then, both the tensor and the scalar are promoted to this dtype: ``(int16, 4.0) -> float32``
 
 
+``tl.float4e2m1x2`` and ``tl.float8e8m0fnu`` map to PyTorch's
+``float4_e2m1fn_x2`` and ``float8_e8m0fnu`` dtypes. Both are floating-point types
+occupying one byte; packed FP4 shapes and pointer offsets count pairs, with the
+first value in the low nibble. Existing integer-byte representations remain
+supported. These types do not participate in implicit type promotion.
+
+
 Broadcasting
 ------------
 

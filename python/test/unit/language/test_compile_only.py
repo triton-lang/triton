@@ -99,8 +99,7 @@ def test_umulhi_truncated_input(seed_type, dtype):
     for kind, stage in stages.items():
         module = stage(module, metadata)
         if kind == "llir":
-            intrinsic = "ui" if bits == 32 else "ull"
-            assert f"@llvm.nvvm.mulhi.{intrinsic}" in str(module)
+            assert f"@llvm.umulh.i{bits}" in str(module)
         if kind == "ptx":
             assert f"mul.hi.u{bits}" in module
             assert "mul.lo." not in module
@@ -136,6 +135,41 @@ define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %ou
     else:
         assert len(re.findall(r"\babs\.f32\b", ptx)) == 4
         assert "and.b32" not in ptx
+
+
+@pytest.mark.parametrize("dtype, suffix", [("half", "f16"), ("bfloat", "bf16")])
+@pytest.mark.parametrize("lanes", [1, 4])
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_copysign_preserves_nan_payload(dtype, suffix, lanes, instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 100, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    ty = dtype if lanes == 1 else f"<{lanes} x {dtype}>"
+    intrinsic = suffix if lanes == 1 else f"v{lanes}{suffix}"
+    source = f'''
+target triple = "nvptx64-nvidia-cuda"
+declare {ty} @llvm.copysign.{intrinsic}({ty}, {ty})
+define ptx_kernel void @copysign_kernel(ptr addrspace(1) %input,
+                                      ptr addrspace(1) %signs,
+                                      ptr addrspace(1) %output) {{
+  %value = load {ty}, ptr addrspace(1) %input, align 8
+  %sign = load {ty}, ptr addrspace(1) %signs, align 8
+  %signed = call {ty} @llvm.copysign.{intrinsic}({ty} %value, {ty} %sign)
+  store {ty} %signed, ptr addrspace(1) %output, align 8
+  ret void
+}}
+'''
+    ptx = backend.make_ptx(source, {}, options, 100)
+    if instrumentation_mode == "fpsan":
+        assert not re.search(r"\b(?:abs|neg)\.(?:f16|bf16)(?:x2)?\b", ptx)
+        assert ptx.count("xor.b16 diff,") == lanes
+        assert ptx.count("and.b16 diff, diff, 0x8000;") == lanes
+        assert len(re.findall(r"xor\.b16 [^,]+, [^,]+, diff;", ptx)) == lanes
+    else:
+        assert "xor.b16 diff," not in ptx
 
 
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
@@ -186,11 +220,14 @@ module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tar
     ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
     pattern = re.compile(
         rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
-        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+        r"(?P<output>%\w+),\s*(?P<inputs>[^;]+);", re.MULTILINE)
     emitted_operations = list(pattern.finditer(ptx))
     assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
     for previous, current in zip(emitted_operations, emitted_operations[1:]):
-        assert current.group("input") == previous.group("output")
+        inputs = re.findall(r"%\w+", current.group("inputs"))
+        # Subtraction keeps its operand order; FMA only commutes multiplicands.
+        input_count = 1 if current.group("operation") == "sub" else 2
+        assert previous.group("output") in inputs[:input_count]
     assert "prmt.b32" not in ptx
 
 
@@ -278,6 +315,15 @@ def test_max_occupancy_invalid(max_occupancy):
     backend = CUDABackend(GPUTarget("cuda", 90, 32))
     with pytest.raises(ValueError, match="max_occupancy must be a positive integer or None"):
         backend.parse_options({"max_occupancy": max_occupancy})
+
+
+@pytest.mark.parametrize("num_ctas", [0, -2, 3])
+def test_num_ctas_invalid(num_ctas):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(AssertionError, match="num_ctas must be a power of 2"):
+        backend.parse_options({"num_ctas": num_ctas})
 
 
 def test_compile_only_expect_zero() -> None:

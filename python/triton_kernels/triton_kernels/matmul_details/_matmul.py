@@ -8,7 +8,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
-from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
+from triton_kernels.tensor_details.layout_details.cdna5_scale import unswizzle_mx_scale_cdna5
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_tile, nvfp4_to_mxfp8_tile
@@ -134,6 +134,7 @@ def _matmul(
     has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    has_x_epilogue_scale: tl.constexpr = has_x_tensor_scale and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -287,7 +288,7 @@ def _matmul(
         X += start_m * stride_x_m
     else:
         GatherIndx += start_m
-        # no needs to bounds-check here because `offs_x_m` wraps around M dim
+        # Wrapping bounds the gather-array position, not the gathered row index.
         offs_x_m = tl.load(GatherIndx + offs_x_m)
     if is_x_fp4:
         offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
@@ -325,7 +326,7 @@ def _matmul(
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
             stride_scale_k = stride_w_mx_k
-        elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
+        elif SWIZZLE_MX_SCALE == "CDNA5_SCALE":
             tl.static_assert(stride_w_mx_k is not None)
             tl.static_assert(stride_w_mx_n is not None)
             NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 128
@@ -365,6 +366,12 @@ def _matmul(
         XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m
     else:
         XTensorScalePtrs = None
+
+    # Inactive rows have no source scales; neutral scales preserve their zero values.
+    if REQUANTIZE_X and has_x_tensor_scale:
+        x_conversion_scale = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
+    else:
+        x_conversion_scale: tl.constexpr = None
 
     offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
@@ -411,7 +418,11 @@ def _matmul(
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * X_MX_BLOCK_SIZE < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
+        # Without a gather, row offsets are nonnegative by construction.
+        # Negative gather indices (including -1) mark inactive input rows.
+        # Do not dereference them: zero-fill X before matmul. This does not
+        # suppress output stores or epilogue operations such as bias.
+        x = tl.load(XPtrs, mask=(offs_x_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if cuda_capability_geq(8, 0):
             if x.dtype == tl.float32 and ALLOW_TF32:
@@ -423,7 +434,13 @@ def _matmul(
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
-                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :], other=0.0)
+                # Inactive rows must not read scales. Zero padding permits async-copy
+                # zero filling; neutral E8M0 padding avoids extra spills on Hopper.
+                scale_padding: tl.constexpr = 0.0
+                if (GatherIndx is not None and XMxScale.dtype.element_ty == tl.uint8
+                        and cuda_capability_geq(9, 0) and not cuda_capability_geq(10, 0)):
+                    scale_padding = 127
+                x_scales = tl.load(XMxScalePtrs, mask=(offs_x_m[:, None] >= 0 if GatherIndx is not None else True) & mask_x_k_scale[None, :], other=scale_padding)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -445,15 +462,15 @@ def _matmul(
                     w_scales = tl.where(mask_k_scale[None, :], w_scales, scale_zero)
                 elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
                     w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
-                elif SWIZZLE_MX_SCALE == "GFX1250_SCALE":
-                    w_scales = unswizzle_mx_scale_gfx1250(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
+                elif SWIZZLE_MX_SCALE == "CDNA5_SCALE":
+                    w_scales = unswizzle_mx_scale_cdna5(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
                 else:
                     w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
             else:
                 w_scales: tl.constexpr = None
 
             if REQUANTIZE_X:
-                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales)
+                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales, x_conversion_scale)
 
             if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
                 tl.static_assert(w_format == "fp16" or w_format == "bf16")
@@ -502,11 +519,11 @@ def _matmul(
         else:
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
-    if has_x_tensor_scale or has_w_tensor_scale:
+    if has_x_epilogue_scale or has_w_tensor_scale:
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-        if has_x_tensor_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs)
+        if has_x_epilogue_scale:
+            x_tensor_scales = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
         if has_w_tensor_scale:
             w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
         if SWAP_XW:

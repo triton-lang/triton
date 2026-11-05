@@ -165,8 +165,10 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
+    auto attrs = splitBuilderAttributes<DestOp>(
+        rewriter, loc, adaptor.getAttributes().getValue());
     auto result = DestOp::create(rewriter, loc, elemTy, operands[0],
-                                 adaptor.getAttributes().getValue());
+                                 attrs.properties, attrs.discardableAttrs);
     Customize(result);
     return {result};
   }

@@ -221,6 +221,7 @@ jobs:
         -DLLVM_BUILD_LLVM_DYLIB=OFF
         -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
+        -DLLVM_ENABLE_LZMA=OFF
         $extra_cmake_flags
         llvm-project/llvm
 
@@ -248,6 +249,7 @@ jobs:
         -DLLVM_BUILD_LLVM_DYLIB=OFF
         -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
+        -DLLVM_ENABLE_LZMA=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build ${{ env.llvm_build_targets }}

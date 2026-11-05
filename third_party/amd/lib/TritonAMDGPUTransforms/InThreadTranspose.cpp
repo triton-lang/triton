@@ -69,8 +69,9 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
   }
 
   // Construct new load with the new encoding
-  auto attrs = load->getAttrs();
-  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
+  auto newLoad =
+      tt::LoadOp::create(rewriter, loc, newArgs, load.getProperties(),
+                         load->getDiscardableAttrDictionary().getValue());
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -111,7 +112,7 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
   auto cgaLayout = ttg::getCGALayout(dotOperandEnc);
-  auto bitWidth = operandType.getElementTypeBitWidth();
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(operandType.getElementType());
   SmallVector<unsigned> order{1, 0};
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
@@ -710,7 +711,7 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
   auto blockedEnc = cast<ttg::BlockedEncodingAttr>(loadEnc);
 
   auto maxkDimSizePerThread = getMaxSizePerThread(loadType, kDimNum);
-  auto elemBitwidth = loadType.getElementType().getIntOrFloatBitWidth();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(loadType.getElementType());
   // Current the widest is set to ds_write_b64
   // In some cases b64 works best, in others 128
   // TODO introduce a heuristic

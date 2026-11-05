@@ -222,11 +222,84 @@ Value selectLdsAddressForPredicate(TritonLLVMOpBuilder &b, Value pred,
   return b.select(pred, shmemAddr, outOfRangeAddress);
 }
 
+FailureOr<int32_t> getTDMCtrlBits(Operation *op, triton::CacheModifier cache,
+                                  Attribute cachePolicy,
+                                  std::optional<MemSyncScope> scope,
+                                  bool isLoad, const TargetInfo &targetInfo) {
+  // The verifier keeps cache modifier apart from the cache policy and scope.
+  if (cache != triton::CacheModifier::NONE)
+    return LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(cache, isLoad,
+                                                          targetInfo);
+  return LLVM::AMD::getBufferLoadStoreCtrlBits(op, cachePolicy, scope, isLoad,
+                                               targetInfo);
+}
+
 // Contains some helper functions for both Load and Store conversions.
+// The resource descriptor of a buffer op: the converted descriptor operand,
+// or a default one built from a pointer base.
+Value getResourceDescriptor(LLVM::AMD::BufferEmitter &bufferEmitter, Value base,
+                            Value llBase) {
+  if (isa<triton::amdgpu::BufferDescType>(base.getType()))
+    return llBase;
+  return bufferEmitter.createResourceDescriptor(llBase,
+                                                /*numRecords=*/Value());
+}
+
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(const AMD::TargetInfo &targetInfo,
                                    ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
+
+  // Whether a tensor `soffset` has the same value in every lane of an
+  // instruction: each lane basis of its layout stays within a block of equal
+  // values (AxisInfo constancy), so the first lane's value is every lane's.
+  bool isLaneUniform(Value soffset) const {
+    auto tensorTy = cast<RankedTensorType>(soffset.getType());
+    auto *axisInfo = axisAnalysisPass.getAxisInfo(soffset);
+    if (!axisInfo)
+      return false;
+    LinearLayout layout = triton::gpu::toLinearLayout(tensorTy);
+    StringAttr kLane = StringAttr::get(tensorTy.getContext(), "lane");
+    for (const auto &basis : layout.getBases().lookup(kLane)) {
+      for (auto [dim, coord] : llvm::enumerate(basis)) {
+        uint64_t constancy =
+            llvm::bit_floor(static_cast<uint64_t>(axisInfo->getConstancy(dim)));
+        if (static_cast<uint64_t>(coord) >= constancy)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  // Read one element of a lane-uniform tensor `soffset` from the first lane,
+  // as the scalar offset in bytes.
+  Value getTensorScalarOffsetBytes(RewriterBase &rewriter, Location loc,
+                                   LLVM::AMD::BufferEmitter &bufferEmitter,
+                                   Type elemTy, Value soffset) const {
+    Value uniform =
+        ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, soffset);
+    return bufferEmitter.getScalarOffsetBytes(elemTy, uniform);
+  }
+
+  // Get the scalar offset in bytes of each unique element of an atomic
+  // load/store.
+  FailureOr<SmallVector<Value>> getAtomicScalarOffsetBytes(
+      Operation *op, RewriterBase &rewriter, Location loc,
+      LLVM::AMD::BufferEmitter &bufferEmitter, Type elemTy, Value soffset,
+      Value llSoffset, size_t numElems) const {
+    if (!soffset || !isa<RankedTensorType>(soffset.getType()))
+      return SmallVector<Value>(
+          numElems, bufferEmitter.getScalarOffsetBytes(elemTy, llSoffset));
+    if (!isLaneUniform(soffset))
+      return op->emitOpError(
+          "can't prove the soffset tensor is the same across the lanes of a "
+          "wave");
+    SmallVector<Value> soffsetBytes;
+    for (Value elem : unpackUniqueTensorElements(loc, llSoffset, rewriter))
+      soffsetBytes.push_back(getTensorScalarOffsetBytes(
+          rewriter, loc, bufferEmitter, elemTy, elem));
+    return soffsetBytes;
+  }
 
   // Create a LLVM vector of type `vecTy` containing all zeros
   Value createZeroVector(OpBuilder &builder, Location loc,
@@ -258,12 +331,10 @@ struct LoadStoreConversionBase {
     return v;
   }
 
-  // Return a tensor of pointers with the same type of `basePtr` and the same
-  // shape of `offset`
+  // Return a tensor of pointers with the same type of `basePtr` (or of a
+  // buffer descriptor's element type) and the same shape of `offset`
   Type getPointerTypeWithShape(Value basePtr, Value offset) const {
-    Type basePtrType = basePtr.getType();
-    auto offsetType = cast<RankedTensorType>(offset.getType());
-    return offsetType.cloneWith(std::nullopt, basePtrType);
+    return LLVM::AMD::getPointerTypeWithShape(basePtr, offset);
   }
 
   // Unpack the elements contained in a `llvmStruct` into a `SmallVector` of
@@ -485,13 +556,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     globalLayout = removeBroadcast.apply(globalLayout);
     vals = removeBroadcast.apply(vals);
 
-    LinearLayout sharedLayout;
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            sharedTy.getEncoding())) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(sharedTy);
-    }
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(sharedTy);
     auto cvt = globalLayout.invertAndCompose(sharedLayout);
     if (!cvt.isTrivialOver({str_attr("block")})) {
       return emitError(loc, isLoad ? "direct to lds loads do not support "
@@ -533,7 +599,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       laneId = b.i32_val(0);
     }
 
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), paddingShifts,
+    SmallVector<Value> smemBases(smemObj.getBases().begin(),
+                                 smemObj.getBases().end());
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemBases, paddingShifts,
               affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
               /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
               vec, lowerInstForwardMulticastMask);
@@ -686,11 +754,11 @@ struct BufferLoadOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
+    if (failed(aux))
       return failure();
-    }
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
@@ -699,7 +767,6 @@ struct BufferLoadOpConversion
     Value ptr = op.getPtr();
     Value offset = op.getOffsets();
     Value mask = op.getMask();
-    auto cacheMod = *cacheModifier;
 
     // Converted values
     Value llPtr = adaptor.getPtr();
@@ -722,6 +789,26 @@ struct BufferLoadOpConversion
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
     assert(offsetElems.size() == numElems);
 
+    // Get the scalar offset. A tensor soffset needs one value per vector.
+    Value soffset = op.getSoffset();
+    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
+    SmallVector<Value> soffsetElems;
+    Value soffsetBytes;
+    if (tensorSoffset) {
+      // It goes in the scalar offset register, so it must be the same across
+      // the lanes of an access, and across the elements of a vector.
+      if (!isLaneUniform(soffset))
+        return op.emitOpError(
+            "can't prove the soffset tensor is the same across the lanes of "
+            "a wave");
+      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(soffset));
+      soffsetElems = unpackTensorElements(loc, adaptor.getSoffset(), rewriter,
+                                          soffset.getType());
+    } else {
+      soffsetBytes =
+          bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    }
+
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
@@ -733,7 +820,7 @@ struct BufferLoadOpConversion
           unpackTensorElements(loc, llOther, rewriter, op.getOther().getType());
 
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -743,8 +830,14 @@ struct BufferLoadOpConversion
         falseVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
-      Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
+      Value vecSoffsetBytes =
+          tensorSoffset
+              ? getTensorScalarOffsetBytes(rewriter, loc, bufferEmitter,
+                                           valueElemTy, soffsetElems[vecStart])
+              : soffsetBytes;
+      Value loadVal =
+          bufferEmitter.emitLoad(vecTy, rsrcDesc, offsetElems[vecStart],
+                                 vecSoffsetBytes, pred, falseVal, *aux);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -774,12 +867,11 @@ struct BufferLoadToLocalOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
+    if (failed(aux))
       return failure();
-    }
-    auto cacheMod = *cacheModifier;
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
@@ -860,7 +952,9 @@ struct BufferLoadToLocalOpConversion
 
     // Create the resource descriptor and then emit the buffer_loads to lds
     // based on the collected shared addresses and vector size
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value soffsetBytes =
+        bufferEmitter.getScalarOffsetBytes(resElemTy, adaptor.getSoffset());
+    Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
 
     auto freeVarMasks = getFreeVariableMasks(ptrType);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -898,8 +992,8 @@ struct BufferLoadToLocalOpConversion
         Value predicatedAddress =
             selectLdsAddressForPredicate(b, threadPred, shmemAddr);
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-            vecTy, vecBytesVal, rsrcDesc, offsetElem, predicatedAddress,
-            maybeSwizzledMaskElem, cacheMod);
+            vecTy, vecBytesVal, rsrcDesc, offsetElem, soffsetBytes,
+            predicatedAddress, maybeSwizzledMaskElem, *aux);
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       } else {
@@ -908,8 +1002,8 @@ struct BufferLoadToLocalOpConversion
         auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, pred);
 
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-            vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,
-            hasOther ? b.true_val() : maybeSwizzledMaskElem, cacheMod);
+            vecTy, vecBytesVal, rsrcDesc, offsetElem, soffsetBytes, shmemAddr,
+            hasOther ? b.true_val() : maybeSwizzledMaskElem, *aux);
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
@@ -954,11 +1048,12 @@ struct AsyncCopyGlobalToLocalOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
+    // Global loads to LDS encode their cache bits like buffer loads.
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), /*scope=*/std::nullopt, /*isLoad=*/true,
+        targetInfo);
+    if (failed(aux))
       return failure();
-    }
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1060,14 +1155,14 @@ struct AsyncCopyGlobalToLocalOpConversion
             selectLdsAddressForPredicate(b, cond, shmemAddr);
 
         emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
-                      predicatedAddress, *cacheModifier, multicastMask);
+                      predicatedAddress, *aux, multicastMask);
       } else {
         // For architectures not supporting per lane LDS addresses we need to
         // emit a branch.
         auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
         emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem, shmemAddr,
-                      *cacheModifier, multicastMask);
+                      *aux, multicastMask);
 
         rewriter.setInsertionPointToStart(afterLoadBlock);
       }
@@ -1098,13 +1193,9 @@ struct AsyncCopyGlobalToLocalOpConversion
 
   void emitAsyncLoad(RewriterBase &rewriter, Location loc,
                      AMD::TargetInfo targetInfo, int vecBits, Value srcPtr,
-                     Value shmemAddr, triton::CacheModifier cacheMod,
-                     Value multicastMask) const {
+                     Value shmemAddr, int32_t aux, Value multicastMask) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    int32_t cacheModifiers =
-        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            cacheMod, /*isLoad=*/true, targetInfo);
-    auto auxAttr = rewriter.getI32IntegerAttr(cacheModifiers);
+    auto auxAttr = rewriter.getI32IntegerAttr(aux);
 
     if (targetInfo.useAsyncMarks()) {
       // Use the async intrinsic so LLVM tracks these via asyncmark
@@ -1113,7 +1204,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           nullptr, nullptr, nullptr);
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(asyncLoadOp);
-    } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    } else if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
       switch (vecBits) {
       case 32:
         if (multicastMask)
@@ -1166,17 +1257,16 @@ struct AsyncCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
-      return failure();
+    if (targetInfo.getISAFamily() != ISAFamily::CDNA5) {
+      return rewriter.notifyMatchFailure(
+          op, "async_copy_local_to_global only supported on CDNA5");
     }
 
-    // Only supported on GFX1250
-    if (targetInfo.getISAFamily() != ISAFamily::GFX1250) {
-      return rewriter.notifyMatchFailure(
-          op, "async_copy_local_to_global only supported on GFX1250");
-    }
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(aux))
+      return failure();
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1202,8 +1292,8 @@ struct AsyncCopyLocalToGlobalOpConversion
 
     // For padded encodings restrict vec by the min interval
     auto srcEnc = srcTy.getEncoding();
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
+    if (triton::gpu::isPaddedEncoding(srcEnc)) {
+      vec = std::min(vec, triton::gpu::getMinInterval(srcEnc));
     }
 
     Type dstPtrTy = dstElems[0].getType();
@@ -1216,7 +1306,7 @@ struct AsyncCopyLocalToGlobalOpConversion
         freeVarMasks, rewriter, loc, targetInfo);
 
     auto emitGlobalStoreLds =
-        [this, &op, &b, threadPred, dstPtrTy, cacheModifier = *cacheModifier](
+        [this, &op, &b, threadPred, dstPtrTy, aux = *aux](
             RewriterBase &rewriter, Location loc, ArrayRef<Value> storeValues,
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value /*multicastMask*/) -> SmallVector<Value> {
@@ -1230,7 +1320,7 @@ struct AsyncCopyLocalToGlobalOpConversion
       auto [storeBlock, afterStoreBlock] = emitBranch(rewriter, loc, cond);
 
       emitAsyncStore(rewriter, loc, targetInfo, vecBits, dstElem, shmemAddr,
-                     cacheModifier);
+                     aux);
 
       rewriter.setInsertionPointToStart(afterStoreBlock);
 
@@ -1254,18 +1344,15 @@ struct AsyncCopyLocalToGlobalOpConversion
 
   void emitAsyncStore(RewriterBase &rewriter, Location loc,
                       AMD::TargetInfo targetInfo, int vecBits, Value dstPtr,
-                      Value shmemAddr, triton::CacheModifier cacheMod) const {
+                      Value shmemAddr, int32_t aux) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    int32_t cacheModifiers =
-        mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            cacheMod, /*isLoad=*/false, targetInfo);
 
     auto emitStore = [&](int bits, Value dst, Value shmem) {
       std::string intrinsic =
           "llvm.amdgcn.global.store.async.from.lds.b" + std::to_string(bits);
       LLVM::createLLVMIntrinsicCallOp(
           rewriter, loc, intrinsic, {},
-          {dst, shmem, b.i32_val(0), b.i32_val(cacheModifiers)});
+          {dst, shmem, b.i32_val(0), b.i32_val(aux)});
     };
 
     // If vecBits is not supported but vecBits/2 is, split into two
@@ -1303,6 +1390,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/true, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1366,17 +1457,13 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     if (auto hintAttr = op.getWarpUsedHintAttr())
       warpUsedHint = static_cast<uint32_t>(hintAttr.getInt());
 
-    auto cacheMod = op.getCache();
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        cacheMod, /*isLoad*/ true, targetInfo);
-
     // Placeholder: the copy inherits pred from the descriptor.
     Value pred = b.i32_val(1);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, pred, multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        auxBits, warpUsedHint, /*isPureForm=*/true);
+        *auxBits, warpUsedHint, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
     return success();
@@ -1397,6 +1484,10 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/true, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t numMembers = op.getDescs().size();
@@ -1436,10 +1527,8 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
       memberHints.push_back(static_cast<uint32_t>(op.getWarpUsedHints()[i]));
     }
 
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        op.getCache(), /*isLoad*/ true, targetInfo);
     mlir::LLVM::AMD::emitTDMLoadFused(rewriter, loc, getTypeConverter(),
-                                      members, numWarps, ctaId, auxBits,
+                                      members, numWarps, ctaId, *auxBits,
                                       memberHints);
 
     rewriter.eraseOp(op);
@@ -1461,6 +1550,10 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncTDMCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = getTDMCtrlBits(op, op.getCache(), op.getCachePolicyAttr(),
+                                  op.getScope(), /*isLoad=*/false, targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1513,17 +1606,13 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
 
     auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
 
-    auto cacheMod = op.getCache();
-    auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-        cacheMod, /*isLoad*/ false, targetInfo);
-
     // Placeholder: the copy inherits pred from the descriptor.
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
     mlir::LLVM::AMD::emitTDMLoadStore(
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, srcPtrs, pred,
         /*multicastMask=*/{}, elementType, barrierPtr,
-        /*isLoad=*/false, sharedLayout, encoding, ctaId, auxBits,
+        /*isLoad=*/false, sharedLayout, encoding, ctaId, *auxBits,
         /*warpUsedHint=*/std::nullopt, /*isPureForm=*/true);
 
     rewriter.eraseOp(op);
@@ -1544,13 +1633,13 @@ struct AsyncTDMScatterOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    // Multi-CTA not supported for scatter
-    if (lookupNumCTAs(op) > 1) {
-      return op.emitError("TDM scatter does not support multi-CTA");
-    }
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
@@ -1618,7 +1707,7 @@ struct AsyncTDMScatterOpConversion
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
             padAmount, srcPtr, /*multicastMask=*/{}, elementType, barrierPtr,
             cgaLayout, ctaId, dstRowIndices,
-            /*isGather=*/false, numWarps, dstRowIndicesType)))
+            /*isGather=*/false, numWarps, dstRowIndicesType, *auxBits)))
       return failure();
 
     rewriter.eraseOp(op);
@@ -1639,6 +1728,11 @@ struct AsyncTDMGatherOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::AsyncTDMGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto auxBits = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
+    if (failed(auxBits))
+      return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -1708,7 +1802,7 @@ struct AsyncTDMGatherOpConversion
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
             padAmount, dstPtr, multicastMask, elementType, barrierPtr,
             cgaLayout, ctaId, srcRowIndices,
-            /*isGather=*/true, numWarps, srcRowIndicesType)))
+            /*isGather=*/true, numWarps, srcRowIndicesType, *auxBits)))
       return failure();
 
     rewriter.eraseOp(op);
@@ -1816,9 +1910,7 @@ struct BufferAtomicRMWOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -1870,7 +1962,8 @@ struct BufferAtomicRMWOpConversion
       maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
     }
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc =
+        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -1925,8 +2018,8 @@ struct BufferAtomicRMWOpConversion
       return failure();
     }
 
-    finalizeAtomicResults(op, rewriter, loadedVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, loadedVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -1945,9 +2038,7 @@ struct BufferAtomicCASOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -1981,7 +2072,8 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> cmpElems =
         unpackUniqueTensorElements(loc, llCmp, rewriter);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc =
+        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -2034,8 +2126,139 @@ struct BufferAtomicCASOpConversion
       return failure();
     }
 
-    finalizeAtomicResults(op, rewriter, loadedVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, loadedVals, threadPred, targetInfo,
+                          getTypeConverter());
+    return success();
+  }
+};
+
+struct BufferAtomicLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicLoadOp>,
+      public LoadStoreConversionBase {
+  BufferAtomicLoadOpConversion(LLVMTypeConverter &converter,
+                               const AMD::TargetInfo &targetInfo,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferAtomicLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // The access is coherent at the op's scope; ordering comes from the
+    // barriers and fence below, as for tt.atomic_load.
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, /*cachePolicy=*/Attribute(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
+    if (failed(aux))
+      return failure();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto sem = op.getSem();
+    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+
+    Type resultTy = op.getType();
+    Type valueElemTy =
+        typeConverter->convertType(getElementTypeOrSelf(resultTy));
+    SmallVector<Value> offsetElems =
+        unpackUniqueTensorElements(loc, adaptor.getOffsets(), rewriter);
+    SmallVector<Value> maskElems;
+    if (adaptor.getMask())
+      maskElems = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), offsetElems.size());
+    if (failed(soffsetBytes))
+      return failure();
+    Value rsrcDesc =
+        getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
+
+    // Only one thread loads each element; finalizeAtomicResults broadcasts
+    // its value so that every copy of the element agrees.
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        getFreeVariableMasks(resultTy), rewriter, loc, targetInfo);
+    Type vecTy = LLVM::getVectorType(valueElemTy, 1);
+    SmallVector<Value> loadedVals;
+    for (size_t i = 0; i < offsetElems.size(); ++i) {
+      Value pred =
+          maskElems.empty() ? threadPred : b.and_(threadPred, maskElems[i]);
+      Value loaded = bufferEmitter.emitAtomicLoad(
+          vecTy, rsrcDesc, offsetElems[i], (*soffsetBytes)[i], pred, *aux);
+      loadedVals.push_back(
+          b.extract_element(valueElemTy, loaded, b.i32_val(0)));
+    }
+
+    if (sem == triton::MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            targetInfo.getAtomicSyncScope(op.getScope()));
+    finalizeAtomicResults(op, rewriter, loadedVals, threadPred, targetInfo,
+                          getTypeConverter());
+    return success();
+  }
+};
+
+struct BufferAtomicStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicStoreOp>,
+      public LoadStoreConversionBase {
+  BufferAtomicStoreOpConversion(LLVMTypeConverter &converter,
+                                const AMD::TargetInfo &targetInfo,
+                                ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferAtomicStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // LLVM has no atomic buffer store intrinsic; like its own lowering of
+    // atomic stores through buffer pointers, emit a store coherent at the
+    // op's scope, after a release fence when required.
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, /*cachePolicy=*/Attribute(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(aux))
+      return failure();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+
+    Type valueTy = op.getValue().getType();
+    Type valueElemTy =
+        typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    SmallVector<Value> offsetElems =
+        unpackUniqueTensorElements(loc, adaptor.getOffsets(), rewriter);
+    SmallVector<Value> valueElems =
+        unpackUniqueTensorElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> maskElems;
+    if (adaptor.getMask())
+      maskElems = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), offsetElems.size());
+    if (failed(soffsetBytes))
+      return failure();
+    Value rsrcDesc =
+        getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
+
+    if (op.getSem() == triton::MemSemantic::RELEASE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                            targetInfo.getAtomicSyncScope(op.getScope()));
+
+    // Only one thread stores each element.
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        getFreeVariableMasks(valueTy), rewriter, loc, targetInfo);
+    auto vecTy = cast<VectorType>(LLVM::getVectorType(valueElemTy, 1));
+    for (size_t i = 0; i < offsetElems.size(); ++i) {
+      Value pred =
+          maskElems.empty() ? threadPred : b.and_(threadPred, maskElems[i]);
+      Value value = packElementRangeIntoVector(rewriter, getTypeConverter(),
+                                               loc, vecTy, valueElems, i);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[i], (*soffsetBytes)[i],
+                              value, pred, *aux);
+    }
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -2053,11 +2276,11 @@ struct BufferStoreOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
-      op.emitOpError("target cache policy is not supported on AMD targets");
+    auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
+    if (failed(aux))
       return failure();
-    }
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
@@ -2067,7 +2290,6 @@ struct BufferStoreOpConversion
     Value offset = op.getOffsets();
     Value mask = op.getMask();
     Value data = op.getValue();
-    auto cacheMod = *cacheModifier;
 
     Value llPtr = adaptor.getPtr();
     Value llOffset = adaptor.getOffsets();
@@ -2091,11 +2313,31 @@ struct BufferStoreOpConversion
     SmallVector<Value> valueElems =
         unpackTensorElements(loc, llData, rewriter, data.getType());
 
+    // Get the scalar offset. A tensor soffset needs one value per vector.
+    Value soffset = op.getSoffset();
+    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
+    SmallVector<Value> soffsetElems;
+    Value soffsetBytes;
+    if (tensorSoffset) {
+      // It goes in the scalar offset register, so it must be the same across
+      // the lanes of an access, and across the elements of a vector.
+      if (!isLaneUniform(soffset))
+        return op.emitOpError(
+            "can't prove the soffset tensor is the same across the lanes of "
+            "a wave");
+      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(soffset));
+      soffsetElems = unpackTensorElements(loc, adaptor.getSoffset(), rewriter,
+                                          soffset.getType());
+    } else {
+      soffsetBytes =
+          bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    }
+
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     MLIRContext *ctx = rewriter.getContext();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -2115,8 +2357,13 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred,
-                              cacheMod);
+      Value vecSoffsetBytes =
+          tensorSoffset
+              ? getTensorScalarOffsetBytes(rewriter, loc, bufferEmitter,
+                                           valueElemTy, soffsetElems[vecStart])
+              : soffsetBytes;
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], vecSoffsetBytes,
+                              storeVal, pred, *aux);
     } // end vec
 
     rewriter.eraseOp(op);
@@ -2137,11 +2384,14 @@ struct AtomicCASOpConversion
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (lookupNumCTAs(op) > 1 &&
+        !isa<RankedTensorType>(op.getResult().getType()))
+      return op.emitError(
+          "scalar atomic CAS is not supported in multi-CTA kernels on AMD");
+
     // extract relevant info from Module
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -2162,12 +2412,7 @@ struct AtomicCASOpConversion
     if (!scope)
       return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
-    // deal with tensor or scalar
-    auto valueTy = op.getResult().getType();
-    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-    Type valueElemTy =
-        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
-                 : valueTy;
+    Type valueElemTy = valElements.front().getType();
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     Type valueElemIntTy{};
     if (!valueElemTy.isSignlessInteger()) {
@@ -2207,8 +2452,8 @@ struct AtomicCASOpConversion
       resultVals[i] = results.front();
     }
 
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -2238,10 +2483,13 @@ struct AtomicRMWOpConversion
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (lookupNumCTAs(op) > 1 &&
+        !isa<RankedTensorType>(op.getResult().getType()))
+      return op.emitError(
+          "scalar atomic RMW is not supported in multi-CTA kernels on AMD");
+
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 !atomicResultHasOrderingBarrier(op), rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Type atomicElementType = getElementTypeOrSelf(op.getVal().getType());
@@ -2399,8 +2647,8 @@ struct AtomicRMWOpConversion
         }
       }
     }
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -2452,7 +2700,7 @@ struct AsyncWaitOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
       // Clamp asyncCnt to 6bits(hw limit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);
@@ -2527,8 +2775,9 @@ struct AsyncCopyMbarrierArriveOpConversion
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
-    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(rewriter, loc, {},
-                                                             smemObj.getBase());
+    auto newOp = ROCDL::DsAtomicAsyncBarrierArriveOp::create(
+        rewriter, loc, TypeRange{}, smemObj.getBase(),
+        ROCDL::DsAtomicAsyncBarrierArriveOp::Properties{});
     rewriter.replaceOp(op, newOp);
     return success();
   }
@@ -2585,6 +2834,25 @@ struct TDMPrefetchConversion
 private:
   const AMD::TargetInfo &targetInfo;
 };
+struct MakeBufferDescOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::MakeBufferDescOp> {
+  MakeBufferDescOpConversion(LLVMTypeConverter &converter,
+                             const AMD::TargetInfo &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::MakeBufferDescOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, op.getLoc(), targetInfo);
+    rewriter.replaceOp(op, bufferEmitter.createResourceDescriptor(
+                               adaptor.getBase(), adaptor.getNumRecords()));
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2596,6 +2864,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferLoadToLocalOpConversion, BufferStoreOpConversion,
+               BufferAtomicLoadOpConversion, BufferAtomicStoreOpConversion,
                BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
                AsyncCopyLocalToGlobalOpConversion, BufferAtomicCASOpConversion,
                AsyncTDMCopyGlobalToLocalOpConversion,
@@ -2604,6 +2873,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<MakeBufferDescOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncTDMIntrinsicWaitConversion>(typeConverter, benefit);

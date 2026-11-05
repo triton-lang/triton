@@ -96,6 +96,8 @@ def make_default_opt_flags_amd(
         block_m = 128
     elif get_rdna_version() in (3, 4) and m >= 512:
         block_m = 64
+    elif slice_size <= 8:
+        block_m = 16
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
@@ -329,6 +331,12 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (is_persistent and routing_data is None and constraints.get("block_n") is None
+            and cuda_capability_geq(10, 0) and grid_size_tma < n_sms
+            and not epilogue_effective_itemsize and epilogue_reduction_n == 1 and not has_y_acc_in
+            and opt_flags_nvidia.is_fp8_nvfp4(precision_config, lhs_dtype, rhs_dtype)):
+        # A narrower tile gives the decoded NVFP4 path more blocks to fill the GPU.
+        block_n = min(block_n, 128)
     if (is_persistent and constraints.get("block_n", None) is None
             and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)
             and not x_uses_tma_when_persistent):
@@ -440,6 +448,10 @@ def make_default_opt_flags_nvidia(
         subtiles_to_check = [2]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
+        if precision_config.c_mx_scale is not None and split_k == 1:
+            # Each output subtile must contain a complete quantization group.
+            subtiles_to_check = [ep for ep in subtiles_to_check
+                                if block_n // ep // epilogue_reduction_n >= precision_config.c_microblock_size]
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,

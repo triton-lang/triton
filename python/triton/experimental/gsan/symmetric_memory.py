@@ -72,7 +72,7 @@ def empty(*size, dtype: torch.dtype | None = None, device: torch.device | str | 
     device_index = torch.cuda.current_device() if dev.index is None else dev.index
     dev = torch.device("cuda", device_index)
 
-    with torch.cuda.use_mem_pool(_get_mem_pool(shadow_granularity, write_once)):
+    with torch.cuda.use_mem_pool(_get_mem_pool(shadow_granularity, write_once), device=device_index):
         return torch.empty(shape, dtype=dtype, device=dev)
 
 

@@ -73,6 +73,10 @@ class TritonSemantic(Generic[TensorTy]):
 
     def computation_type_impl(self, a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
                               div_or_mod: bool) -> tl.dtype:
+        if a_ty in (tl.float4e2m1x2, tl.float8e8m0fnu) or b_ty in (tl.float4e2m1x2, tl.float8e8m0fnu):
+            if a_ty != b_ty:
+                raise TypeError(f"Implicit promotion between {a_ty} and {b_ty} is not supported")
+            return a_ty
         # 0) For scalars we follow semantics similar to PyTorch, namely:
         # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
         #   it doesn't participate in the promotion
@@ -287,6 +291,11 @@ class TritonSemantic(Generic[TensorTy]):
         scalar_ty = input.type.scalar
         # ptr - offset
         if scalar_ty.is_ptr():
+            # Negate unsigned offsets in a signed type to avoid unsigned wraparound.
+            if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
+                other_type = other.type.with_element_ty(tl.int64)
+                other_handle = self.builder.create_int_cast(other.handle, other_type.to_ir(self.builder), False)
+                other = self.make_tensor(other_handle, other_type)
             return self.add(input, self.minus(other), sanitize_overflow=False)
         # float - float
         if scalar_ty.is_floating():
@@ -670,14 +679,14 @@ class TritonSemantic(Generic[TensorTy]):
     def unsplat(self, value: TensorTy) -> TensorTy:
         return self.make_tensor(self.builder.create_unsplat(value.handle), value.dtype)
 
-    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool) -> TensorTy:
+    def reshape(self, input: TensorTy, dst_shape: List[int]) -> TensorTy:
         numel = 1
         for s in dst_shape:
             numel *= s
         if input.type.numel != numel:
             raise ValueError("reshape() cannot change total number of elements in tensor")
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
-        return self.make_tensor(self.builder.create_reshape(input.handle, dst_shape, can_reorder), ret_ty)
+        return self.make_tensor(self.builder.create_reshape(input.handle, dst_shape), ret_ty)
 
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]
@@ -711,7 +720,7 @@ class TritonSemantic(Generic[TensorTy]):
         ret = self.make_tensor(self.builder.create_join(a.handle, b.handle), ret_type)
 
         if was_rank_1:
-            ret = self.reshape(ret, [2], can_reorder=False)
+            ret = self.reshape(ret, [2])
 
         return ret
 
@@ -1386,6 +1395,11 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(handle, expected.type.with_element_ty(tl.int1))
 
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+        is_hip = self.builder.options.backend_name == "hip"
+        if (is_hip and self.builder.options.num_ctas > 1 and not ptr.type.is_block()):
+            raise ValueError("scalar atomic CAS is not supported in multi-CTA kernels on AMD")
+        ptr, cmp, _ = self._atomic_typechecking_impl(ptr, cmp, None, "cas")
+        ptr, val, _ = self._atomic_typechecking_impl(ptr, val, None, "cas")
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
@@ -1396,6 +1410,9 @@ class TritonSemantic(Generic[TensorTy]):
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
+        is_hip = self.builder.options.backend_name == "hip"
+        if (is_hip and self.builder.options.num_ctas > 1 and not ptr.type.is_block()):
+            raise ValueError("scalar atomic RMW is not supported in multi-CTA kernels on AMD")
         ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, op)
         self._validate_atomic_rmw_element_type(ptr.type.scalar.element_ty, op)
         return ptr, val, mask
@@ -1620,6 +1637,9 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = acc.handle
             assert acc.type.shape == ret_ty.shape, \
                 f"expected accumulator shape {ret_ty.shape}, got {acc.type.shape}"
+            assert acc.type.element_ty == ret_ty.element_ty, \
+                f"expected accumulator dtype {ret_ty.element_ty} for {lhs.dtype} operands, got {acc.type.element_ty}; " \
+                f"use a {ret_ty.element_ty} accumulator, or accumulate with acc += tl.dot(a, b).to(acc.dtype)"
             assert acc.type.element_ty == out_dtype, \
                 f"expected accumulator dtype {out_dtype}, got {acc.type.element_ty}; " \
                 f"pass out_dtype={acc.type.element_ty} to use this accumulator dtype"
@@ -1652,7 +1672,7 @@ class TritonSemantic(Generic[TensorTy]):
                      tl.float16}.get(float_format)
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
-            assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
+            assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
             return val
         if val.dtype == triton_ty:
             return val
@@ -1776,7 +1796,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
-            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=True) for t in inputs)
+            inputs = tuple(self.reshape(t, [t.numel.value]) for t in inputs)
             axis = 0
         # get result shape
         shape = inputs[0].type.shape

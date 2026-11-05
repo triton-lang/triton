@@ -74,22 +74,20 @@ def verify_mir_content(mir_content, kernel_name):
 def _find_llc():
     """Locate an llc to cross-check the DAG against.
 
-    Prefer the LLVM Triton itself was built against. A stray system llc can be
-    many major versions away from it -- old enough not to know the target we
-    are compiling for -- and the DAG it prints would not be comparable, so it
-    is only a last resort. The prebuilt package Triton downloads carries a
-    matching llc, which is what makes this work on a bare CI image.
+    It has to be an llc from the AMD code generator's own LLVM, the one that
+    produced the MIR. Triton's core LLVM is pinned separately and is usually
+    weeks behind, far enough that it rejects the MIR outright on an attribute
+    it does not know yet; a stray system llc is further away still. So this
+    only looks in AMD code generation's own locations, and the test skips when
+    none of them has an llc -- the prebuilt bootstrap LLVM does not ship one.
     """
     import glob
     import os
-    import shutil
-    llvm_pkgs = os.path.join(os.environ.get("TRITON_HOME", os.path.expanduser("~/")), ".triton", "llvm", "*", "bin",
-                             "llc")
+    amd_llvm_pkgs = os.path.join(os.environ.get("TRITON_HOME", os.path.expanduser("~/")), ".triton", "amd", "llvm", "*",
+                                 "bin", "llc")
     for cand in (
-            os.path.join(os.environ.get("LLVM_SYSPATH", ""), "bin", "llc"),
-            os.path.join(os.environ.get("LLVM_BUILD_DIR", ""), "bin", "llc"),
-            *sorted(glob.glob(llvm_pkgs)),
-            shutil.which("llc") or "",
+            os.path.join(os.environ.get("AMD_LLVM_BUILD_DIR", ""), "bin", "llc"),
+            *sorted(glob.glob(amd_llvm_pkgs)),
     ):
         if cand and os.path.isfile(cand):
             return cand
@@ -289,8 +287,8 @@ def _cross_check_dag_against_llvm(mir_content, llc_path):
 def test_dag_matches_llvm(tmp_path, monkeypatch):
     llc_path = _find_llc()
     if llc_path is None:
-        pytest.skip("llc not found (set LLVM_SYSPATH or LLVM_BUILD_DIR); "
-                    "DAG cross-check needs the LLVM tools")
+        pytest.skip("no llc from the AMD code generator's LLVM (set AMD_LLVM_BUILD_DIR); "
+                    "the DAG cross-check needs one built from that same revision")
 
     monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
     monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")

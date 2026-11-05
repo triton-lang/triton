@@ -6,7 +6,7 @@
 // It provides:
 //  - software fallback conversion paths for FP32/FP16/BF16/FP8 variants,
 //  - hardware-accelerated packed conversion paths selected by ISA family
-//    (CDNA3, CDNA4, RDNA4m, RDNA4, GFX1250+),
+//    (CDNA3, CDNA4, RDNA4m, RDNA4, CDNA5+),
 //  - round-mode aware handling (RTNE/RTZ), saturation, NaN/Inf and subnormal
 //    semantics.
 //
@@ -35,7 +35,7 @@ using triton::amdgpu::ISAFamily;
 
 namespace {
 bool isCDNA4OrHigher(ISAFamily family) {
-  return family == ISAFamily::CDNA4 || family == ISAFamily::GFX1250;
+  return family == ISAFamily::CDNA4 || family == ISAFamily::CDNA5;
 }
 // List of architectures that have hardware support for OCP fp8 formats via the
 // *unscaled* cvt instructions, i.e. v_cvt_{f32_fp8,f32_bf8} and
@@ -347,7 +347,7 @@ SmallVector<Value> scalePk4UpcastFromFp8(Location loc,
   return ret;
 }
 
-// Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on gfx1250+
+// Convert Ocp Fp8/Bf8 to Fp16/Bf16/Fp32 on CDNA5+
 template <typename ConvertOp>
 SmallVector<Value> scalePk8UpcastFromFp8(Location loc,
                                          ConversionPatternRewriter &rewriter,
@@ -1035,55 +1035,58 @@ public:
     return result;
   }
 
-  Value Fp8E4M3fnToFp16OneValue(Location loc,
-                                ConversionPatternRewriter &rewriter, Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto fp8x2VecTy = vec_ty(i8_ty, 2);
-    Value a = b.undef(fp8x2VecTy);
-    a = b.insert_element(fp8x2VecTy, a, b.i8_val(0), b.i32_val(0));
-    a = b.insert_element(fp8x2VecTy, a, v, b.i32_val(1));
-    a = b.bitcast(a, i16_ty);
-
-    // Get sign and absolute value
-    Value sign = b.and_(a, b.i16_val(0x8000));
-    a = b.and_(a, b.i16_val(0x7FFF));
-
-    // Right shift 1 bit to adjust the positions of exponent and mantissa
-    a = b.lshr(a, b.i16_val(1));
-
-    // Adjust exponent, (15 - 7) << 10 === 0x2000
-    a = b.add(a, b.i16_val(0x2000));
-
-    // Check NaN
-    Value vAbs = b.and_(b.bitcast(v, i8_ty), b.i8_val(0x7F));
-    a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
-
-    // Check denorms and zero
-    // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
-    // fp16 value
-    constexpr size_t lutSize = 8;
-    static constexpr int denormsAndZeroLut[lutSize] = {
-        0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
-
-    for (int i = 0; i < lutSize; i++) {
-      a = b.select(b.icmp_eq(vAbs, b.i8_val(i)),
-                   b.i16_val(denormsAndZeroLut[i]), a);
-    }
-
-    // Set sign
-    a = b.or_(a, sign);
-    a = b.bitcast(a, f16_ty);
-
-    return a;
-  }
-
   // Ocp Fp8->Fp16
   SmallVector<Value> Fp8E4M3fnToFp16SW(Location loc,
                                        ConversionPatternRewriter &rewriter,
-                                       const SmallVector<Value> &values) {
-    SmallVector<Value> results(4);
-    for (size_t i = 0; i < 4; i++)
-      results[i] = Fp8E4M3fnToFp16OneValue(loc, rewriter, values[i]);
+                                       const SmallVector<Value> &v) {
+    assert(v.size() == 4);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    auto i16x2VecTy = vec_ty(i16_ty, 2);
+
+    Value scale = b.undef(fp16x2VecTy);
+    scale =
+        b.insert_element(fp16x2VecTy, scale, b.f16_val(0x1p+8), b.i32_val(0));
+    scale =
+        b.insert_element(fp16x2VecTy, scale, b.f16_val(0x1p+8), b.i32_val(1));
+
+    SmallVector<Value> results;
+    for (size_t i = 0; i < 4; i += 2) {
+      // Pack two fp8 values into the high bytes of the 16-bit halves of an i32
+      Value a = b.undef(fp8x4VecTy);
+      a = b.insert_element(fp8x4VecTy, a, b.i8_val(0), b.i32_val(0));
+      a = b.insert_element(fp8x4VecTy, a, v[i], b.i32_val(1));
+      a = b.insert_element(fp8x4VecTy, a, b.i8_val(0), b.i32_val(2));
+      a = b.insert_element(fp8x4VecTy, a, v[i + 1], b.i32_val(3));
+      a = b.bitcast(a, i32_ty);
+
+      // Get sign and absolute value
+      Value sign = b.and_(i32_ty, a, b.i32_val(0x80008000));
+      a = b.and_(i32_ty, a, b.i32_val(0x7FFF7FFF));
+
+      // Right shift 1 bit to adjust the positions of exponent and mantissa
+      a = b.lshr(i32_ty, a, b.i32_val(1));
+      a = b.bitcast(a, fp16x2VecTy);
+
+      // Multiplying by 2^(15-7) rebiases the exponent and normalizes
+      // subnormals. fp8 subnormals are fp16 denormals before the multiply, so
+      // this requires fp16 denormals to be preserved, not flushed to zero.
+      a = b.fmul(fp16x2VecTy, a, scale);
+      a = b.bitcast(a, i32_ty);
+
+      // Set sign
+      a = b.or_(i32_ty, a, sign);
+      a = b.bitcast(a, i16x2VecTy);
+
+      for (size_t j = 0; j < 2; j++) {
+        Value r = b.extract_element(i16_ty, a, b.i32_val(j));
+        // Check NaN
+        Value vAbs = b.and_(v[i + j], b.i8_val(0x7F));
+        r = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), r);
+        results.push_back(b.bitcast(r, f16_ty));
+      }
+    }
     return results;
   }
 
@@ -1565,7 +1568,7 @@ public:
 
   size_t getNumElements() override {
     if (isa<Float8E4M3FNType>(dstTy)) {
-      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::CDNA5 ? 8 : 4;
     } else if (isa<Float8E4M3FNUZType>(dstTy)) {
       return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     }
@@ -1581,7 +1584,7 @@ public:
       return std::nullopt;
 
     if (isa<Float8E4M3FNType>(dstTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (isaFamily == ISAFamily::CDNA5) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F16Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1656,7 +1659,7 @@ public:
         return (isaFamily == ISAFamily::CDNA3) ? 4 : 2;
       }
       if (isa<Float8E5M2Type>(dstTy)) {
-        return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+        return (isaFamily == ISAFamily::CDNA5) ? 8 : 4;
       }
     } else if (roundingMode == RoundingMode::RTZ) {
       return 4;
@@ -1675,7 +1678,7 @@ public:
         else
           return Fp16ToFp8E5M2fnuzSW(loc, rewriter, v);
       } else if (isa<Float8E5M2Type>(dstTy)) {
-        if (isaFamily == ISAFamily::GFX1250) {
+        if (isaFamily == ISAFamily::CDNA5) {
           return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F16Op>(
               loc, rewriter, v);
         } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1806,7 +1809,7 @@ public:
 
   size_t getNumElements() override {
     if (isa<Float8E4M3FNType>(dstTy)) {
-      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::CDNA5 ? 8 : 4;
     } else if (isa<Float8E4M3FNUZType>(dstTy)) {
       return 4;
     }
@@ -1822,7 +1825,7 @@ public:
       return std::nullopt;
 
     if (isa<Float8E4M3FNType>(dstTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (isaFamily == ISAFamily::CDNA5) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8Bf16Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1890,7 +1893,7 @@ public:
 
   size_t getNumElements() override {
     if (isa<Float8E5M2Type>(dstTy)) {
-      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return isaFamily == ISAFamily::CDNA5 ? 8 : 4;
     } else if (isa<Float8E5M2FNUZType>(dstTy)) {
       return 4;
     }
@@ -1906,7 +1909,7 @@ public:
       return std::nullopt;
 
     if (isa<Float8E5M2Type>(dstTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (isaFamily == ISAFamily::CDNA5) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8Bf16Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -2173,7 +2176,7 @@ public:
     if (isa<Float8E4M3FNUZType>(dstTy)) {
       return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     } else if (isa<Float8E4M3FNType>(dstTy)) {
-      return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+      return (isaFamily == ISAFamily::CDNA5) ? 8 : 4;
     }
     return 0;
   }
@@ -2192,7 +2195,7 @@ public:
       else
         return Fp32ToFp8E4M3fnuzSW(loc, rewriter, inVals);
     } else if (isa<Float8E4M3FNType>(dstTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (isaFamily == ISAFamily::CDNA5) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F32Op>(
             loc, rewriter, inVals);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -2255,7 +2258,7 @@ public:
       if (isa<Float8E5M2FNUZType>(dstTy)) {
         return hasFnuzFp8HW(isaFamily) ? 4 : 2;
       } else if (isa<Float8E5M2Type>(dstTy)) {
-        return (isaFamily == ISAFamily::GFX1250) ? 8 : 4;
+        return (isaFamily == ISAFamily::CDNA5) ? 8 : 4;
       }
     }
     if (roundingMode == RoundingMode::RTZ) {
@@ -2276,7 +2279,7 @@ public:
         else
           return Fp32ToFp8E5M2fnuzSW(loc, rewriter, inVals);
       } else if (isa<Float8E5M2Type>(dstTy)) {
-        if (isaFamily == ISAFamily::GFX1250) {
+        if (isaFamily == ISAFamily::CDNA5) {
           return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F32Op>(
               loc, rewriter, inVals);
         } else if (isaFamily == ISAFamily::CDNA4) {

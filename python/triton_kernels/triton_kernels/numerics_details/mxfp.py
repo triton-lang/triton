@@ -18,6 +18,7 @@ from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 
 class DequantScaleRoundingMode(Enum):
     # 2^round_up(log2(max/max_q)) avoids clipping the max value
+    # For E4M3 scales, round up to the next representable value (saturating at 448).
     ROUND_UP = 0
     # 2^round_down(log2(max/max_power_of_2_q)) follows the OCP standard ~50% of
     # chance of clipping the max value.
@@ -280,12 +281,13 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
             ds_int_rounded = ds_int & 0x7F800000
         dequant_scale_rounded = ds_int_rounded.view(torch.float32)
     else:
-        # Direct fp8 scales keep the existing plain cast semantics here: the
-        # stored scale is rounded by the fp8 conversion rather than forced
-        # upward despite the ROUND_UP mode name.
-        if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_NEAREST:
-            dequant_scale = dequant_scale.clamp(max=448.0)
-        dequant_scale_rounded = dequant_scale.to(scale_dtype).to(torch.float32)
+        # Match the saturating E4M3 conversion used by the kernel.
+        scale_tensor = dequant_scale.clamp(max=448.0).to(scale_dtype)
+        if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
+            scale_bits = scale_tensor.view(torch.uint8)
+            round_up = (scale_tensor.float() < dequant_scale) & (scale_bits < 0x7E)
+            scale_tensor = (scale_bits + round_up.to(torch.uint8)).view(scale_dtype)
+        dequant_scale_rounded = scale_tensor.to(torch.float32)
 
     # Compute the quantization scale.
     quant_scale = torch.where(dequant_scale_rounded == 0, torch.tensor(0.0, device=device), 1.0 / dequant_scale_rounded)

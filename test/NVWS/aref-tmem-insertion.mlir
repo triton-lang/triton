@@ -519,6 +519,32 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     tt.return
   }
 
+  // CHECK-LABEL: @same_partition_scale_final_wait
+  tt.func @same_partition_scale_final_wait(%a: !ttg.memdesc<128x64xf8E4M3FN, #shared2, #smem>, %b: !ttg.memdesc<64x128xf8E4M3FN, #shared4, #smem>, %scales: tensor<128x8xi8, #linear>, %other_scale: !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>, %n: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %true = arith.constant true
+    %c1 = arith.constant 1 : i32
+    %c0 = arith.constant 0 : i32
+    %acc, %token = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %init = ttng.tmem_store %zero, %acc[%token], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: tmem_alloc {{.*}} !ttg.memdesc<128x8xi8
+    // CHECK-NEXT: [[FINAL_SCALE_AREF:%.*]] = nvws.aref.create
+    // CHECK: scf.for
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%dep = %init) -> (!ttg.async.token) : i32 {
+      %scale = ttng.tmem_alloc %scales {ttg.partition = array<i32: 1>} : (tensor<128x8xi8, #linear>) -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>
+      %mma = ttng.tc_gen5_mma_scaled %a, %b, %acc[%dep], %scale, %other_scale, %true, %true lhs = e4m3 rhs = e4m3 {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf8E4M3FN, #shared2, #smem>, !ttg.memdesc<64x128xf8E4M3FN, #shared4, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>
+      // CHECK: get.exit [[FINAL_SCALE_AREF]]
+      %loaded, %next = ttng.tmem_load %acc[%mma] {ttg.partition = array<i32: 0>} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      "use"(%loaded) {ttg.partition = array<i32: 0>} : (tensor<128x128xf32, #blocked>) -> ()
+      scf.yield %next : !ttg.async.token
+    } {tt.num_stages = 3 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 17 : i32, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 1>]}
+    // CHECK: {{^ *}}} {tt.num_stages = 3 : i32, tt.warp_specialize{{.*}}ttg.warp_specialize.tag = 17 : i32}
+    // CHECK: put.enter [[FINAL_SCALE_AREF]] {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 17 : i32}
+    %final, %done = ttng.tmem_load %acc[%result] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    "use"(%final) : (tensor<128x128xf32, #blocked>) -> ()
+    tt.return
+  }
+
   // CHECK-LABEL: @store_mma_load
   tt.func @store_mma_load(%arg0: i32, %arg1: !tt.tensordesc<128x64xf16, #shared>, %arg2: !ttg.memdesc<64x128xf16, #shared, #smem>) {
     %true = arith.constant true

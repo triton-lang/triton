@@ -169,7 +169,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     };
     bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
 
-    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::CDNA5) {
       if (mask < 16)
         return emitDpp(loc, rewriter, val, val,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
@@ -661,13 +661,13 @@ static int32_t getCtrlBitsForCacheModifierOnRDNA3(triton::CacheModifier cm,
 // Load   | .ca |  CU   | RT |
 //        | .cg |  DEV  | RT |
 //        | .cs |  CU   | NT |
-//        | .cv |  SYS  | LU | on gfx1250, this combination bypasses all caches
+//        | .cv |  SYS  | LU | on CDNA5, this combination bypasses all caches
 // -------+-----+-------+----+-
 // Store  | .wb |  CU   | RT |
 //        | .cg |  DEV  | RT |
 //        | .cs |  CU   | NT |
 //        | .wt |  SYS  | RT | behavior for gfx12
-//        | .wt |  SYS  | WB | behavior for gfx1250, bypasses all caches
+//        | .wt |  SYS  | WB | behavior for CDNA5, bypasses all caches
 // -------+-----+-------+----+-
 static int32_t getCtrlBitsForCacheModifierOn_GFX12(triton::CacheModifier cm,
                                                    bool isLoad,
@@ -732,15 +732,93 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
   case ISAFamily::RDNA4:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
     return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
 }
 
+FailureOr<int32_t>
+getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
+                           std::optional<triton::MemSyncScope> scope,
+                           bool isLoad,
+                           const mlir::triton::AMD::TargetInfo &targetInfo) {
+  const bool isGfx9 = llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                                         targetInfo.getISAFamily());
+  const bool isGfx12 = llvm::is_contained({ISAFamily::RDNA4, ISAFamily::CDNA5},
+                                          targetInfo.getISAFamily());
+  const bool isCDNA5 = targetInfo.getISAFamily() == ISAFamily::CDNA5;
+  int32_t aux = 0;
+  if (auto gfx9Policy =
+          dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
+              cachePolicy)) {
+    if (!isGfx9)
+      return op->emitOpError(
+          "the gfx9 cache policy is only supported on CDNA3 and CDNA4");
+    const int ntBit = 0b10;
+    if (gfx9Policy.getNontemporal())
+      aux |= ntBit;
+  } else if (auto gfx12Policy =
+                 dyn_cast_if_present<triton::amdgpu::CachePolicyGfx12Attr>(
+                     cachePolicy)) {
+    if (!isGfx12)
+      return op->emitOpError(
+          "the gfx12 cache policy is only supported on RDNA4 and CDNA5");
+    // TH[2:0] holds the temporal hint, whose values match the enum's.
+    aux |= static_cast<int32_t>(gfx12Policy.getTemporal());
+  } else {
+    auto cm = getCacheModifier(cachePolicy);
+    if (failed(cm))
+      return op->emitOpError(
+          "target cache policy is not supported on AMD targets");
+    aux = getCtrlBitsForCacheModifierOnTarget(*cm, isLoad, targetInfo);
+  }
+  if (!scope)
+    return aux;
+  if (isGfx9) {
+    // gfx9 encodes the scope of a non-atomic access in SC[1:0]: none = wave,
+    // SC0 = workgroup, SC1 = agent, SC0|SC1 = system.
+    const int sc0Bit = 0b1, sc1Bit = 0b10000;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      return aux | sc0Bit;
+    case triton::MemSyncScope::GPU:
+      return aux | sc1Bit;
+    case triton::MemSyncScope::SYSTEM:
+      return aux | sc0Bit | sc1Bit;
+    }
+  } else if (isGfx12) {
+    // gfx12 encodes it in SCOPE[4:3]: CU, SE, device or system. As in LLVM's
+    // memory model, the CU scope, the default, covers a workgroup on CDNA5,
+    // where it runs on one WGP, and on RDNA4 in CU mode. In RDNA4's WGP mode,
+    // its waves can run on both CUs of a WGP, each with its own L0 cache, so
+    // it needs the SE scope.
+    const int scopeShift = 3;
+    const int scopeSE = 1 << scopeShift, scopeDev = 2 << scopeShift,
+              scopeSys = 3 << scopeShift;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      return isCDNA5 || targetInfo.isCuMode() ? aux : aux | scopeSE;
+    case triton::MemSyncScope::GPU:
+      return aux | scopeDev;
+    case triton::MemSyncScope::SYSTEM:
+      return aux | scopeSys;
+    }
+  } else {
+    return op->emitOpError("scope on buffer loads and stores is only "
+                           "supported on CDNA3, CDNA4, CDNA5 and RDNA4");
+  }
+  return op->emitOpError("unsupported scope on a buffer load or store");
+}
+
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
   Type basePtrType = basePtr.getType();
+  // Accesses through a buffer descriptor behave like ones through a global
+  // pointer to its element type.
+  if (auto desc = dyn_cast<triton::amdgpu::BufferDescType>(basePtrType))
+    basePtrType = triton::PointerType::get(desc.getElementType(),
+                                           triton::PtrAddrSpace::Global);
   auto offsetType = cast<RankedTensorType>(offset.getType());
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
@@ -794,7 +872,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
-  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  auto pointeeBitWidth =
+      triton::getPointeeBitWidth(getPointerTypeWithShape(ptr, offset));
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
@@ -864,7 +943,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   };
 
   // For padded encodings restrict vec by the min interval
-  auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
+  auto paddedEnc = triton::gpu::getPaddedEncoding(dstEnc);
   if (paddedEnc) {
     unsigned maxAllowedVecSize = paddedEnc.getMinInterval();
     // Without scattering support, padding can only be inserted at warp
@@ -912,7 +991,8 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
   LinearLayout sharedLayout;
   if (paddedEnc) {
-    sharedLayout = paddedEnc.getLinearComponent();
+    sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(dstAllocShape, dstEnc);
   } else {
     sharedLayout = triton::gpu::toLinearLayout(dstAllocShape, dstEnc);
 

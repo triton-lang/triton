@@ -12,7 +12,7 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
   // llvm.readcyclecounter lowers to the correct per-target counter:
   //   - gfx942/gfx950: s_memtime
-  //   - gfx1250: s_get_shader_cycles_u64. gfx1250 removed s_memtime and
+  //   - CDNA5: s_get_shader_cycles_u64. CDNA5 removed s_memtime and
   //     moved the (now 64-bit) shader-cycles counter out of the s_getreg
   //     table; hwreg(HW_REG_SHADER_CYCLES_*) still assembles but reads 0 at
   //     runtime.
@@ -34,7 +34,7 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value globalTimeVal;
   if (getTritonTargetInfo().getISAFamily() ==
-      triton::amdgpu::ISAFamily::GFX1250) {
+      triton::amdgpu::ISAFamily::CDNA5) {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     globalTimeVal =
         LLVM::createLLVMIntrinsicCallOp(
@@ -67,10 +67,10 @@ static Value getHwReg(ConversionPatternRewriter &rewriter, Location loc,
 
 // The helpers below read the CDNA (gfx940-942, gfx950) wave-placement fields.
 //
-// IMPORTANT: these registers do NOT exist under the same ids on gfx1250.
+// IMPORTANT: these registers do NOT exist under the same ids on CDNA5.
 // The same numeric ids decode to unrelated registers there
 // (hwreg(20,...) -> WAVE_SCRATCH_BASE_LO, hwreg(4,...) -> WAVE_STATE_PRIV), so
-// they would read garbage. gfx1250 wave placement is read separately in
+// they would read garbage. CDNA5 wave placement is read separately in
 // processorId(); see below.
 //
 // https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/include/hip/amd_detail/amd_device_functions.h#L898
@@ -92,13 +92,13 @@ static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   return getHwReg(rewriter, loc, /*HW_REG_HW_ID=*/4, 13, 3);
 }
 
-// gfx1250 WAVE_HW_ID1 (hwreg id 23) holds the wave's WGP/SA/SIMD placement.
+// CDNA5 WAVE_HW_ID1 (hwreg id 23) holds the wave's WGP/SA/SIMD placement.
 // Read the complete register once so all fields come from the same snapshot.
 static Value getWaveHwId1(ConversionPatternRewriter &rewriter, Location loc) {
   return getHwReg(rewriter, loc, /*HW_REG_WAVE_HW_ID1=*/23, 0, 32);
 }
 
-// gfx1250 uses a separate packing in processorId().
+// CDNA5 uses a separate packing in processorId().
 static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
@@ -126,10 +126,10 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
 
-  // gfx1250 remapped the hwreg id space, so the CDNA reads
+  // CDNA5 remapped the hwreg id space, so the CDNA reads
   // used below (hwreg 20 / hwreg 4) no longer name XCC_ID / HW_ID and every
   // wave would read the same constant, collapsing all traces onto one core.
-  // Read the gfx1250 sources instead: SE_ID and XCC/AID_ID come from
+  // Read the CDNA5 sources instead: SE_ID and XCC/AID_ID come from
   // s_sendmsg_rtn(MSG_RTN_GET_SE_AID_ID) (bits [3:0] and [19:16]); WGP_ID and
   // SA_ID come from WAVE_HW_ID1 (hwreg id 23). Together these four fields
   // uniquely identify a WGP. Pack the full documented field widths to avoid
@@ -139,7 +139,7 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   // (HW_ID1.SIMD_ID[0]) is intentionally omitted; add it if sub-WGP resolution
   // is ever needed.
   if (getTritonTargetInfo().getISAFamily() ==
-      triton::amdgpu::ISAFamily::GFX1250) {
+      triton::amdgpu::ISAFamily::CDNA5) {
     Value msg = b.i32_val(/*MSG_RTN_GET_SE_AID_ID=*/135);
     Value seAid =
         LLVM::createLLVMIntrinsicCallOp(

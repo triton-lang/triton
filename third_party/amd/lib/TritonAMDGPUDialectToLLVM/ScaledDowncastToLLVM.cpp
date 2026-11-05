@@ -126,7 +126,7 @@ struct ScaledDowncastFp4OpPattern
         int groupSize = std::min<int>(4, numOutputBytes - i);
         if (failed(verifyGroupUsesSingleScale(
                 rewriter, downcastOp, scaleRegisters, i, groupSize,
-                "each gfx1250 pk8 conversion group must share one scale")))
+                "each CDNA5 pk8 conversion group must share one scale")))
           return failure();
         int scaleReg = scaleRegisters[i];
 
@@ -236,7 +236,7 @@ struct ScaledDowncastFp8OpPattern
         int groupSize = std::min<int>(8, numOutputBytes - i);
         if (failed(verifyGroupUsesSingleScale(
                 rewriter, downcastOp, scaleRegisters, i, groupSize,
-                "each gfx1250 pk8 conversion group must share one scale")))
+                "each CDNA5 pk8 conversion group must share one scale")))
           return failure();
         int scaleReg = scaleRegisters[i];
         // Gather the group's 8 values, zero-padding an incomplete tail.

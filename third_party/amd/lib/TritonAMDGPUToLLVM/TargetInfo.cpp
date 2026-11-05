@@ -131,7 +131,7 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
 
 int TargetInfo::getSharedMemoryBanks() const {
   switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
   case ISAFamily::CDNA4:
     return 64;
   default:
@@ -160,7 +160,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
-  case ISAFamily::GFX1250: {
+  case ISAFamily::CDNA5: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     timer = LLVM::createLLVMIntrinsicCallOp(
                 rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
@@ -228,6 +228,13 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
+  // Always insert a workgroup barrier before each cluster barrier. In the case
+  // when there are multiple cluster barriers, a faster warp can pass more
+  // than one cluster signal, while the slower warps have not reached the first
+  // cluster barrier, which leads to a hang. The workgroup barrier ensures
+  // warps stay in sync across cluster barriers.
+  barrier(loc, rewriter, triton::gpu::AddrSpace::None);
+
   triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
   triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
@@ -725,7 +732,7 @@ void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
       rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
       "s_trap 2", /*constraints=*/"",
       /*has_side_effects=*/true, /*is_align_stack=*/false,
-      LLVM::TailCallKind::None,
+      LLVM::TailCallKind::None, /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
       /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }
@@ -750,7 +757,7 @@ bool TargetInfo::supportVectorizedAtomics() const {
 
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   // AMD has native ternary max/min instructions: v_max3/v_min3 on all GFX9+,
-  // and v_maximum3/v_minimum3 additionally on GFX950 and GFX1250.
+  // and v_maximum3/v_minimum3 additionally on GFX950 and CDNA5.
   // Use a ternary reduction tree so these map 1:1 to hardware.
   if (isa<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
           arith::MinNumFOp>(combinerOp))

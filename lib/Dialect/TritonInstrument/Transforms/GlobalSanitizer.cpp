@@ -4,6 +4,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -225,12 +226,29 @@ getMBarrierArrivals(Operation *op, OpBuilder &builder) {
   return arrivals;
 }
 
-static int64_t getMBarrierCapacity(ModuleOp module) {
-  // Upper bound to the number of simultaneously active mbarriers
+static FailureOr<int64_t> getMBarrierCapacity(ModuleOp module) {
+  SmallVector<Value> barriers;
+  module.walk(
+      [&](ttng::InitBarrierOp op) { barriers.push_back(op.getAlloc()); });
+  if (barriers.empty())
+    return 0;
+
+  auto solver = createDataFlowSolver();
+  auto *analysis = solver->load<SharedMemoryAliasAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return failure();
+
+  // The runtime retains a table entry for every distinct barrier address, even
+  // after invalidation. Count the underlying allocations once, since a single
+  // init in a loop can dynamically index every barrier in an allocation.
+  DenseSet<Value> allocations;
+  for (Value barrier : barriers) {
+    const auto &aliases = analysis->getLatticeElement(barrier)->getValue();
+    allocations.insert(aliases.getAllocs().begin(), aliases.getAllocs().end());
+  }
   int64_t capacity = 0;
-  module.walk([&](ttng::InitBarrierOp op) {
-    capacity += op.getAlloc().getType().getNumElements();
-  });
+  for (Value allocation : allocations)
+    capacity += cast<ttg::MemDescType>(allocation.getType()).getNumElements();
   return capacity;
 }
 
@@ -378,8 +396,15 @@ public:
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
-    int64_t mBarrierCapacity =
-        ttg::lookupNumCTAs(module) > 1 ? getMBarrierCapacity(module) : 0;
+    int64_t mBarrierCapacity = 0;
+    if (ttg::lookupNumCTAs(module) > 1) {
+      auto capacity = getMBarrierCapacity(module);
+      if (failed(capacity)) {
+        signalPassFailure();
+        return;
+      }
+      mBarrierCapacity = *capacity;
+    }
     const bool instrumentMBarriers = mBarrierCapacity > 0;
     DenseMap<tt::FuncOp, Value> mbarrierScratch;
 

@@ -1,7 +1,9 @@
 from ..._core import builtin
 from .._ops import _wmma
+from ..cdna5._cache_policy import CachePolicy
+from . import buffer
 
-__all__ = ["wmma"]
+__all__ = ["buffer", "CachePolicy", "wmma"]
 
 
 @builtin

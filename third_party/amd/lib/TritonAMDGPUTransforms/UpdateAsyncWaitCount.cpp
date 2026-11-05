@@ -36,8 +36,8 @@
 //   registers since we do not control the vectorization (llvm can change it).
 //   Therefore interleaving direct-to-lds and loads to registers will produce
 //   conservative waits.
-// - On GFX1250 the number of (multicast) async_load and async_stores. On
-//   GFX1250 those are out of order with register loads so we will not get
+// - On CDNA5 the number of (multicast) async_load and async_stores. On
+//   CDNA5 those are out of order with register loads so we will not get
 //   conservative waits.
 // For amdg.tdm_async_wait we only count TDM ops, then translate each op to the
 // number of TDM intrinsics emitted by lowering.
@@ -422,7 +422,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
   void runOnOperation() override {
     TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
-    if (!targetFeatures.isCDNA() && !targetFeatures.isGFX1250()) {
+    if (!targetFeatures.isCDNA() && !targetFeatures.isCDNA5()) {
       return;
     }
 
@@ -433,7 +433,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
     // intrinsics. Keep the ttg.async_wait ops unchanged (they track
     // commit groups) and lower them directly to wait_asyncmark later.
     if (!targetFeatures.useAsyncMarks()) {
-      // GFX1250 (and future arches without asyncmark) use instruction counting.
+      // CDNA5 (and future arches without asyncmark) use instruction counting.
       SmallVector<ttg::AsyncWaitOp> waitOps;
       getOperation()->walk(
           [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
