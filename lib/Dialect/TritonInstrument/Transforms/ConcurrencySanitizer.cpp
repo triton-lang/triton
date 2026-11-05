@@ -135,6 +135,13 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
     thread += threadLayout.clcThreadOffset;
     return thread;
   }
+  if (hooks.usesAsyncCopyMbarrierArriveThread(op)) {
+    assert(threadLayout.hasAsyncCopyMbarrierArriveThreads() &&
+           "AsyncCopyMbarrierArrive thread class must exist when "
+           "instrumenting an async-copy mbarrier arrive op");
+    thread += threadLayout.asyncCopyMbarrierArriveThreadOffset;
+    return thread;
+  }
   return thread;
 }
 
@@ -142,10 +149,10 @@ int getBaseThread(int thread, const AuxDataMap::ThreadLayout &threadLayout) {
   return thread % threadLayout.numBaseThreads;
 }
 
-// Peer threads are the equivalent threads in the TMA, TC, CLC and normal
-// thread classes.
-// If a thread is a base thread, return the mask with the peers, otherwise
-// return the mask with the thread itself.
+// Peer threads are the equivalent threads in the TMA, TC, CLC,
+// AsyncCopyMbarrierArrive and normal thread classes. If a thread is a base
+// thread, return the mask with the peers, otherwise return the mask with the
+// thread itself.
 uint64_t getThreadPeersMask(int thread,
                             const AuxDataMap::ThreadLayout &threadLayout) {
   uint64_t mask = 1ULL << thread;
@@ -156,6 +163,9 @@ uint64_t getThreadPeersMask(int thread,
       mask |= 1ULL << (thread + threadLayout.tcThreadOffset);
     if (threadLayout.hasCLCThreads())
       mask |= 1ULL << (thread + threadLayout.clcThreadOffset);
+    if (threadLayout.hasAsyncCopyMbarrierArriveThreads())
+      mask |=
+          1ULL << (thread + threadLayout.asyncCopyMbarrierArriveThreadOffset);
   }
   return mask;
 }
