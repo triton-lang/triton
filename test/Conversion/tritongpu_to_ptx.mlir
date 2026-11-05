@@ -667,19 +667,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   // CHECK-LABEL: .entry fp32_to_fp8e5_rtz(
   // CHECK: cvt.rz.f16.f32
-  // SM90: and.b32
-  // SM100: and.b32
   // CHECK: prmt.b32
   // VEC80-LABEL: llvm.func @fp32_to_fp8e5_rtz
   // VEC80: llvm.shufflevector {{.*}} [1, 3, 5, 7] : vector<8xi8>
   // VEC90-LABEL: llvm.func @fp32_to_fp8e5_rtz
-  // VEC90: llvm.inline_asm
-  // VEC90-SAME: and.b32
-  // VEC90-SAME: prmt.b32
+  // VEC90: nvvm.prmt
   // VEC100-LABEL: llvm.func @fp32_to_fp8e5_rtz
-  // VEC100: llvm.inline_asm
-  // VEC100-SAME: and.b32
-  // VEC100-SAME: prmt.b32
+  // VEC100: nvvm.prmt
   tt.func public @fp32_to_fp8e5_rtz(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<256xf32, #blocked>) {
     %result = tt.fp_to_fp %arg, rounding = rtz : tensor<256xf32, #blocked> -> tensor<256xf8E5M2, #blocked>
     %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
