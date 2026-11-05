@@ -186,10 +186,17 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
-                                   *ordering,
-                                   targetInfo.getAtomicSyncScope(scope))
-      .getResult();
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value val = vals.front();
+  // LLVM's integer RMWs operate on the bit representation of floating values.
+  bool useIntegerBits = isa<FloatType>(valueElemTy) &&
+                        rmwOpAttr != RMWOp::FADD && rmwOpAttr != RMWOp::XCHG;
+  if (useIntegerBits)
+    val = b.bitcast(val, int_ty(valueElemTy.getIntOrFloatBitWidth()));
+  Value old =
+      LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, val, *ordering,
+                                targetInfo.getAtomicSyncScope(scope));
+  return useIntegerBits ? b.bitcast(old, valueElemTy) : old;
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,

@@ -289,6 +289,27 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA atomic lowering")
+@pytest.mark.parametrize("tensor", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_atomic_xor_float_bits(tensor, dtype, device):
+
+    @gluon.jit
+    def kernel(X, Old, TENSOR: ttgl.constexpr):
+        if TENSOR:
+            offsets = ttgl.arange(0, 32, layout=ttgl.constexpr(ttgl.BlockedLayout([1], [32], [1], [0])))
+        else:
+            offsets = 0
+        old = ttgl.atomic_xor(X + offsets, -0.0, sem="relaxed")
+        ttgl.store(Old + offsets, old)
+
+    initial = torch.full((32 if tensor else 1, ), 1.5, dtype=dtype, device=device)
+    x, old = initial.clone(), torch.empty_like(initial)
+    kernel[(1, )](x, old, tensor, num_warps=1)
+    assert torch.equal(old, initial)
+    assert torch.equal(x, -initial)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
 @pytest.mark.parametrize("op", ["load", "store"])
 @pytest.mark.parametrize(

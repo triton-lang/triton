@@ -2120,7 +2120,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
-    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.gpu.{sem_str}." in ptx or f"atom.{sem_str}.gpu.global." in ptx
 
 
 @pytest.mark.interpreter
@@ -2398,7 +2399,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
         return
-    assert f"atom.global.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.{sem_str}.gpu.cas." in ptx or f"atom.{sem_str}.gpu.global.cas." in ptx
 
 
 @pytest.mark.interpreter
