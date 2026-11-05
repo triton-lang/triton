@@ -1,5 +1,49 @@
 // RUN: triton-opt %s --convert-nv-gpu-to-llvm -allow-unregistered-dialect -split-input-file | FileCheck %s
 
+!acc = !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+// CHECK-LABEL: @wgmma_inline_ss
+llvm.func @wgmma_inline_ss(%a: i32, %b: i32) -> !acc {
+  %false = llvm.mlir.constant(false) : i1
+  // CHECK: .reg .b32 desc_a_low; .reg .b64 desc_a;
+  // CHECK-SAME: add.u32 desc_a_low, $8, 2;
+  // CHECK-SAME: cvt.u64.u32 desc_a, desc_a_low;
+  // CHECK-SAME: or.b64 desc_a, desc_a, 4611686293305294848;
+  // CHECK-SAME: add.u32 desc_b_low, $9, 4;
+  // CHECK-SAME: wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16
+  // CHECK-SAME: desc_a, desc_b, 0, 1, 1, 0, 0;
+  %out = nvg.wgmma %a, %b, %false {
+    m = 64 : i32, n = 16 : i32, k = 16 : i32,
+    eltTypeA = 5 : i32, eltTypeB = 5 : i32, eltTypeC = 7 : i32,
+    layoutA = 0 : i32, layoutB = 1 : i32,
+    descriptorBitsA = 4611686293305294850 : i64,
+    descriptorBitsB = 4611686293305294852 : i64
+  } : (i32, i32, i1) -> !acc
+  llvm.return %out : !acc
+}
+
+// -----
+
+!acc = !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+!regs = !llvm.struct<(i32, i32, i32, i32)>
+// CHECK-LABEL: @wgmma_inline_rs
+llvm.func @wgmma_inline_rs(%a: !regs, %b: i32) -> !acc {
+  %false = llvm.mlir.constant(false) : i1
+  // CHECK-NOT: desc_a_low
+  // CHECK: .reg .b32 desc_b_low; .reg .b64 desc_b;
+  // CHECK-SAME: add.u32 desc_b_low, $12, 4;
+  // CHECK-SAME: wgmma.mma_async.sync.aligned.m64n16k16.f32.bf16.bf16
+  // CHECK-SAME: {$8,$9,$10,$11}, desc_b, 0, 1, 1, 0;
+  %out = nvg.wgmma %a, %b, %false {
+    m = 64 : i32, n = 16 : i32, k = 16 : i32,
+    eltTypeA = 5 : i32, eltTypeB = 5 : i32, eltTypeC = 7 : i32,
+    layoutA = 0 : i32, layoutB = 1 : i32,
+    descriptorBitsB = 4611686293305294852 : i64
+  } : (!regs, i32, i1) -> !acc
+  llvm.return %out : !acc
+}
+
+// -----
+
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
   // CHECK: nvvm.read.ptx.sreg.cluster.ctarank

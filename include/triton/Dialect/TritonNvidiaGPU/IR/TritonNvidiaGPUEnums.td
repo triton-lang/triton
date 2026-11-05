@@ -3,6 +3,15 @@
 
 include "mlir/IR/EnumAttr.td"
 
+def TTNG_WGMMADescriptorModeAttr : I32EnumAttr<
+    "WGMMADescriptorMode", "WGMMA descriptor construction mode",
+    [
+        I32EnumAttrCase<"Default", 0, "default">,
+        I32EnumAttrCase<"Inline", 1, "inline">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_CacheEvictionPriorityAttr : I32EnumAttr<
     "CacheEvictionPriority", "NVIDIA cache eviction priority",
     [

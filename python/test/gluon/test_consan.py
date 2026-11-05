@@ -2264,9 +2264,10 @@ def test_ws_join_async_write_visibility(WAIT, device, run_wrapper, monkeypatch):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("descriptor_mode", [None, "inline"])
+def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas, descriptor_mode):
     if run_wrapper:
-        result = run_in_process(test_warpgroup_mma, (FAILURE, device, False, monkeypatch, num_ctas))
+        result = run_in_process(test_warpgroup_mma, (FAILURE, device, False, monkeypatch, num_ctas, descriptor_mode))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
             assert "Accessing buffer with pending access. Pending access type: warpgroup_mma operand read" in result.driver_stderr_output
@@ -2280,7 +2281,7 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(input, FAILURE: ttgl.constexpr):
+    def kernel(input, FAILURE: ttgl.constexpr, DESCRIPTOR_MODE: ttgl.constexpr):
         block_m: ttgl.constexpr = mma_block_m(ttgl.num_ctas())
         block_n: ttgl.constexpr = mma_block_n(ttgl.num_ctas())
         cga_layout_a: ttgl.constexpr = mma_cga_layout(ttgl.num_ctas(), 0)
@@ -2299,14 +2300,14 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
                                                                  instr_shape=[16, 32, 16], cga_layout=cga_layout_c)
         acc = ttgl.zeros([block_m, block_n], ttgl.float16, acc_layout)
-        acc = hopper.warpgroup_mma(smemA, smemB, acc, is_async=True)
+        acc = hopper.warpgroup_mma(smemA, smemB, acc, is_async=True, descriptor_mode=DESCRIPTOR_MODE)
         if FAILURE:
             smemA.store(ttgl.full([block_m, XBLOCK], 42, ttgl.float16, blocked_layout))
         hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
         smemA.store(ttgl.full([block_m, XBLOCK], 42, ttgl.float16, blocked_layout))
 
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-    kernel[(1, )](input, FAILURE=FAILURE, num_ctas=num_ctas)
+    kernel[(1, )](input, FAILURE=FAILURE, DESCRIPTOR_MODE=descriptor_mode, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper")
