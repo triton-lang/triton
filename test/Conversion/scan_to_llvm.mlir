@@ -7,6 +7,7 @@
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
+// RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
@@ -206,6 +207,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // OFFSETS: nvvm.shfl.sync up {{.*}} : i32 -> i32
 // OFFSETS-NOT: nvvm.shfl.sync
 // OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_carry(
+// AMD-OFFSETS: [[VALID:%.*]] = llvm.icmp "sge" [[LANE:%[^,]+]],
+// AMD-OFFSETS: [[SOURCE:%.*]] = llvm.select [[VALID]], {{%.*}}, [[LANE]] : i1, i32
+// AMD-OFFSETS: [[ADDR:%.*]] = llvm.shl [[SOURCE]],
+// AMD-OFFSETS: [[DATA:%.*]] = rocdl.ds_bpermute [[ADDR]],
+// AMD-OFFSETS: [[SUM:%.*]] = llvm.add {{.*}}[[DATA]]
+// AMD-OFFSETS: llvm.select [[VALID]], [[SUM]],
+// AMD-OFFSETS-COUNT-5: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_carry(%arg: tensor<64xi32, #groups>) -> tensor<64xi32, #groups> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
@@ -302,6 +313,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Register, lane, and warp bits alternate along the scan axis. Zero lane
 // bases replicate values within a wave64; tuple operands have different widths.
 #interleaved = #ttg.linear<{register = [[16, 0], [4, 0], [0, 1]], lane = [[1, 0], [0, 2], [8, 0], [0, 4], [0, 0], [0, 0]], warp = [[2, 0], [32, 0]], block = []}>
+#wave64 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx90a"} {
 // GFX90A-LABEL: llvm.func {{.*}}@test_scan_wave64_interleaved_reverse(
 // GFX90A: llvm.store
@@ -318,6 +330,27 @@ tt.func private @test_scan_wave64_interleaved_reverse(%a: tensor<64x8xi8, #inter
     tt.scan.return %a12, %b_sum : i8, i64
   }) : (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>) -> (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>)
   tt.return %a_out, %b_out : tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>
+}
+
+// Each of the six wave64 scan rounds permutes both words of the i64 value.
+// GFX90A-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_wave64(
+// GFX90A: [[VALID:%.*]] = llvm.icmp "sge" [[LANE:%[^,]+]],
+// GFX90A: [[SOURCE:%.*]] = llvm.select [[VALID]], {{%.*}}, [[LANE]] : i1, i32
+// GFX90A: [[ADDR:%.*]] = llvm.shl [[SOURCE]],
+// GFX90A: rocdl.ds_bpermute [[ADDR]],
+// GFX90A: rocdl.ds_bpermute
+// GFX90A: [[SUM:%.*]] = llvm.add {{.*}} : i64
+// GFX90A: llvm.select [[VALID]], [[SUM]],
+// GFX90A-COUNT-10: rocdl.ds_bpermute
+// GFX90A-NOT: rocdl.ds_bpermute
+// GFX90A: llvm.return
+tt.func private @test_scan_shuffle_up_wave64(%arg: tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64>
+  tt.return %result : tensor<64xi64, #wave64>
 }
 }
 
