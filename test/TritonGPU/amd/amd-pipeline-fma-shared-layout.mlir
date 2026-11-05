@@ -14,7 +14,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
                 %argB: tensor<32x32x!tt.ptr<f32>, #blocked>,
                 %argA: tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #fma}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<32x32xf32, #fma> {
-    // CHECK: ttg.local_alloc {{.*}} #shared
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x32x32xf32, #shared,
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[ALLOC]]
+    // CHECK: scf.for {{.*}} iter_args({{.*}}%[[BUF:arg[0-9]+]] = %[[VIEW]])
+    // CHECK: %[[LOAD:.*]] = ttg.local_load %[[BUF]] :
+    // CHECK: %[[B:.*]] = ttg.convert_layout %[[LOAD]] : {{.*}} -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1,
+    // CHECK: tt.dot %{{.*}}, %[[B]], %{{.*}}
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #fma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x32xf32, #fma>) : i32 {
       %b = tt.load %argB : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -41,7 +46,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
                 %argA: tensor<32x32x!tt.ptr<f32>, #blocked>,
                 %argB: tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #fma}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<32x32xf32, #fma> {
-    // CHECK: ttg.local_alloc {{.*}} #shared
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x32x32xf32, #shared,
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[ALLOC]]
+    // CHECK: scf.for {{.*}} iter_args({{.*}}%[[BUF:arg[0-9]+]] = %[[VIEW]])
+    // CHECK: %[[LOAD:.*]] = ttg.local_load %[[BUF]] :
+    // CHECK: %[[A:.*]] = ttg.convert_layout %[[LOAD]] : {{.*}} -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 0,
+    // CHECK: tt.dot %[[A]], %{{.*}}, %{{.*}}
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #fma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x32xf32, #fma>) : i32 {
       %a = tt.load %argA : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -68,7 +78,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
                 %argB: tensor<32x32x!tt.ptr<f32>, #blocked>,
                 %argA: tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #fma}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<32x32xf32, #fma> {
-    // CHECK: ttg.local_alloc {{.*}} #shared
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x32x32xf32, #shared,
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[ALLOC]]
+    // CHECK: scf.for {{.*}} iter_args({{.*}}%[[BUF:arg[0-9]+]] = %[[VIEW]])
+    // CHECK: %[[LOAD:.*]] = ttg.local_load %[[BUF]] :
+    // CHECK: %[[B:.*]] = ttg.convert_layout %[[LOAD]] : {{.*}} -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1,
+    // CHECK: tt.dot %{{.*}}, %[[B]], %{{.*}}
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #fma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x32xf32, #fma>) : i32 {
       %b = tt.load %argB : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -93,7 +108,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
                 %argB: tensor<32x32x!tt.ptr<f32>, #blocked>,
                 %argA: tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<16x32xf32, #mma> {
-    // CHECK: ttg.local_alloc {{.*}} #shared
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x32x32xf32, #shared,
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[ALLOC]]
+    // CHECK: scf.for {{.*}} iter_args({{.*}}%[[BUF:arg[0-9]+]] = %[[VIEW]])
+    // CHECK: %[[LOAD:.*]] = ttg.local_load %[[BUF]] :
+    // CHECK: %[[B:.*]] = ttg.convert_layout %[[LOAD]] : {{.*}} -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1,
+    // CHECK: tt.dot %{{.*}}, %[[B]], %{{.*}}
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x32xf32, #mma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x32xf32, #mma>) : i32 {
       %b = tt.load %argB : tensor<32x32x!tt.ptr<f32>, #blocked>
@@ -119,7 +139,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
                 %argB: tensor<32x32x!tt.ptr<f32>, #blocked>,
                 %argA: tensor<32x32xf32, #ttg.dot_op<{opIdx = 0, parent = #fma}>>,
                 %lb: i32, %ub: i32, %step: i32) -> tensor<32x32xf32, #fma> {
-    // CHECK: ttg.local_alloc {{.*}} #shared
+    // CHECK: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x32x32xf32, #shared,
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[ALLOC]]
+    // CHECK: scf.for {{.*}} iter_args({{.*}}%[[BUF:arg[0-9]+]] = %[[VIEW]])
+    // CHECK: %[[LOAD:.*]] = ttg.local_load %[[BUF]] :
+    // CHECK: %[[B:.*]] = ttg.convert_layout %[[LOAD]] : {{.*}} -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1,
+    // CHECK: tt.dot %{{.*}}, %[[B]], %{{.*}}
     %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #fma>
     %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x32xf32, #fma>) : i32 {
       %b = tt.load %argB : tensor<32x32x!tt.ptr<f32>, #blocked>
