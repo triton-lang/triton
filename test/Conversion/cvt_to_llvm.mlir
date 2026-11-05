@@ -147,7 +147,7 @@ tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>, %out: tensor<128x64x!t
   // CHECK: select i1
   // CHECK-COUNT-4: call i32 @llvm.nvvm.shfl.sync.idx.i32
   // CHECK: select i1
-  // CHECK: asm sideeffect {{.*}}st.global.b32
+  // CHECK: store i32 {{.*}}, ptr addrspace(1) {{.*}}, align 4
   // CHECK: ret void
   %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #dot>
   tt.store %out, %opA : tensor<128x64x!tt.ptr<i32>, #dot>

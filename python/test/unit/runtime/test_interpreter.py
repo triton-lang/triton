@@ -206,3 +206,40 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
+    import importlib.util
+    import torch
+
+    source = tmp_path / "core_helper.py"
+    source.write_text("import triton.language.core as core\n"
+                      "def helper(out, fail):\n"
+                      "    core.store(out, core.full((), 7, core.int32))\n"
+                      "    if fail:\n"
+                      "        raise ValueError('helper failed')\n")
+    spec = importlib.util.spec_from_file_location("core_helper", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    helper = interpreter.InterpretedFunction(module.helper)
+
+    def caller(out, helper: tl.constexpr, fail: tl.constexpr):
+        helper(out, fail)
+        tl.store(out, tl.load(out) + 1)
+
+    original = tl.core.full
+    # Restore module attributes even if the regression assertion fails.
+    for name, value in vars(tl.core).copy().items():
+        monkeypatch.setattr(tl.core, name, value)
+    output = torch.zeros((), dtype=torch.int32)
+    kernel = interpreter.InterpretedFunction(caller)
+    if fail:
+        with pytest.raises(interpreter.InterpreterError, match="helper failed"):
+            kernel[(1, )](output, helper, fail)
+    else:
+        kernel[(1, )](output, helper, fail)
+    assert output.item() == (7 if fail else 8)
+    assert tl.core.full is original
+    with pytest.raises(ValueError, match="_semantic"):
+        tl.core.full((), 7, tl.int32)

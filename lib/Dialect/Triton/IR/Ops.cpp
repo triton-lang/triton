@@ -135,35 +135,12 @@ LogicalResult LoadOp::verify() {
                            CachePolicyOperation::Load);
 }
 
-// load(ptr, splat(1), ...)        -> load(ptr, ...)
-// load(ptr, splat(0), other, ...) -> other
-struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
-  CanonicalizeMaskedLoadPattern(MLIRContext *context)
-      : OpRewritePattern<LoadOp>(context, 1) {}
-
-  LogicalResult matchAndRewrite(LoadOp loadOp,
-                                PatternRewriter &rewriter) const override {
-    auto mask = loadOp.getMask();
-    if (!mask)
-      return failure();
-
-    if (matchPattern(mask, m_One())) {
-      rewriter.replaceOpWithNewOp<LoadOp>(
-          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
-      return success();
-    }
-    // Without "other", a false-masked load produces an undefined value.
-    if (!matchPattern(mask, m_Zero()) || !loadOp.getOther())
-      return failure();
-    rewriter.replaceOp(loadOp, loadOp.getOther());
-    return success();
-  }
-};
-
-void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                         MLIRContext *context) {
-  results.add<CanonicalizeMaskedLoadPattern>(context);
+LogicalResult LoadOp::canonicalize(LoadOp op, PatternRewriter &rewriter) {
+  // Without "other", a false-masked load produces an undefined value.
+  if (!op.getOther() || !op.getMask() || !matchPattern(op.getMask(), m_Zero()))
+    return failure();
+  rewriter.replaceOp(op, op.getOther());
+  return success();
 }
 
 //-- StoreOp --
@@ -190,25 +167,9 @@ LogicalResult StoreOp::verify() {
                            CachePolicyOperation::Store);
 }
 
-// store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
-// store(ptr, value, splat(0), ...) -> [none]
-struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
-  CanonicalizeMaskedStorePattern(MLIRContext *context)
-      : OpRewritePattern<StoreOp>(context, 1) {}
-
-  LogicalResult matchAndRewrite(StoreOp storeOp,
-                                PatternRewriter &rewriter) const override {
-    if (succeeded(eraseIfPredicateIsFalse(storeOp, rewriter)))
-      return success();
-    auto mask = storeOp.getMask();
-    if (!mask || !matchPattern(mask, m_One()))
-      return failure();
-    rewriter.replaceOpWithNewOp<StoreOp>(
-        storeOp, storeOp.getPtr(), storeOp.getValue(), Value(),
-        storeOp.getCachePolicyAttr(), storeOp.getIgnoreCta());
-    return success();
-  }
-};
+LogicalResult StoreOp::canonicalize(StoreOp op, PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
 
 Value AtomicRMWOp::getPredicateOperand() { return getMask(); }
 
@@ -270,11 +231,6 @@ LogicalResult AtomicPollOp::verify() {
     return emitOpError(
         "only supports integer elements with width {16, 32, 64}");
   return success();
-}
-
-void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                          MLIRContext *context) {
-  results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
 //-- TransOp --

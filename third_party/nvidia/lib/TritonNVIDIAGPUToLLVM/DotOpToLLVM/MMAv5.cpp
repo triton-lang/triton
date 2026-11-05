@@ -167,6 +167,10 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
     uint32_t shift : 2;
   };
   auto getTypeEncoding = [&](Type type) {
+    if (isa<Float6E2M3FNType>(type))
+      return 3;
+    if (isa<Float6E3M2FNType>(type))
+      return 4;
     if (type.isF16())
       return 0;
     if (type.isBF16())
@@ -190,8 +194,8 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.transposeB = transposeB;
   desc.M = M >> 4;
   desc.N = N >> 3;
-  desc.aType = getTypeEncoding(op.getA().getType().getElementType());
-  desc.bType = getTypeEncoding(op.getB().getType().getElementType());
+  desc.aType = getTypeEncoding(op.getAElementType());
+  desc.bType = getTypeEncoding(op.getBElementType());
   Type dstElType = op.getD().getType().getElementType();
   if (dstElType.isInteger(32)) {
     desc.dType = 2;
@@ -702,12 +706,13 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   DotConversion dot;
-  Type srcElementTy = aTensorTy.getElementType();
+  Type srcElementTy = op.getAElementType();
   if (srcElementTy.isF16() || srcElementTy.isBF16()) {
     dot.kind = "f16";
   } else if (srcElementTy.isF32()) {
     dot.kind = "tf32";
-  } else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy)) {
+  } else if (isa<Float6E2M3FNType, Float6E3M2FNType, Float8E4M3FNType,
+                 Float8E5M2Type>(srcElementTy)) {
     dot.kind = "f8f6f4";
   } else if (dTensorTy.getElementType().isInteger(32)) {
     // PTX uses "i8" for integer operations (both signed and unsigned)
@@ -726,7 +731,9 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
 
   // 2xfp8 requires M = 128 for 1CTA or 256 for 2CTA, which corresponds to
   // the condition mmaSizeM == 128 here
-  if (targetFeatures.supports2xFp8Tcgen05MMA() &&
+  bool hasFp6 = isa<Float6E2M3FNType, Float6E3M2FNType>(srcElementTy) ||
+                isa<Float6E2M3FNType, Float6E3M2FNType>(op.getBElementType());
+  if (!hasFp6 && targetFeatures.supports2xFp8Tcgen05MMA() &&
       aTensorTy.getElementTypeBitWidth() == 8 &&
       aTensorTy.getDimSize(1) >= 64 && mmaSizeM == 128) {
     dot.mmaSizeK = 64;
@@ -829,6 +836,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
   if (!targetFeatures.supports4xFp4Tcgen05MMA() || hasFp4PaddedOperand ||
+      NVMMASharedEncodingAttr::isPackedFp6(aTensorTy.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFp6(bTensorTy.getEncoding()) ||
       // We need to disable MMA_K = 128 for NVFP4 on Rubin when MMA_N < 128,
       // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering

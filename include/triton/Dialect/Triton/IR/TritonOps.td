@@ -255,6 +255,7 @@ def TT_AddPtrOp : TT_Op<"addptr",
 // Load/Store Ops
 //
 def TT_LoadOp : TT_Op<"load", [
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
@@ -298,10 +299,11 @@ def TT_LoadOp : TT_Op<"load", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 def TT_StoreOp : TT_Op<"store", [
+  FoldTruePredicate,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -335,7 +337,7 @@ def TT_StoreOp : TT_Op<"store", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 //
@@ -356,6 +358,7 @@ def TT_GridDependencyLaunchDependentsOp
 }
 
 def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
@@ -389,6 +392,7 @@ def TT_AtomicLoadOp : TT_Op<"atomic_load", [
 }
 
 def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
@@ -456,6 +460,7 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
 }
 
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
@@ -491,7 +496,6 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
       functional-type(operands, $result)
     }];
-
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -1022,7 +1026,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 //
 // Histogram Op
 //
-def TT_HistogramOp : TT_Op<"histogram", [Pure,
+def TT_HistogramOp : TT_Op<"histogram", [Pure, FoldTruePredicate,
     TypesMatchWith<"mask type matches src type",
                  "src", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
