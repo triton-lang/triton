@@ -336,9 +336,6 @@ bool preferTwoCTALayout(triton::DotOp dot) {
   if (ttg::lookupNumCTAs(dot) < 2)
     return false;
   auto module = dot->getParentOfType<ModuleOp>();
-  auto target = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-  if (!target || !target.getValue().starts_with("cuda:"))
-    return false;
   int cc = getNVIDIAComputeCapability(module);
   return cc >= 100 && cc < 120;
 }
