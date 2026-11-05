@@ -968,8 +968,7 @@ LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
                                   /*isIm2Col=*/false)))
     return failure();
   MemDescType srcType = getSrc().getType();
-  if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType,
-                                         /*isStore=*/true)))
+  if (failed(verifyDescriptorLoadStoreOp(*this, getDesc().getType(), srcType)))
     return failure();
   return verifyAsyncTMAStoreOp(*this, getDesc(), srcType);
 }

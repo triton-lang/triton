@@ -171,8 +171,7 @@ LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
                                     ShapedType indicesType);
 LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
                                           TensorDescInterface desc,
-                                          ShapedType tensor,
-                                          bool isStore = false);
+                                          ShapedType tensor);
 
 LogicalResult deduceScaleFactor(ArrayRef<int64_t> lhsShape,
                                 std::optional<ArrayRef<int64_t>> lhsScaleShape,

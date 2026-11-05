@@ -2058,21 +2058,13 @@ class TritonSemantic(Generic[TensorTy]):
         block_shape = tl._unwrap_shape(block_shape)
 
         assert isinstance(base.type, tl.pointer_type), f"base must be a pointer type, got {base.type}"
-        type = tl.block_type(base.type.element_ty, block_shape)
-        base_handle = base.handle
-        is_signed_int = base.type.element_ty.is_int_signed()
-
         padding = self._str_to_padding_option(padding_option)
 
         if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
             raise ValueError("Padding option `nan` is not supported for integer blocks")
 
-        if fp6_format:
-            desc_ty = tl.tensor_descriptor_base_type(type, fp6_format)._to_ir(self.builder)
-            handle = self.builder.create_make_tensor_descriptor(desc_ty, base_handle, [s.handle for s in shape],
-                                                                [s.handle for s in strides], padding)
-            return tl.tensor_descriptor(handle, shape, strides, type, fp6_format)
-        handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
-                                                            [s.handle for s in strides], block_shape, is_signed_int,
-                                                            padding)
-        return tl.tensor_descriptor(handle, shape, strides, type)
+        block_type = tl.block_type(base.type.element_ty, block_shape)
+        desc_ty = tl.tensor_descriptor_base_type(block_type, fp6_format)._to_ir(self.builder)
+        handle = self.builder.create_make_tensor_descriptor(desc_ty, base.handle, [s.handle for s in shape],
+                                                            [s.handle for s in strides], padding)
+        return tl.tensor_descriptor(handle, shape, strides, block_type, fp6_format)

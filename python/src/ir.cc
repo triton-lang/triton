@@ -205,9 +205,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
           ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
-          isFP6(descTy.getElementType())
-              ? 1
-              : getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
+          getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());

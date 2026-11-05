@@ -1847,10 +1847,10 @@ LogicalResult DescriptorScatterOp::verify() {
 // -- DescriptorLoadOp --
 LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
                                           TensorDescInterface desc,
-                                          ShapedType tensor, bool isStore) {
+                                          ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
   if (isFP6(block.getElementType())) {
-    if (!isStore || !tensor.getElementType().isInteger(8))
+    if (!isa<DescriptorStoreOp>(op) || !tensor.getElementType().isInteger(8))
       return op->emitOpError(
           "packed FP6 descriptors require stores of i8 codes");
   } else if (block.getElementType() != tensor.getElementType()) {
@@ -1881,7 +1881,7 @@ LogicalResult DescriptorLoadOp::verify() {
 // -- DescriptorStoreOp --
 LogicalResult DescriptorStoreOp::verify() {
   return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
-                                     getSrc().getType(), /*isStore=*/true);
+                                     getSrc().getType());
 }
 
 // -- DescriptorReduceOp --

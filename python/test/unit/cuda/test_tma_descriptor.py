@@ -150,6 +150,8 @@ def test_fp6_tma_store_padded_bytes(block_m, fmt, dtype, host, with_allocator):
     kernel = _fp6_desc_store[(1, )](x, buf, raw, desc, fmt, block_m)
     torch.testing.assert_close(raw, codes.byte())
     torch.testing.assert_close(buf, pack_fp6(initial))
+    assert f"!tt.tensordesc<{block_m}x128xf6{fmt.upper()}FN>" in kernel.asm["ttir"]
+    assert f"!tt.tensordesc<{block_m}x128xui8," in kernel.asm["ttgir"]
     src = "f32"
     if get_ptx_version_from_options(kernel.metadata, kernel.metadata.target.arch) >= 91:
         src = {torch.float16: "f16x2", torch.bfloat16: "bf16x2", torch.float32: "f32"}[dtype]

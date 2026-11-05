@@ -937,11 +937,25 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
-    def create_make_tensor_descriptor(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
-                                      tensor_shape: List[int], is_signed: bool, padding: str = "zero"):
-        desc = TensorDescHandle(base, shape, strides, tensor_shape, padding)
+    def create_tensor_descriptor_type(self, block_type, is_signed, fp6_format=None):
+        elem_ty = block_type.element_ty
+        if elem_ty.is_int() and elem_ty.is_int_signed() != is_signed:
+            block_type = block_type.with_element_ty(tl.core.get_int_dtype(elem_ty.primitive_bitwidth, is_signed))
+        return tl.core.tensor_descriptor_base_type(block_type, fp6_format)
+
+    def create_make_tensor_descriptor(self, *args, **kwargs):
+        if args and isinstance(args[0], tl.core.tensor_descriptor_base_type):
+            desc_ty, base, shape, strides, *padding = args
+            desc = TensorDescHandle(base, shape, strides, desc_ty.block_type.shape, *padding, **kwargs)
+        else:
+            desc = self._make_tensor_descriptor_from_shape(*args, **kwargs)
         desc.validate()
         return desc
+
+    def _make_tensor_descriptor_from_shape(self, base: TensorHandle, shape: List[TensorHandle],
+                                           strides: List[TensorHandle], tensor_shape: List[int], is_signed: bool,
+                                           padding: str = "zero"):
+        return TensorDescHandle(base, shape, strides, tensor_shape, padding)
 
     def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_policy):
         ptrs, mask = desc.materialize_pointers(indices)
