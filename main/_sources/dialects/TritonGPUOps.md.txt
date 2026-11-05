@@ -55,7 +55,7 @@ The data will only be available in local memory after `ttg.async_wait` is issued
 completion of `async_copy_global_to_local`. The async copy operations must be committed using
 `ttg.async_commit_group` to close the batch and allow for them to be waited on.
 
-Traits: `AttrSizedOperandSegments`, `GlobalToLocalCopyTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `GlobalToLocalCopyTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
@@ -412,7 +412,7 @@ If mask is present, the update is performed only for positions where
 mask[I] is true. Masked-off positions do not update shared memory and return
 an undefined old value.
 
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 

@@ -167,8 +167,8 @@ acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)</p>
 <li><p><strong>acc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor" title="triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor"><em>tensor_memory_descriptor</em></a>) – Accumulator value in tensor memory (mutated).</p></li>
 <li><p><strong>a_scale</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – Scale factor for operand A.</p></li>
 <li><p><strong>b_scale</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – Scale factor for operand B.</p></li>
-<li><p><strong>a_type</strong> (<em>str</em>) – Type of operand A. One of {“e2m1”, “e4m3”, “e5m2”}.</p></li>
-<li><p><strong>b_type</strong> (<em>str</em>) – Type of operand B. One of {“e2m1”, “e4m3”, “e5m2”}.</p></li>
+<li><p><strong>a_type</strong> (<em>str</em>) – Type of operand A. One of {“e2m1”, “e2m3”, “e3m2”, “e4m3”, “e5m2”}.</p></li>
+<li><p><strong>b_type</strong> (<em>str</em>) – Type of operand B. One of {“e2m1”, “e2m3”, “e3m2”, “e4m3”, “e5m2”}.</p></li>
 <li><p><strong>use_acc</strong> (<em>bool</em>) – Whether to use the initial value of the accumulator. Defaults to True.</p></li>
 <li><p><strong>pred</strong> (<em>bool</em>) – Scalar predicate. Operation is skipped if predicate is False. Defaults to True.</p></li>
 <li><p><strong>multicast</strong> (<em>bool</em>) – Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.</p></li>

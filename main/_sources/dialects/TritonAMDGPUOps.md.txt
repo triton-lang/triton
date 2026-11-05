@@ -65,6 +65,8 @@ This allows op to use async_copy_local_to_global even if the alignment cannot be
 `scope` makes the stored data available at that scope (it is not atomic and
 orders nothing).
 
+Traits: `FoldTruePredicate`
+
 Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
@@ -676,7 +678,7 @@ descriptor; `offsets` and `soffset` count elements). Masked-off and
 out-of-bounds elements read zero. The load is never removed, merged or
 hoisted, so it can poll a flag.
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`
 
 Interfaces: `AtomicOpInterface`
 
@@ -727,7 +729,7 @@ Stride is the distance between the beginning of contiguous memory chunks. When p
 the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
 when it converts to the buffer ops because it is important for optimizing the cache memory access.
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`
 
 Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
@@ -774,7 +776,7 @@ atomically, as a relaxed or release store at `scope`. Addressing and
 bounds follow `amdg.buffer_store`; masked-off and out-of-bounds elements
 are dropped.
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsEncoding`
 
 Interfaces: `AtomicOpInterface`
 
@@ -829,7 +831,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 `scope` makes the loaded data visible at that scope (it is not atomic
 and orders nothing).
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`
 
 Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
@@ -883,7 +885,7 @@ This allows to use buffer_load_to_local even if the alignment cannot be proven b
 out-of-bounds element writes zero to `dest`. `scope` makes the loaded
 data visible at that scope.
 
-Traits: `AttrSizedOperandSegments`, `GlobalToLocalCopyTrait`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `GlobalToLocalCopyTrait`
 
 Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 
@@ -947,7 +949,7 @@ This allows to use buffer_store even if the alignment cannot be proven based on 
 out-of-bounds element is dropped. `scope` makes the stored data available at
 that scope (it is not atomic and orders nothing).
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsEncoding`
 
 Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 

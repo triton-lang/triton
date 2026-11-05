@@ -196,7 +196,7 @@ operation ::= `tt.atomic_load` $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict 
               functional-type(operands, $result)
 ```
 
-Traits: `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 
@@ -285,7 +285,7 @@ load data at $ptr, do $rmw_op with $val, and store result to $ptr.
 
 return old value at $ptr
 
-Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 
@@ -325,7 +325,7 @@ operation ::= `tt.atomic_store` $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)
               type($ptr)
 ```
 
-Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 
@@ -1158,7 +1158,7 @@ Return the histogram of the input tensor. The number of bins is equal to
 the dimension of the output tensor. Each bins has a width of 1 and bins
 start at 0.
 
-Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `FoldTruePredicate`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -1257,7 +1257,7 @@ operation ::= `tt.load` $ptr (`,` $mask^)? (`,` $other^)?
               attr-dict `:` type($ptr)
 ```
 
-Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInterface`
 
@@ -1847,7 +1847,7 @@ operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
               attr-dict `:` type($ptr)
 ```
 
-Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `PredicatedOpInterface`
 

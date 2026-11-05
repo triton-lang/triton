@@ -396,6 +396,7 @@ the given layout and mask.
 This allows op to use async_copy_local_to_global even if the alignment cannot be proven based on IR.
 <code class="docutils literal notranslate"><span class="pre">scope</span></code> makes the stored data available at that scope (it is not atomic and
 orders nothing).</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
@@ -1152,7 +1153,7 @@ bounds follow <code class="docutils literal notranslate"><span class="pre">amdg.
 descriptor; <code class="docutils literal notranslate"><span class="pre">offsets</span></code> and <code class="docutils literal notranslate"><span class="pre">soffset</span></code> count elements). Masked-off and
 out-of-bounds elements read zero. The load is never removed, merged or
 hoisted, so it can poll a flag.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code></p>
 <section id="id32">
 <h3>Attributes:<a class="headerlink" href="#id32" title="Link to this heading"></a></h3>
@@ -1220,7 +1221,7 @@ the specified memory semantics and scope. Atomic RMW ops return the pre-op value
 Stride is the distance between the beginning of contiguous memory chunks. When performing a RMW, the <code class="docutils literal notranslate"><span class="pre">stride</span></code> is
 the address difference between the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
 when it converts to the buffer ops because it is important for optimizing the cache memory access.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id35">
 <h3>Attributes:<a class="headerlink" href="#id35" title="Link to this heading"></a></h3>
@@ -1286,7 +1287,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 atomically, as a relaxed or release store at <code class="docutils literal notranslate"><span class="pre">scope</span></code>. Addressing and
 bounds follow <code class="docutils literal notranslate"><span class="pre">amdg.buffer_store</span></code>; masked-off and out-of-bounds elements
 are dropped.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code></p>
 <section id="id38">
 <h3>Attributes:<a class="headerlink" href="#id38" title="Link to this heading"></a></h3>
@@ -1350,7 +1351,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 <p><code class="docutils literal notranslate"><span class="pre">ptr</span></code> and <code class="docutils literal notranslate"><span class="pre">soffset</span></code> are described in BufferOpInterface.
 <code class="docutils literal notranslate"><span class="pre">scope</span></code> makes the loaded data visible at that scope (it is not atomic
 and orders nothing).</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id40">
 <h3>Attributes:<a class="headerlink" href="#id40" title="Link to this heading"></a></h3>
@@ -1424,7 +1425,7 @@ This allows to use buffer_load_to_local even if the alignment cannot be proven b
 <p><code class="docutils literal notranslate"><span class="pre">ptr</span></code> and <code class="docutils literal notranslate"><span class="pre">soffset</span></code> are described in BufferOpInterface; an
 out-of-bounds element writes zero to <code class="docutils literal notranslate"><span class="pre">dest</span></code>. <code class="docutils literal notranslate"><span class="pre">scope</span></code> makes the loaded
 data visible at that scope.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">GlobalToLocalCopyTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">GlobalToLocalCopyTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id43">
 <h3>Attributes:<a class="headerlink" href="#id43" title="Link to this heading"></a></h3>
@@ -1510,7 +1511,7 @@ This allows to use buffer_store even if the alignment cannot be proven based on 
 <p><code class="docutils literal notranslate"><span class="pre">ptr</span></code> and <code class="docutils literal notranslate"><span class="pre">soffset</span></code> are described in BufferOpInterface; an
 out-of-bounds element is dropped. <code class="docutils literal notranslate"><span class="pre">scope</span></code> makes the stored data available at
 that scope (it is not atomic and orders nothing).</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">BufferOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id46">
 <h3>Attributes:<a class="headerlink" href="#id46" title="Link to this heading"></a></h3>

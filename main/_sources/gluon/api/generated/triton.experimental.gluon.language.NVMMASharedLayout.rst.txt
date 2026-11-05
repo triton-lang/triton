@@ -28,6 +28,7 @@
    
       ~NVMMASharedLayout.fp4_padded
       ~NVMMASharedLayout.get_default_for
+      ~NVMMASharedLayout.padding
       ~NVMMASharedLayout.rank
       ~NVMMASharedLayout.transposed
       ~NVMMASharedLayout.type

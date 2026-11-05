@@ -30,6 +30,8 @@ Syntax:
 operation ::= `nvg.ld_acquire` $sem `,` $scope `,` $addr (`,` $mask^)? attr-dict `:` functional-type($addr, $result)
 ```
 
+Traits: `FoldTruePredicate`
+
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource, MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`

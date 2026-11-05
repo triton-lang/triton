@@ -649,7 +649,7 @@ If the condition is false, the message is printed, and the program is aborted.</
               functional-type(operands, $result)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id9">
 <h3>Attributes:<a class="headerlink" href="#id9" title="Link to this heading"></a></h3>
@@ -765,7 +765,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 </div>
 <p>load data at $ptr, do $rmw_op with $val, and store result to $ptr.</p>
 <p>return old value at $ptr</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id15">
 <h3>Attributes:<a class="headerlink" href="#id15" title="Link to this heading"></a></h3>
@@ -821,7 +821,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
               type($ptr)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id18">
 <h3>Attributes:<a class="headerlink" href="#id18" title="Link to this heading"></a></h3>
@@ -1818,7 +1818,7 @@ changed.</p>
 <p>Return the histogram of the input tensor. The number of bins is equal to
 the dimension of the output tensor. Each bins has a width of 1 and bins
 start at 0.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id65">
@@ -1952,7 +1952,7 @@ the two input tensors must have the same shape.</p>
               attr-dict `:` type($ptr)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id71">
 <h3>Attributes:<a class="headerlink" href="#id71" title="Link to this heading"></a></h3>
@@ -2695,7 +2695,7 @@ shape 4x8xf32.</p>
               attr-dict `:` type($ptr)
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">FoldTruePredicate</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id109">
 <h3>Attributes:<a class="headerlink" href="#id109" title="Link to this heading"></a></h3>

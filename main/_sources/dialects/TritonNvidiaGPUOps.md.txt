@@ -44,7 +44,7 @@ ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mut
 ttng.arrive_barrier %barrier, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #shared, #smem, mutable>
 ```
 
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
@@ -818,7 +818,7 @@ operations, but since the commit groups are sequential, the arrive-on
 operation on `%barrierA` is guaranteed to be performed before the arrive-on
 operation on `%barrierB`, even though its commit group is empty.
 
-Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
@@ -872,6 +872,8 @@ Interfaces: `DotOpInterface`, `MBarrierOpInterface`, `MMAv5OpInterface`, `Memory
 <tr><td><code>two_ctas</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>multicast</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>is_unsigned</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>a_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
+<tr><td><code>b_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 </table>
 
 #### Operands:
@@ -1122,7 +1124,7 @@ the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_M
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.
 
 
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `PredicatedOpInterface`
 
@@ -1352,7 +1354,7 @@ that any of the dependencies may be accessed until the barrier completes.
 The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
 
-Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 

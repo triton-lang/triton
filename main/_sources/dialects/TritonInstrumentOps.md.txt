@@ -250,7 +250,7 @@ operation ::= `tti.experimental_gsan_atomic_load` $sem `,` $scope `,` $ptr (`,` 
               functional-type(operands, $result)
 ```
 
-Traits: `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`
+Traits: `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`
 
 Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`
 
@@ -320,7 +320,7 @@ operation ::= `tti.experimental_gsan_atomic_rmw` $atomic_rmw_op `,` $sem `,` $sc
               functional-type(operands, $result)
 ```
 
-Traits: `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+Traits: `FoldTruePredicate`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
 
 Interfaces: `AtomicOpInterface`
 
@@ -360,7 +360,7 @@ operation ::= `tti.experimental_gsan_atomic_store` $sem `,` $scope `,` $ptr `,` 
               type($ptr)
 ```
 
-Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`
+Traits: `FoldTruePredicate`, `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`
 
 Interfaces: `AtomicOpInterface`
 
@@ -492,6 +492,8 @@ operation ::= `tti.experimental_gsan_indexed_tensordesc_access` $desc `[` $indic
 
 Passes a native tensor descriptor and its row indices directly to the GSan
 runtime, which checks row and column bounds before updating shadow memory.
+
+Traits: `FoldTruePredicate`
 
 #### Attributes:
 
@@ -696,6 +698,8 @@ operation ::= `tti.experimental_gsan_tensor_access` $ptr `,` $isStore (`,` $mask
 Emits runtime instrumentation for a tensor pointer access. The pointer and
 optional mask are consumed by the GSan runtime.
 
+Traits: `FoldTruePredicate`
+
 #### Attributes:
 
 <table>
@@ -726,7 +730,7 @@ operation ::= `tti.experimental_gsan_tensordesc_access` $desc `[` $coords `]` `,
 Passes the native tensor descriptor and its coordinates directly to the
 GSan runtime, which decodes the descriptor and iterates over the tile.
 
-Traits: `AttrSizedOperandSegments`
+Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`
 
 #### Attributes:
 
@@ -795,6 +799,8 @@ operation ::= `tti.experimental_lock_acquire` $lock (`,` $pred^)? attr-dict `:` 
 
 Enter a critical section by acquiring a lock with single thread.
 
+Traits: `FoldTruePredicate`
+
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
@@ -819,6 +825,8 @@ operation ::= `tti.experimental_lock_release` $lock (`,` $pred^)? attr-dict `:` 
 ```
 
 Leave a critical section by releasing a lock with single thread.
+
+Traits: `FoldTruePredicate`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
