@@ -35,6 +35,13 @@ def test_implicit_cvt_float_follows_annotation(annotation, dtype):
     assert result.handle.data.dtype == interpreter._get_np_dtype(dtype)
 
 
+def test_implicit_cvt_bf16_truncates_like_launcher():
+    # fp32 bits 0x3F80C000: keeping the upper half gives 0x3F80 (1.0); rounding would give 0x3F81.
+    result = interpreter._implicit_cvt(1.005859375, "bf16")
+    assert result.dtype == tl.bfloat16
+    assert result.handle.data[0] == np.uint16(0x3F80)
+
+
 def test_float_arg_precision_follows_annotation():
     import torch
 

@@ -1384,7 +1384,12 @@ def _implicit_cvt(arg, annotation=None):
     if isinstance(arg, float):
         # Like the compiled launcher: a floating-point annotation picks the type, otherwise fp32.
         ty_name = annotation if annotation in ("fp16", "bf16", "fp32", "fp64") else "fp32"
-        handle = getattr(interpreter_builder, f"get_{ty_name}")(arg)
+        if ty_name == "bf16":
+            # The launchers keep the upper 16 bits of the fp32 value instead of rounding.
+            bits = np.array([arg], dtype=np.float32).view(np.uint32) >> 16
+            handle = TensorHandle(bits.astype(np.uint16), tl.bfloat16)
+        else:
+            handle = getattr(interpreter_builder, f"get_{ty_name}")(arg)
         return tl.tensor(handle, tl.str_to_ty(ty_name, None))
     if hasattr(arg, "data_ptr"):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
