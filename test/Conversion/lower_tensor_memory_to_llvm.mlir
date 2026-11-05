@@ -9,6 +9,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait
   // CHECK-NEXT: {{.*}}tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32
+  // CHECK: nvvm.fence.proxy {{.*}}async.shared{{.*}}cluster
   // CHECK: tcgen05.relinquish_alloc_permit.cta_group::2.sync.aligned
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait

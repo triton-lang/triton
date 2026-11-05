@@ -550,6 +550,15 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   NVVM::BarrierOp::create(rewriter, loc);
   Value address = b.load(i32_ty, sharedMem);
+  // The slot is scratch at offset 0 of shared memory, which the allocator also
+  // assigns to buffers, and the next access to those bytes may be through the
+  // async proxy (e.g. a TMA load, possibly multicast by a peer CTA). Each
+  // thread fences its generic accesses to the slot (the alloc's write and this
+  // load) before the barrier.
+  NVVM::FenceProxyOp::create(
+      rewriter, loc, NVVM::ProxyKind::async_shared,
+      NVVM::SharedSpaceAttr::get(func.getContext(),
+                                 NVVM::SharedSpace::shared_cluster));
   NVVM::BarrierOp::create(rewriter, loc);
   address = b.inttoptr(ptr_ty(func.getContext(), 6), address);
   return address;

@@ -81,6 +81,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   //      CHECK:    %[[A:.+]] = llvm.inline_asm has_side_effects
   // CHECK-SAME:    "@$0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128;", "b,r" %[[PRED]], %[[SHMEM]] : (i1, !llvm.ptr<3>) -> !llvm.void
   //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
+  //      CHECK:    nvvm.fence.proxy {{.*}}async.shared{{.*}}cluster
   //      CHECK:    nvvm.barrier
   //      CHECK:    "@$0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;", "b" %[[PRED]]  : (i1) -> !llvm.void
   //      CHECK:    nvvm.barrier
@@ -131,6 +132,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   //      CHECK:    %[[A:.+]] = llvm.inline_asm has_side_effects
   // CHECK-SAME:    "@$0 tcgen05.alloc.exclusive.cta_group::1.sync.aligned.shared::cta.b32 [$1], 576;", "b,r" %[[PRED]], %[[SHMEM]] : (i1, !llvm.ptr<3>) -> !llvm.void
   //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
+  //      CHECK:    nvvm.fence.proxy {{.*}}async.shared{{.*}}cluster
   //      CHECK:    nvvm.barrier
   //      CHECK:    "@$0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;", "b" %[[PRED]]  : (i1) -> !llvm.void
   //      CHECK:    nvvm.barrier
@@ -156,6 +158,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-SAME:    "@$0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 512;", "b,r" %[[PRED]], %[[SHMEM]] : (i1, !llvm.ptr<3>) -> !llvm.void
   //      CHECK-NOT:  .exclusive
   //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
+  //      CHECK:    nvvm.fence.proxy {{.*}}async.shared{{.*}}cluster
   //      CHECK:    nvvm.barrier
   //      CHECK:    "@$0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;", "b" %[[PRED]]  : (i1) -> !llvm.void
   //      CHECK:    nvvm.barrier
