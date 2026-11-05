@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefixes=CHECK,GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s --check-prefixes=CHECK,GFX942
 
 // A buffer descriptor packs its base and num_records into the resource;
 // soffset feeds the instruction's scalar offset, scaled from elements to bytes.
@@ -82,6 +82,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: llvm.fence release
     // CHECK: rocdl.raw.ptr.buffer.store %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, 17 : i32
     amdg.buffer_atomic_store release, sys, %0, %desc[%offsets], %mask soffset = %s : i32 : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_pointer_mask
+  tt.func @buffer_pointer_mask(%base: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>) {
+    // GFX950: %[[POOB:.*]] = llvm.mlir.constant(-2147483648 : i32) : i32
+    // GFX942: %[[POOB:.*]] = llvm.mlir.constant(-1 : i32) : i32
+    // CHECK: %[[POFF:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[POOB]] : i1, i32
+    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %[[POFF]], %{{.*}}, 0 : f32
+    %x = amdg.buffer_load %base[%offsets], %mask : !tt.ptr<f32> -> tensor<64xf32, #blocked>
+    amdg.buffer_store %x, %base[%offsets], %mask : !tt.ptr<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The descriptor can be a block/function argument. Choose the sentinel from
+// its current extent without tracing its producer or changing that extent.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_descriptor_mask
+  tt.func @buffer_descriptor_mask(%desc: !amdg.buffer_desc<f32>, %offsets: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>) {
+    // GFX950: %[[BITS:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<8> to i128
+    // GFX950: %[[SHIFT:.*]] = llvm.mlir.constant(64 : i128) : i128
+    // GFX950: %[[HIGH:.*]] = llvm.lshr %[[BITS]], %[[SHIFT]] : i128
+    // GFX950: %[[BOUND:.*]] = llvm.trunc %[[HIGH]] : i128 to i32
+    // GFX950: %[[ALIGNED:.*]] = llvm.mlir.constant(-16 : i32) : i32
+    // GFX950: %[[FITS:.*]] = llvm.icmp "ule" %[[BOUND]], %[[ALIGNED]] : i32
+    // GFX950: %[[DOOB:.*]] = llvm.select %[[FITS]], %[[ALIGNED]], %{{.*}} : i1, i32
+    // GFX942: %[[DOOB:.*]] = llvm.mlir.constant(-1 : i32) : i32
+    // CHECK: %[[DOFF:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[DOOB]] : i1, i32
+    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %[[DOFF]], %{{.*}}, 0 : f32
+    %x = amdg.buffer_load %desc[%offsets], %mask : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
+    amdg.buffer_store %x, %desc[%offsets], %mask : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
     tt.return
   }
 }

@@ -59,7 +59,7 @@ namespace mlir::LLVM::AMD {
 // Failure to meet 2) and 3) will result in incorrect memory access.
 struct BufferEmitter {
   BufferEmitter(RewriterBase &rw, Location loc,
-                mlir::triton::AMD::TargetInfo ti);
+                mlir::triton::AMD::TargetInfo ti, bool hasBufferDescriptor = false);
 
   // Create a resource descriptor (V#) for `basePtr`. `numRecords` is the i32
   // byte bound; null means the default 2^31 - 2 bytes.
@@ -116,6 +116,7 @@ private:
   RewriterBase &rewriter;
   Location loc;
   mlir::triton::AMD::TargetInfo targetInfo;
+  bool hasBufferDescriptor;
 };
 
 } // namespace mlir::LLVM::AMD

@@ -31,8 +31,10 @@ bool isZero(Value v) {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
-    : rewriter(rw), loc(loc), targetInfo(ti) {}
+BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti,
+                             bool hasBufferDescriptor)
+    : rewriter(rw), loc(loc), targetInfo(ti),
+      hasBufferDescriptor(hasBufferDescriptor) {}
 
 Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -309,6 +311,26 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
     accessBytes *= vecTy.getNumElements();
   Value vOffsetOutOfBounds =
       b.int_val(32, isAtomicRMW ? static_cast<int32_t>(-accessBytes) : -1);
+  if (!isAtomicRMW && targetInfo.getISAFamily() == ISAFamily::CDNA4) {
+    if (!hasBufferDescriptor) {
+      // Implicit pointer descriptors have a fixed 2^31 - 2 byte bound.
+      // Preserve the aligned sentinel and code generation used before explicit
+      // descriptors supported the full unsigned 32-bit range.
+      vOffsetOutOfBounds = b.i32_val(std::numeric_limits<int32_t>::min());
+    } else {
+      // An aligned OOB offset avoids extra buffer processing on gfx950. Keep
+      // the original extent, including any partial tail. Only use -16 when it
+      // is outside that extent; near-full-range descriptors still need -1.
+      // CDNA4 stores NumRecords in resource bits [95:64]. Extract it from the
+      // current operand so descriptors carried through control flow work too.
+      Type i128Ty = rewriter.getIntegerType(128);
+      Value bits = b.ptrtoint(i128Ty, rsrcDesc);
+      Value numRecords = b.trunc(i32_ty, b.lshr(bits, b.int_val(128, 64)));
+      Value alignedOOB = b.i32_val(-16);
+      Value fits = b.icmp_ule(numRecords, alignedOOB);
+      vOffsetOutOfBounds = b.select(fits, alignedOOB, vOffsetOutOfBounds);
+    }
+  }
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
