@@ -145,6 +145,22 @@ def _scan_layouts():
         if _is_layout_applicable(layout)
     ]
     return cases + [
+        *[
+            pytest.param(
+                ttgl.DistributedLinearLayout(
+                    [[1, 0], [4, 0], [8, 0]], [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + lane_padding,
+                    [[16, 0], [0, 16]], [], [32, 32]), 32, 32, 0, dtype, id=f"shared_carry_{dtype}")
+            for dtype in [torch.int8, torch.int16, torch.int64]
+        ],
+        # Joint routing shares exchanges between terminal results and carries.
+        pytest.param(
+            ttgl.DistributedLinearLayout([[1, 0], [4, 0], [8, 0]], [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + [[0, 0]] *
+                                         (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 16]], [], [32, 32]), 32, 32,
+            0, torch.int32, id="shared_terminal_carry_exchanges"),
+        pytest.param(
+            ttgl.DistributedLinearLayout([[1, 0], [8, 0], [16, 0], [0, 16]], [[2, 0], [4, 0], [0, 1], [0, 2], [0, 4]] +
+                                         [[0, 0]] * (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 8]], [],
+                                         [64, 32]), 64, 32, 0, torch.int32, id="shared_carry_four_lanes"),
         pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 32, 32, 0, torch.int32,
                      id="interwarp_single_value_prefixes"),
         # Reuse each segment's inclusive total while retaining exclusive carries
