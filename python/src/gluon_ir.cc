@@ -241,8 +241,11 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto cgaBases = getCgaLayoutBases(cgaLayout);
     return getLayoutClass("NVMMASharedLayout")(
         nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
-        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.getFp4Padded(),
-        cgaBases);
+        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.isPaddedFp4(),
+        cgaBases,
+        nvmma.getPadding() == ttg::NVMmaPadding::None
+            ? py::none()
+            : py::cast(ttg::stringifyNVMmaPadding(nvmma.getPadding()).str()));
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(swizzled.getCGALayout());
@@ -616,14 +619,18 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
-              unsigned elementBitwidth, bool transposed, bool fp4Padded,
+              unsigned elementBitwidth, bool transposed,
+              const std::string &padding,
               std::vector<std::vector<int32_t>> &cgaBases,
               unsigned rank) -> Attribute {
              auto ctx = self.getContext();
-             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
+             auto mode = ttg::symbolizeNVMmaPadding(padding);
+             if (!mode)
+               throw std::invalid_argument(
+                   "invalid NVIDIA shared memory padding");
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
-                 ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
-                 cgaLayout);
+                 ctx, swizzleByteWidth, transposed, elementBitwidth, *mode,
+                 buildCgaLayoutAttr(ctx, cgaBases, rank));
            })
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
@@ -1113,18 +1120,28 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
-      .def("create_tcgen05_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas,
-              bool multicast) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
-                                            pred, two_ctas, multicast,
-                                            mbarriers, mbarrier_preds,
-                                            /*isAsync=*/true);
-           })
+      .def(
+          "create_tcgen05_mma",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+             Value pred, std::vector<Value> &mbarriers,
+             std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
+             std::optional<tt::ScaleDotElemType> aType,
+             std::optional<tt::ScaleDotElemType> bType) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            self.create<ttng::TCGen5MMAOp>(
+                tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
+                mbarriers, mbarrier_preds,
+                /*isAsync=*/true, /*isUnsigned=*/false,
+                aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *aType)
+                      : tt::ScaleDotElemTypeAttr{},
+                bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
+                      : tt::ScaleDotElemTypeAttr{});
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
+          py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
+          py::arg("two_ctas"), py::arg("multicast"), py::arg("a_type").none(),
+          py::arg("b_type").none())
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
               Value bScale, tt::ScaleDotElemType aType,

@@ -312,6 +312,7 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
 //===----------------------------------------------------------------------===//
 
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
   BufferOpInterface,
@@ -371,6 +372,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 //===----------------------------------------------------------------------===//
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
+  FoldTruePredicate,
   GlobalToLocalCopyTrait,
   AttrSizedOperandSegments,
   BufferOpInterface,
@@ -423,6 +425,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 //===----------------------------------------------------------------------===//
 
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
+  FoldTruePredicate,
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   BufferOpInterface,
@@ -518,6 +521,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
 //===----------------------------------------------------------------------===//
 
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
+  FoldTruePredicate,
   AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
   BufferOpInterface,
@@ -574,6 +578,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 //===----------------------------------------------------------------------===//
 
 def BufferAtomicLoadOp : TT_AMDGPU_Op<"buffer_atomic_load", [
+  FoldTruePredicate,
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   AtomicOpInterface,
@@ -617,6 +622,7 @@ def BufferAtomicLoadOp : TT_AMDGPU_Op<"buffer_atomic_load", [
 //===----------------------------------------------------------------------===//
 
 def BufferAtomicStoreOp : TT_AMDGPU_Op<"buffer_atomic_store", [
+  FoldTruePredicate,
   AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
   AtomicOpInterface,
@@ -982,6 +988,7 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_transposed", [
 //===----------------------------------------------------------------------===//
 
 def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
+  FoldTruePredicate,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   OptionalTypesMatchWith<"infer mask type from dst type",
                  "dst", "mask", "getI1SameShape($_self)">,

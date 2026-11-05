@@ -183,13 +183,13 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // the tt.dot that consumes it, so the LDS read of the next K-tile overlaps
   // the current tile's matrix op. for num_stages<3 there is no room to separate
   // them.
-  // We take a conservative route and only enable LDS prefetch when the dot is
-  // not scaled until more testing is done.
+  // This applies to tt.dot_scaled as well: its operand local_loads are hoisted
+  // the same way, and the scale operands follow whichever stage their own
+  // local_load lands in.
   // waitAtTail (pingpong) requires very specific scheduling, which is
   // incompatible with the prefetch cluster ordering below, so disable prefetch
   // in that case.
-  bool ldsPrefetch =
-      hasTDMLoad && !hasScaledDot && numStages >= 3 && !waitAtTail;
+  bool ldsPrefetch = hasTDMLoad && numStages >= 3 && !waitAtTail;
   if (ldsPrefetch) {
     stages[SCHED_LOCAL_LOAD] = lastStage - 1;
   }
@@ -278,8 +278,10 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
-  // TDM copy reordering to improve latency hiding.
-  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail;
+  // TDM copy reordering to improve latency hiding. Only for the stage schedules
+  // LDS prefetch does not already cover (i.e. numStages < 3), since the
+  // prefetch ordering above subsumes it and must not be overwritten here.
+  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail && !ldsPrefetch;
   if (tdmReorder) {
     globalLoadCluster = 0; // all TDM copies first
     asyncWaitCluster = 1;  // single wait after the copies

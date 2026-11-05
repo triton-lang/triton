@@ -27,7 +27,7 @@
 // CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
-// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}}
+// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] {
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
@@ -311,7 +311,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[LOCAL_ALLOC_12:.*]] = ttg.local_alloc
 //       AMD:   %[[CMPI_13:.*]] = arith.cmpi slt, %{{.*}}, %{{.*}}
 //       AMD:   %[[SPLAT_14:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:   %[[LOAD_15:.*]] = tt.load %{{.*}}, %[[SPLAT_14]], %{{.*}}
+//       AMD:   %[[LOAD_15:.*]] = tt.load %{{[^, ]+}}, %[[SPLAT_14]] {amd.pipeliner_part = "prologue"}
 //       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
@@ -1700,10 +1700,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // Verify that statically dead prologue iterations are properly predicated
 // CHECK-LABEL: @peeled_prologue_statically_dead
-// CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
-// CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
-// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
-// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-COUNT-2: ttg.async_copy_global_to_local %{{[^,]+}}, %{{[^ ,]+}} {
 // CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
 // CHECK: scf.for
 tt.func @peeled_prologue_statically_dead(

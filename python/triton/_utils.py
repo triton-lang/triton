@@ -11,6 +11,21 @@ if TYPE_CHECKING:
 TRITON_MAX_TENSOR_NUMEL = 1048576
 
 
+def fp6_logical_shape(shape):
+    if shape[-1] % 96:
+        raise ValueError("packed FP6 rows must contain a multiple of 96 bytes")
+    return [*shape[:-1], shape[-1] // 3 * 4]
+
+
+def validate_fp6_box(width, inner, outer_strides, padding, *, host=False):
+    if width != 128 or padding != "zero":
+        raise ValueError("FP6 requires zero padding and a 128-value box")
+    if (host or isinstance(inner, int)) and inner % width:
+        raise ValueError("FP6 inner extent must be a multiple of the box width")
+    if any((host or isinstance(s, int)) and s % 32 for s in outer_strides):
+        raise ValueError("FP6 outer byte strides must be multiples of 32")
+
+
 def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:
     return reduce(lambda a, idx: a[idx], path, iterable)  # type: ignore[index]
 
