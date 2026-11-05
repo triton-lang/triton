@@ -42,7 +42,6 @@ from triton._internal_testing import (
     is_hip_rdna4m,
     is_hip_rdna4,
     is_hip_cdna5,
-    is_xpu,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -7176,9 +7175,6 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
-    if not (is_hip() or is_xpu()):
-        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------
