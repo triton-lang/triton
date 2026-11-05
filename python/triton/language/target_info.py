@@ -1,3 +1,4 @@
+from triton import knobs
 from triton.runtime import driver
 from triton.runtime.jit import constexpr_function
 
@@ -5,6 +6,8 @@ __all__ = ["current_target"]
 
 
 def current_target():
+    if knobs.runtime.interpret:
+        return None
     try:
         active_driver = driver.active
     except RuntimeError:
