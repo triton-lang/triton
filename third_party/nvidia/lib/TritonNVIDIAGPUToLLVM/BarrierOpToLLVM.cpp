@@ -27,9 +27,11 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/MathExtras.h"
 
 #include "Utility.h"
@@ -603,23 +605,28 @@ struct CLCGetProgramIdOpConversion
 
     auto loc = op.getLoc();
 
-    auto queryType = [&] {
-      switch (op.getDim()) {
-      case ProgramIDDim::X:
-        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_X;
-      case ProgramIDDim::Y:
-        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_Y;
-      case ProgramIDDim::Z:
-        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_Z;
-      }
-      llvm::llvm_unreachable_internal("Invalid program id dim");
-    }();
+    using namespace llvm::Intrinsic;
+    constexpr std::pair<ID, int> queries[] = {
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_x,
+         kMaxGriddimx},
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_y,
+         kMaxGriddimy},
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_z,
+         kMaxGriddimz}};
+    auto [intrinsic, maxGridDim] = queries[static_cast<unsigned>(op.getDim())];
+    auto call = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, llvm::Intrinsic::getName(intrinsic), op.getType(),
+        adaptor.getClcResult());
+    // A successful cancellation returns a raw CTA coordinate in [0,
+    // maxGridDim).
+    auto range =
+        LLVM::ConstantRangeAttr::get(rewriter.getContext(), 32, 0, maxGridDim);
+    auto resultAttrs = rewriter.getDictionaryAttr(
+        rewriter.getNamedAttr(LLVM::LLVMDialect::getRangeAttrName(), range));
+    call.setResAttrsAttr(rewriter.getArrayAttr(resultAttrs));
+    Value result = call.getResult(0);
 
-    Value result = NVVM::ClusterLaunchControlQueryCancelOp::create(
-        rewriter, loc, queryType, adaptor.getClcResult());
-
-    // Convert ctaid to clusterid, which is the real program id
-    // Note that all cluster CTAs are distributed in the X dim
+    // Cluster CTAs are distributed along X.
     if (op.getDim() == ProgramIDDim::X) {
       auto numCTAs = ttg::lookupNumCTAs(op);
       if (numCTAs > 1) {
