@@ -85,6 +85,7 @@ public:
     return loadDShared(rewriter, loc, ptr, /*ctaId=*/Value(), elemTy, pred);
   }
 
+  virtual int getWarpSize() const = 0;
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   // Return the shuffled value and whether the source lane is in bounds.

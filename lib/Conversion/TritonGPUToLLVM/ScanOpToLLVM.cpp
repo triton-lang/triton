@@ -193,7 +193,7 @@ private:
     // power of 2. The latter is more general, but it requires a lane index to
     // be computed and passed in.
     // The logical segment index must equal laneId * numRegs for every lane.
-    bool fullWarp = !reverse && numLanes == 32;
+    bool fullWarp = !reverse && numLanes == targetInfo.getWarpSize();
     for (auto [bit, basis] :
          llvm::enumerate(laneLayout.getBases().lookup(kLane)))
       fullWarp &= (basis[axis] & (numSegments - 1)) == (numRegs << bit);
