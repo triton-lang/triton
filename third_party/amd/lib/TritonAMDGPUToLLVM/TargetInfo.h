@@ -24,7 +24,7 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  int getWarpSize() const override { return targetFeatures.getWarpSize(); }
+  int getWarpSize() const { return targetFeatures.getWarpSize(); }
 
   int getSharedMemorySize() const {
     return targetFeatures.getSharedMemorySize();

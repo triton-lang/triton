@@ -190,8 +190,6 @@ private:
 
     const auto &laneBases = layout.getBases().find(kLane)->second;
     auto shuffleBoundsMatch = [&](unsigned distance, unsigned laneDistance) {
-      if (layout.getInDimSize(kLane) != targetInfo.getWarpSize())
-        return false;
       // Both bounds tests ask whether a quotient is nonzero. Division by
       // these powers of two drops low bits, so checking the lane bases proves
       // segmentIndex / distance == laneId / laneDistance for every lane.
