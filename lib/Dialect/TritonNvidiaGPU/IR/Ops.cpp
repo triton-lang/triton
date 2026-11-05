@@ -713,10 +713,6 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
           memDesc.getShape() != shape || nvmma != descEnc)
         return op->emitOpError(
             "64-value FP6 TMA requires a matching unswizzled [M, 64] store");
-      auto target = op->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
-          gpu::AttrTargetName);
-      if (!target || target.getValue() != "cuda:103")
-        return op->emitOpError("64-value FP6 TMA stores require SM103");
     } else if (width < 128 || (swizzle ? swizzle : width) != 128)
       return op->emitOpError("FP6 TMA requires a 128-value box");
   }

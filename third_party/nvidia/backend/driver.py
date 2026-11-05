@@ -133,7 +133,6 @@ class CudaUtils(object):
         self._get_device_properties = functools.lru_cache(maxsize=None)(mod.get_device_properties)
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
-        self.fill_sm103_fp6_store_descriptor = mod.fill_sm103_fp6_store_descriptor
         self.fill_tma_descriptor_tiled = mod.fill_tma_descriptor_tiled
         self.fill_tma_descriptor_im2col = mod.fill_tma_descriptor_im2col
         self.launch = mod.launch
@@ -225,15 +224,7 @@ def make_tensordesc_arg(arg, metadata, _):
     if arg.round_f32_to_tf32:
         elem_type = TMA_TF32
 
-    if metadata.get("fp6_store_box64"):
-        driver = triton.runtime.driver.active
-        if driver.get_current_target().arch != 103:
-            raise ValueError("64-value FP6 TMA stores require SM103")
-        if len(block_size) != 2 or block_size[1] != 64 or elem_type != 15 or swizzle or padding or strides[-1] != 1:
-            raise ValueError("expected an unswizzled [M, 64] FP6 store descriptor")
-        cu_tensor_map = driver.utils.fill_sm103_fp6_store_descriptor(arg.base.data_ptr(), *shape, strides[0],
-                                                                     block_size[0])
-    elif is_im2col:
+    if is_im2col:
         # Im2col mode - use im2col descriptor fill function
         # block_size from metadata is [pixelsPerColumn, channelsPerPixel] (possibly clamped)
         element_strides = arg.element_strides if arg.element_strides is not None else [1] * len(shape)

@@ -2296,19 +2296,6 @@ tt.func @fp6_tma_store_box_width(%desc: !desc, %coord: i32, %src: !src) {
 
 // -----
 
-#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6p2x16"}>
-!desc = !tt.tensordesc<2x64xui8, #fp6>
-!src = !ttg.memdesc<2x64xi8, #fp6, #ttg.shared_memory>
-module attributes {ttg.target = "cuda:100"} {
-  tt.func @fp6_store_box64_sm100(%desc: !desc, %coord: i32, %src: !src) {
-    // expected-error @below {{64-value FP6 TMA stores require SM103}}
-    ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %src : !desc, !src
-    tt.return
-  }
-}
-
-// -----
-
 #fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6x16_p32"}>
 #bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 !desc = !tt.tensordesc<2x64xui8, #fp6>

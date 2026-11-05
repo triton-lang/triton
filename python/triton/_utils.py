@@ -18,7 +18,8 @@ def fp6_logical_shape(shape):
 
 
 def validate_fp6_box(width, inner, outer_strides, padding, *, host=False):
-    if (width != 128 and not (host and width == 64)) or padding != "zero":
+    widths = (64, 128) if host else (128, )
+    if width not in widths or padding != "zero":
         raise ValueError("FP6 requires zero padding and a 128-value box or a 64-value host store box")
     if (host or isinstance(inner, int)) and inner % width:
         raise ValueError("FP6 inner extent must be a multiple of the box width")

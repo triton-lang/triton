@@ -202,32 +202,8 @@ public:
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
                  TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
         context);
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
-      return signalPassFailure();
-
-    // Only tiled stores may use the SM103 narrow FP6 host encoder.
-    for (auto func : m.getOps<triton::FuncOp>()) {
-      if (!triton::isKernel(func))
-        continue;
-      for (auto arg : func.getArguments()) {
-        auto desc = dyn_cast<TensorDescType>(arg.getType());
-        if (!desc || desc.getShape().back() != 64)
-          continue;
-        auto layout = dyn_cast_if_present<gpu::NVMMASharedEncodingAttr>(
-            desc.getSharedLayout());
-        if (!layout || !layout.isPaddedFp6())
-          continue;
-        if (arg.use_empty() || !llvm::all_of(arg.getUsers(), [](Operation *op) {
-              return isa<AsyncTMACopyLocalToGlobalOp>(op);
-            })) {
-          func.emitOpError("64-value FP6 host descriptors must be used only by "
-                           "tiled TMA stores");
-          return signalPassFailure();
-        }
-        func.setArgAttr(arg.getArgNumber(), "ttng.fp6_store_box64",
-                        UnitAttr::get(context));
-      }
-    }
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      signalPassFailure();
   }
 };
 

@@ -4927,6 +4927,14 @@ def test_split_auto_layout_execution():
     torch.testing.assert_close(output, ref)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires SM103")
+def test_fp6_tma_store_descriptor_escape():
+    dst = torch.empty((2, 48), device="cuda", dtype=torch.uint8)
+    desc = TensorDescriptor.from_tensor(dst, [2, 64], ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16"))
+    with pytest.raises(TypeError, match="used only by tiled TMA stores"):
+        noinline_tma_kernel.warmup(desc, grid=(1, ))
+
+
 @gluon.jit
 def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr):
     fmt: ttgl.constexpr = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")

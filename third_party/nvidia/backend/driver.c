@@ -562,40 +562,6 @@ static PyTypeObject PyCUtensorMapType = {
 };
 // clang-format on
 
-// SM103's b6p2x16 store accepts a 48-byte box, which cuTensorMapEncodeTiled
-// rejects. This opaque encoding is specific to SM103, tiled 2D, no swizzle,
-// unit element strides, zero fill and boxes of 64 logical values per row.
-static PyObject *fillSM103FP6StoreDescriptor(PyObject *self, PyObject *args) {
-  unsigned long long address, rows, columns, stride, boxRows;
-  if (!PyArg_ParseTuple(args, "KKKKK", &address, &rows, &columns, &stride,
-                        &boxRows))
-    return NULL;
-  if (!address || address % 16 || !rows || rows > (1ULL << 32) || !columns ||
-      columns > (1ULL << 32) || columns % 64 || !stride || stride % 16 ||
-      stride / 16 > UINT32_MAX || !boxRows || boxRows > 256) {
-    PyErr_SetString(PyExc_ValueError, "invalid shape, address, byte stride or "
-                                      "box height for SM103 FP6 store");
-    return NULL;
-  }
-  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject(
-      (PyObject *)&PyCUtensorMapType, NULL);
-  if (!desc)
-    return NULL;
-  uint32_t words[32] = {0};
-  words[0] = (uint32_t)address;
-  words[1] = (uint32_t)(address >> 32);
-  words[2] = 0x690; // 2D tiled FP6, no swizzle.
-  words[3] = stride >> 4;
-  words[8] = columns - 1;
-  words[9] = rows - 1;
-  words[13] = 63U << 24;   // Innermost box dimension minus one.
-  words[14] = boxRows - 1; // Outermost box dimension minus one.
-  _Static_assert(sizeof(words) == sizeof(CUtensorMap),
-                 "unexpected tensor map size");
-  memcpy(&desc->tensorMap, words, sizeof(words));
-  return (PyObject *)desc;
-}
-
 static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   int swizzle;
@@ -680,6 +646,47 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   shapeFast = NULL;
   Py_DECREF(stridesFast);
   stridesFast = NULL;
+
+  // cuTensorMapEncodeTiled requires 128 FP6 values. SM103 also accepts 64
+  // for a b6p2x16 store. Encode just that unswizzled 2D map here.
+  if (elemType == CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B &&
+      blockSizeInt[0] == 64) {
+    CUdevice device;
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    if (major != 10 || minor != 3) {
+      PyErr_SetString(PyExc_ValueError,
+                      "64-value FP6 TMA stores require SM103");
+      goto cleanup;
+    }
+    if (rank != 2 || swizzle || padding || elemSize != 1 || !global_address ||
+        global_address % 16 || !shapeInt[0] || shapeInt[0] % 64 ||
+        shapeInt[0] > (1ULL << 32) || !shapeInt[1] ||
+        shapeInt[1] > (1ULL << 32) || !stridesLL[0] || stridesLL[0] % 16 ||
+        stridesLL[0] / 16 > UINT32_MAX || !blockSizeInt[1] ||
+        blockSizeInt[1] > 256) {
+      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
+      goto cleanup;
+    }
+    uint32_t words[32] = {
+        [0] = (uint32_t)global_address,
+        [1] = global_address >> 32,
+        [2] = 0x690, // Tiled 2D FP6, no swizzle.
+        [3] = stridesLL[0] >> 4,
+        [8] = shapeInt[0] - 1,
+        [9] = shapeInt[1] - 1,
+        [13] = 63U << 24,
+        [14] = blockSizeInt[1] - 1,
+    };
+    _Static_assert(sizeof(words) == sizeof(CUtensorMap),
+                   "unexpected tensor map size");
+    memcpy(&desc->tensorMap, words, sizeof(words));
+    return (PyObject *)desc;
+  }
 
   CUtensorMapFloatOOBfill fill =
       (padding == 1) ? CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
@@ -1617,8 +1624,6 @@ static PyMethodDef ModuleMethods[] = {
      "being dropped.  This inherits all the limitations of this call; in "
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
-    {"fill_sm103_fp6_store_descriptor", fillSM103FP6StoreDescriptor,
-     METH_VARARGS, NULL},
     {"fill_tma_descriptor_tiled", fillTMADescriptorTiled, METH_VARARGS,
      "Create TMA descriptor for tiled mode"},
     {"fill_tma_descriptor_im2col", fillTMADescriptorIm2col, METH_VARARGS,
