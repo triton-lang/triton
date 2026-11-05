@@ -289,25 +289,33 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA atomic lowering")
+@pytest.mark.parametrize("op", ["and", "or", "xor"])
 @pytest.mark.parametrize("tensor", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_atomic_xor_float_bits(tensor, dtype, device):
+def test_atomic_bitwise_float_bits(op, tensor, dtype, device):
 
     @gluon.jit
-    def kernel(X, Old, TENSOR: ttgl.constexpr):
-        if TENSOR:
-            offsets = ttgl.arange(0, 32, layout=ttgl.constexpr(ttgl.BlockedLayout([1], [32], [1], [0])))
+    def kernel(X, Old, N: ttgl.constexpr, LAYOUT: ttgl.constexpr, OP: ttgl.constexpr):
+        if N > 1:
+            offsets = ttgl.arange(0, N, layout=LAYOUT)
         else:
             offsets = 0
-        old = ttgl.atomic_xor(X + offsets, -0.0, sem="relaxed")
+        old = OP(X + offsets, -0.0, sem="relaxed")
         ttgl.store(Old + offsets, old)
 
-    initial = torch.full((32 if tensor else 1, ), 1.5, dtype=dtype, device=device)
+    bits_ty = torch.int32 if dtype == torch.float32 else torch.int64
+    n = THREADS_PER_WARP if tensor else 1
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [1], [0])
+    initial = torch.full((n, ), 1.5, dtype=dtype, device=device)
+    initial[::2].neg_()
     x, old = initial.clone(), torch.empty_like(initial)
-    kernel[(1, )](x, old, tensor, num_warps=1)
-    assert torch.equal(old, initial)
-    assert torch.equal(x, -initial)
+    compiled = kernel[(1, )](x, old, n, layout, getattr(ttgl, f"atomic_{op}"), num_warps=1)
+    rmw, = (line for line in compiled.asm["source"].splitlines() if f"tt.atomic_rmw {op}," in line)
+    assert f"!tt.ptr<i{initial.element_size() * 8}>" in rmw
+    sign = torch.full_like(initial, -0.0).view(bits_ty)
+    expected = getattr(torch, f"bitwise_{op}")(initial.view(bits_ty), sign)
+    assert torch.equal(old.view(bits_ty), initial.view(bits_ty))
+    assert torch.equal(x.view(bits_ty), expected)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")

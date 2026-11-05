@@ -4666,9 +4666,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   }
 
   // CHECK-LABEL: @atomic_xor_float_bits
-  // CHECK: %[[BITS:.*]] = llvm.bitcast {{.*}} : f32 to i32
-  // CHECK: %[[OLD:.*]] = llvm.atomicrmw _xor {{.*}}, %[[BITS]] syncscope("device") monotonic
-  // CHECK: llvm.bitcast %[[OLD]] : i32 to f32
+  // CHECK: llvm.inline_asm {{.*}}atom.global.gpu.relaxed.xor.b32
   tt.func public @atomic_xor_float_bits(%ptr: tensor<32x!tt.ptr<f32>, #atomic_blocked>, %out: tensor<32x!tt.ptr<f32>, #atomic_blocked>, %val: tensor<32xf32, #atomic_blocked>) {
     %old = tt.atomic_rmw xor, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<f32>, #atomic_blocked>, tensor<32xf32, #atomic_blocked>) -> tensor<32xf32, #atomic_blocked>
     tt.store %out, %old : tensor<32x!tt.ptr<f32>, #atomic_blocked>

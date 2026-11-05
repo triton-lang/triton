@@ -175,7 +175,10 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
               RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
               const TargetInfoBase &targetInfo, unsigned vec = 1,
               unsigned packed = 1, bool returnOld = true) {
-  if (pred || vec != 1 || packed != 1 ||
+  // Older TTGIR can carry floating operands for integer RMW operations.
+  bool needsBitwisePtx = isa<FloatType>(valueElemTy) &&
+                         rmwOpAttr != RMWOp::FADD && rmwOpAttr != RMWOp::XCHG;
+  if (pred || vec != 1 || packed != 1 || needsBitwisePtx ||
       usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
     return emitPtxAtomicRMWImpl(
         rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr, sem,
@@ -186,17 +189,10 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Value val = vals.front();
-  // LLVM's integer RMWs operate on the bit representation of floating values.
-  bool useIntegerBits = isa<FloatType>(valueElemTy) &&
-                        rmwOpAttr != RMWOp::FADD && rmwOpAttr != RMWOp::XCHG;
-  if (useIntegerBits)
-    val = b.bitcast(val, int_ty(valueElemTy.getIntOrFloatBitWidth()));
-  Value old =
-      LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, val, *ordering,
-                                targetInfo.getAtomicSyncScope(scope));
-  return useIntegerBits ? b.bitcast(old, valueElemTy) : old;
+  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
+                                   *ordering,
+                                   targetInfo.getAtomicSyncScope(scope))
+      .getResult();
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
