@@ -229,17 +229,17 @@ tt.func private @test_scan_shuffle_up_i64(%arg: tensor<64xi64, #groups>) -> tens
   tt.return %result : tensor<64xi64, #groups>
 }
 
-// Physical lane bit zero selects an independent row. The scan strides are
-// 2, 4, 8, and 16, preserving that row bit.
+// Physical lane bit zero selects an independent row. Column k is in lanes
+// 2*k and 2*k+1, so a shuffle by 2*d supplies the bounds for a scan by d.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_strided(
 // OFFSETS-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
 // OFFSETS-DAG: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32)
 // OFFSETS-DAG: %[[EIGHT:.*]] = llvm.mlir.constant(8 : i32)
 // OFFSETS-DAG: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[TWO]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[FOUR]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[EIGHT]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[TWO]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[FOUR]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[EIGHT]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
@@ -251,11 +251,11 @@ tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) 
 }
 
 // The first two rounds cross gaps between scan lane bits 0, 2, and 4.
-// The last round changes only bit 4 and has a uniform distance of 16.
+// In the last round, column >= 4 is equivalent to physical lane >= 16.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_gapped(
 // OFFSETS: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
 // OFFSETS-COUNT-2: nvvm.shfl.sync idx
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
 // OFFSETS-NOT: nvvm.shfl.sync
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {

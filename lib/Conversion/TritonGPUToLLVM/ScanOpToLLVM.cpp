@@ -188,16 +188,25 @@ private:
     if (numSegments != axisSize)
       segmentIndex = b.and_(index, b.i32_val(numSegments - 1));
 
+    const auto &laneBases = layout.getBases().find(kLane)->second;
+    auto shuffleBoundsMatch = [&](unsigned distance, unsigned laneDistance) {
+      if (layout.getInDimSize(kLane) != targetInfo.getWarpSize())
+        return false;
+      // Both bounds tests ask whether a quotient is nonzero. Division by
+      // these powers of two drops low bits, so checking the lane bases proves
+      // segmentIndex / distance == laneId / laneDistance for every lane.
+      for (auto [bit, basis] : llvm::enumerate(laneBases)) {
+        unsigned segment = basis[axis] & (numSegments - 1);
+        if (segment / distance != (1u << bit) / laneDistance)
+          return false;
+      }
+      return true;
+    };
     // Depending on the interval, we maybe able to use shuffleUp or shuffleIdx.
     // The former is more efficient, but it only works when the distance is a
     // power of 2. The latter is more general, but it requires a lane index to
     // be computed and passed in.
-    // The logical segment index must equal laneId * numRegs for every lane.
-    bool fullWarp = !reverse && numLanes == targetInfo.getWarpSize();
-    for (auto [bit, basis] :
-         llvm::enumerate(laneLayout.getBases().lookup(kLane)))
-      fullWarp &= (basis[axis] & (numSegments - 1)) == (numRegs << bit);
-    SmallVector<std::tuple<Value, Value, std::optional<unsigned>, bool>> rounds;
+    SmallVector<std::tuple<Value, Value, std::optional<unsigned>>> rounds;
     for (unsigned offset = 1; offset < numLanes; offset *= 2) {
       int distance = offset * numRegs;
       auto upDistance =
@@ -212,20 +221,22 @@ private:
                    .back()
                    .second;
       }
-      Value pred =
-          reverse ? b.icmp_ult(segmentIndex, b.i32_val(numSegments - distance))
-                  : b.icmp_uge(segmentIndex, b.i32_val(distance));
-      rounds.emplace_back(lane, pred, upDistance,
-                          fullWarp && upDistance == offset);
+      Value logicalBounds;
+      if (!upDistance || !shuffleBoundsMatch(distance, *upDistance))
+        logicalBounds = reverse ? b.icmp_ult(segmentIndex,
+                                             b.i32_val(numSegments - distance))
+                                : b.icmp_uge(segmentIndex, b.i32_val(distance));
+      rounds.emplace_back(lane, logicalBounds, upDistance);
     }
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
-      for (auto [lane, pred, upDistance, useValidity] : rounds) {
+      for (auto [lane, logicalBounds, upDistance] : rounds) {
         auto [incoming, sourceInBounds] =
             shuffleValues(loc, values[last], lane, rewriter, upDistance);
+        Value pred = logicalBounds ? logicalBounds : sourceInBounds;
         for (unsigned r = base; r < base + numRegs; ++r)
-          values[r] = combineWithPrefix(op, incoming, values[r], rewriter,
-                                        useValidity ? sourceInBounds : pred);
+          values[r] =
+              combineWithPrefix(op, incoming, values[r], rewriter, pred);
       }
     }
   }
