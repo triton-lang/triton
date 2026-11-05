@@ -5,6 +5,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <limits>
 #include <tuple>
@@ -14,51 +15,40 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
-                               Value i, NVVM::ShflKind mode, Value clamp) {
+static Value shuffleWords(Location loc, RewriterBase &rewriter, Value val,
+                          llvm::function_ref<Value(Value)> shuffleWord) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  unsigned bits = val.getType().getIntOrFloatBitWidth();
-
-  if (bits == 64) {
-    Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = b.bitcast(val, vecTy);
-    Value val0 = b.extract_element(f32_ty, vec, b.i32_val(0));
-    Value val1 = b.extract_element(f32_ty, vec, b.i32_val(1));
-    val0 = shuffleCommonImpl(loc, rewriter, val0, i, mode, clamp);
-    val1 = shuffleCommonImpl(loc, rewriter, val1, i, mode, clamp);
-    vec = b.undef(vecTy);
-    vec = b.insert_element(vecTy, vec, val0, b.i32_val(0));
-    vec = b.insert_element(vecTy, vec, val1, b.i32_val(1));
-    return b.bitcast(vec, val.getType());
-  }
   Type type = val.getType();
-  if (type != i32_ty) {
-    val = b.bitcast(val, int_ty(bits));
-    if (bits < 32)
-      val = b.zext(i32_ty, val);
+  if (isa<LLVM::LLVMPointerType>(type))
+    return b.inttoptr(type, shuffleWords(loc, rewriter, b.ptrtoint(i64_ty, val),
+                                         shuffleWord));
+  unsigned bits = type.getIntOrFloatBitWidth();
+  if (bits == 64) {
+    auto words =
+        unpackLLVector(loc, b.bitcast(val, vec_ty(i32_ty, 2)), rewriter);
+    for (Value &word : words)
+      word = shuffleWord(word);
+    return b.bitcast(packLLVector(loc, words, rewriter), type);
   }
-  Value mask = b.i32_val(0xFFFFFFFF);
-  Value result = NVVM::ShflOp::create(rewriter, loc, i32_ty, mask, val, i,
-                                      clamp, mode, UnitAttr());
-  if (type != i32_ty) {
-    if (bits < 32)
-      result = b.trunc(int_ty(bits), result, LLVM::IntegerOverflowFlags::nuw);
-    result = b.bitcast(result, type);
-  }
-  return result;
+  if (type == i32_ty)
+    return shuffleWord(val);
+  Value word = b.bitcast(val, int_ty(bits));
+  if (bits < 32)
+    word = b.zext(i32_ty, word);
+  word = shuffleWord(word);
+  if (bits < 32)
+    word = b.trunc(int_ty(bits), word, LLVM::IntegerOverflowFlags::nuw);
+  return b.bitcast(word, type);
 }
 
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
                            Value i, NVVM::ShflKind mode, Value clamp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // To shuffle pointers, convert them to i64.
-  Type valTy = val.getType();
-  if (isa<LLVM::LLVMPointerType>(valTy))
-    val = b.ptrtoint(i64_ty, val);
-  Value result = shuffleCommonImpl(loc, rewriter, val, i, mode, clamp);
-  if (isa<LLVM::LLVMPointerType>(valTy))
-    result = b.inttoptr(valTy, result);
-  return result;
+  Value mask = b.i32_val(-1);
+  return shuffleWords(loc, rewriter, val, [&](Value word) -> Value {
+    return NVVM::ShflOp::create(rewriter, loc, i32_ty, mask, word, i, clamp,
+                                mode, UnitAttr());
+  });
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
