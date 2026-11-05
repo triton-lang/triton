@@ -202,7 +202,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Five scan rounds and the exclusive carry use shuffle-up.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_carry(
 // OFFSETS-NOT: nvvm.shfl.sync idx
-// OFFSETS-COUNT-6: nvvm.shfl.sync up
+// OFFSETS-COUNT-5: nvvm.shfl.sync up {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up {{.*}} : i32 -> i32
 // OFFSETS-NOT: nvvm.shfl.sync
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_carry(%arg: tensor<64xi32, #groups>) -> tensor<64xi32, #groups> {
@@ -212,6 +213,20 @@ tt.func private @test_scan_shuffle_up_carry(%arg: tensor<64xi32, #groups>) -> te
     tt.scan.return %sum : i32
   }) : (tensor<64xi32, #groups>) -> tensor<64xi32, #groups>
   tt.return %result : tensor<64xi32, #groups>
+}
+
+// Both words of an i64 read the same lane. Each round uses one bounds result.
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_i64(
+// OFFSETS-COUNT-5: nvvm.shfl.sync up {{.*}} return_value_and_is_valid
+// OFFSETS-NOT: return_value_and_is_valid
+// OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_up_i64(%arg: tensor<64xi64, #groups>) -> tensor<64xi64, #groups> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<64xi64, #groups>) -> tensor<64xi64, #groups>
+  tt.return %result : tensor<64xi64, #groups>
 }
 
 // Physical lane bit zero selects an independent row. The scan strides are

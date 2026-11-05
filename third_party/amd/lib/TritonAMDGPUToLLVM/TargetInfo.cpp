@@ -305,14 +305,15 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int delta) const {
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value laneId = getLaneId(rewriter, loc);
   Value offset = b.i32_val(delta);
-  Value underflow = b.icmp_slt(laneId, offset);
-  Value index = b.select(underflow, laneId, b.sub(laneId, offset));
-  return shuffleIdx(rewriter, loc, val, index);
+  Value sourceInBounds = b.icmp_sge(laneId, offset);
+  Value index = b.select(sourceInBounds, b.sub(laneId, offset), laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,

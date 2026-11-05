@@ -97,15 +97,24 @@ private:
     return totals;
   }
 
-  SmallVector<Value>
+  std::pair<SmallVector<Value>, Value>
   shuffleValues(Location loc, SmallVector<Value> values, Value lane,
                 ConversionPatternRewriter &rewriter,
-                std::optional<unsigned> upDistance = {}) const {
-    for (Value &value : values)
-      value = upDistance
-                  ? targetInfo.shuffleUp(rewriter, loc, value, *upDistance)
-                  : targetInfo.shuffleIdx(rewriter, loc, value, lane);
-    return values;
+                std::optional<unsigned> upDistance) const {
+    Value sourceInBounds;
+    for (auto [index, value] : llvm::enumerate(values)) {
+      if (upDistance) {
+        auto [shuffled, inBounds] =
+            targetInfo.shuffleUp(rewriter, loc, value, *upDistance);
+        value = shuffled;
+        // All tuple members read the same source lane.
+        if (index == 0)
+          sourceInBounds = inBounds;
+      } else {
+        value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
+      }
+    }
+    return {std::move(values), sourceInBounds};
   }
 
   static Value shiftWithinSegment(TritonLLVMOpBuilder &b, Value index,
@@ -183,7 +192,12 @@ private:
     // The former is more efficient, but it only works when the distance is a
     // power of 2. The latter is more general, but it requires a lane index to
     // be computed and passed in.
-    SmallVector<std::tuple<Value, Value, std::optional<unsigned>>> rounds;
+    // The logical segment index must equal laneId * numRegs for every lane.
+    bool fullWarp = !reverse && numLanes == 32;
+    for (auto [bit, basis] :
+         llvm::enumerate(laneLayout.getBases().lookup(kLane)))
+      fullWarp &= (basis[axis] & (numSegments - 1)) == (numRegs << bit);
+    SmallVector<std::tuple<Value, Value, std::optional<unsigned>, bool>> rounds;
     for (unsigned offset = 1; offset < numLanes; offset *= 2) {
       int distance = offset * numRegs;
       auto upDistance =
@@ -201,16 +215,17 @@ private:
       Value pred =
           reverse ? b.icmp_ult(segmentIndex, b.i32_val(numSegments - distance))
                   : b.icmp_uge(segmentIndex, b.i32_val(distance));
-      rounds.emplace_back(lane, pred, upDistance);
+      rounds.emplace_back(lane, pred, upDistance,
+                          fullWarp && upDistance == offset);
     }
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
-      for (auto [lane, pred, upDistance] : rounds) {
-        auto incoming =
+      for (auto [lane, pred, upDistance, useValidity] : rounds) {
+        auto [incoming, sourceInBounds] =
             shuffleValues(loc, values[last], lane, rewriter, upDistance);
         for (unsigned r = base; r < base + numRegs; ++r)
-          values[r] =
-              combineWithPrefix(op, incoming, values[r], rewriter, pred);
+          values[r] = combineWithPrefix(op, incoming, values[r], rewriter,
+                                        useValidity ? sourceInBounds : pred);
       }
     }
   }
@@ -559,10 +574,12 @@ private:
     assert(!candidates.empty() && "each segment has a warp-local carry");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto carry = shuffleValues(loc, totals[candidates.front()], srcLane,
-                               rewriter, upDistance);
+                               rewriter, upDistance)
+                     .first;
     for (unsigned candidate : candidates.drop_front()) {
       auto incoming =
-          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance);
+          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance)
+              .first;
       Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
       for (auto [value, source] : llvm::zip(carry, incoming))
         value = b.select(select, source, value);

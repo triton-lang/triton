@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "Dialect/NVGPU/IR/Dialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -42,9 +43,10 @@ static Value shuffleWords(Location loc, RewriterBase &rewriter, Value val,
 }
 
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, NVVM::ShflKind mode, Value clamp) {
+                           Value i, NVVM::ShflKind mode) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask = b.i32_val(-1);
+  Value clamp = b.i32_val(31);
   return shuffleWords(loc, rewriter, val, [&](Value word) -> Value {
     return NVVM::ShflOp::create(rewriter, loc, i32_ty, mask, word, i, clamp,
                                 mode, UnitAttr());
@@ -53,14 +55,24 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::bfly,
-                       b.i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::bfly);
 }
 
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::up,
-                       b.i32_val(0x0));
+std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
+                                  Value val, int delta) {
+  Value sourceInBounds;
+  auto shuffleWord = [&](Value word) -> Value {
+    auto shuffle = mlir::gpu::ShuffleOp::create(rewriter, loc, word, delta, 32,
+                                                mlir::gpu::ShuffleMode::UP);
+    // Both halves of a 64-bit value read the same source lane.
+    if (!sourceInBounds)
+      sourceInBounds = shuffle.getValid();
+    return shuffle.getShuffleResult();
+  };
+  Value result = val.getType().isF32()
+                     ? shuffleWord(val)
+                     : shuffleWords(loc, rewriter, val, shuffleWord);
+  return {result, sourceInBounds};
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
@@ -69,9 +81,7 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                       b.i32_val(0x1f));
+  return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx);
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
