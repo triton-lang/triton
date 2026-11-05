@@ -437,10 +437,22 @@ def test_benchmark_cache_flush_does_not_write(device):
     driver = triton.runtime.driver.active
     cache = driver.get_empty_cache_for_benchmark()
     cache.fill_(1)
-    before = cache.sum().item()
+    before = cache.clone()
     driver.clear_cache(cache)
-    assert cache.sum().item() == before, \
+    assert torch.equal(cache, before), \
         "the L2 flush wrote to the buffer, so its dirty lines are billed to the next timed kernel"
+
+
+@pytest.mark.parametrize("size", [1, 1024, 1025, 4096])
+@pytest.mark.parametrize("bits", [0, 1, 0x42F12000, 0x7FC00001, 0x7F800000],
+                         ids=["zero", "subnormal", "reachable-sum", "nan", "inf"])
+def test_benchmark_cache_flush_preserves_bits(device, size, bits):
+    # 1024 float32 values of 120.5625 sum exactly to 123456.0. Integer
+    # comparisons also check that NaN payloads are preserved bit for bit.
+    cache = torch.full((size, ), bits, dtype=torch.int32, device=device)
+    before = cache.clone()
+    triton.runtime.driver.active.clear_cache(cache)
+    assert torch.equal(cache, before)
 
 
 def test_is_lazy():

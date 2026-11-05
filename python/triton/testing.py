@@ -141,10 +141,8 @@ def _collect_proton_scope_times(database, prefix):
 @jit
 def _read_flush_kernel(X, n, BLOCK: tl.constexpr):
     off = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-    keep = tl.sum(tl.load(X + off, mask=off < n))
-    # The store never executes; it only stops the load above from being removed.
-    if keep == 123456.0:
-        tl.store(X, keep)
+    # Volatile keeps the read even when its result is unused, without a store.
+    tl.load(X + off, mask=off < n, volatile=True)
 
 
 def _flush_l2(cache):
