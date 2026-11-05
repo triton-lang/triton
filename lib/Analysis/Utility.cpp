@@ -506,7 +506,9 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   }
 
   unsigned next = 1;
-  if (interWarpScanType == InterWarpScanType::Warp)
+  // Grouped traversal can also scan across lanes while retaining the
+  // independent lane bases that select other scans.
+  if (interWarpScanType != InterWarpScanType::Registers)
     for (auto &basis : bases[kLane])
       if (next < numSegments &&
           llvm::all_of(basis, [](int32_t x) { return x == 0; })) {

@@ -145,6 +145,11 @@ def _scan_layouts():
         if _is_layout_applicable(layout)
     ]
     return cases + [
+        pytest.param(
+            ttgl.DistributedLinearLayout([[1, 0], [0, 1], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]],
+                                         [[0, 2], [0, 0], [0, 4], [0, 0], [0, 8]] + [[0, 0]] *
+                                         (THREADS_PER_WARP.bit_length() - 6), [[2, 0], [4, 0]], [], [512, 16]), 512, 16,
+            0, torch.int32, id="interwarp_groups_lane_ownership"),
         *[
             pytest.param(
                 ttgl.DistributedLinearLayout(
