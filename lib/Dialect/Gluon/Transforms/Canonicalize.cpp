@@ -57,6 +57,7 @@ void Canonicalize::runOnOperation() {
   // Populate select Triton canonicalization patterns. The important patterns to
   // EXCLUDE are those that modify layouts, especially `ConvertLayoutOp`
   // patterns.
+  MakeRangeOp::getCanonicalizationPatterns(patterns, ctx);
   LoadOp::getCanonicalizationPatterns(patterns, ctx);
   StoreOp::getCanonicalizationPatterns(patterns, ctx);
   AtomicStoreOp::getCanonicalizationPatterns(patterns, ctx);

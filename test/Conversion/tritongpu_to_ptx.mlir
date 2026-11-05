@@ -652,16 +652,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM80: prmt.b32
   // SM90: cvt.rn.satfinite.e5m2x2.f32
   // SM100: cvt.rn.satfinite.e5m2x2.f32
+  // SM90-NOT: prmt.b32
+  // SM100-NOT: prmt.b32
+  // CHECK: st.global.
   // VEC80-LABEL: llvm.func @fp32_to_fp8e5_rtne
   // VEC80: nvvm.convert.f32x2.to.f16x2 {{.*}}rnd = <rz>
   // VEC80: llvm.call_intrinsic "llvm.minimumnum"
   // VEC80: llvm.intr.copysign
-  tt.func public @fp32_to_fp8e5_rtne(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<256xf32, #blocked>) {
-    %result = tt.fp_to_fp %arg, rounding = rtne : tensor<256xf32, #blocked> -> tensor<256xf8E5M2, #blocked>
-    %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
-    %base = tt.splat %ptr : !tt.ptr<f8E5M2> -> tensor<256x!tt.ptr<f8E5M2>, #blocked>
-    %ptrs = tt.addptr %base, %offsets : tensor<256x!tt.ptr<f8E5M2>, #blocked>, tensor<256xi32, #blocked>
-    tt.store %ptrs, %result : tensor<256x!tt.ptr<f8E5M2>, #blocked>
+  tt.func public @fp32_to_fp8e5_rtne(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<512xf32, #blocked>) {
+    %result = tt.fp_to_fp %arg, rounding = rtne : tensor<512xf32, #blocked> -> tensor<512xf8E5M2, #blocked>
+    %offsets = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
+    %base = tt.splat %ptr : !tt.ptr<f8E5M2> -> tensor<512x!tt.ptr<f8E5M2>, #blocked>
+    %ptrs = tt.addptr %base, %offsets : tensor<512x!tt.ptr<f8E5M2>, #blocked>, tensor<512xi32, #blocked>
+    tt.store %ptrs, %result : tensor<512x!tt.ptr<f8E5M2>, #blocked>
     tt.return
   }
 
