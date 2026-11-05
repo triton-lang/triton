@@ -175,10 +175,7 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
               RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
               const TargetInfoBase &targetInfo, unsigned vec = 1,
               unsigned packed = 1, bool returnOld = true) {
-  // Older TTGIR can carry floating operands for integer RMW operations.
-  bool needsBitwisePtx = isa<FloatType>(valueElemTy) &&
-                         rmwOpAttr != RMWOp::FADD && rmwOpAttr != RMWOp::XCHG;
-  if (pred || vec != 1 || packed != 1 || needsBitwisePtx ||
+  if (pred || vec != 1 || packed != 1 ||
       usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
     return emitPtxAtomicRMWImpl(
         rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr, sem,
