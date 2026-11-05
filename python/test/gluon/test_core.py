@@ -4543,8 +4543,7 @@ def test_buffer_descriptor_mask_changing_bound():
     out = torch.empty(64, dtype=torch.int32, device="cuda")
     kernel[(1, )](src, bounds, out, 3, num_warps=1)
     index = torch.arange(64, device="cuda")
-    expected = (torch.where(index < 7, src[:64], 0) + src[64:128] +
-                torch.where(index < 5, src[128:192], 0))
+    expected = (torch.where(index < 7, src[:64], 0) + src[64:128] + torch.where(index < 5, src[128:192], 0))
     torch.testing.assert_close(out, torch.where(index % 2 == 0, expected, 0), atol=0, rtol=0)
 
 
