@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // async_commit_groups and yield a tighter bound (e.g. 1 for a real
   // gfx950 simple_persistent_matmul kernel).
   // CHECK: scf.for
-  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
+  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32
   tt.func public @async_ns3_gemm_pingpong_multi_token(
       %arg0: i32,
       %arg1: tensor<256x32x!tt.ptr<bf16>, #blocked>,

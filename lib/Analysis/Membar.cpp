@@ -499,17 +499,21 @@ bool MembarAnalysis::hasThreadEffects(Operation *op) {
   });
 }
 
+CompletionSync MembarAnalysis::getCompletionSync(Operation *op) {
+  auto sync = getThreadSyncInfo(op);
+  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
+    return CompletionSync::All;
+  if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
+    return CompletionSync::Shared;
+  return CompletionSync::None;
+}
+
 BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
   BlockInfo effects;
   effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
-  auto sync = getThreadSyncInfo(op);
-  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
-    effects.threadSync.completion = CompletionSync::All;
-  else if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
-    effects.threadSync.completion = CompletionSync::Shared;
-  effects.threadSync.peerWaitNeedsSync =
-      sync.kind == ThreadSyncKind::MBarrierWait &&
-      !isRegionLocal(cast<ttng::WaitBarrierOp>(op).getAlloc());
+  effects.threadSync.completion = getCompletionSync(op);
+  if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op))
+    effects.threadSync.peerWaitNeedsSync = !isRegionLocal(wait.getAlloc());
   return effects;
 }
 
