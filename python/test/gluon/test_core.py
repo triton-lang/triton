@@ -4490,7 +4490,7 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("num_records", [0, 12, 28, 60])
 @pytest.mark.parametrize("vec", [1, 4])
 @pytest.mark.parametrize("soffset", [0, 1])
@@ -4501,11 +4501,11 @@ def test_buffer_descriptor_mask_partial_bounds(num_records, vec, soffset):
         layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [64], [1], [0])
         offsets = ttgl.arange(0, 64 * VEC, layout=layout)
         mask = (offsets // VEC) % 3 != 2
-        src_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, bound.to(ttgl.uint32))
-        x = ttgl.amd.cdna4.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, bound.to(ttgl.uint32))
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
         ttgl.store(out + offsets, x)
-        dst_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(dst, bound.to(ttgl.uint32))
-        ttgl.amd.cdna4.buffer.store(offsets + 1, dst_desc, offsets, mask=mask, soffset=soffset)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, bound.to(ttgl.uint32))
+        ttgl.amd.cdna3.buffer.store(offsets + 1, dst_desc, offsets, mask=mask, soffset=soffset)
 
     n = 64 * vec
     src = torch.arange(1, soffset + n + 1, dtype=torch.int32, device="cuda")
@@ -4522,7 +4522,7 @@ def test_buffer_descriptor_mask_partial_bounds(num_records, vec, soffset):
     torch.testing.assert_close(dst, expected_store, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_buffer_descriptor_mask_changing_bound():
 
     @gluon.jit
@@ -4530,12 +4530,12 @@ def test_buffer_descriptor_mask_changing_bound():
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
         mask = offsets % 2 == 0
-        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, ttgl.load(bounds))
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, ttgl.load(bounds))
         acc = ttgl.zeros([64], ttgl.int32, layout)
         for step in range(steps):
-            acc += ttgl.amd.cdna4.buffer.load(desc, offsets, mask=mask)
+            acc += ttgl.amd.cdna3.buffer.load(desc, offsets, mask=mask)
             bound = ttgl.load(bounds + step + 1)
-            desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src + (step + 1) * 64, bound)
+            desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src + (step + 1) * 64, bound)
         ttgl.store(out + offsets, acc)
 
     src = torch.arange(1, 257, dtype=torch.int32, device="cuda")

@@ -56,7 +56,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords) {
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
   //
-  // For GFX12+ (RDNA4, CDNA5): LLVM's lowerPointerAsRsrcIntrin()
+  // For CDNA5: LLVM's lowerPointerAsRsrcIntrin()
   // (SIISelLowering.cpp) rebuilds the descriptor in v2i64 format (57-bit
   // base, 45-bit num_records) and shifts the flags operand left by 28 bits
   // into bits [127:124] of the descriptor. Therefore only flags bits [3:0]
@@ -67,7 +67,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords) {
   // OOB_select=0 is correct for raw buffer ops with stride=0
   // (structured and unstructured modes are equivalent in this case).
   // The RDNA-style flags below have bits [3:0]=0, so they are effectively
-  // ignored on GFX12+ but we include CDNA5 in the check for consistency.
+  // ignored on CDNA5 but we include it in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
   if (llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m, ISAFamily::RDNA4,
                           ISAFamily::CDNA5},
@@ -311,7 +311,7 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
     accessBytes *= vecTy.getNumElements();
   Value vOffsetOutOfBounds =
       b.int_val(32, isAtomicRMW ? static_cast<int32_t>(-accessBytes) : -1);
-  if (!isAtomicRMW && targetInfo.getISAFamily() == ISAFamily::CDNA4) {
+  if (!isAtomicRMW) {
     if (!hasBufferDescriptor) {
       // Implicit pointer descriptors have a fixed 2^31 - 2 byte bound.
       // Preserve the aligned sentinel and code generation used before explicit
@@ -321,11 +321,16 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
       // An aligned OOB offset avoids extra buffer processing on gfx950. Keep
       // the original extent, including any partial tail. Only use -16 when it
       // is outside that extent; near-full-range descriptors still need -1.
-      // CDNA4 stores NumRecords in resource bits [95:64]. Extract it from the
-      // current operand so descriptors carried through control flow work too.
+      // CDNA5 stores NumRecords starting at bit 57; other targets use bit 64.
+      // BufferDescType has a 32-bit byte bound even on targets with a wider
+      // hardware field. Read the current operand so loop-carried descriptors
+      // work without inspecting their producers.
+      unsigned numRecordsShift =
+          targetInfo.getISAFamily() == ISAFamily::CDNA5 ? 57 : 64;
       Type i128Ty = rewriter.getIntegerType(128);
       Value bits = b.ptrtoint(i128Ty, rsrcDesc);
-      Value numRecords = b.trunc(i32_ty, b.lshr(bits, b.int_val(128, 64)));
+      Value numRecords =
+          b.trunc(i32_ty, b.lshr(bits, b.int_val(128, numRecordsShift)));
       Value alignedOOB = b.i32_val(-16);
       Value fits = b.icmp_ule(numRecords, alignedOOB);
       vOffsetOutOfBounds = b.select(fits, alignedOOB, vOffsetOutOfBounds);
