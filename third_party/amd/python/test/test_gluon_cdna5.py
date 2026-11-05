@@ -494,16 +494,21 @@ def test_runtime_gemm_wide_k_width(a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BL
 def run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     torch.manual_seed(42)
 
+    a_dtype = getattr(torch, a_dtype)
+    b_dtype = getattr(torch, b_dtype)
+    c_dtype = getattr(torch, c_dtype)
+
     def create_operand(shape, dtype):
+        if c_dtype == torch.float16:
+            # Integers in [-2, 2] are exact in fp16/fp8 and keep every partial sum
+            # within fp16's exact-integer range (|sum| <= 4 * K <= 2048).
+            assert K <= 512
+            return torch.randint(-2, 3, shape).to(dtype)
         if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
             return torch.randint(20, 40, shape, dtype=torch.uint8).view(dtype)
-
-    a_dtype = getattr(torch, a_dtype)
-    b_dtype = getattr(torch, b_dtype)
-    c_dtype = getattr(torch, c_dtype)
 
     a = create_operand((M, K), a_dtype)
     b = create_operand((K, N), b_dtype)
@@ -528,7 +533,7 @@ def run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
     if c_dtype == torch.float16:
-        torch.testing.assert_close(c_triton.to(torch.float32), c_torch, rtol=1e-2, atol=1e-1)
+        torch.testing.assert_close(c_triton.to(torch.float32), c_torch, rtol=0, atol=0)
     else:
         torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
 
