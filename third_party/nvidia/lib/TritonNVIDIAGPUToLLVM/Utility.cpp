@@ -73,6 +73,12 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
                        b.i32_val(0x0));
 }
 
+Value shuffleDown(Location loc, RewriterBase &rewriter, Value val, int i) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::down,
+                       b.i32_val(0x1f));
+}
+
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   return shuffleIdx(loc, rewriter, val, b.i32_val(i));
