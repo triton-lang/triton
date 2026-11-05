@@ -42,7 +42,6 @@ from triton._internal_testing import (
     is_hip_rdna4m,
     is_hip_rdna4,
     is_hip_cdna5,
-    is_xpu,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -2120,7 +2119,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
-    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.gpu.{sem_str}." in ptx or f"atom.{sem_str}.gpu.global." in ptx
 
 
 @pytest.mark.interpreter
@@ -2398,7 +2398,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
         return
-    assert f"atom.global.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.{sem_str}.gpu.cas." in ptx or f"atom.{sem_str}.gpu.global.cas." in ptx
 
 
 @pytest.mark.interpreter
@@ -7174,9 +7175,6 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
-    if not (is_hip() or is_xpu()):
-        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------

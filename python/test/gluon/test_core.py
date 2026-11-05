@@ -289,6 +289,35 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("op", ["and", "or", "xor"])
+@pytest.mark.parametrize("tensor", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_atomic_bitwise_float_bits(op, tensor, dtype, device):
+
+    @gluon.jit
+    def kernel(X, Old, N: ttgl.constexpr, LAYOUT: ttgl.constexpr, OP: ttgl.constexpr):
+        if N > 1:
+            offsets = ttgl.arange(0, N, layout=LAYOUT)
+        else:
+            offsets = 0
+        old = OP(X + offsets, -0.0, sem="relaxed")
+        ttgl.store(Old + offsets, old)
+
+    bits_ty = torch.int32 if dtype == torch.float32 else torch.int64
+    n = THREADS_PER_WARP if tensor else 1
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [1], [0])
+    initial = torch.full((n, ), 1.5, dtype=dtype, device=device)
+    initial[::2].neg_()
+    x, old = initial.clone(), torch.empty_like(initial)
+    compiled = kernel[(1, )](x, old, n, layout, getattr(ttgl, f"atomic_{op}"), num_warps=1)
+    rmw, = (line for line in compiled.asm["source"].splitlines() if f"tt.atomic_rmw {op}," in line)
+    assert f"!tt.ptr<i{initial.element_size() * 8}>" in rmw
+    sign = torch.full_like(initial, -0.0).view(bits_ty)
+    expected = getattr(torch, f"bitwise_{op}")(initial.view(bits_ty), sign)
+    assert torch.equal(old.view(bits_ty), initial.view(bits_ty))
+    assert torch.equal(x.view(bits_ty), expected)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
 @pytest.mark.parametrize("op", ["load", "store"])
 @pytest.mark.parametrize(

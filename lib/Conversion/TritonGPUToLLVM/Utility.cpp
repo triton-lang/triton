@@ -312,10 +312,10 @@ Value emitMemoryThreadPredicate(
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
   if (op->getParentOfType<ThreadScopeOp>()) {
     auto block = StringAttr::get(op->getContext(), "block");
-    auto domain = ThreadDomainAttr::get(op->getContext(), 0, 0,
-                                        freeVarMasks.lookup(block) &
-                                            (lookupNumCTAs(op) - 1));
-    return emitThreadPredicate(domain, rewriter, op->getLoc(), targetInfo);
+    llvm::MapVector<StringAttr, int32_t> residualMasks;
+    residualMasks[block] = freeVarMasks.lookup(block) & (lookupNumCTAs(op) - 1);
+    return emitRedundantThreadPredicate(residualMasks, rewriter, op->getLoc(),
+                                        targetInfo);
   }
   return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
                                       targetInfo);
