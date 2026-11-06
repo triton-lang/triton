@@ -629,8 +629,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0
+    // CHECK-SAME: ttg.amdg.completion_scope = "all"
     amdg.async_tdm_wait {num = 0 : i32}
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 1
+    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 1 : i32}
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 2
     amdg.async_tdm_wait {num = 2 : i32}

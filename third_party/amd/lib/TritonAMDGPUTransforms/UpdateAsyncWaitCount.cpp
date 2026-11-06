@@ -60,13 +60,14 @@ static bool isAsyncWait(Operation *op) {
 // restoring Shared scope after stores. Partial waits keep the bit; producer
 // order/counts could refine retirement if needed.
 class AsyncCompletionAnalysis {
-  enum Work : unsigned {
+  enum GlobalWriteQueue : unsigned {
     CopyGlobalWrite = 1,
     TDMGlobalWrite = 2,
   };
 
   struct EntryState {
-    unsigned work;
+    // Each bit marks a queue that may still have async global writes pending.
+    unsigned pendingGlobalWrites;
     bool queued = false;
   };
   DenseMap<Operation *, EntryState> entries;
@@ -76,15 +77,14 @@ class AsyncCompletionAnalysis {
 
   // Queue existing IR positions only when their incoming state grows. Presence
   // in the map also records reachability when all bits are zero.
-  void enqueue(Operation *op, unsigned work) {
+  void enqueue(Operation *op, unsigned pendingGlobalWrites) {
     if (!op)
       return;
-    auto [it, inserted] = entries.try_emplace(op, EntryState{work});
+    auto [it, inserted] = entries.try_emplace(op, EntryState{0});
     auto &entry = it->second;
-    if (!inserted && (entry.work | work) == entry.work)
-      return;
-    entry.work |= work;
-    if (!entry.queued) {
+    unsigned previous = entry.pendingGlobalWrites;
+    entry.pendingGlobalWrites |= pendingGlobalWrites;
+    if (!entry.queued && (inserted || entry.pendingGlobalWrites != previous)) {
       entry.queued = true;
       worklist.push_back(op);
     }
@@ -112,23 +112,24 @@ class AsyncCompletionAnalysis {
 
   // Follow existing block successors or return to the enclosing structured op.
   // Loop backedges resume at the header, without rescanning pre-loop producers.
-  void leaveBlock(Operation *terminator, unsigned work) {
+  void leaveBlock(Operation *terminator, unsigned pendingGlobalWrites) {
     if (terminator->getNumSuccessors()) {
       for (Block *block : terminator->getSuccessors())
-        enqueue(&block->front(), work);
+        enqueue(&block->front(), pendingGlobalWrites);
       return;
     }
     Operation *parent = terminator->getParentOp();
     if (isa<scf::IfOp, scf::ExecuteRegionOp>(parent)) {
-      enqueue(parent->getNextNode(), work);
+      enqueue(parent->getNextNode(), pendingGlobalWrites);
     } else if (isa<scf::ForOp>(parent)) {
-      enqueue(parent, work);
+      enqueue(parent, pendingGlobalWrites);
     } else if (auto loop = dyn_cast<scf::WhileOp>(parent)) {
       bool fromBefore = terminator->getParentRegion() == &loop.getBefore();
       Block *next = fromBefore ? loop.getAfterBody() : loop.getBeforeBody();
-      enqueue(&next->front(), work);
+      enqueue(&next->front(), pendingGlobalWrites);
+      // The condition can also exit; the after-region only loops back.
       if (fromBefore)
-        enqueue(parent->getNextNode(), work);
+        enqueue(parent->getNextNode(), pendingGlobalWrites);
     } else if (!isa<FunctionOpInterface>(parent)) {
       unsupported = true;
     }
@@ -136,51 +137,48 @@ class AsyncCompletionAnalysis {
 
   // Scan straight-line IR directly; only control-flow transfers need worklist
   // entries. Accumulate wait scope before a full wait clears its queue's bit.
-  void scan(Operation *op, unsigned work) {
+  void scan(Operation *op, unsigned pendingGlobalWrites) {
     for (; op; op = op->getNextNode()) {
       if (isAsyncWait(op)) {
-        waitScopes[op] |= work;
-        work &= ~getDrainedQueue(op);
+        waitScopes[op] |= pendingGlobalWrites;
+        pendingGlobalWrites &= ~getDrainedQueue(op);
         continue;
       }
       if (op->hasTrait<OpTrait::IsTerminator>()) {
-        leaveBlock(op, work);
+        leaveBlock(op, pendingGlobalWrites);
         return;
       }
       if (!op->getNumRegions()) {
-        work |= classify(op);
+        pendingGlobalWrites |= classify(op);
         continue;
       }
 
-      // Only region-bearing ops need structured control-flow dispatch.
+      // Add the alternative path for an if or a possibly zero-trip for.
       if (auto branch = dyn_cast<scf::IfOp>(op)) {
-        enqueue(&branch.getThenRegion().front().front(), work);
         if (branch.getElseRegion().empty())
-          enqueue(op->getNextNode(), work);
+          enqueue(op->getNextNode(), pendingGlobalWrites);
         else
-          enqueue(&branch.getElseRegion().front().front(), work);
-      } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
-        enqueue(&loop.getBody()->front(), work);
-        enqueue(op->getNextNode(), work); // Include the zero-trip path.
-      } else if (auto loop = dyn_cast<scf::WhileOp>(op)) {
-        // The before-region executes even when the loop has zero iterations.
-        enqueue(&loop.getBeforeBody()->front(), work);
-      } else if (auto region = dyn_cast<scf::ExecuteRegionOp>(op)) {
-        enqueue(&region.getRegion().front().front(), work);
+          enqueue(&branch.getElseRegion().front().front(), pendingGlobalWrites);
+      } else if (isa<scf::ForOp>(op)) {
+        enqueue(op->getNextNode(), pendingGlobalWrites);
       } else if (isa<tt::ReduceOp, tt::ScanOp>(op)) {
         continue;
-      } else {
+      } else if (!isa<scf::WhileOp, scf::ExecuteRegionOp>(op)) {
         // Unsupported regions may execute concurrently. Keep the whole
         // function conservative rather than treating them as sequential.
         unsupported = true;
+        return;
       }
+      // All supported ops enter their first region, including while's condition
+      // region. Its terminator schedules the continuation or loop backedge.
+      enqueue(&op->getRegion(0).front().front(), pendingGlobalWrites);
       return;
     }
   }
 
 public:
   // Finish the forward fixed point before annotating waits. Unvisited waits,
-  // unsupported regions and unknown entry work retain All scope.
+  // unsupported regions and unknown entry state retain All scope.
   void annotate(FunctionOpInterface function, bool unknownEntry,
                 StringAttr name, StringAttr shared, StringAttr all) {
     if (!unknownEntry) {
@@ -191,7 +189,7 @@ public:
         Operation *op = worklist.pop_back_val();
         auto &entry = entries.find(op)->second;
         entry.queued = false;
-        scan(op, entry.work);
+        scan(op, entry.pendingGlobalWrites);
       }
     }
     function.walk([&](Operation *op) {

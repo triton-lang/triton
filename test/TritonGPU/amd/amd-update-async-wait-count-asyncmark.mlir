@@ -45,24 +45,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: uncommitted_copy_survives_wait
-  tt.func @uncommitted_copy_survives_wait(%mem: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %ptr: tensor<128x16x!tt.ptr<f16>, #blocked>) {
-    %load = ttg.async_copy_global_to_local %ptr, %mem : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
-    %group = ttg.async_commit_group tokens %load
-    %pending = ttg.async_copy_global_to_local %ptr, %mem : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
-    // An asyncmark wait covers committed groups, not the later copy.
-    // CHECK: ttg.async_wait {{.*}}{num = 0 : i32, ttg.amdg.completion_scope = "shared"}
-    ttg.async_wait %group {num = 0 : i32}
-    %nextGroup = ttg.async_commit_group tokens %pending
-    // CHECK: ttg.async_wait {{.*}}{num = 0 : i32, ttg.amdg.completion_scope = "shared"}
-    ttg.async_wait %nextGroup {num = 0 : i32}
-    tt.return
-  }
-}

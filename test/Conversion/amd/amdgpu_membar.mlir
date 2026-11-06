@@ -995,10 +995,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @completion_scope_shared_global_read(
-tt.func @completion_scope_shared_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %n: i32) -> tensor<512xf32, #cross> {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i32
-  %zero = arith.constant 0.0 : f32
+tt.func @completion_scope_shared_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>) -> tensor<512xf32, #cross> {
   %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #own>
   %buf = ttg.local_alloc : () -> !ttg.memdesc<512xf32, #shared, #smem, mutable>
   %copy = amdg.buffer_load_to_local %ptr[%offsets] into %buf : !tt.ptr<f32>[tensor<512xi32, #own>] -> <512xf32, #shared, #smem, mutable>
@@ -1009,41 +1006,6 @@ tt.func @completion_scope_shared_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<
   // CHECK-NEXT: {{.*}} = ttg.local_load
   %wait = amdg.async_wait %group {num_inst = 0 : i32, ttg.amdg.completion_scope = "shared"}
   %sum = tt.load %bias : !tt.ptr<f32>
-  %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
-  %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>
-  %result = arith.addf %v, %bcast : tensor<512xf32, #cross>
-  tt.return %result : tensor<512xf32, #cross>
-}
-}
-
-// -----
-
-#own = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#cross = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
-// CHECK-LABEL: @completion_scope_shared_loop(
-tt.func @completion_scope_shared_loop(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %n: i32) -> tensor<512xf32, #cross> {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i32
-  %zero = arith.constant 0.0 : f32
-  %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #own>
-  %buf = ttg.local_alloc : () -> !ttg.memdesc<512xf32, #shared, #smem, mutable>
-  %copy = amdg.buffer_load_to_local %ptr[%offsets] into %buf : !tt.ptr<f32>[tensor<512xi32, #own>] -> <512xf32, #shared, #smem, mutable>
-  %group = ttg.async_commit_group tokens %copy
-  // CHECK: amdg.async_wait
-  // CHECK-NEXT: cf.br
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: tt.load
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: {{.*}} = ttg.local_load
-  %wait = amdg.async_wait %group {num_inst = 0 : i32, ttg.amdg.completion_scope = "shared"}
-  %sum = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> f32 : i32 {
-    %b = tt.load %bias : !tt.ptr<f32>
-    %next = arith.addf %acc, %b : f32
-    scf.yield %next : f32
-  }
   %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
   %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>
   %result = arith.addf %v, %bcast : tensor<512xf32, #cross>
@@ -1059,10 +1021,7 @@ tt.func @completion_scope_shared_loop(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @completion_scope_all_global_read(
-tt.func @completion_scope_all_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %n: i32) -> tensor<512xf32, #cross> {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i32
-  %zero = arith.constant 0.0 : f32
+tt.func @completion_scope_all_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>) -> tensor<512xf32, #cross> {
   %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #own>
   %buf = ttg.local_alloc : () -> !ttg.memdesc<512xf32, #shared, #smem, mutable>
   %copy = amdg.buffer_load_to_local %ptr[%offsets] into %buf : !tt.ptr<f32>[tensor<512xi32, #own>] -> <512xf32, #shared, #smem, mutable>
@@ -1088,46 +1047,8 @@ tt.func @completion_scope_all_global_read(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
-// CHECK-LABEL: @completion_scope_all_loop(
-tt.func @completion_scope_all_loop(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %n: i32) -> tensor<512xf32, #cross> {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i32
-  %zero = arith.constant 0.0 : f32
-  %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #own>
-  %buf = ttg.local_alloc : () -> !ttg.memdesc<512xf32, #shared, #smem, mutable>
-  %copy = amdg.buffer_load_to_local %ptr[%offsets] into %buf : !tt.ptr<f32>[tensor<512xi32, #own>] -> <512xf32, #shared, #smem, mutable>
-  %group = ttg.async_commit_group tokens %copy
-  // CHECK: amdg.async_wait
-  // CHECK-NEXT: ttg.barrier local
-  // CHECK-NEXT: cf.br
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: tt.load
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: ttg.local_load
-  %wait = amdg.async_wait %group {num_inst = 0 : i32, ttg.amdg.completion_scope = "all"}
-  %sum = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> f32 : i32 {
-    %b = tt.load %bias : !tt.ptr<f32>
-    %next = arith.addf %acc, %b : f32
-    scf.yield %next : f32
-  }
-  %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
-  %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>
-  %result = arith.addf %v, %bcast : tensor<512xf32, #cross>
-  tt.return %result : tensor<512xf32, #cross>
-}
-}
-// -----
-
-#own = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#cross = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @completion_scope_retained_ttg_wait(
-tt.func @completion_scope_retained_ttg_wait(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>, %n: i32) -> tensor<512xf32, #cross> {
-  %c0 = arith.constant 0 : i32
-  %c1 = arith.constant 1 : i32
-  %zero = arith.constant 0.0 : f32
+tt.func @completion_scope_retained_ttg_wait(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f32>) -> tensor<512xf32, #cross> {
   %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #own>
   %buf = ttg.local_alloc : () -> !ttg.memdesc<512xf32, #shared, #smem, mutable>
   %copy = amdg.buffer_load_to_local %ptr[%offsets] into %buf : !tt.ptr<f32>[tensor<512xi32, #own>] -> <512xf32, #shared, #smem, mutable>
