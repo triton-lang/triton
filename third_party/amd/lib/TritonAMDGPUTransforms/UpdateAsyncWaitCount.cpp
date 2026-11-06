@@ -6,7 +6,6 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -55,30 +54,15 @@ static bool isAsyncWait(Operation *op) {
              amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
-// Opaque effects may hide queue work; known synchronous memory effects do not.
-// Inspect only this op's effects; the forward scan handles regions separately.
-static bool hasOpaqueEffects(Operation *op) {
-  auto interface = dyn_cast<MemoryEffectOpInterface>(op);
-  if (!interface)
-    return !op->hasTrait<OpTrait::HasRecursiveMemoryEffects>();
-  SmallVector<MemoryEffects::EffectInstance> effects;
-  interface.getEffects(effects);
-  return llvm::any_of(effects, [](const auto &effect) {
-    return isa<SideEffects::DefaultResource>(effect.getResource());
-  });
-}
-
 // One global-write bit per queue is the cheapest model for load/store phases:
 // loads need no state, joins use OR, and no producer queue or token history is
 // needed. A hardware waitcnt(0) clears the bit after classifying the wait,
-// restoring Shared scope after stores when no unknown work remains. Partial
-// waits keep the bit; producer order/counts could refine retirement if needed.
+// restoring Shared scope after stores. Partial waits keep the bit; producer
+// order/counts could refine retirement if needed.
 class AsyncCompletionAnalysis {
   enum Work : unsigned {
     CopyGlobalWrite = 1,
     TDMGlobalWrite = 2,
-    // Unknown work may use unmodeled queues, so known waits cannot clear it.
-    Unknown = 4,
   };
 
   struct EntryState {
@@ -106,27 +90,14 @@ class AsyncCompletionAnalysis {
     }
   }
 
-  // Known loads and synchronous operations add no async global-writing work.
+  // Track only explicit async global writes completed by the supported waits.
   static unsigned classify(Operation *op) {
-    // Barriers introduce no async work. Keep pending queue bits until a full
-    // hardware wait proves completion; barriers have no memory-effect interface.
-    if (isa<ttg::BarrierOp>(op))
-      return 0;
-    if (!hasAsyncToken(op->getResultTypes()) &&
-        !isa<amdgpu::TDMOpInterface>(op))
-      return hasOpaqueEffects(op) ? Unknown : 0;
     return llvm::TypeSwitch<Operation *, unsigned>(op)
-        .Case<ttg::AsyncCopyGlobalToLocalOp, amdgpu::BufferLoadToLocalOp,
-              amdgpu::AsyncTDMCopyGlobalToLocalOp,
-              amdgpu::AsyncTDMFusedCopyGlobalToLocalOp,
-              amdgpu::AsyncTDMGatherOp, ttg::AsyncCommitGroupOp>(
-            [](auto) { return 0; })
         .Case<amdgpu::AsyncCopyLocalToGlobalOp>(
             [](auto) { return CopyGlobalWrite; })
-        .Case<amdgpu::TDMOpInterface>([](auto) { return TDMGlobalWrite; })
-        .Case<BranchOpInterface, RegionBranchTerminatorOpInterface>(
-            [](auto op) { return hasOpaqueEffects(op) ? Unknown : 0; })
-        .Default([](Operation *) { return Unknown; });
+        .Case<amdgpu::AsyncTDMCopyLocalToGlobalOp, amdgpu::AsyncTDMScatterOp>(
+            [](auto) { return TDMGlobalWrite; })
+        .Default([](Operation *) { return 0; });
   }
 
   // Use final hardware counts. An asyncmark wait may leave uncommitted copies
@@ -153,12 +124,11 @@ class AsyncCompletionAnalysis {
     } else if (isa<scf::ForOp>(parent)) {
       enqueue(parent, work);
     } else if (auto loop = dyn_cast<scf::WhileOp>(parent)) {
-      if (terminator->getParentRegion() == &loop.getBefore()) {
-        enqueue(&loop.getAfterBody()->front(), work);
+      bool fromBefore = terminator->getParentRegion() == &loop.getBefore();
+      Block *next = fromBefore ? loop.getAfterBody() : loop.getBeforeBody();
+      enqueue(&next->front(), work);
+      if (fromBefore)
         enqueue(parent->getNextNode(), work);
-      } else {
-        enqueue(&loop.getBeforeBody()->front(), work);
-      }
     } else if (!isa<FunctionOpInterface>(parent)) {
       unsupported = true;
     }
@@ -171,36 +141,40 @@ class AsyncCompletionAnalysis {
       if (isAsyncWait(op)) {
         waitScopes[op] |= work;
         work &= ~getDrainedQueue(op);
-      } else if (auto branch = dyn_cast<scf::IfOp>(op)) {
-        enqueue(&branch.getThenRegion().front().front(), work);
-        if (branch.getElseRegion().empty())
-          enqueue(op->getNextNode(), work);
-        else
-          enqueue(&branch.getElseRegion().front().front(), work);
-        return;
-      } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
-        enqueue(&loop.getBody()->front(), work);
-        enqueue(op->getNextNode(), work); // Include the zero-trip path.
-        return;
-      } else if (auto loop = dyn_cast<scf::WhileOp>(op)) {
-        // The before-region executes even when the loop has zero iterations.
-        enqueue(&loop.getBeforeBody()->front(), work);
-        return;
-      } else if (auto region = dyn_cast<scf::ExecuteRegionOp>(op)) {
-        enqueue(&region.getRegion().front().front(), work);
-        return;
-      } else if (op->getNumRegions() && !isa<tt::ReduceOp, tt::ScanOp>(op)) {
-        // Unsupported regions may execute concurrently. Keep the whole
-        // function conservative rather than treating them as sequential.
-        unsupported = true;
-        return;
-      } else {
-        work |= classify(op);
+        continue;
       }
       if (op->hasTrait<OpTrait::IsTerminator>()) {
         leaveBlock(op, work);
         return;
       }
+      if (!op->getNumRegions()) {
+        work |= classify(op);
+        continue;
+      }
+
+      // Only region-bearing ops need structured control-flow dispatch.
+      if (auto branch = dyn_cast<scf::IfOp>(op)) {
+        enqueue(&branch.getThenRegion().front().front(), work);
+        if (branch.getElseRegion().empty())
+          enqueue(op->getNextNode(), work);
+        else
+          enqueue(&branch.getElseRegion().front().front(), work);
+      } else if (auto loop = dyn_cast<scf::ForOp>(op)) {
+        enqueue(&loop.getBody()->front(), work);
+        enqueue(op->getNextNode(), work); // Include the zero-trip path.
+      } else if (auto loop = dyn_cast<scf::WhileOp>(op)) {
+        // The before-region executes even when the loop has zero iterations.
+        enqueue(&loop.getBeforeBody()->front(), work);
+      } else if (auto region = dyn_cast<scf::ExecuteRegionOp>(op)) {
+        enqueue(&region.getRegion().front().front(), work);
+      } else if (isa<tt::ReduceOp, tt::ScanOp>(op)) {
+        continue;
+      } else {
+        // Unsupported regions may execute concurrently. Keep the whole
+        // function conservative rather than treating them as sequential.
+        unsupported = true;
+      }
+      return;
     }
   }
 
@@ -224,9 +198,8 @@ public:
       if (!isAsyncWait(op))
         return;
       auto found = waitScopes.find(op);
-      unsigned mask =
-          Unknown | (isa<amdgpu::AsyncTDMIntrinsicWait>(op) ? TDMGlobalWrite
-                                                            : CopyGlobalWrite);
+      unsigned mask = isa<amdgpu::AsyncTDMIntrinsicWait>(op) ? TDMGlobalWrite
+                                                             : CopyGlobalWrite;
       // An empty queue also permits Shared; no shared producer is required.
       bool sharedOnly = !unsupported && !unknownEntry &&
                         found != waitScopes.end() && !(found->second & mask);

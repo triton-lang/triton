@@ -875,25 +875,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #idx = #ttg.slice<{dim = 0, parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @completion_scope_unknown_asm(
-  tt.func @completion_scope_unknown_asm(%mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>, %desc: !tt.tensordesc<64x128xf16>, %indices: tensor<64xi32, #idx>, %ptr: tensor<64x128x!tt.ptr<f16>, #copy>) {
+  // CHECK-LABEL: @completion_scope_ignores_asm_effects(
+  tt.func @completion_scope_ignores_asm_effects(%mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>, %desc: !tt.tensordesc<64x128xf16>, %indices: tensor<64xi32, #idx>, %ptr: tensor<64x128x!tt.ptr<f16>, #copy>) {
     %g = amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     %opaque = tt.elementwise_inline_asm "" {constraints = "=s", packed_element = 1 : i32, pure = false} -> i32
     // CHECK: amdg.async_tdm_intrinsic_wait
-    // CHECK-SAME: ttg.amdg.completion_scope = "all"
+    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %tw = amdg.async_tdm_wait %g {num = 0 : i32}
     tt.return
   }
 
-  // CHECK-LABEL: @completion_scope_nested_unknown_asm(
-  tt.func @completion_scope_nested_unknown_asm(%mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>, %desc: !tt.tensordesc<64x128xf16>, %indices: tensor<64xi32, #idx>, %ptr: tensor<64x128x!tt.ptr<f16>, #copy>, %cond: i1) {
+  // CHECK-LABEL: @completion_scope_ignores_nested_asm_effects(
+  tt.func @completion_scope_ignores_nested_asm_effects(%mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>, %desc: !tt.tensordesc<64x128xf16>, %indices: tensor<64xi32, #idx>, %ptr: tensor<64x128x!tt.ptr<f16>, #copy>, %cond: i1) {
     %g = amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // Opaque work in either branch reaches the wait at the join.
+    // Generic memory effects in a branch add no async global-write state.
     scf.if %cond {
       %opaque = tt.elementwise_inline_asm "" {constraints = "=s", packed_element = 1 : i32, pure = false} -> i32
     }
     // CHECK: amdg.async_tdm_intrinsic_wait
-    // CHECK-SAME: ttg.amdg.completion_scope = "all"
+    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %tw = amdg.async_tdm_wait %g {num = 0 : i32}
     tt.return
   }
@@ -1095,22 +1095,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
-  // CHECK-LABEL: @completion_scope_opaque_survives_drain(
-  tt.func @completion_scope_opaque_survives_drain(
+  // CHECK-LABEL: @completion_scope_asm_does_not_prevent_drain(
+  tt.func @completion_scope_asm_does_not_prevent_drain(
       %mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>,
       %desc: !tt.tensordesc<64x128xf16>,
       %indices: tensor<64xi32, #idx>) {
     %opaque = tt.elementwise_inline_asm "" {constraints = "=s", packed_element = 1 : i32, pure = false} -> i32
-    // A full TDM wait cannot prove completion of unmodeled queues.
+    // Generic memory effects add no async global-write state.
     amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "all"
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 0 : i32}
     amdg.async_tdm_scatter %desc[%indices] from %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "all"
     amdg.async_tdm_wait {num = 0 : i32}
-    // Later loads still cannot establish shared-only completion.
+    // A full wait clears the scatter, restoring Shared for later loads.
     amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "all"
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 0 : i32}
     tt.return
   }
