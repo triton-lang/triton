@@ -1,5 +1,19 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-optimize-descriptor-encoding | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-optimize-descriptor-encoding | FileCheck %s --check-prefixes=CHECK,FP6
+// RUN: triton-opt %s -split-input-file --pass-pipeline='builtin.module(triton-nvidia-optimize-descriptor-encoding,triton-nvidia-optimize-descriptor-encoding)' | FileCheck %s --check-prefix=FP6
 // Test descriptor layout selection for TMA.
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // FP6-DAG: #[[PACKED_BYTES:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6p2x16"}>
+  // FP6-DAG: #[[PLAIN_BYTES:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+  // FP6: tt.func private @fp6_descriptor_types(
+  // FP6-SAME: !tt.tensordesc<1x128xui8, #[[PACKED_BYTES]]>
+  // FP6-SAME: !tt.tensordesc<1x128xui8, #[[PLAIN_BYTES]]>) -> !tt.tensordesc<1x128xui8, #[[PACKED_BYTES]]>
+  tt.func private @fp6_descriptor_types(%fp6: !tt.tensordesc<1x128xf6E2M3FN>, %bytes: !tt.tensordesc<1x128xui8>) -> !tt.tensordesc<1x128xf6E2M3FN> {
+    tt.return %fp6 : !tt.tensordesc<1x128xf6E2M3FN>
+  }
+}
+
+// -----
 
 // Padded FP4 MMA layouts with small K cannot be used directly by TMA.
 // Load packed bytes with a legal layout and keep the padded consumer layout.

@@ -403,7 +403,8 @@ Value emitThreadPredicate(ThreadDomainAttr domain,
                           ConversionPatternRewriter &rewriter, Location loc,
                           const TargetInfoBase &targetInfo);
 
-// Thread-local memory operations already execute in their owner's branch.
+// Inside an owner's branch, only redundant CTAs need a predicate.
+// An empty value means all participating threads can execute the operation.
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
