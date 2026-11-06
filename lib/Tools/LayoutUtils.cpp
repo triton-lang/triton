@@ -288,6 +288,15 @@ uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
   return mask;
 }
 
+uint32_t getGroupZeroMask(unsigned varyingIdBits) {
+  assert(varyingIdBits < 32);
+  uint32_t pattern = 1;
+  for (unsigned stride = 1; stride <= varyingIdBits; stride <<= 1)
+    if (varyingIdBits & stride)
+      pattern |= pattern << stride;
+  return pattern;
+}
+
 IdentityFactor factorMaximalIdentityPrefix(const LinearLayout &layout,
                                            StringAttr inDim, StringAttr outDim,
                                            int32_t maxSize) {

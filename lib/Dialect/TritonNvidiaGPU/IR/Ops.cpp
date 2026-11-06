@@ -2154,15 +2154,6 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
   return broadcastMasks;
 }
 
-uint32_t getGroupZeroMask(unsigned varyingIdBits) {
-  assert(varyingIdBits < 32);
-  uint32_t pattern = 1;
-  for (unsigned stride = 1; stride <= varyingIdBits; stride <<= 1)
-    if (varyingIdBits & stride)
-      pattern |= pattern << stride;
-  return pattern;
-}
-
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
                                                      uint16_t broadcastBits) {
   uint32_t varyingBits = broadcastBits & (numCTAs - 1);

@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <limits>
@@ -726,8 +727,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       // The low five thread-ID bits select the lane. Shift the group-zero
       // bitset to this lane's group and test its bits in a converged ballot.
       Value leader = b.and_(getThreadId(rewriter, loc), b.i32_val(groupBits));
-      Value members =
-          b.shl(b.i32_val(nvidia_gpu::getGroupZeroMask(varyingBits)), leader);
+      Value members = b.shl(b.i32_val(getGroupZeroMask(varyingBits)), leader);
       Value hit = all ? b.xor_(value, b.true_val()) : value;
       Value groupHit = b.and_(ballot(rewriter, loc, i32_ty, hit), members);
       acc[0] = all ? b.icmp_eq(groupHit, b.i32_val(0))
