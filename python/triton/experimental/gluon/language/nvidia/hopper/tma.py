@@ -173,7 +173,7 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
         align_bytes = 64
     if desc.layout.padding in ("b6x16_p32", "b6p2x16"):
         # FP6 tensor coordinates count logical values.
-        align_bytes = 128
+        align_bytes = min(desc.block_shape[-1], 128)
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8

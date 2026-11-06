@@ -496,6 +496,8 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
       functional-type(operands, $result)
     }];
+
+    let hasVerifier = 1;
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -994,6 +996,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 
     let hasFolder = 1;
     let hasVerifier = 1;
+    let hasCanonicalizer = 1;
 }
 
 //

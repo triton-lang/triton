@@ -100,6 +100,25 @@ tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
 
 // -----
 
+// CHECK-LABEL: @range_comparisons
+tt.func @range_comparisons() -> (tensor<8xi1>, tensor<8xi1>, tensor<8xi1>, tensor<8xi1>) {
+  // CHECK-DAG: %[[T:.*]] = arith.constant dense<true> : tensor<8xi1>
+  // CHECK-DAG: %[[F:.*]] = arith.constant dense<false> : tensor<8xi1>
+  // CHECK: %[[TAIL:.*]] = arith.cmpi slt
+  // CHECK: %[[UNSIGNED:.*]] = arith.cmpi ult
+  // CHECK: tt.return %[[T]], %[[F]], %[[TAIL]], %[[UNSIGNED]]
+  %r = tt.make_range {start = -4 : i32, end = 4 : i32} : tensor<8xi32>
+  %end = arith.constant dense<4> : tensor<8xi32>
+  %mid = arith.constant dense<0> : tensor<8xi32>
+  %full = arith.cmpi slt, %r, %end : tensor<8xi32>
+  %empty = arith.cmpi sge, %r, %end : tensor<8xi32>
+  %tail = arith.cmpi slt, %r, %mid : tensor<8xi32>
+  %unsigned = arith.cmpi ult, %r, %end : tensor<8xi32>
+  tt.return %full, %empty, %tail, %unsigned : tensor<8xi1>, tensor<8xi1>, tensor<8xi1>, tensor<8xi1>
+}
+
+// -----
+
 // CHECK-LABEL: fold_addptr
 tt.func @fold_addptr(%arg: tensor<64x64x!tt.ptr<f16>>) -> (tensor<64x64x!tt.ptr<f16>>) {
   // CHECK-NOT: tt.addptr
