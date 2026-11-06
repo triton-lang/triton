@@ -17,6 +17,24 @@
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
+// REDUX-LABEL: @reduce_warp_predicates
+// REDUX: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// REDUX: nvvm.vote.sync any %[[MASK]], {{.*}} -> i1
+// REDUX: nvvm.vote.sync all %[[MASK]], {{.*}} -> i1
+tt.func private @reduce_warp_predicates(%in: tensor<4x32xi1, #blocked_warp_reduce>) -> (tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.ori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.minui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return %any, %all : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
 // CHECK-LABEL: @reduce_linear_layout
 tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #linear}>> {
   // CHECK-NEXT: [[SRC0:%.*]] = extractvalue {{.*}} %0, 0
