@@ -769,8 +769,10 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   if (getNumOperands() != 1 || getNumResults() != 1)
     return nullptr;
   Block *block = &(*getCombineOp().begin());
-  Operation *yield = block->getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  Value yielded = block->getTerminator()->getOperand(0);
+  if (yielded.getParentBlock() != block)
+    return nullptr;
+  Operation *reduceOp = yielded.getDefiningOp();
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
       reduceOp->getNumResults() != 1)
     return nullptr;
