@@ -602,9 +602,10 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int i) const {
-  return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
+  return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, delta);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -706,6 +707,18 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                         getComputeCapability());
   };
   Value value = acc[0];
+  if (value.getType().isInteger(1) && reduceLaneIdMask == 31) {
+    bool all =
+        *kind == NVVM::ReductionKind::AND || *kind == NVVM::ReductionKind::UMIN;
+    bool any =
+        *kind == NVVM::ReductionKind::OR || *kind == NVVM::ReductionKind::UMAX;
+    if (all || any) {
+      auto vote = all ? NVVM::VoteSyncKind::all : NVVM::VoteSyncKind::any;
+      acc[0] = NVVM::VoteSyncOp::create(rewriter, loc, value.getType(),
+                                        b.i32_val(-1), value, vote);
+      return true;
+    }
+  }
   if (value.getType().isInteger(64)) {
     // The i64 tree uses two shuffles per stage for all groups, while REDUX
     // needs one instruction per piece and group. Require at least two

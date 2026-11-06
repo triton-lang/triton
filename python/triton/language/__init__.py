@@ -333,7 +333,8 @@ def str_to_ty(name, c):
             rest = rest[:rank_match.start()] + rest[rank_match.end():]
         layout_str = rest.lstrip(",")
         is_gluon = len(layout_str)
-        dtype = str_to_ty(dtype, None)
+        fp6_format = dtype[3:] if dtype in ("fp6e2m3", "fp6e3m2") else None
+        dtype = uint8 if fp6_format else str_to_ty(dtype, None)
         # For im2col with tensor_rank, use it for shape/stride types; otherwise use block_shape ndim
         ndim = tensor_rank if (is_im2col and tensor_rank is not None) else len(block_shape)
         shape_type = tuple_type([int32] * ndim)
@@ -355,7 +356,7 @@ def str_to_ty(name, c):
                 return nvidia_tensor_descriptor_type(block, shape_type, stride_type, layout)
             else:
                 return amd_tensor_descriptor_type(block, shape_type, stride_type, layout)
-        return tensor_descriptor_type(block, shape_type, stride_type)
+        return tensor_descriptor_type(block, shape_type, stride_type, fp6_format)
 
     if name.startswith("constexpr"):
         return constexpr_type(c)

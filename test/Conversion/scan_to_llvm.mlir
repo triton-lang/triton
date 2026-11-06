@@ -1,5 +1,4 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
@@ -7,102 +6,13 @@
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
+// RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
 // RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
 // RUN: triton-opt %t/small-lanes.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SMALL-LANES --implicit-check-not="nvvm.shfl.sync idx" --implicit-check-not="nvvm.barrier"
-
-//--- scan.mlir
-
-#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
-#layout_adj = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
-#layout_2d = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [2, 1], order = [0,1]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 16 : i32} {
-
-// CHECK-LABEL: @test_1d_simple
-tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-COUNT-3: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.barrier
-  // CHECK: ret
-  %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%arg1: i32, %arg2: i32):
-    %1 = arith.addi %arg1, %arg2 : i32
-    tt.scan.return %1 : i32
-  }) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
-  tt.return %0 : tensor<8xi32, #layout>
-}
-
-// CHECK-LABEL: @test_1d_grouped
-tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.barrier
-  // CHECK: ret
-  %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%arg1: i32, %arg2: i32):
-    %1 = arith.addi %arg1, %arg2 : i32
-    tt.scan.return %1 : i32
-  }) : (tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj>
-  tt.return %0 : tensor<8xi32, #layout_adj>
-}
-
-// CHECK-LABEL: @test_2d_grouped
-tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK: asm sideeffect "@{{.*}} st.shared::cta.
-  // CHECK: @llvm.nvvm.barrier
-  // CHECK: load i32, ptr addrspace(3)
-  // CHECK: ret
-  %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%arg1: i32, %arg2: i32):
-    %1 = arith.addi %arg1, %arg2 : i32
-    tt.scan.return %1 : i32
-  }) : (tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d>
-  tt.return %0 : tensor<16x1xi32, #layout_2d>
-}
-
-// CHECK-LABEL: @test_1d_reversed
-tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-NOT: @llvm.nvvm.barrier
-  // CHECK: ret
-  %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
-  ^bb0(%arg1: i32, %arg2: i32):
-    %1 = arith.addi %arg1, %arg2 : i32
-    tt.scan.return %1 : i32
-  }) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
-  tt.return %0 : tensor<8xi32, #layout>
-}
-
-// This just prevents the test functions from being DCE'd.
-tt.func public @anchor(%ptr: !llvm.ptr, %arg0: !llvm.struct<(i32)>, %arg1: !llvm.struct<(i32, i32)>, %arg2: !llvm.struct<(i32)>) {
-  %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.struct<(i32)> to tensor<8xi32, #layout>
-  %1 = tt.call @test_1d_simple(%0) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
-  %2 = builtin.unrealized_conversion_cast %1 : tensor<8xi32, #layout> to !llvm.struct<(i32)>
-  llvm.store volatile %2, %ptr : !llvm.struct<(i32)>, !llvm.ptr
-
-  %3 = builtin.unrealized_conversion_cast %arg1 : !llvm.struct<(i32, i32)> to tensor<8xi32, #layout_adj>
-  %4 = tt.call @test_1d_grouped(%3) : (tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj>
-  %5 = builtin.unrealized_conversion_cast %4 : tensor<8xi32, #layout_adj> to !llvm.struct<(i32, i32)>
-  llvm.store volatile %5, %ptr : !llvm.struct<(i32, i32)>, !llvm.ptr
-
-  %6 = builtin.unrealized_conversion_cast %arg2 : !llvm.struct<(i32)> to tensor<16x1xi32, #layout_2d>
-  %7 = tt.call @test_2d_grouped(%6) : (tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d>
-  %8 = builtin.unrealized_conversion_cast %7 : tensor<16x1xi32, #layout_2d> to !llvm.struct<(i32)>
-  llvm.store volatile %8, %ptr : !llvm.struct<(i32)>, !llvm.ptr
-
-  %9 = tt.call @test_1d_reversed(%0) : (tensor<8xi32, #layout>) -> tensor<8xi32, #layout>
-  %10 = builtin.unrealized_conversion_cast %9 : tensor<8xi32, #layout> to !llvm.struct<(i32)>
-  llvm.store volatile %10, %ptr : !llvm.struct<(i32)>, !llvm.ptr
-
-  tt.return
-}
-
-}
 
 //--- cross-cta.mlir
 // ERROR: scan axis distributed across CTAs is not supported
@@ -202,9 +112,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Five scan rounds and the exclusive carry use shuffle-up.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_carry(
 // OFFSETS-NOT: nvvm.shfl.sync idx
-// OFFSETS-COUNT-6: nvvm.shfl.sync up
+// OFFSETS-COUNT-5: nvvm.shfl.sync up {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up {{.*}} : i32 -> i32
 // OFFSETS-NOT: nvvm.shfl.sync
 // OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_carry(
+// AMD-OFFSETS: [[VALID:%.*]] = llvm.icmp "sge" [[LANE:%[^,]+]],
+// AMD-OFFSETS: [[SOURCE:%.*]] = llvm.select [[VALID]], {{%.*}}, [[LANE]] : i1, i32
+// AMD-OFFSETS: [[ADDR:%.*]] = llvm.shl [[SOURCE]],
+// AMD-OFFSETS: [[DATA:%.*]] = rocdl.ds_bpermute [[ADDR]],
+// AMD-OFFSETS: [[SUM:%.*]] = llvm.add {{.*}}[[DATA]]
+// AMD-OFFSETS: llvm.select [[VALID]], [[SUM]],
+// AMD-OFFSETS-COUNT-5: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_carry(%arg: tensor<64xi32, #groups>) -> tensor<64xi32, #groups> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
@@ -214,17 +135,31 @@ tt.func private @test_scan_shuffle_up_carry(%arg: tensor<64xi32, #groups>) -> te
   tt.return %result : tensor<64xi32, #groups>
 }
 
-// Physical lane bit zero selects an independent row. The scan strides are
-// 2, 4, 8, and 16, preserving that row bit.
+// Both words of an i64 read the same lane. Each round uses one bounds result.
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_i64(
+// OFFSETS-COUNT-5: nvvm.shfl.sync up {{.*}} return_value_and_is_valid
+// OFFSETS-NOT: return_value_and_is_valid
+// OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_up_i64(%arg: tensor<64xi64, #groups>) -> tensor<64xi64, #groups> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<64xi64, #groups>) -> tensor<64xi64, #groups>
+  tt.return %result : tensor<64xi64, #groups>
+}
+
+// Physical lane bit zero selects an independent row. Column k is in lanes
+// 2*k and 2*k+1, so a shuffle by 2*d supplies the bounds for a scan by d.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_strided(
 // OFFSETS-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
 // OFFSETS-DAG: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32)
 // OFFSETS-DAG: %[[EIGHT:.*]] = llvm.mlir.constant(8 : i32)
 // OFFSETS-DAG: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[TWO]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[FOUR]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[EIGHT]],
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[TWO]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[FOUR]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[EIGHT]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
@@ -236,11 +171,11 @@ tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) 
 }
 
 // The first two rounds cross gaps between scan lane bits 0, 2, and 4.
-// The last round changes only bit 4 and has a uniform distance of 16.
+// In the last round, column >= 4 is equivalent to physical lane >= 16.
 // OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_gapped(
 // OFFSETS: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
 // OFFSETS-COUNT-2: nvvm.shfl.sync idx
-// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
 // OFFSETS-NOT: nvvm.shfl.sync
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {
@@ -287,6 +222,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Register, lane, and warp bits alternate along the scan axis. Zero lane
 // bases replicate values within a wave64; tuple operands have different widths.
 #interleaved = #ttg.linear<{register = [[16, 0], [4, 0], [0, 1]], lane = [[1, 0], [0, 2], [8, 0], [0, 4], [0, 0], [0, 0]], warp = [[2, 0], [32, 0]], block = []}>
+#wave64 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx90a"} {
 // GFX90A-LABEL: llvm.func {{.*}}@test_scan_wave64_interleaved_reverse(
 // GFX90A: llvm.store
@@ -303,6 +239,27 @@ tt.func private @test_scan_wave64_interleaved_reverse(%a: tensor<64x8xi8, #inter
     tt.scan.return %a12, %b_sum : i8, i64
   }) : (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>) -> (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>)
   tt.return %a_out, %b_out : tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>
+}
+
+// Each of the six wave64 scan rounds permutes both words of the i64 value.
+// GFX90A-LABEL: llvm.func {{.*}}@test_scan_shuffle_up_wave64(
+// GFX90A: [[VALID:%.*]] = llvm.icmp "sge" [[LANE:%[^,]+]],
+// GFX90A: [[SOURCE:%.*]] = llvm.select [[VALID]], {{%.*}}, [[LANE]] : i1, i32
+// GFX90A: [[ADDR:%.*]] = llvm.shl [[SOURCE]],
+// GFX90A: rocdl.ds_bpermute [[ADDR]],
+// GFX90A: rocdl.ds_bpermute
+// GFX90A: [[SUM:%.*]] = llvm.add {{.*}} : i64
+// GFX90A: llvm.select [[VALID]], [[SUM]],
+// GFX90A-COUNT-10: rocdl.ds_bpermute
+// GFX90A-NOT: rocdl.ds_bpermute
+// GFX90A: llvm.return
+tt.func private @test_scan_shuffle_up_wave64(%arg: tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64>
+  tt.return %result : tensor<64xi64, #wave64>
 }
 }
 

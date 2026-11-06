@@ -97,15 +97,24 @@ private:
     return totals;
   }
 
-  SmallVector<Value>
+  std::pair<SmallVector<Value>, Value>
   shuffleValues(Location loc, SmallVector<Value> values, Value lane,
                 ConversionPatternRewriter &rewriter,
-                std::optional<unsigned> upDistance = {}) const {
-    for (Value &value : values)
-      value = upDistance
-                  ? targetInfo.shuffleUp(rewriter, loc, value, *upDistance)
-                  : targetInfo.shuffleIdx(rewriter, loc, value, lane);
-    return values;
+                std::optional<unsigned> upDistance) const {
+    Value sourceInBounds;
+    for (auto [index, value] : llvm::enumerate(values)) {
+      if (upDistance) {
+        auto [shuffled, inBounds] =
+            targetInfo.shuffleUp(rewriter, loc, value, *upDistance);
+        value = shuffled;
+        // All tuple members read the same source lane.
+        if (index == 0)
+          sourceInBounds = inBounds;
+      } else {
+        value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
+      }
+    }
+    return {std::move(values), sourceInBounds};
   }
 
   static Value shiftWithinSegment(TritonLLVMOpBuilder &b, Value index,
@@ -179,6 +188,18 @@ private:
     if (numSegments != axisSize)
       segmentIndex = b.and_(index, b.i32_val(numSegments - 1));
 
+    const auto &laneBases = layout.getBases().find(kLane)->second;
+    auto shuffleBoundsMatch = [&](unsigned distance, unsigned laneDistance) {
+      // Both bounds tests ask whether a quotient is nonzero. Division by
+      // these powers of two drops low bits, so checking the lane bases proves
+      // segmentIndex / distance == laneId / laneDistance for every lane.
+      for (auto [bit, basis] : llvm::enumerate(laneBases)) {
+        unsigned segment = basis[axis] & (numSegments - 1);
+        if (segment / distance != (1u << bit) / laneDistance)
+          return false;
+      }
+      return true;
+    };
     // Depending on the interval, we maybe able to use shuffleUp or shuffleIdx.
     // The former is more efficient, but it only works when the distance is a
     // power of 2. The latter is more general, but it requires a lane index to
@@ -198,16 +219,19 @@ private:
                    .back()
                    .second;
       }
-      Value pred =
-          reverse ? b.icmp_ult(segmentIndex, b.i32_val(numSegments - distance))
-                  : b.icmp_uge(segmentIndex, b.i32_val(distance));
-      rounds.emplace_back(lane, pred, upDistance);
+      Value logicalBounds;
+      if (!upDistance || !shuffleBoundsMatch(distance, *upDistance))
+        logicalBounds = reverse ? b.icmp_ult(segmentIndex,
+                                             b.i32_val(numSegments - distance))
+                                : b.icmp_uge(segmentIndex, b.i32_val(distance));
+      rounds.emplace_back(lane, logicalBounds, upDistance);
     }
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
-      for (auto [lane, pred, upDistance] : rounds) {
-        auto incoming =
+      for (auto [lane, logicalBounds, upDistance] : rounds) {
+        auto [incoming, sourceInBounds] =
             shuffleValues(loc, values[last], lane, rewriter, upDistance);
+        Value pred = logicalBounds ? logicalBounds : sourceInBounds;
         for (unsigned r = base; r < base + numRegs; ++r)
           values[r] =
               combineWithPrefix(op, incoming, values[r], rewriter, pred);
@@ -559,10 +583,12 @@ private:
     assert(!candidates.empty() && "each segment has a warp-local carry");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto carry = shuffleValues(loc, totals[candidates.front()], srcLane,
-                               rewriter, upDistance);
+                               rewriter, upDistance)
+                     .first;
     for (unsigned candidate : candidates.drop_front()) {
       auto incoming =
-          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance);
+          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance)
+              .first;
       Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
       for (auto [value, source] : llvm::zip(carry, incoming))
         value = b.select(select, source, value);
