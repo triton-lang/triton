@@ -202,14 +202,10 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
           ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
-      // CUDA uses the same element type for FP6 loads and stores. Only stores
-      // can use the 64-value host map.
-      if (!isIm2Col && mmaEncoding.isPaddedFp6() && blockSize.back() == 64 &&
-          (arg.use_empty() ||
-           !llvm::all_of(arg.getUsers(),
-                         llvm::IsaPred<ttng::AsyncTMACopyLocalToGlobalOp>)))
-        throw py::type_error("64-value FP6 host descriptors must be used only "
-                             "by tiled TMA stores");
+      // CUDA assigns the same element type to both FP6 packing modes.
+      if (!isIm2Col && blockSize.back() == 64 &&
+          mmaEncoding.getPadding() == ttg::NVMmaPadding::B6x16P32)
+        throw py::type_error("64-value FP6 host maps require store packing");
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
           getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;

@@ -4927,12 +4927,13 @@ def test_split_auto_layout_execution():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires SM103")
-def test_fp6_tma_store_descriptor_escape():
-    dst = torch.empty((2, 48), device="cuda", dtype=torch.uint8)
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires SM103")
+def test_fp6_tma_store_noinline():
+    dst = torch.full((2, 48), 0xa5, device="cuda", dtype=torch.uint8)
     desc = TensorDescriptor.from_tensor(dst, [2, 64], ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16"))
-    with pytest.raises(TypeError, match="used only by tiled TMA stores"):
-        noinline_tma_kernel.warmup(desc, grid=(1, ))
+    compiled = noinline_tma_kernel[(1, )](desc)
+    assert "tt.call" in compiled.asm["ttgir"]
+    torch.testing.assert_close(dst, torch.zeros_like(dst))
 
 
 @gluon.jit
@@ -4951,11 +4952,19 @@ def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr)
     tma.store_wait(0)
 
 
+def test_fp6_tma_store_reshaped_source_sm100():
+    layout = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
+    desc_type = f"tensordesc<u8[1,128],{layout!r}>"
+    signature = {"src": "*u8", "dst": "*u8", "desc": desc_type, "ROWS": "constexpr", "WIDTH": "constexpr"}
+    source = gluon.GluonASTSource(_fp6_store_tile, signature, {"ROWS": 2, "WIDTH": 64})
+    triton.compile(source, target=GPUTarget("cuda", 100, 32))
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
                     reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("host,rows,width", [(False, 1, 128), (True, 1, 128), (True, 1, 64), (True, 2, 64)])
 def test_fp6_tma_store_contiguous(host, rows, width, with_allocator):
-    if width == 64 and torch.cuda.get_device_capability() != (10, 3):
+    if width == 64 and not is_blackwell_ultra():
         pytest.skip("64-value FP6 stores require SM103")
     src = torch.randint(0, 256, (2, rows, width), device="cuda", dtype=torch.uint8)
     dst = torch.full((2 * rows + 3, width * 3 // 4), 0xa5, device="cuda", dtype=torch.uint8)
@@ -5546,6 +5555,19 @@ def test_in_thread_convert_layout_8bit(src_reg_bases, dst_reg_bases):
 def descriptor_shape_kernel(desc, expect_shape):
     for i in ttgl.static_range(len(expect_shape)):
         ttgl.device_assert(desc.shape[i] == expect_shape[i])
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires SM103")
+def test_fp6_host_descriptor_shape_only():
+    dst = torch.empty((2, 48), device="cuda", dtype=torch.uint8)
+
+    def warmup(packing):
+        desc = TensorDescriptor.from_tensor(dst, [2, 64], ttgl.NVMMASharedLayout(0, 8, padding=packing))
+        descriptor_shape_kernel.warmup(desc, (2, 64), grid=(1, ), debug=True)
+
+    warmup("b6p2x16")
+    with pytest.raises(TypeError, match="64-value FP6 host maps require store packing"):
+        warmup("b6x16_p32")
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import fp6_values, pack_fp6, is_cuda
+from triton._internal_testing import fp6_values, pack_fp6, is_blackwell_ultra, is_cuda
 from triton.backends.nvidia.compiler import get_ptx_version_from_options
 from triton.language.extra.cuda import to_fp6
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
@@ -143,7 +143,7 @@ def test_fp6_tma_store_box64_sm100(capfd):
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
 @pytest.mark.parametrize("rows,columns", [(1, 64), (1, 128), (2, 64), (2, 128), (256, 128)])
 def test_fp6_tma_store_host_box64(fmt, rows, columns):
-    if not is_cuda() or torch.cuda.get_device_capability() != (10, 3):
+    if not is_blackwell_ultra():
         pytest.skip("64-value FP6 stores require SM103")
 
     row_bytes = columns * 6 // 8

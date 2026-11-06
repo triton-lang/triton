@@ -1551,10 +1551,12 @@ struct AsyncTMACopyLocalToGlobalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto src = op.getSrc().getType();
-    auto layout = cast<ttg::NVMMASharedEncodingAttr>(src.getEncoding());
-    if (layout.getPadding() == ttg::NVMmaPadding::B6P2x16 &&
-        src.getShape().back() == 64 && computeCapability != 103)
+    auto descTy = op.getDesc().getType();
+    auto layout = cast<ttg::NVMMASharedEncodingAttr>(descTy.getSharedLayout());
+    if (computeCapability != 103 && layout.isPaddedFp6() &&
+        ttng::getTMABlockShape(descTy, /*packedSize=*/false,
+                               ttg::TMAMode::Tiled)
+                .back() == 64)
       return op.emitOpError("64-value FP6 TMA stores require SM103");
     auto l2Policy = createTMACachePolicy(op, op.getCachePolicyAttr(), rewriter,
                                          computeCapability, 90);
