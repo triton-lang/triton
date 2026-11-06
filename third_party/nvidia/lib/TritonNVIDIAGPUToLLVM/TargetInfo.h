@@ -88,6 +88,9 @@ public:
                   triton::ReduceOp op, unsigned reduceLaneIdMask,
                   unsigned broadcastLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
+  bool preferThreePredicateChains(unsigned valuesPerThread) const override {
+    return valuesPerThread >= 32;
+  }
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,

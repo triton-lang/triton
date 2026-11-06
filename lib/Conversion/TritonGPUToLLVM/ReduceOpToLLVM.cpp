@@ -312,6 +312,15 @@ private:
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
+    // A combiner returning AND/OR may also contain observable effects.
+    bool isPureBooleanAndOr =
+        isa_and_nonnull<arith::AndIOp, arith::OrIOp, arith::MinUIOp,
+                        arith::MaxUIOp>(combinerOp) &&
+        combinerOp->getResult(0).getType().isInteger(1) &&
+        llvm::hasSingleElement(combineRegion.front().without_terminator());
+    bool usePredicateChains =
+        isPureBooleanAndOr && targetInfo.preferThreePredicateChains(axisPack);
+
     // Perform a tree reduction
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
@@ -324,7 +333,12 @@ private:
         for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        vals.push_back(std::move(cur));
+        // ptxas can fuse comparisons into each chain and merge the three
+        // partial predicates with one PLOP3.
+        if (usePredicateChains && i >= 3)
+          accumulate(loc, rewriter, combineRegion, vals[i % 3], cur);
+        else
+          vals.push_back(std::move(cur));
       }
       auto acc =
           treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
