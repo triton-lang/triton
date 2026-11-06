@@ -475,9 +475,6 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout,
   auto kBlock = StringAttr::get(layout.getContext(), "block");
 
   if (isa<DistributedEncodingTrait>(layout)) {
-    // BlockedEncodingAttr, SliceEncodingAttr, DotOperandEncodingAttr,
-    // LinearEncodingAttr, GenericLinearEncodingAttr, NvidiaMmaEncodingAttr,
-    // AMDMfmaEncodingAttr, and AMDWmmaEncodingAttr.
     auto ll = toLinearLayout(layoutShape, layout);
     return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
   } else if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(layout)) {
