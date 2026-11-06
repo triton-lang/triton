@@ -1202,6 +1202,41 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
   return success();
 }
 
+bool TCGen5MMAOp::verifyDims() {
+  return getA().getType().getDimSize(1) * (getMetadata() ? 2 : 1) ==
+         getB().getType().getDimSize(0);
+}
+
+// Each instruction reads metadata from one 128-row tile, starting at selector
+// zero. FP16 uses one word per row, FP8 and paired FP4 use two.
+static LogicalResult verifySparseTile(Operation *op, MemDescType metadata,
+                                      MemDescType acc, int64_t k,
+                                      int64_t instructionK, int64_t words) {
+  auto module = op->getParentOfType<ModuleOp>();
+  if (module->hasAttr(triton::gpu::AttrTargetName)) {
+    auto cc = getNVIDIAComputeCapability(module);
+    if (cc != 100 && cc != 103)
+      return op->emitOpError("sparse MMA requires SM100 or SM103");
+  }
+  auto layout = dyn_cast<TensorMemoryEncodingAttr>(metadata.getEncoding());
+  auto accLayout = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
+  if (!layout || !accLayout || !metadata.getElementType().isInteger(32) ||
+      metadata.getShape() != ArrayRef<int64_t>({128, words}) ||
+      layout.getBlockM() != 128 || layout.getColStride() != 1 ||
+      getNumCTAs(metadata.getEncoding()) != 1 ||
+      getNumCTAs(acc.getEncoding()) != 1 || layout.getTwoCTAs() ||
+      accLayout.getTwoCTAs() || accLayout.getBlockM() != 128 ||
+      acc.getDimSize(0) != 128 || k != instructionK)
+    return op->emitOpError(
+               "expected one 128-row sparse MMA tile with logical K=")
+           << instructionK << " and 128x" << words
+           << " i32 tensor memory metadata";
+  if (words == 2 && getTMemSubSliceOffset(metadata, 1, 1) != 1)
+    return op->emitOpError(
+        "sparse metadata words must occupy adjacent TMEM columns");
+  return success();
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1227,6 +1262,15 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
+  if (auto metadata = getMetadata()) {
+    if (!atype.isF16() && !isa<Float8E4M3FNType, Float8E5M2Type>(atype))
+      return emitOpError("sparse MMA requires FP16 or FP8 operands");
+    int64_t instructionK = atype.isF16() ? 32 : 64;
+    if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(),
+                                getB().getType().getDimSize(0), instructionK,
+                                instructionK / 32)))
+      return failure();
+  }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
   int64_t minK = kind == MMADTypeKind::tf32  ? 8
                  : kind == MMADTypeKind::f16 ? 16
@@ -1309,6 +1353,9 @@ LogicalResult TCGen5MMAOp::verify() {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  if (getMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(), &getMetadataMutable()[0],
+                         TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
   if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
@@ -1388,7 +1435,7 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, Value(), isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
         isUnsigned ? builder.getUnitAttr() : UnitAttr(), aType, bType);
@@ -1544,6 +1591,22 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
+  if (auto metadata = getMetadata()) {
+    if (getAType() != ScaleDotElemType::E2M1 ||
+        getBType() != ScaleDotElemType::E2M1 ||
+        !isa<Float8E4M3FNType>(aScaleType.getElementType()) ||
+        !isa<Float8E4M3FNType>(bScaleType.getElementType()))
+      return emitOpError("sparse scaled MMA requires NVFP4 operands");
+    if (aScaleType.getShape() != ArrayRef<int64_t>({128, 4}) ||
+        bScaleType.getShape() != ArrayRef<int64_t>({getBlockN(), 4}) ||
+        !isa<TensorMemoryScalesEncodingAttr>(aScaleType.getEncoding()) ||
+        !isa<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding()))
+      return emitOpError(
+          "expected E4M3 tensor memory scales per 32 logical K values");
+    if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(), k,
+                                128, 2)))
+      return failure();
+  }
   int64_t minK = 32;
   if (getAType() == ScaleDotElemType::E2M1 &&
       getBType() == ScaleDotElemType::E2M1) {
@@ -1599,6 +1662,9 @@ LogicalResult TCGen5MMAScaledOp::verify() {
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  if (getMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(), &getMetadataMutable()[0],
+                         TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
   if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
@@ -1716,7 +1782,7 @@ int64_t TCGen5MMAScaledOp::getBlockK() {
   bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
-  return blockK;
+  return getMetadata() ? blockK * 2 : blockK;
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
@@ -1733,7 +1799,7 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, Value(), twoCTAs ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
         isAsync ? builder.getUnitAttr() : UnitAttr());
 }

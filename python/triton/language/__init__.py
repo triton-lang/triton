@@ -4,6 +4,7 @@
 from . import math
 from . import extra
 from .standard import (
+    sparse_dot,
     all,
     any,
     argmax,
@@ -196,6 +197,7 @@ __all__ = [
     "div_rn",
     "dot",
     "dot_scaled",
+    "sparse_dot",
     "dtype",
     "erf",
     "exp",

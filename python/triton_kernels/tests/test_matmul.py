@@ -1404,3 +1404,77 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype,scale_k", [(torch.float16, None), (torch.float8_e4m3fn, None),
+                                          (torch.float8_e5m2, None), (torch.uint8, 16), (torch.uint8, 32)])
+def test_matmul_structured_sparse_weights(dtype, scale_k):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        pytest.skip("requires SM100 or SM103")
+    nvfp4 = dtype == torch.uint8
+    m, n, k = 39, 143, 288
+    group = 8 if nvfp4 else 4
+    rng = torch.Generator().manual_seed(17)
+    pairs = torch.combinations(torch.arange(4), r=2)
+    indices = pairs[torch.randint(6, (n, k // group), generator=rng)]
+    selectors = indices[..., 0] + 4 * indices[..., 1]
+    selectors = torch.nn.functional.pad(selectors, (0, -selectors.shape[-1] % 8), value=4)
+    metadata = (selectors.reshape(n, -1, 8) << (torch.arange(8) * 4)).sum(-1).int().cuda()
+
+    x = torch.randint(4, (m, k), generator=rng)
+    w = torch.randint(4, (n, k // 2), generator=rng)
+    if nvfp4:
+        positions = (indices[..., None] * 2 + torch.arange(2)).flatten(-2)
+        # E2M1 codes 0 through 3 represent 0, 0.5, 1, and 1.5.
+        def pack(t):
+            return (t[:, ::2] + 16 * t[:, 1::2]).to(torch.uint8)
+
+        a, b = pack(x).cuda(), pack(w).T.cuda()
+        xs = torch.randint(1, 4, (m, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
+        ws = torch.randint(1, 4, (n, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
+        config = PrecisionConfig(a_mx_scale=xs.cuda(), b_mx_scale=ws.cuda(), a_microblock_size=scale_k,
+                                 b_microblock_size=scale_k, out_dtype=torch.float32)
+        x = x.float() * 0.5 * xs.float().repeat_interleave(scale_k, dim=1)
+        w = w.float() * 0.5 * ws.float().repeat_interleave(scale_k // 2, dim=1)
+    else:
+        positions = indices
+        a, b = x.to(dtype).cuda(), w.to(dtype).T.cuda()
+        config = PrecisionConfig(out_dtype=torch.float32)
+    dense = torch.zeros(n, k // group, group).scatter_(2, positions, w.float().reshape(n, k // group, group // 2))
+    expected = x.float() @ dense.reshape(n, k).T
+    result = matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
+    torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("routed", [False, True])
+def test_matmul_structured_sparse_experts(routed):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        pytest.skip("requires SM100 or SM103")
+    experts, m, k, n = 3, 37, 64, 17
+    a = torch.randint(4, (experts, m, k), device="cuda").half()
+    b = torch.randint(4, (experts, k // 2, n), device="cuda").half()
+    dense = torch.zeros((experts, k // 4, 4, n), device="cuda")
+    dense[:, :, :2] = b.view(experts, k // 4, 2, n)
+    dense = dense.view(experts, k, n)
+    meta = torch.full((experts, n, k // 32), 0x44444444, device="cuda", dtype=torch.int32)
+    bias = torch.randint(4, (experts, n), device="cuda").float()
+    kwargs = {}
+    if routed:
+        a = a[0]
+        sizes = [7, 0, 30]
+        gather = torch.randperm(m, device="cuda")
+        gather[4] = -1
+        scatter = torch.randperm(m, device="cuda")
+        ragged = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), m)
+        kwargs = dict(a_ragged_metadata=ragged, gather_indx=gather, scatter_indx=scatter)
+        x = a[gather.clamp_min(0)].float()
+        x[gather == -1] = 0
+        expected = torch.empty((m, n), device="cuda")
+        for i, rows in enumerate(x.split(sizes)):
+            start = sum(sizes[:i])
+            expected[scatter[start:start + sizes[i]]] = 2 * (rows @ dense[i] + bias[i])
+    else:
+        expected = 2 * (a.float() @ dense + bias[:, None, :])
+    out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparse_metadata=meta,
+                 out_alpha=2.0, **kwargs)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)

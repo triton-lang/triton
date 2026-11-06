@@ -2308,3 +2308,19 @@ module attributes {ttg.target = "cuda:103"} {
     tt.return
   }
 }
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x32xf8E4M3FN, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xf8E4M3FN, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x1xi32, #t, #ttng.tensor_memory, 128x2>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @short_sparse_metadata_subview(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{expected one 128-row sparse MMA tile with logical K=64 and 128x2 i32 tensor memory metadata}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred metadata %e : !e {is_async} : !a, !b, !d
+    tt.return
+  }
+}

@@ -754,6 +754,61 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   return newB;
 }
 
+class SparseDotToMMAv5 : public OpRewritePattern<SparseDotOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(SparseDotOp op,
+                                PatternRewriter &rewriter) const override {
+    namespace nv = triton::nvidia_gpu;
+    auto resultTy = op.getType();
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto cga = getCGALayout(resultTy.getEncoding());
+    int warps = lookupNumWarps(op);
+    auto space = nv::TensorMemorySpaceAttr::get(ctx);
+    auto allocReadOnly = [&](Value v, Attribute enc) {
+      return createTmemScaleOperand(v, enc, space, warps, loc, rewriter);
+    };
+    auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
+        ctx, 128, op.getMetadata().getType().getDimSize(1), 1, cga);
+    Value meta = allocReadOnly(op.getMetadata(), metaEncoding);
+    Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
+    Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
+    auto accEncoding = nv::TensorMemoryEncodingAttr::get(
+        ctx, 128, resultTy.getDimSize(1), 1, cga);
+    auto accTy =
+        MemDescType::get(resultTy.getShape(), resultTy.getElementType(),
+                         accEncoding, space, true);
+    auto regTy = resultTy.cloneWithEncoding(
+        nv::getDefaultLayoutForTmemLdSt(accTy, warps));
+    auto tokenTy = rewriter.getType<AsyncTokenType>();
+    Value init = ConvertLayoutOp::create(rewriter, loc, regTy, op.getAcc());
+    auto acc = nv::TMEMAllocOp::create(rewriter, loc, accTy, tokenTy, init);
+    Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+    Value token;
+    if (op.getAScale()) {
+      auto enc = nv::TensorMemoryScalesEncodingAttr::get(
+          ctx, cga, nv::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+      Value sa = allocReadOnly(op.getAScale(), enc);
+      Value sb = allocReadOnly(op.getBScale(), enc);
+      auto mma = nv::TCGen5MMAScaledOp::create(
+          rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
+          ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
+      mma.getMetadataMutable().assign(meta);
+      token = mma.getToken();
+    } else {
+      auto mma = nv::TCGen5MMAOp::create(rewriter, loc, tokenTy, a, b, acc,
+                                         acc.getToken(), pred, pred);
+      mma.getMetadataMutable().assign(meta);
+      token = mma.getToken();
+    }
+    auto ld = nv::TMEMLoadOp::create(rewriter, loc, regTy, tokenTy, acc, token);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, ld);
+    return success();
+  }
+};
+
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
   bool enableTwoCTAs;
@@ -1228,6 +1283,8 @@ public:
     constexpr int benefitMMAv5 = 10;
     constexpr int benefitSM120 = 10;
 
+    if (computeCapability == 100 || computeCapability == 103)
+      patterns.add<SparseDotToMMAv5>(context);
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);

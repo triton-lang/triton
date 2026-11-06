@@ -575,7 +575,7 @@ def tcgen05_copy(src, dst, pred=True, _semantic=None):
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                a_type=None, b_type=None, _semantic=None):
+                a_type=None, b_type=None, metadata=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -588,6 +588,10 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
+        metadata (tensor_memory_descriptor, optional): Emit sparse MMA with a compressed A operand.
+            Use a 128-row i32 TMEM tile with one word per row for FP16 (logical K=32)
+            or two for FP8 (logical K=64). FP16 uses the PTX selector-zero half-word
+            interleave. FP8 packs eight consecutive four-bit selectors per word.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -615,12 +619,13 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     a_type = _semantic._str_to_fp_type(a_type) if a_type is not None else None
     b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type,
+                                         metadata.handle if metadata is not None else None)
 
 
 @builtin
 def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
-                       mbarriers=None, mbarrier_preds=None, _semantic=None):
+                       mbarriers=None, mbarrier_preds=None, metadata=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA scaled instruction.
     acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
@@ -633,6 +638,10 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         b_scale (tensor): Scale factor for operand B.
         a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
         b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
+        metadata (tensor_memory_descriptor, optional): Emit paired 4:8 NVFP4 MMA.
+            For logical K=128, store compressed A in 32 bytes per row. Supply a
+            128-by-2 i32 TMEM tile with eight pair selectors per word, lowest
+            nibble first. Each operand uses four E4M3 scales along logical K.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -663,7 +672,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast)
+                                                acc.layout.two_ctas, multicast, metadata.handle if metadata is not None else None)
 
 
 @constexpr_function

@@ -192,6 +192,8 @@ public:
       namedOperands = {{mmav5Op.getA(), "A"},
                        {mmav5Op.getB(), "B"},
                        {mmav5Op.getAccumulator(), "Acc"}};
+      if (Value metadata = mmav5Op.getMetadata())
+        namedOperands.emplace_back(metadata, "Metadata");
       if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
         namedOperands.emplace_back(mmaScaledOp.getAScale(), "AScale");
         namedOperands.emplace_back(mmaScaledOp.getBScale(), "BScale");

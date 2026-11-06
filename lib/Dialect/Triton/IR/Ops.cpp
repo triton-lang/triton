@@ -341,6 +341,36 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   return success();
 }
 
+LogicalResult SparseDotOp::verify() {
+  auto a = getA().getType(), b = getB().getType(), acc = getAcc().getType();
+  auto meta = getMetadata().getType();
+  if (a.getRank() != 2 || b.getRank() != 2 || acc.getRank() != 2 ||
+      a.getDimSize(0) != 128 || b.getDimSize(1) < 16 || b.getDimSize(1) > 256 ||
+      acc.getDimSize(0) != 128 || acc.getDimSize(1) != b.getDimSize(1) ||
+      !acc.getElementType().isF32())
+    return emitOpError(
+        "requires a 128-row tile and a matching FP32 accumulator");
+  Type elem = a.getElementType();
+  bool scaled = bool(getAScale());
+  if (scaled != bool(getBScale()) || b.getElementType() != elem ||
+      (scaled ? !elem.isInteger(8)
+              : !(elem.isF16() || isa<Float8E4M3FNType, Float8E5M2Type>(elem))))
+    return emitOpError("expected FP16, FP8, or packed NVFP4 with two scales");
+  int64_t storedK = elem.isF16() ? 16 : 32;
+  if (a.getDimSize(1) != storedK || b.getDimSize(0) != 2 * storedK ||
+      !meta.getElementType().isInteger(32) ||
+      meta.getShape() != ArrayRef<int64_t>({128, storedK / 16}))
+    return emitOpError("invalid compressed K dimension or metadata tile");
+  if (scaled) {
+    for (auto [scale, rows] : {std::pair{getAScale(), int64_t(128)},
+                               std::pair{getBScale(), b.getDimSize(1)}})
+      if (!isa<Float8E4M3FNType>(scale.getType().getElementType()) ||
+          scale.getType().getShape() != ArrayRef<int64_t>({rows, 4}))
+        return emitOpError("expected one E4M3 scale per 32 logical K elements");
+  }
+  return success();
+}
+
 LogicalResult DotOp::verify() {
   auto aTy = getA().getType();
   auto bTy = getB().getType();
