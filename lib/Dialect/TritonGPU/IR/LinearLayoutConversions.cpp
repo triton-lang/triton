@@ -1864,45 +1864,28 @@ std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx, int width,
                                                  int numWarps) {
   // PTX mma.sp.m16n8k32 (FP16) and m16n8k64 (FP8) use the same four
   // 32-bit registers for each multiplicand. The packed K width differs.
-  const int pack = 32 / width;
-  using Bases = std::vector<std::vector<int32_t>>;
-  Bases aRegs, bRegs;
-  for (int k = 1; k < pack; k *= 2) {
-    aRegs.push_back({0, k});
-    bRegs.push_back({k, 0});
-  }
-  aRegs.insert(aRegs.end(), {{8, 0}, {0, 4 * pack}});
-  bRegs.insert(bRegs.end(), {{4 * pack, 0}, {8 * pack, 0}});
-  Bases eRegs, dRegs{{0, 1}, {8, 0}};
-  for (int col = 8; col < shape[1]; col *= 2) {
-    bRegs.push_back({0, col});
-    dRegs.push_back({0, col});
-  }
-  Bases warpM, warpB;
-  for (int w = 1; w < numWarps; w *= 2) {
-    warpM.push_back({16 * w < shape[0] ? 16 * w : 0, 0});
-    warpB.push_back({0, 0});
-  }
-  for (int row = 16 * numWarps; row < shape[0]; row *= 2) {
-    aRegs.push_back({row, 0});
-    eRegs.push_back({row, 0});
-    dRegs.push_back({row, 0});
-  }
-  auto layout = [&](Bases regs, Bases lanes, Bases warps) -> Attribute {
-    LinearLayout::BasesT bases;
-    bases[StringAttr::get(ctx, "register")] = std::move(regs);
-    bases[StringAttr::get(ctx, "lane")] = std::move(lanes);
-    bases[StringAttr::get(ctx, "warp")] = std::move(warps);
-    bases[StringAttr::get(ctx, "block")] = {};
+  const unsigned pack = 32 / width;
+  auto dims = standardOutDimNames(ctx, 2);
+  auto cga = CGAEncodingAttr::get1CTALayout(ctx, 2);
+  auto warpM = LinearLayout::identity1D(numWarps, S("warp"), dims[0]);
+  auto broadcastWarp = LinearLayout::zeros1D(numWarps, S("warp"), dims[0]);
+  auto tile = [&](LinearLayout fragment, const LinearLayout &warps,
+                  ArrayRef<int64_t> operandShape) -> Attribute {
     return LinearEncodingAttr::get(
-        ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
+        ctx, combineCtaCgaWithShape(fragment * warps, cga, operandShape));
   };
-  return {
-      layout(aRegs, {{0, pack}, {0, 2 * pack}, {1, 0}, {2, 0}, {4, 0}}, warpM),
-      layout(bRegs, {{pack, 0}, {2 * pack, 0}, {0, 1}, {0, 2}, {0, 4}}, warpB),
-      layout(eRegs, {{8, 0}, {0, width == 8 ? 1 : 0}, {1, 0}, {2, 0}, {4, 0}},
-             warpM),
-      layout(dRegs, {{0, 2}, {0, 4}, {1, 0}, {2, 0}, {4, 0}}, warpM)};
+
+  auto a = nvidiaMmaTile(ctx, {16, 8 * pack}, pack, {1, 0}, {1, 0});
+  auto b = nvidiaMmaTile(ctx, {16 * pack, 8}, pack, {0, 1}, {0, 1});
+  auto d = nvidiaMmaTile(ctx, {16, 8}, 2, {1, 0}, {1, 0});
+  // Selector zero takes two lanes per quad for FP16, and all four for FP8.
+  LinearLayout metadata(
+      {{S("register"), {}},
+       {S("lane"), {{8, 0}, {0, width == 8 ? 1 : 0}, {1, 0}, {2, 0}, {4, 0}}}},
+      dims);
+  return {tile(a, warpM, {shape[0], 8 * pack}),
+          tile(b, broadcastWarp, {16 * pack, shape[1]}),
+          tile(metadata, warpM, {shape[0], 16 / width}), tile(d, warpM, shape)};
 }
 
 Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,

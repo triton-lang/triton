@@ -320,19 +320,20 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
                               reshape2D.getResult());
 }
 
-static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
-                                    Attribute tensorMemorySpace, int numWarps,
-                                    Location loc, PatternRewriter &rewriter) {
+static nvidia_gpu::TMEMAllocOp allocTmemOperand(PatternRewriter &rewriter,
+                                                Location loc, Value tensor,
+                                                Attribute encoding,
+                                                int numWarps, Type token = {}) {
+  auto space = nvidia_gpu::TensorMemorySpaceAttr::get(rewriter.getContext());
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto tmemType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                       tmemEncoding, tensorMemorySpace,
-                       /*mutableMemory=*/false);
+                       encoding, space, /*mutableMemory=*/bool(token));
   auto tmemLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(tmemType, numWarps);
   auto stagedType = tensorType.cloneWithEncoding(tmemLayout);
   Value converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
-  return triton::nvidia_gpu::TMEMAllocOp::create(rewriter, loc, tmemType,
-                                                 /*token=*/Type(), converted);
+  return triton::nvidia_gpu::TMEMAllocOp::create(rewriter, loc, tmemType, token,
+                                                 converted);
 }
 
 SmallVector<unsigned, 3>
@@ -755,120 +756,79 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   return newB;
 }
 
-class SparseDotToWarpMMA : public OpRewritePattern<SparseDotOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SparseDotOp op,
-                                PatternRewriter &rewriter) const override {
-    if (op.getAScale() || getNumCTAs(op.getType().getEncoding()) != 1)
-      return failure();
-    int warps = lookupNumWarps(op);
-    auto layouts = getWarpSparseMmaLayouts(
-        op.getContext(), op.getA().getType().getElementTypeBitWidth(),
-        op.getType().getShape(), warps);
-    bool prepared =
-        llvm::all_of(llvm::zip(op.getOperands(), layouts), [](auto pair) {
-          auto [operand, layout] = pair;
-          return cast<RankedTensorType>(operand.getType()).getEncoding() ==
-                 layout;
-        });
-    if (prepared)
-      return failure();
-    Value result =
-        buildWarpSparseDot(rewriter, op.getLoc(), op.getA(), op.getB(),
-                           op.getMetadata(), op.getAcc(), warps);
-    rewriter.replaceOp(op, result);
-    return success();
+static void lowerSparseDot(SparseDotOp op, int capability) {
+  namespace nv = triton::nvidia_gpu;
+  PatternRewriter rewriter(op.getContext());
+  rewriter.setInsertionPoint(op);
+  auto resultTy = op.getType();
+  auto loc = op.getLoc();
+  auto ctx = op.getContext();
+  int warps = lookupNumWarps(op);
+  auto cga = getCGALayout(resultTy.getEncoding());
+  bool blackwell = capability == 100 || capability == 103;
+  if (!blackwell) {
+    if (capability < 80 || capability >= 100 || op.getAScale() ||
+        getNumCTAs(resultTy.getEncoding()) != 1)
+      return;
+    if (capability != 90 || warps % 4) {
+      Value dot = buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
+                                     op.getMetadata(), op.getAcc(), warps);
+      rewriter.replaceOp(op, dot);
+      return;
+    }
   }
-};
-
-class SparseDotToWGMMA : public OpRewritePattern<SparseDotOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(SparseDotOp op,
-                                PatternRewriter &rewriter) const override {
-    auto result = op.getType();
-    auto warps = lookupNumWarps(op);
-    if (op.getAScale() || warps % 4 || getNumCTAs(result.getEncoding()) != 1)
-      return failure();
-    unsigned n = result.getDimSize(1);
+  Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
+  Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
+  if (!blackwell) {
+    unsigned n = resultTy.getDimSize(1);
     unsigned width = op.getA().getType().getElementTypeBitWidth();
     auto encoding = NvidiaMmaEncodingAttr::get(
-        op.getContext(), 3, 0, {unsigned(warps), 1},
-        getCGALayout(result.getEncoding()), {16, n, 256 / width});
-    auto accTy = result.cloneWithEncoding(encoding);
-    Location loc = op.getLoc();
+        op.getContext(), 3, 0, {unsigned(warps), 1}, cga, {16, n, 256 / width});
+    auto accTy = resultTy.cloneWithEncoding(encoding);
     Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
-    Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
-    Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
     auto layouts = getWarpSparseMmaLayouts(op.getContext(), width,
-                                           result.getShape(), warps);
+                                           resultTy.getShape(), warps);
     Value e = ConvertLayoutOp::create(
         rewriter, loc, op.getMetadata().getType().cloneWithEncoding(layouts[2]),
         op.getMetadata());
     Value dot = nvidia_gpu::WarpGroupDotOp::create(
         rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
         1u << 30, false);
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, result, dot);
-    return success();
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, dot);
+    return;
   }
-};
 
-class SparseDotToMMAv5 : public OpRewritePattern<SparseDotOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(SparseDotOp op,
-                                PatternRewriter &rewriter) const override {
-    namespace nv = triton::nvidia_gpu;
-    auto resultTy = op.getType();
-    auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto cga = getCGALayout(resultTy.getEncoding());
-    int warps = lookupNumWarps(op);
-    auto space = nv::TensorMemorySpaceAttr::get(ctx);
-    auto allocReadOnly = [&](Value v, Attribute enc) {
-      return createTmemScaleOperand(v, enc, space, warps, loc, rewriter);
-    };
-    auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
-        ctx, 128, op.getMetadata().getType().getDimSize(1), 1, cga);
-    Value meta = allocReadOnly(op.getMetadata(), metaEncoding);
-    Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
-    Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
-    auto accEncoding = nv::TensorMemoryEncodingAttr::get(
-        ctx, 128, resultTy.getDimSize(1), 1, cga);
-    auto accTy =
-        MemDescType::get(resultTy.getShape(), resultTy.getElementType(),
-                         accEncoding, space, true);
-    auto regTy = resultTy.cloneWithEncoding(
-        nv::getDefaultLayoutForTmemLdSt(accTy, warps));
-    auto tokenTy = rewriter.getType<AsyncTokenType>();
-    Value init = ConvertLayoutOp::create(rewriter, loc, regTy, op.getAcc());
-    auto acc = nv::TMEMAllocOp::create(rewriter, loc, accTy, tokenTy, init);
-    Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
-    Value token;
-    if (op.getAScale()) {
-      auto enc = nv::TensorMemoryScalesEncodingAttr::get(
-          ctx, cga, nv::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
-      Value sa = allocReadOnly(op.getAScale(), enc);
-      Value sb = allocReadOnly(op.getBScale(), enc);
-      auto mma = nv::TCGen5MMAScaledOp::create(
-          rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
-          ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
-      mma.getMetadataMutable().assign(meta);
-      token = mma.getToken();
-    } else {
-      auto mma = nv::TCGen5MMAOp::create(rewriter, loc, tokenTy, a, b, acc,
-                                         acc.getToken(), pred, pred);
-      mma.getMetadataMutable().assign(meta);
-      token = mma.getToken();
-    }
-    auto ld = nv::TMEMLoadOp::create(rewriter, loc, regTy, tokenTy, acc, token);
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, ld);
-    return success();
+  auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
+      ctx, 128, op.getMetadata().getType().getDimSize(1), 1, cga);
+  Value meta =
+      allocTmemOperand(rewriter, loc, op.getMetadata(), metaEncoding, warps);
+  auto accEncoding = nv::TensorMemoryEncodingAttr::get(
+      ctx, 128, resultTy.getDimSize(1), 1, cga);
+  auto tokenTy = rewriter.getType<AsyncTokenType>();
+  auto acc =
+      allocTmemOperand(rewriter, loc, op.getAcc(), accEncoding, warps, tokenTy);
+  Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+  Value token;
+  if (op.getAScale()) {
+    auto enc = nv::TensorMemoryScalesEncodingAttr::get(
+        ctx, cga, nv::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+    Value sa = allocTmemOperand(rewriter, loc, op.getAScale(), enc, warps);
+    Value sb = allocTmemOperand(rewriter, loc, op.getBScale(), enc, warps);
+    auto mma = nv::TCGen5MMAScaledOp::create(
+        rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
+        ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
+    mma.getMetadataMutable().assign(meta);
+    token = mma.getToken();
+  } else {
+    auto mma = nv::TCGen5MMAOp::create(rewriter, loc, tokenTy, a, b, acc,
+                                       acc.getToken(), pred, pred);
+    mma.getMetadataMutable().assign(meta);
+    token = mma.getToken();
   }
-};
+  auto ld = nv::TMEMLoadOp::create(rewriter, loc, acc.getSrc().getType(),
+                                   tokenTy, acc, token);
+  rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, ld);
+}
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
@@ -921,20 +881,9 @@ public:
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
         context, instrShape[0], instrShape[1], colStride, cgaLayout,
         useTwoCTAs);
-    Attribute tensorMemorySpace =
-        triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
-    auto newDistributedEncoding =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(accMemDescType, numWarps);
-    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
-    Value cvtAcc =
-        ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
-    auto acc = triton::nvidia_gpu::TMEMAllocOp::create(
-        rewriter, loc, accMemDescType, tokType, cvtAcc);
+    auto acc = allocTmemOperand(rewriter, loc, dotOp.getC(), accEncoding,
+                                numWarps, tokType);
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
     auto mma = triton::nvidia_gpu::TCGen5MMAOp::create(
         rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
@@ -942,7 +891,8 @@ public:
     mma.setTwoCtas(useTwoCTAs);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
-        rewriter, loc, newAccType, tokType, acc, /*dep=*/mma.getToken());
+        rewriter, loc, acc.getSrc().getType(), tokType, acc,
+        /*dep=*/mma.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -1167,20 +1117,9 @@ public:
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
         context, m, n, colStride, cgaLayout);
-    Attribute tensorMemorySpace =
-        triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
-    auto newDistributedEncoding =
-        nvidia_gpu::getDefaultLayoutForTmemLdSt(accMemDescType, numWarps);
-    auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
-    Value cvtAcc =
-        ConvertLayoutOp::create(rewriter, loc, newAccType, dotOp.getOperand(2));
     auto tokType = rewriter.getType<AsyncTokenType>();
-    auto acc = triton::nvidia_gpu::TMEMAllocOp::create(
-        rewriter, loc, accMemDescType, tokType, cvtAcc);
+    auto acc = allocTmemOperand(rewriter, loc, dotOp.getC(), accEncoding,
+                                numWarps, tokType);
 
     RankedTensorType oldScaleAType = dotOp.getAScale().getType();
     RankedTensorType oldScaleBType = dotOp.getBScale().getType();
@@ -1202,16 +1141,14 @@ public:
     Value scaleA =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
     if (!scaleA) {
-      scaleA =
-          createTmemScaleOperand(dotOp.getAScale(), scaleAEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+      scaleA = allocTmemOperand(rewriter, loc, dotOp.getAScale(),
+                                scaleAEncoding, numWarps);
     }
     Value scaleB =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
     if (!scaleB) {
-      scaleB =
-          createTmemScaleOperand(dotOp.getBScale(), scaleBEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+      scaleB = allocTmemOperand(rewriter, loc, dotOp.getBScale(),
+                                scaleBEncoding, numWarps);
     }
 
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
@@ -1221,7 +1158,7 @@ public:
         /*useD=*/vTrue, /*pred=*/vTrue);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
-        rewriter, loc, newAccType, tokType, acc, mmaOp.getToken());
+        rewriter, loc, acc.getSrc().getType(), tokType, acc, mmaOp.getToken());
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
     return success();
   }
@@ -1344,12 +1281,6 @@ public:
     constexpr int benefitMMAv5 = 10;
     constexpr int benefitSM120 = 10;
 
-    if (computeCapability == 100 || computeCapability == 103)
-      patterns.add<SparseDotToMMAv5>(context);
-    else if (computeCapability == 90)
-      patterns.add<SparseDotToWGMMA>(context, benefitMMAv5);
-    if (computeCapability >= 80 && computeCapability < 100)
-      patterns.add<SparseDotToWarpMMA>(context);
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
@@ -1362,6 +1293,7 @@ public:
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
                                        benefitMMAv5);
 
+    m.walk([&](SparseDotOp op) { lowerSparseDot(op, computeCapability); });
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively
