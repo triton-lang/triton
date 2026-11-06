@@ -496,6 +496,7 @@ if __name__ == "__main__":
 # copy, and the kernel runs faster.
 #
 # As on CDNA4, the shared memory budget limits the number of buffers. On CDNA5,
-# each CU has 320 KB of LDS, twice as much as on CDNA4. A kernel can use more
-# buffers and a deeper pipeline. The CTAs on a CU still share the LDS, and each
-# buffer reduces the number of CTAs that fit on a CU.
+# the compute unit is called a workgroup processor (WGP). A WGP has 320 KB of
+# LDS, twice as much as a CDNA4 CU. A kernel can use more buffers and a deeper
+# pipeline. The CTAs on a WGP still share the LDS, and each buffer reduces the
+# number of CTAs that fit on a WGP.
