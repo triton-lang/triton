@@ -400,7 +400,7 @@ if __name__ == "__main__":
 # are adjacent, and the same layout works.
 
 
-def try_layout(name, layout, XBLOCK, YBLOCK):
+def compiles(layout, XBLOCK, YBLOCK):
     A = torch.randn(XBLOCK, YBLOCK, device="cuda")
     B = torch.randn_like(A)
     C = torch.empty_like(A)
@@ -412,9 +412,9 @@ def try_layout(name, layout, XBLOCK, YBLOCK):
     try:
         elementwise_async_copy_w_buffer_kernel[(1, )](A, B, C, XBLOCK, YBLOCK, *A.stride(), *B.stride(), *C.stride(),
                                                       XBLOCK, YBLOCK, layout, smem_layout, num_warps=4)
-        print(f"{name}: compiles")
+        return True
     except RuntimeError:
-        print(f"{name}: compilation error")
+        return False
     finally:
         os.dup2(stderr, 2)
         os.close(stderr)
@@ -423,16 +423,12 @@ def try_layout(name, layout, XBLOCK, YBLOCK):
 if __name__ == "__main__":
     one_row = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     eight_rows = gl.BlockedLayout([1, 4], [8, 8], [4, 1], [1, 0])
-    try_layout("1 row per warp, 32x256 tile", one_row, 32, 256)
-    try_layout("8 rows per warp, 32x256 tile", eight_rows, 32, 256)
-    try_layout("8 rows per warp, 32x32 tile", eight_rows, 32, 32)
-
-# %%
-# ```
-# 1 row per warp, 32x256 tile: compiles
-# 8 rows per warp, 32x256 tile: compilation error
-# 8 rows per warp, 32x32 tile: compiles
-# ```
+    # The 64 lanes of a warp cover one contiguous row of 256 values.
+    assert compiles(one_row, 32, 256)
+    # The 8 rows of a warp are 256 values apart.
+    assert not compiles(eight_rows, 32, 256)
+    # The 8 rows of a warp are adjacent.
+    assert compiles(eight_rows, 32, 32)
 
 # %%
 # Besides the layouts, the shared memory budget also limits direct-to-shared
