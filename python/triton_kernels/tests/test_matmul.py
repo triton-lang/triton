@@ -64,6 +64,22 @@ def opt_flags_scope():
     opt_flags.reset_opt_flags_constraints()
 
 
+def test_matmul_split_k_per_batch_output_scale(device):
+    scales = torch.tensor([1.0, 8.0], device=device)
+    actual_scale = torch.zeros_like(scales)
+    a = torch.ones((2, 33, 4096), device=device, dtype=torch.bfloat16)
+    b = torch.ones((2, 4096, 64), device=device, dtype=torch.bfloat16)
+    config = PrecisionConfig(
+        out_dtype=torch.float16,
+        flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=scales, actual_scale=actual_scale)),
+    )
+    with opt_flags.scoped_opt_flags_constraints({"split_k": 16, "is_persistent": False}):
+        y = matmul(a, b, None, precision_config=config)
+    expected = (4096 / scales[:, None, None]).expand(2, 33, 64).half()
+    torch.testing.assert_close(y, expected, rtol=0, atol=0)
+    torch.testing.assert_close(actual_scale, torch.full_like(scales, 4096.0 / 65472.0))
+
+
 def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str, num_warps):
     constraints = {
         "block_m": block_m,
