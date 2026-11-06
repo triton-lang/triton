@@ -585,6 +585,73 @@ def test_scatter_pipeline(device):
         assert kernel.asm["ttgir"].count("async_tdm_wait") == 5, "expected pipelined TDM scatter"
 
 
+def _run_staged_matmul(device, num_stages):
+    # The kernel is defined per call so every launch recompiles under the
+    # caller's TRITON_HIP_USE_STAGED_ASYNC_MARKS setting instead of reusing a
+    # cached compilation from a previous setting.
+    @triton.jit
+    def staged_matmul_kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+                             BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+                             NUM_STAGES: tl.constexpr):
+        pid_m = tl.program_id(axis=0)
+        pid_n = tl.program_id(axis=1)
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        for _ in tl.range(0, 16, num_stages=NUM_STAGES):
+            a = tl.load(a_ptrs)
+            b = tl.load(b_ptrs)
+            accumulator = tl.dot(a, b, acc=accumulator)
+            a_ptrs += BLOCK_K * stride_ak
+            b_ptrs += BLOCK_K * stride_bk
+        c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+        tl.store(c_ptrs, accumulator.to(tl.float16))
+
+    M, N, K = 256, 256, 1024
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((K, N), device=device, dtype=torch.float16)
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    handler = staged_matmul_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0),
+                                         c.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, num_stages, num_warps=8)
+    ref = torch.matmul(a.float(), b.float())
+    torch.testing.assert_close(c.float(), ref, atol=1e-2, rtol=1e-2)
+    return handler
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="staged asyncmarks are CDNA5 (gfx1250) only")
+@pytest.mark.parametrize("num_stages", [2, 3, 4])
+def test_staged_asyncmark_pipeline_matmul(num_stages, device, monkeypatch):
+    # Staged asyncmarks are on by default on CDNA5; make sure an ambient
+    # opt-out does not leak into this test.
+    monkeypatch.delenv("TRITON_HIP_USE_STAGED_ASYNC_MARKS", raising=False)
+    handler = None
+    # Launch twice with fresh inputs so a wait that under-waits and leaves
+    # stale data in shared memory shows up as a numerical failure.
+    for _ in range(2):
+        handler = _run_staged_matmul(device, num_stages)
+    # The pipeliner must have produced async copies, and the LLVM IR must
+    # carry staged asyncmark/wait.asyncmark intrinsics for LLVM's per-stage
+    # waitcnt computation instead of a single s.wait.asynccnt.
+    assert "ttg.async_copy_global_to_local" in handler.asm["ttgir"]
+    assert "llvm.amdgcn.asyncmark" in handler.asm["llir"]
+    assert "llvm.amdgcn.wait.asyncmark" in handler.asm["llir"]
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="staged asyncmarks are CDNA5 (gfx1250) only")
+def test_staged_asyncmark_disabled_pipeline_matmul(device, monkeypatch):
+    # With staged marks off, gfx1250 falls back to instruction-counted
+    # s.wait.asynccnt waits. The result must stay numerically correct.
+    monkeypatch.setenv("TRITON_HIP_USE_STAGED_ASYNC_MARKS", "0")
+    handler = _run_staged_matmul(device, 3)
+    assert "llvm.amdgcn.asyncmark" not in handler.asm["llir"]
+    assert "llvm.amdgcn.s.wait.asynccnt" in handler.asm["llir"]
+
+
 @pytest.mark.parametrize("num_stages", [1, 2, 3])
 def test_conditional_store_pipeline(num_stages, device):
     """
