@@ -24,11 +24,8 @@ public:
 protected:
   // Consume the earlier wait-count pass's scope proof before merging state.
   CompletionSync getCompletionSync(Operation *op) override {
-    // amdg.async_wait is only lowered from ttg.async_wait; keep its Shared
-    // scope.
-    if (isa<amdgpu::AsyncWaitOp>(op))
-      return CompletionSync::Shared;
-    if (isa<amdgpu::AsyncTDMWait, amdgpu::AsyncTDMIntrinsicWait>(op)) {
+    if (isa<gpu::AsyncWaitOp, amdgpu::AsyncWaitOp, amdgpu::AsyncTDMWait,
+            amdgpu::AsyncTDMIntrinsicWait>(op)) {
       if (auto scope = op->getAttrOfType<StringAttr>(
               amdgpu::kAsyncCompletionScopeAttrName))
         return scope.getValue() == "shared" ? CompletionSync::Shared

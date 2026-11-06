@@ -1,5 +1,5 @@
 // RUN: triton-opt %s --tritonamdgpu-block-pingpong=num-stages=3 | FileCheck %s
-// RUN: triton-opt %s --tritonamdgpu-block-pingpong=num-stages=3 --tritonamdgpu-update-async-wait-count=gfx-arch=gfx950 | FileCheck %s
+// RUN: triton-opt %s --tritonamdgpu-block-pingpong=num-stages=3 --tritonamdgpu-update-async-wait-count=gfx-arch=gfx950 | FileCheck %s --check-prefixes=CHECK,SCOPE
 
 // BlockPingpong's transformTwoClusterWithLocalLoadAndAll combines per-operand
 // ttg.async_waits into a single multi-token wait, then reorders async copies
@@ -8,9 +8,8 @@
 // the post-reorder IR (with multi-token support added in the same patch).
 //
 // On asyncmark targets (CDNA3/CDNA4) this `num` lowers straight to
-// rocdl.wait.asyncmark(N), and UpdateAsyncWaitCount is a no-op since PR #9883
-// - so whatever num BlockPingpong writes is what reaches the hardware. The
-// second RUN line confirms UpdateAsyncWaitCount leaves the wait untouched.
+// rocdl.wait.asyncmark(N). Since PR #9883, UpdateAsyncWaitCount preserves num.
+// The second RUN also checks conservative scope for incoming async tokens.
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -28,7 +27,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // async_commit_groups and yield a tighter bound (e.g. 1 for a real
   // gfx950 simple_persistent_matmul kernel).
   // CHECK: scf.for
-  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
+  // CHECK: ttg.async_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32
+  // SCOPE-SAME: , ttg.amdg.completion_scope = "all"}
   tt.func public @async_ns3_gemm_pingpong_multi_token(
       %arg0: i32,
       %arg1: tensor<256x32x!tt.ptr<bf16>, #blocked>,

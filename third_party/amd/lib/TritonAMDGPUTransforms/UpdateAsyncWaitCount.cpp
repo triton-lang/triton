@@ -11,9 +11,10 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <limits>
 
-// Lower async waits to hardware instruction counts and annotate TDM waits'
+// Lower async waits to hardware instruction counts and annotate their
 // completion scope for AMD Membar. On asyncmark targets, retain ordinary
 // commit-group waits and let LLVM compute their hardware counts; TDM waits
 // still need lowering.
@@ -27,10 +28,10 @@
 // waits more conservatively, while a larger count could leave required work
 // incomplete.
 //
-// After count lowering, a direct forward scan tracks possible TDM global
+// After count lowering, a direct forward scan tracks possible async global
 // writes through the existing IR's control flow. Scope is evaluated before a
 // full hardware wait clears its queue's bit; partial waits conservatively
-// retain it. Ordinary async waits keep Shared scope without an annotation.
+// retain it.
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
@@ -48,34 +49,40 @@ static bool hasAsyncToken(TypeRange types) {
                       [](Type type) { return isa<ttg::AsyncTokenType>(type); });
 }
 
-static bool isTDMWait(Operation *op) {
-  return isa<amdgpu::AsyncTDMWait, amdgpu::AsyncTDMIntrinsicWait>(op);
+static bool isAsyncWait(Operation *op) {
+  return isa<ttg::AsyncWaitOp, amdgpu::AsyncWaitOp, amdgpu::AsyncTDMWait,
+             amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
-// A pending-global-write flag is the cheapest model for TDM load/store phases:
+// One global-write bit per queue is the cheapest model for load/store phases:
 // loads need no state, joins use OR, and no producer queue or token history is
 // needed. A hardware waitcnt(0) clears the bit after classifying the wait,
 // restoring Shared scope after stores. Partial waits keep the bit; producer
 // order/counts could refine retirement if needed.
-class TDMCompletionAnalysis {
+class AsyncCompletionAnalysis {
+  enum GlobalWriteQueue : unsigned {
+    CopyGlobalWrite = 1,
+    TDMGlobalWrite = 2,
+  };
+
   struct EntryState {
-    // True if the TDM queue may still have global writes pending.
-    bool pendingGlobalWrites;
+    // Each bit marks a queue that may still have async global writes pending.
+    unsigned pendingGlobalWrites;
     bool queued = false;
   };
   DenseMap<Operation *, EntryState> entries;
-  DenseMap<Operation *, bool> waitScopes;
+  DenseMap<Operation *, unsigned> waitScopes;
   SmallVector<Operation *> worklist;
   bool unsupported = false;
 
-  // Queue existing IR positions only when their incoming state grows. Presence
-  // in the map also records reachability when no global writes are pending.
-  void enqueue(Operation *op, bool pendingGlobalWrites) {
+  // Schedule first visits even with zero bits, and revisit only if state grows.
+  // Already queued entries pick up merged state when processed.
+  void enqueue(Operation *op, unsigned pendingGlobalWrites) {
     if (!op)
       return;
-    auto [it, inserted] = entries.try_emplace(op, EntryState{false});
+    auto [it, inserted] = entries.try_emplace(op, EntryState{0});
     auto &entry = it->second;
-    bool previous = entry.pendingGlobalWrites;
+    unsigned previous = entry.pendingGlobalWrites;
     entry.pendingGlobalWrites |= pendingGlobalWrites;
     if (!entry.queued && (inserted || entry.pendingGlobalWrites != previous)) {
       entry.queued = true;
@@ -83,9 +90,29 @@ class TDMCompletionAnalysis {
     }
   }
 
+  // Track only explicit async global writes completed by the supported waits.
+  static unsigned classify(Operation *op) {
+    return llvm::TypeSwitch<Operation *, unsigned>(op)
+        .Case<amdgpu::AsyncCopyLocalToGlobalOp>(
+            [](auto) { return CopyGlobalWrite; })
+        .Case<amdgpu::AsyncTDMCopyLocalToGlobalOp, amdgpu::AsyncTDMScatterOp>(
+            [](auto) { return TDMGlobalWrite; })
+        .Default([](Operation *) { return 0; });
+  }
+
+  // Use final hardware counts. An asyncmark wait may leave uncommitted copies
+  // outstanding even with num=0, so it cannot clear the ordinary queue's bit.
+  static unsigned getDrainedQueue(Operation *op) {
+    if (auto wait = dyn_cast<amdgpu::AsyncWaitOp>(op))
+      return wait.getNumInst() == 0 ? CopyGlobalWrite : 0;
+    if (auto wait = dyn_cast<amdgpu::AsyncTDMIntrinsicWait>(op))
+      return wait.getCount() == 0 ? TDMGlobalWrite : 0;
+    return 0;
+  }
+
   // Follow existing block successors or return to the enclosing structured op.
   // Loop backedges resume at the header, without rescanning pre-loop producers.
-  void leaveBlock(Operation *terminator, bool pendingGlobalWrites) {
+  void leaveBlock(Operation *terminator, unsigned pendingGlobalWrites) {
     if (terminator->getNumSuccessors()) {
       for (Block *block : terminator->getSuccessors())
         enqueue(&block->front(), pendingGlobalWrites);
@@ -110,14 +137,11 @@ class TDMCompletionAnalysis {
 
   // Scan straight-line IR directly; only control-flow transfers need worklist
   // entries. Accumulate wait scope before a full wait clears its queue's bit.
-  void scan(Operation *op, bool pendingGlobalWrites) {
+  void scan(Operation *op, unsigned pendingGlobalWrites) {
     for (; op; op = op->getNextNode()) {
-      if (isTDMWait(op)) {
+      if (isAsyncWait(op)) {
         waitScopes[op] |= pendingGlobalWrites;
-        // Only the final hardware count proves that all TDM stores completed.
-        if (auto wait = dyn_cast<amdgpu::AsyncTDMIntrinsicWait>(op);
-            wait && wait.getCount() == 0)
-          pendingGlobalWrites = false;
+        pendingGlobalWrites &= ~getDrainedQueue(op);
         continue;
       }
       if (op->hasTrait<OpTrait::IsTerminator>()) {
@@ -125,9 +149,7 @@ class TDMCompletionAnalysis {
         return;
       }
       if (!op->getNumRegions()) {
-        pendingGlobalWrites |=
-            isa<amdgpu::AsyncTDMCopyLocalToGlobalOp, amdgpu::AsyncTDMScatterOp>(
-                op);
+        pendingGlobalWrites |= classify(op);
         continue;
       }
 
@@ -140,6 +162,7 @@ class TDMCompletionAnalysis {
       } else if (isa<scf::ForOp>(op)) {
         enqueue(op->getNextNode(), pendingGlobalWrites);
       } else if (isa<tt::ReduceOp, tt::ScanOp>(op)) {
+        // Pure combiners cannot add async queue work.
         continue;
       } else if (!isa<scf::WhileOp, scf::ExecuteRegionOp>(op)) {
         // Unsupported regions may execute concurrently. Keep the whole
@@ -162,7 +185,7 @@ public:
     if (!unknownEntry) {
       for (Region &region : function->getRegions())
         if (!region.empty())
-          enqueue(&region.front().front(), false);
+          enqueue(&region.front().front(), 0);
       while (!worklist.empty() && !unsupported) {
         Operation *op = worklist.pop_back_val();
         auto &entry = entries.find(op)->second;
@@ -171,20 +194,24 @@ public:
       }
     }
     function.walk([&](Operation *op) {
-      if (!isTDMWait(op))
+      if (!isAsyncWait(op))
         return;
       auto found = waitScopes.find(op);
+      unsigned mask =
+          isa<amdgpu::AsyncTDMWait, amdgpu::AsyncTDMIntrinsicWait>(op)
+              ? TDMGlobalWrite
+              : CopyGlobalWrite;
       // An empty queue also permits Shared; no shared producer is required.
       bool sharedOnly = !unsupported && !unknownEntry &&
-                        found != waitScopes.end() && !found->second;
+                        found != waitScopes.end() && !(found->second & mask);
       op->setAttr(name, sharedOnly ? shared : all);
     });
   }
 };
 
-// Scan final TDM waits after count lowering. Calls retain conservative
+// Scan final waits after count lowering. Calls retain conservative
 // module-wide scope because a callee can wait on work issued by its caller.
-static void annotateTDMCompletionScopes(ModuleOp module) {
+static void annotateCompletionScopes(ModuleOp module) {
   bool hasCalls =
       module.walk([](CallOpInterface) { return WalkResult::interrupt(); })
           .wasInterrupted();
@@ -194,13 +221,13 @@ static void annotateTDMCompletionScopes(ModuleOp module) {
   auto all = StringAttr::get(ctx, "all");
   module.walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (auto function = dyn_cast<FunctionOpInterface>(op)) {
-      TDMCompletionAnalysis analysis;
+      AsyncCompletionAnalysis analysis;
       analysis.annotate(function,
                         hasCalls || hasAsyncToken(function.getArgumentTypes()),
                         name, shared, all);
       return WalkResult::skip();
     }
-    if (isTDMWait(op)) {
+    if (isAsyncWait(op)) {
       op->setAttr(name, all);
       return WalkResult::skip();
     }
@@ -583,8 +610,8 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
     // With asyncmark/wait_asyncmark, LLVM handles vmcnt computation —
     // Triton no longer needs to walk the IR and count outstanding async
-    // intrinsics. Keep the ttg.async_wait ops unchanged (they track
-    // commit groups) and lower them directly to wait_asyncmark later.
+    // intrinsics. Preserve ttg.async_wait and its commit-group count for
+    // lowering to wait_asyncmark later; scope annotation still runs below.
     if (!targetFeatures.useAsyncMarks()) {
       // CDNA5 (and future arches without asyncmark) use instruction counting.
       SmallVector<ttg::AsyncWaitOp> waitOps;
@@ -663,7 +690,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       IRRewriter builder(waitOp->getContext());
       updateWaitCount(waitOp, countTDMInstructions, builder);
     }
-    annotateTDMCompletionScopes(m);
+    annotateCompletionScopes(m);
   }
 };
 
