@@ -4023,6 +4023,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // A split input requires all four partial counts even when result bins have
   // distinct CTA owners. Atomic updates remain in CTA-local shared memory.
   // CHECK-LABEL: @histogram_split_input_split_result
+  // CHECK: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<3>
   // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait
