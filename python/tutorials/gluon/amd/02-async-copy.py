@@ -20,7 +20,6 @@ shared memory, which Gluon can control explicitly.
 
 import importlib
 import os
-import re
 import pytest
 import torch
 import triton
@@ -54,19 +53,12 @@ warp_size = 64
 # still in flight. The global load kernel from the previous tutorial shows how
 # these waits work.
 
-
-def print_instructions(kernel, pattern):
-    for instr in t1.get_instructions(kernel):
-        if re.search(pattern, instr):
-            print(f"  {instr}")
-
-
 if __name__ == "__main__":
     A = torch.randn(1024, 2048, device="cuda")
     B = torch.randn_like(A)
     C = torch.empty_like(A)
     kernel = t1.elementwise(A, B, C, t1.elementwise_kernel, XBLOCK=16)
-    print_instructions(kernel, r"global_load|vmcnt|v_pk_add")
+    t1.print_instructions(kernel, r"global_load|vmcnt|v_pk_add")
 
 # %%
 # ```
@@ -218,7 +210,7 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     kernel = elementwise_async_copy(A, B, C, elementwise_async_copy_w_buffer_kernel, XBLOCK=16)
-    print_instructions(kernel, r"m0|lds|vmcnt|s_barrier|ds_read")
+    t1.print_instructions(kernel, r"m0|lds|vmcnt|s_barrier|ds_read")
 
 # %%
 # ```
@@ -336,7 +328,7 @@ def test_elementwise_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
 
 if __name__ == "__main__":
     kernel = elementwise_pipelined(A, B, C, XBLOCK=16, num_buffers=2)
-    print_instructions(kernel, r"vmcnt")
+    t1.print_instructions(kernel, r"vmcnt")
 
 # %%
 # ```

@@ -178,6 +178,12 @@ def print_asm_summary(kernel):
     print(f"  {next(instr for instr in instrs if re.match('(global|buffer)_load', instr))}")
 
 
+def print_instructions(kernel, pattern):
+    for instr in get_instructions(kernel):
+        if re.search(pattern, instr):
+            print(f"  {instr}")
+
+
 if __name__ == "__main__":
     A = torch.randn(1024, 1024, device="cuda")
     B = torch.randn_like(A)
