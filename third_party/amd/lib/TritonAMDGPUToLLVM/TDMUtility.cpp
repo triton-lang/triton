@@ -172,7 +172,8 @@ struct GatherScatterLayoutAnalysis {
 };
 
 GatherScatterLayoutAnalysis
-analyzeGatherScatterLayout(RankedTensorType indicesType) {
+analyzeGatherScatterLayout(RankedTensorType indicesType,
+                           const triton::LinearLayout &sharedLayout) {
   assert(indicesType.getEncoding());
 
   bool use32BitIndices =
@@ -193,7 +194,19 @@ analyzeGatherScatterLayout(RankedTensorType indicesType) {
   size_t contigIndiceCount = indexLL.getNumConsecutiveInOut();
   maxIndicesPerInstr = std::min(maxIndicesPerInstr, contigIndiceCount);
 
-  auto kRegister = StringAttr::get(indicesType.getContext(), "register");
+  // An instruction writes one contiguous LDS span, so it must stay inside one
+  // piece of a row-partitioned layout: the first partition basis is the
+  // piece height.
+  auto *ctx = indicesType.getContext();
+  auto kPartition = StringAttr::get(ctx, "partition");
+  if (sharedLayout.hasInDim(kPartition)) {
+    auto kDim0 = StringAttr::get(ctx, "dim0");
+    size_t pieceRows = sharedLayout.getBasis(kPartition, 0, kDim0);
+    assert(pieceRows > 0 && "gather/scatter only supports row partitioning");
+    maxIndicesPerInstr = std::min(maxIndicesPerInstr, pieceRows);
+  }
+
+  auto kRegister = StringAttr::get(ctx, "register");
   size_t effectiveRegCount = indexLL.getInDimSize(kRegister);
   size_t numInstructions =
       effectiveRegCount == 0
@@ -1385,19 +1398,22 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   }
 }
 
-size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType) {
-  return analyzeGatherScatterLayout(indicesType).numInstructions;
+size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType,
+                                         triton::gpu::MemDescType smemTy) {
+  return analyzeGatherScatterLayout(
+             indicesType, triton::gpu::toLinearLayoutIgnoringPadding(smemTy))
+      .numInstructions;
 }
 
-LogicalResult
-emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
-                     const LLVMTypeConverter *typeConverter,
-                     ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
-                     unsigned padInterval, unsigned padAmount, Value ldsPtr,
-                     Value multicastMask, Type elementType, Value barrierPtr,
-                     const triton::LinearLayout &cgaLayout, Value ctaId,
-                     ArrayRef<Value> rowIndices, bool isGather, int numWarps,
-                     RankedTensorType indicesType) {
+LogicalResult emitTDMGatherScatter(
+    RewriterBase &rewriter, Location loc,
+    const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
+    ArrayRef<int64_t> blockShape, unsigned padInterval, unsigned padAmount,
+    ArrayRef<Value> ldsPtrs, Value multicastMask, Type elementType,
+    Value barrierPtr, const triton::LinearLayout &sharedLayout,
+    const triton::LinearLayout &cgaLayout, Value ctaId,
+    ArrayRef<Value> rowIndices, bool isGather, int numWarps,
+    RankedTensorType indicesType) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   assert(!rowIndices.empty() && "Gather/scatter requires row indices");
@@ -1407,7 +1423,7 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   bool use32BitIndices =
       indicesType.getElementType().getIntOrFloatBitWidth() == 32;
 
-  auto analysis = analyzeGatherScatterLayout(indicesType);
+  auto analysis = analyzeGatherScatterLayout(indicesType, sharedLayout);
   auto &indexLL = analysis.indexLL;
   size_t maxIndicesPerInstr = analysis.maxIndicesPerInstr;
 
@@ -1452,6 +1468,24 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                                              {kBlock, b.i32_val(0)}})[0]
                               .second;
 
+  // Map an LDS tile row to its (offset, partition) in shared memory, as
+  // emitTDMIntrinsic does for TDM load/store.
+  auto kDim0 = rewriter.getStringAttr("dim0");
+  auto kDim1 = rewriter.getStringAttr("dim1");
+  auto kOffset = rewriter.getStringAttr("offset");
+  auto kPartition = rewriter.getStringAttr("partition");
+  auto rowToShared = sharedLayout.pseudoinvert();
+  Value chunk0Offset = b.i32_val(0);
+  Value chunk0Partition = b.i32_val(0);
+  for (auto &[name, val] :
+       applyLinearLayout(loc, rewriter, rowToShared,
+                         {{kDim0, chunk0RowOffset}, {kDim1, b.i32_val(0)}})) {
+    if (name == kOffset)
+      chunk0Offset = val;
+    else if (name == kPartition)
+      chunk0Partition = val;
+  }
+
   size_t numIndicesPerWarp = effectiveRowIndices.size();
 
   // Get the descriptor groups (gather/scatter uses 2D format — desc has 2
@@ -1465,12 +1499,41 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
   Type sharedPtrTy = ptr_ty(rewriter.getContext(), 3);
-  Value chunk0LdsAddr;
 
   // The lds-trick scales each chunk's element-offset delta to bytes; the
   // gather/scatter verifier guarantees >=1-byte elements, so this never
   // truncates to 0.
   unsigned elemBytes = elementType.getIntOrFloatBitWidth() / 8;
+
+  bool hasPadding = padInterval > 0 && padAmount > 0;
+  if (hasPadding) {
+    Value iVal = b.i32_val(log2(padInterval));
+    Value pVal = b.i32_val(log2(padAmount));
+    Value padOffset = b.shl(i32_ty, b.ashr(chunk0Offset, iVal), pVal);
+    chunk0Offset = b.add(chunk0Offset, padOffset);
+  }
+
+  // chunk 0's LDS address in partition buffer chunk0Partition ^ partXor,
+  // built once per buffer.
+  llvm::SmallDenseMap<int32_t, Value> chunk0LdsAddrs;
+  auto getChunk0LdsAddr = [&](int32_t partXor) -> Value {
+    if (Value addr = chunk0LdsAddrs.lookup(partXor))
+      return addr;
+    Value base = ldsPtrs[0];
+    if (ldsPtrs.size() > 1) {
+      auto vecTy = VectorType::get({static_cast<int64_t>(ldsPtrs.size())},
+                                   ldsPtrs[0].getType());
+      Value basesVec = b.undef(vecTy);
+      for (size_t i = 0; i < ldsPtrs.size(); ++i)
+        basesVec = b.insert_element(basesVec, ldsPtrs[i], b.i32_val(i));
+      base = b.extract_element(basesVec,
+                               b.xor_(chunk0Partition, b.i32_val(partXor)));
+    }
+    Value addr =
+        b.ptrtoint(i32_ty, b.gep(sharedPtrTy, elementType, base, chunk0Offset));
+    chunk0LdsAddrs[partXor] = addr;
+    return addr;
+  };
 
   // Build the chunk-invariant base once; the loop below only re-stamps the
   // per-chunk lds_addr and indices.
@@ -1498,45 +1561,43 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     Value g2 = group2Zero;
     Value g3 = group3Zero;
 
-    // Per-chunk lds_addr (g0[1]): chunk 0 does the full per-warp computation;
-    // chunks 1..N-1 are chunk0_addr + a compile-time-constant byte delta, so
-    // the backend emits `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead
-    // of a separate per-chunk LDS-address SGPR.
-    Value ldsAddr;
-    if (instrIdx == 0) {
-      Value ldsOffset = b.mul(chunk0RowOffset, b.i32_val(blockShape[1]));
-      if (padInterval > 0 && padAmount > 0) {
-        Value iVal = b.i32_val(log2(padInterval));
-        Value pVal = b.i32_val(log2(padAmount));
-        Value padOffset = b.shl(i32_ty, b.ashr(ldsOffset, iVal), pVal);
-        ldsOffset = b.add(ldsOffset, padOffset);
-      }
-      ldsAddr = b.ptrtoint(i32_ty,
-                           b.gep(sharedPtrTy, elementType, ldsPtr, ldsOffset));
-      chunk0LdsAddr = ldsAddr;
-    } else {
-      // chunk i's register-offset delta from chunk 0, evaluated at warp 0.
-      // applyLinearLayout is linear in `register`, so the per-warp term cancels
-      // (LL(register=0) == 0) and the delta is a compile-time constant.  Adding
-      // it to chunk0's address (rather than XOR-ing, as applyLinearLayout
-      // would) is exact because the index layout is a permutation matrix
-      // (distributed / LinearEncodingAttr invariant): register and warp own
-      // disjoint output bits, so XOR == integer add for these layouts.
-      int64_t rowDelta = indexLL
-                             .apply({{kRegister, (int32_t)startIdx},
-                                     {kLane, 0},
-                                     {kWarp, 0},
-                                     {kBlock, 0}})[0]
-                             .second;
-      int64_t elemDelta = rowDelta * blockShape[1];
-      if (padInterval > 0 && padAmount > 0) {
-        // padInterval divides the innermost block dim (enforced by the
-        // verifier) and elemDelta is a multiple of it, so pad() distributes:
-        // pad(a+delta) == pad(a) + pad(delta).
-        elemDelta += (elemDelta / padInterval) * padAmount;
-      }
-      ldsAddr = b.add(chunk0LdsAddr, b.i32_val(elemDelta * (int64_t)elemBytes));
+    // Per-chunk lds_addr (g0[1]): chunk0_addr in the chunk's partition buffer
+    // + a compile-time-constant byte delta, so the backend emits
+    // `s_add_co_i32 sX, chunk0_addr, <imm>` per chunk instead of a separate
+    // per-chunk LDS-address SGPR.
+    //
+    // chunk i's register-offset delta from chunk 0, evaluated at warp 0.
+    // applyLinearLayout is linear in `register`, so the per-warp term cancels
+    // (LL(register=0) == 0) and the delta is a compile-time constant.  Adding
+    // it to chunk0's address (rather than XOR-ing, as applyLinearLayout
+    // would) is exact because the index layout is a permutation matrix
+    // (distributed / LinearEncodingAttr invariant): register and warp own
+    // disjoint output bits, so XOR == integer add for these layouts.  The
+    // unswizzled shared layout keeps those row bits disjoint in the offset.
+    int64_t rowDelta = indexLL
+                           .apply({{kRegister, (int32_t)startIdx},
+                                   {kLane, 0},
+                                   {kWarp, 0},
+                                   {kBlock, 0}})[0]
+                           .second;
+    int64_t elemDelta = 0;
+    int32_t partDelta = 0;
+    for (auto [name, val] :
+         rowToShared.apply({{kDim0, (int32_t)rowDelta}, {kDim1, 0}})) {
+      if (name == kOffset)
+        elemDelta = val;
+      else if (name == kPartition)
+        partDelta = val;
     }
+    if (hasPadding) {
+      // padInterval divides the innermost block dim (enforced by the
+      // verifier) and elemDelta is a multiple of it, so pad() distributes:
+      // pad(a+delta) == pad(a) + pad(delta).
+      elemDelta += (elemDelta / padInterval) * padAmount;
+    }
+    Value ldsAddr = getChunk0LdsAddr(partDelta);
+    if (elemDelta != 0)
+      ldsAddr = b.add(ldsAddr, b.i32_val(elemDelta * (int64_t)elemBytes));
 
     fillGatherScatterChunk(rewriter, loc, g0, g1, g2, g3, ldsAddr, batchIndices,
                            use32BitIndices);

@@ -331,10 +331,7 @@ LogicalResult verifyTDMGatherScatterLayout(Operation *op,
         "incompatible with the warp-level TDM instruction. Change layout "
         "to broadcast the same indices to all lanes in a warp.");
 
-  auto paddedEnc =
-      dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
-  auto sharedLL = paddedEnc ? paddedEnc.getLinearComponent()
-                            : triton::gpu::toLinearLayout(smemTy);
+  auto sharedLL = triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
   auto kDim0 = StringAttr::get(op->getContext(), "dim0");
   auto indexBlockIt = indexLL.getBases().find(kBlock);
   auto sharedBlockIt = sharedLL.getBases().find(kBlock);
@@ -1872,6 +1869,15 @@ LogicalResult AsyncTDMGatherOp::verify() {
            << blockShape.size() << "D";
 
   auto enc = smemTy.getEncoding();
+  if (auto partitionedEnc =
+          llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc)) {
+    if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
+      return failure();
+    if (partitionedEnc.getPartitionDim() != 0)
+      return emitOpError("NYI: TDM gather only supports partitioning along "
+                         "rows (partitionDim 0)");
+    enc = partitionedEnc.getPartitionLayout();
+  }
   if (!llvm::isa<gpu::PaddedSharedEncodingAttr>(enc) &&
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
