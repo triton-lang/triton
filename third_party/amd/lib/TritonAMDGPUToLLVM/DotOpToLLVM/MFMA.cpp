@@ -525,16 +525,18 @@ struct DotOpMFMAConversionHelper {
     // layout has broadcast registers and lanes along K. They are set to zero
     // so they don't contribute repeated K to the MFMA result.
     Value isCanonicalKLane;
-    if (auto dotEnc =
-            dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding())) {
-      auto freeMasks =
-          triton::gpu::toLinearLayout(tensorType).getFreeVariableMasks();
+    auto dotEnc = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
+    if (dotEnc) {
+      auto ll = triton::gpu::toLinearLayout(tensorType);
+      auto freeMasks = ll.getFreeVariableMasks();
+
       int32_t kRegFreeMask =
           freeMasks.lookup(StringAttr::get(ctx, "register")) &
           computeKRegBitsMask(dotEnc);
       for (size_t reg = 0; reg < elems.size(); ++reg)
         if (reg & kRegFreeMask)
           elems[reg] = tb.null(elems[reg].getType());
+
       int32_t kLaneFreeMask = freeMasks.lookup(StringAttr::get(ctx, "lane")) &
                               computeKLaneBitsMask(dotEnc);
       if (kLaneFreeMask) {
@@ -542,8 +544,7 @@ struct DotOpMFMAConversionHelper {
             tb.and_(getLaneId(rewriter, loc), tb.i32_val(kLaneFreeMask));
         isCanonicalKLane = tb.icmp_eq(freeBits, tb.i32_val(0));
       }
-      // Scaled MFMA can read more K registers than the layout has. Pad them
-      // with zero.
+
       int numRegs = numVecInKBase * kBase;
       int numLayoutRegs = elems.size() / (batch * nonKRep);
       if (numLayoutRegs < numRegs) {
