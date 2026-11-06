@@ -1554,21 +1554,29 @@ _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_conver
 _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
                                 ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
 
+_convert2d_test_cases = [(M, N, *case, "float16", 0)
+                         for M, N in [[64, 1], [64, 64], [64, 128], [1, 64]]
+                         for case in _convert2d_layout_cases]
+_convert2d_test_cases += [
+    pytest.param(M, 16, [2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), dtype, 16,
+                 id=f"multi-cta-small-shape-{M}-{dtype}") for M in [1, 2] for dtype in ["float16", "int64"]
+]
 
-@pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
-@pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
-                         _convert2d_layout_cases)
+
+@pytest.mark.parametrize(
+    "M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype, min_shared_elems",
+    _convert2d_test_cases)
 @pytest.mark.enable_warmup(min_capability=9)
 def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
-                           device):
+                           min_shared_elems, device):
     num_ctas = 1
     if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.skip("num_ctas > 1 requires NVIDIA Hopper or newer")
-        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+        if M % min(M, src_ctas_per_cga[0]) != 0 or N % min(N, src_ctas_per_cga[1]) != 0:
             pytest.skip("Shape must be divisible by the source CGA shape")
-        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+        if M % min(M, dst_ctas_per_cga[0]) != 0 or N % min(N, dst_ctas_per_cga[1]) != 0:
             pytest.skip("Shape must be divisible by the destination CGA shape")
         if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
             pytest.skip("Source and destination CGA shapes must have the same number of CTAs")
@@ -1642,9 +1650,14 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
 
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
-    x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    if dtype == "int64":
+        x = torch.arange(M * N, dtype=torch_dtype, device=device).reshape(M, N)
+        x = (x << 32) | (x * 7 + 3)
+    else:
+        x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
+    assert compiled.metadata.shared >= min_shared_elems * x.element_size()
     torch.testing.assert_close(y, x, rtol=0, atol=0)
     if src_ctas_per_cga != dst_ctas_per_cga and not is_compile_warmup():
         # Replicated values may be loaded from the local CTA.

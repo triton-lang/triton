@@ -504,34 +504,6 @@ def test_copy_kernel_multi_cta():
     torch.testing.assert_close(out, inp)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-@pytest.mark.parametrize("block_m", [1, 2])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.int64])
-def test_convert_layout_multi_cta_small_shape(block_m, dtype, device):
-
-    @gluon.jit
-    def kernel(X, Y, BLOCK_M: ttgl.constexpr):
-        src_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0], cga_layout=[[1, 0]])
-        dst_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0], cga_layout=[[1, 0]])
-        src_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, src_layout))
-        src_n = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, src_layout))
-        values = ttgl.load(X + src_m[:, None] * 16 + src_n[None, :])
-        values = ttgl.convert_layout(values, dst_layout)
-        dst_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, dst_layout))
-        dst_n = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, dst_layout))
-        ttgl.store(Y + dst_m[:, None] * 16 + dst_n[None, :], values)
-
-    x = torch.arange(block_m * 16, device=device, dtype=dtype).reshape(block_m, 16)
-    if dtype == torch.int64:
-        x = (x << 32) | (x * 7 + 3)
-    y = torch.empty_like(x)
-
-    compiled = kernel[(1, )](x, y, block_m, num_warps=4, num_ctas=2)
-
-    assert compiled.metadata.shared >= 16 * x.element_size()
-    torch.testing.assert_close(y, x, atol=0, rtol=0)
-
-
 @gluon.jit
 def local_store_transposed_cga_kernel(inp, out, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
     src_layout: ttgl.constexpr = ttgl.BlockedLayout(
