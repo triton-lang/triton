@@ -460,6 +460,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     }
     tt.return %0 : tensor<128x128xf32, #blocked>
   }
+
+  // POST-PIPELINE-LABEL: @hoist_out_of_else
+  tt.func public @hoist_out_of_else(%cond: i1, %init: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // POST-PIPELINE: %[[A:.+]], %[[T0:.+]] = ttng.tmem_alloc : ()
+    // POST-PIPELINE: %[[T1:.+]] = ttng.tmem_store %{{.*}}, %[[A]][%[[T0]]]
+    // POST-PIPELINE: %[[I:.+]] = scf.if %{{.+}} -> (!ttg.async.token) {
+    // POST-PIPELINE-NEXT: scf.yield %[[T1]]
+    // POST-PIPELINE-NEXT: } else {
+    // POST-PIPELINE-NEXT: %[[T2:.+]] = "write_to_tmem"(%[[A]], %[[T1]])
+    // POST-PIPELINE-NEXT: scf.yield %[[T2]]
+    // POST-PIPELINE: %[[L:.+]], %{{.*}} = ttng.tmem_load %[[A]][%[[I]]]
+    // POST-PIPELINE: tt.return %[[L]]
+    %result = scf.if %cond -> (tensor<128x128xf32, #blocked>) {
+      scf.yield %init : tensor<128x128xf32, #blocked>
+    } else {
+      %alloc, %token = ttng.tmem_alloc %init : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+      %updated = "write_to_tmem"(%alloc, %token) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token) -> !ttg.async.token
+      %value, %loaded = ttng.tmem_load %alloc[%updated] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+      scf.yield %value : tensor<128x128xf32, #blocked>
+    }
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
 }
 
 // -----
