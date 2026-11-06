@@ -1062,7 +1062,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 0 : i32}
     amdg.async_tdm_scatter %desc[%indices] from %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // Lowering must expose the full drain before graph construction.
+    // Count lowering must expose the full drain before scope analysis.
     // CHECK: amdg.async_tdm_intrinsic_wait {count = 0 : i32, ttg.amdg.completion_scope = "all"
     amdg.async_tdm_wait {num = 0 : i32}
     // The retired store no longer affects scope, even without a new load.
@@ -1332,6 +1332,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 0 : i32}
+    tt.return
+  }
+
+  // CHECK-LABEL: @completion_scope_cfg_backedge(
+  tt.func @completion_scope_cfg_backedge(
+      %mem: !ttg.memdesc<64x128xf16, #shared, #smem, mutable>,
+      %desc: !tt.tensordesc<64x128xf16>,
+      %indices: tensor<64xi32, #idx>, %again: i1) {
+    scf.execute_region {
+      cf.br ^loop
+    ^loop:
+      amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+      // The backedge brings the store to this wait on later iterations.
+      // CHECK: amdg.async_tdm_intrinsic_wait {count = 0 : i32, ttg.amdg.completion_scope = "all"}
+      amdg.async_tdm_intrinsic_wait {count = 0 : i32}
+      amdg.async_tdm_scatter %desc[%indices] from %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+      cf.cond_br %again, ^loop, ^exit
+    ^exit:
+      // CHECK: amdg.async_tdm_intrinsic_wait {count = 0 : i32, ttg.amdg.completion_scope = "all"}
+      amdg.async_tdm_intrinsic_wait {count = 0 : i32}
+      scf.yield
+    }
+    // Resume the enclosing block with the store bit cleared.
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 1 : i32, ttg.amdg.completion_scope = "shared"}
+    amdg.async_tdm_intrinsic_wait {count = 1 : i32}
     tt.return
   }
 
