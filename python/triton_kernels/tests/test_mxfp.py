@@ -1,4 +1,5 @@
 import itertools
+import math
 from functools import partial
 
 import pytest
@@ -687,3 +688,54 @@ if __name__ == "__main__":
     print()
     print("MXFP4 (e2m1):")
     print(tabulate(mxfp4_rows, headers=headers))
+
+
+@pytest.mark.parametrize("shape", [(19, 160), (2, 17, 32), (0, 32)])
+def test_upcast_mxfp4_to_fp8_out(shape, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.numerics_details.mxfp import upcast_mxfp4_to_fp8
+
+    codes = (torch.arange(math.prod(shape), device=device) % 16).to(torch.uint8).reshape(shape)
+    values = codes[..., ::2] | (codes[..., 1::2] << 4)
+    scales = (torch.arange(math.prod(shape) // 32, device=device) % 12 + 122).to(torch.uint8)
+    scales = scales.reshape(*shape[:-1], shape[-1] // 32)
+    buffer = torch.zeros(math.prod(shape) + 64, device=device, dtype=torch.float8_e4m3fn)
+    out = buffer[32:-32].view(shape)
+    assert upcast_mxfp4_to_fp8(values, scales, out=out) is out
+    expected = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1).to(torch.float8_e4m3fn)
+    torch.testing.assert_close(out.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    assert not buffer[:32].float().any() and not buffer[-32:].float().any()
+
+
+@pytest.mark.parametrize("shape", [(19, 160), (2, 17, 32), (2, 3, 65, 288)])
+@pytest.mark.parametrize("axis", [-1, -2])
+@pytest.mark.parametrize("tile_shapes", [(None, None), ((8, 32), (64, 128)), ((64, 256), (8, 32))])
+def test_upcast_hopper_mxfp4_to_fp8_out(shape, axis, tile_shapes, device, monkeypatch):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.numerics_details.mxfp import upcast_mxfp4_to_fp8
+    from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
+    from triton_kernels.tensor_details.layout_details.hopper_fp8 import _HopperFP8MXTransformation
+
+    torch.manual_seed(0)
+    codes = torch.randint(0, 16, shape, dtype=torch.uint8, device=device)
+    values = codes[..., ::2] | (codes[..., 1::2] << 4)
+    scales = (torch.arange(math.prod(shape) // 32, device=device) % 12 + 122).to(torch.uint8)
+    scales = scales.reshape(*shape[:-1], shape[-1] // 32)
+    expected = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1).to(torch.float8_e4m3fn)
+    if axis == -2:
+        values, scales = values.mT, scales.mT
+    values = convert_layout(wrap_torch_tensor(values, dtype=FP4), HopperFP8MXValueLayout(axis, tile_shapes[0]))
+    scales = convert_layout(wrap_torch_tensor(scales), HopperFP8MXScaleLayout(axis, tile_shapes[1]))
+
+    def forbid_unswizzle(*args, **kwargs):
+        raise AssertionError("conversion must decode swizzled storage directly")
+
+    monkeypatch.setattr(_HopperFP8MXTransformation, "_decode", forbid_unswizzle)
+    buffer = torch.zeros(math.prod(shape) + 64, device=device, dtype=torch.float8_e4m3fn)
+    out = buffer[32:-32].view(shape)
+    assert upcast_mxfp4_to_fp8(values, scales, out=out, axis=axis) is out
+    torch.testing.assert_close(out.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    assert not buffer[:32].float().any() and not buffer[-32:].float().any()

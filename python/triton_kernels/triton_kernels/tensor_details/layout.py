@@ -5,6 +5,7 @@ from .layout_details.blackwell_value import BlackwellMXValueLayout
 from .layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
+from .layout_details.hopper_fp8 import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
 from .layout_details.cdna5_scale import CDNA5MXScaleLayout
 from .layout_details.strided import StridedLayout
@@ -18,6 +19,8 @@ __all__ = [
     "BlackwellMXScaleLayout",
     "HopperMXScaleLayout",
     "HopperMXValueLayout",
+    "HopperFP8MXValueLayout",
+    "HopperFP8MXScaleLayout",
     "CDNA4MXScaleLayout",
     "CDNA5MXScaleLayout",
     "StridedLayout",
