@@ -179,6 +179,15 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
+LogicalResult AtomicRMWOp::verify() {
+  RMWOp op = getAtomicRmwOp();
+  if ((op == RMWOp::AND || op == RMWOp::OR || op == RMWOp::XOR) &&
+      !isa<IntegerType>(getElementTypeOrSelf(getVal().getType())))
+    return emitOpError() << stringifyRMWOp(op)
+                         << " requires an integer element type";
+  return success();
+}
+
 Value AtomicLoadOp::getPredicateOperand() { return getMask(); }
 
 void AtomicLoadOp::setPredicateOperand(Value pred) {

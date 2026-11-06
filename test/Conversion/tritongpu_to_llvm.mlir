@@ -4405,6 +4405,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @memory_ops_in_owner_scope
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm {{.*}}"ld.relaxed.gpu.global.b32
+  // CHECK: %[[OLD:.*]] = llvm.atomicrmw add {{.*}} syncscope("device") monotonic
+  // CHECK: %[[CAS:.*]] = llvm.cmpxchg %{{.*}}, %[[OLD]], %{{.*}} syncscope("device") acq_rel acquire
+  // CHECK: %[[PREV:.*]] = llvm.extractvalue %[[CAS]][0]
+  // CHECK: llvm.inline_asm {{.*}}"st.relaxed.gpu.global.b32
+  // CHECK: llvm.store %[[PREV]], {{.*}} : i32, !llvm.ptr<1>
+  tt.func public @memory_ops_in_owner_scope(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %v: i32) {
+    %owner = ttg.thread_predicate <31, 3>
+    cf.cond_br %owner, ^owner, ^done
+  ^owner:
+    ttg.thread_scope {
+      %addend = tt.atomic_load relaxed, gpu, %out : (!tt.ptr<i32>) -> i32
+      %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %addend : (!tt.ptr<i32>, i32) -> i32
+      %prev = tt.atomic_cas acq_rel, gpu, %ptr, %old, %v : (!tt.ptr<i32>, i32, i32) -> i32
+      tt.atomic_store relaxed, gpu, %ptr, %prev : !tt.ptr<i32>
+      tt.store %out, %prev : !tt.ptr<i32>
+      ttg.thread_yield
+    }
+    cf.br ^done
+  ^done:
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @store_in_owner_scope_two_ctas
+  // CHECK: llvm.cond_br
+  // CHECK: nvg.cluster_id
+  // CHECK: llvm.inline_asm {{.*}}@$2 st.global.b32
+  tt.func public @store_in_owner_scope_two_ctas(%out: !tt.ptr<i32>, %v: i32) {
+    %owner = ttg.thread_predicate <31, 3>
+    cf.cond_br %owner, ^owner, ^done
+  ^owner:
+    ttg.thread_scope {
+      tt.store %out, %v : !tt.ptr<i32>
+      ttg.thread_yield
+    }
+    cf.br ^done
+  ^done:
+    tt.return
+  }
+}
+
+// -----
+
 #arg_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @arg_ptr_alignment(

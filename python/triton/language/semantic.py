@@ -1514,26 +1514,28 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(self.builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope),
                                 val.type)
 
-    def atomic_and(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'and')
+    def _atomic_bitwise(self, op: ir.ATOMIC_OP, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str,
+                        scope: str) -> TensorTy:
+        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, op.name.lower())
+        dtype = val.type.scalar
+        if dtype.is_floating():
+            bits_ty = tl.get_int_dtype(dtype.primitive_bitwidth, signed=False)
+            ptr = self.bitcast(ptr, tl.pointer_type(bits_ty, ptr.type.scalar.address_space))
+            val = self.bitcast(val, bits_ty)
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        old = self.make_tensor(self.builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope),
+                               val.type)
+        return self.bitcast(old, dtype)
+
+    def atomic_and(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+        return self._atomic_bitwise(ir.ATOMIC_OP.AND, ptr, val, mask, sem, scope)
 
     def atomic_or(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'or')
-        sem = self._str_to_sem(sem)
-        scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        return self._atomic_bitwise(ir.ATOMIC_OP.OR, ptr, val, mask, sem, scope)
 
     def atomic_xor(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'xor')
-        sem = self._str_to_sem(sem)
-        scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        return self._atomic_bitwise(ir.ATOMIC_OP.XOR, ptr, val, mask, sem, scope)
 
     def atomic_xchg(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'xchg')
