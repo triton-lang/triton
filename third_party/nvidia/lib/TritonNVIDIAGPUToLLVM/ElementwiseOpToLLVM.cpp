@@ -96,25 +96,15 @@ static ConverterT makeE5M2F16Converter(bool toFp16) {
 }
 
 static SmallVector<Value>
-convertF16ToE5M2RtzPtx(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &values) {
+convertF16ToE5M2RtzPacked(Location loc, ConversionPatternRewriter &rewriter,
+                          const SmallVector<Value> &values) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value input =
       b.bitcast(packLLVector(loc, values, rewriter), vec_ty(i32_ty, 2));
-  // Keep the packed sequence on SM90+, where LLVM uses more registers for
-  // strided byte outputs.
-  PTXBuilder builder;
-  auto &convert = *builder.create(R"({
-.reg .b32 a<2>;
-and.b32 a0, $1, 0xfffefffe;
-and.b32 a1, $2, 0xfffefffe;
-prmt.b32 $0, a0, a1, 0x7531;
-})");
-  convert({builder.newOperand("=r"),
-           builder.newOperand(b.extract_element(input, b.i32_val(0)), "r"),
-           builder.newOperand(b.extract_element(input, b.i32_val(1)), "r")},
-          /*onlyAttachMLIRArgs=*/true);
-  Value result = builder.launch(rewriter, loc, i32_ty, false);
+  // Keep the four high bytes packed for strided stores on SM90+.
+  Value result = LLVM::NVIDIA::permute(
+      loc, rewriter, b.extract_element(input, b.i32_val(0)),
+      b.extract_element(input, b.i32_val(1)), b.i32_val(0x7531));
   return unpackLLVector(loc, b.bitcast(result, vec_ty(i8_ty, 4)), rewriter);
 }
 
@@ -288,7 +278,7 @@ struct FpToFpOpConversion
     if (srcTy.isF16() && isa<Float8E5M2Type>(dstTy) &&
         roundingMode == RoundingMode::RTZ) {
       if (computeCapability >= 90)
-        return {convertF16ToE5M2RtzPtx, 4};
+        return {convertF16ToE5M2RtzPacked, 4};
       return {makeE5M2F16Converter(/*toFp16=*/false), 4};
     }
 
