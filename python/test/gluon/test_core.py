@@ -507,7 +507,7 @@ def test_copy_kernel_multi_cta():
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("block_m", [1, 2])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.int64])
-def test_convert_layout_cta_split_small_shape(block_m, dtype, device):
+def test_convert_layout_multi_cta_small_shape(block_m, dtype, device):
 
     @gluon.jit
     def kernel(X, Y, BLOCK_M: ttgl.constexpr):
