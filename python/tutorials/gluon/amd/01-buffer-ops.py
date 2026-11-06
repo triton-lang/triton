@@ -7,11 +7,11 @@ covers AMD GPUs. We assume that you already know the basic Gluon concepts,
 especially layouts. Many ideas from the NVIDIA tutorials carry over to AMD GPUs,
 so this series focuses on the Gluon features that are specific to AMD GPUs.
 
-We start with buffer operations, the AMD-specific way to access global memory.
-A buffer operation addresses memory with a buffer resource descriptor and
-offsets. The descriptor holds a base address and a size. The hardware checks
-each access against the size: out-of-bounds loads return zero, and
-out-of-bounds stores are dropped. So a kernel often doesn't need a mask.
+We start with buffer operations, the AMD-specific way to access global memory. A
+buffer operation addresses memory with a buffer resource descriptor and offsets.
+The descriptor holds a base address and a size. The hardware checks each access
+against the size. Out-of-bounds loads return zero, and out-of-bounds stores are
+dropped. So a kernel often doesn't need a mask.
 
 The limitation of buffer operations is that the offsets must fit in 32 bits. So
 one descriptor covers at most 4 GB. To access a larger buffer, the kernel must
@@ -88,7 +88,7 @@ def elementwise_kernel(  #
 # be wrong for the kernel and still be in range. For example, when `ynumel` is
 # not a multiple of `YBLOCK`, the last loop iteration has lanes whose offsets
 # point into the data of the next row. So we still need to mask for certain
-# dimensions. The compiler applies the mask without branches: it replaces the
+# dimensions. The compiler applies the mask without branches. It replaces the
 # offsets of masked-off lanes with an out-of-bounds offset, and the hardware
 # drops these accesses.
 #
@@ -235,17 +235,16 @@ if __name__ == "__main__":
 # ```
 #
 # The buffer kernel is 12% faster. The branches around the masked global loads
-# cost about 5%. The rest comes from the smaller addresses: each lane passes a
+# cost about 5%. The rest comes from the smaller addresses. Each lane passes a
 # 32-bit offset instead of a 64-bit address, so the hardware spends less time
 # processing the addresses of each memory instruction.
 
 # %%
-# One more detail about the bounds check: the hardware checks accesses at a
-# 4-byte granularity. For 32-bit data, the check is exact for each element.
-# However, for 16-bit or 8-bit data, if the size is not a multiple of 4 bytes,
-# the last valid elements are also out of bounds and read zero. To avoid this,
-# round `num_records` up to a multiple of 4, and mask the elements past the end.
-# The following example shows both cases.
+# The hardware checks the bounds at a 4-byte granularity. For 32-bit data, the
+# check is exact for each element. However, for 16-bit or 8-bit data, if the
+# size is not a multiple of 4 bytes, the last valid elements are also out of
+# bounds and read zero. To avoid this, round `num_records` up to a multiple of
+# 4, and mask the elements past the end. The following example shows both cases.
 
 
 @gluon.jit
