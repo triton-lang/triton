@@ -466,23 +466,32 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTAsPerCGA");
 }
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout) {
-  // A generic linear encoding may not have a CGA layout
-  // as having a CGA layout implies being of the form cta_layout * cga_layout
+SmallVector<unsigned> getCTASplitNum(Attribute layout,
+                                     ArrayRef<int64_t> shape) {
+  unsigned rank = cast<LayoutEncodingTrait>(layout).getRank();
+  SmallVector<int64_t> layoutShape(
+      shape.take_back(std::min<size_t>(rank, shape.size())));
+  layoutShape.insert(layoutShape.begin(), rank - layoutShape.size(), 1);
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
-    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/true);
-  } else if (auto sharedLinearLayout =
-                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinearLayout.basesPerDim(kBlock);
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/true);
-    return cast<LayoutEncodingTrait>(sliceLayout)
-        .getCGALayout()
-        .getCTASplitNum();
+
+  if (isa<DistributedEncodingTrait>(layout)) {
+    // BlockedEncodingAttr, SliceEncodingAttr, DotOperandEncodingAttr,
+    // LinearEncodingAttr, GenericLinearEncodingAttr, NvidiaMmaEncodingAttr,
+    // AMDMfmaEncodingAttr, and AMDWmmaEncodingAttr.
+    auto ll = toLinearLayout(layoutShape, layout);
+    return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
+  } else if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    // SharedLinearEncodingAttr.
+    return sharedLinear.basesPerDim(kBlock);
   } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTASplitNum();
+    // SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr,
+    // AMDRotatingSharedEncodingAttr, PaddedSharedEncodingAttr,
+    // PartitionedSharedEncodingAttr, TensorMemoryEncodingAttr, and
+    // TensorMemoryScalesEncodingAttr.
+    auto splitNum = ttgLayout.getCGALayout().getCTASplitNum();
+    for (auto [split, size] : llvm::zip_equal(splitNum, layoutShape))
+      split = std::min<int64_t>(split, size);
+    return splitNum;
   }
   llvm_unreachable("Unimplemented usage of getCTASplitNum");
 }
@@ -505,7 +514,7 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  return getShapePerCTA(getCTASplitNum(layout, shape), shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
