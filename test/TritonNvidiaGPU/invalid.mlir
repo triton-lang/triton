@@ -2287,9 +2287,24 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
 #fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6p2x16"}>
 #bytes = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 !desc = !tt.tensordesc<1x64xui8, #fp6>
-!src = !ttg.memdesc<1x64xi8, #fp6, #ttg.shared_memory>
+!src = !ttg.memdesc<1x64xi8, #bytes, #ttg.shared_memory>
 tt.func @fp6_tma_store_box_width(%desc: !desc, %coord: i32, %src: !src) {
-  // expected-error @below {{FP6 TMA requires a 128-value box}}
+  // expected-error @below {{TMA descriptor and shared memory packing must match}}
   ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %src : !desc, !src
   tt.return
+}
+
+// -----
+
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6x16_p32"}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!desc = !tt.tensordesc<2x64xui8, #fp6>
+!dst = !ttg.memdesc<2x64xi8, #fp6, #ttg.shared_memory, mutable>
+!mbar = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+module attributes {ttg.target = "cuda:103"} {
+  tt.func @fp6_load_box64(%desc: !desc, %coord: i32, %dst: !dst, %bar: !mbar, %pred: i1) {
+    // expected-error @below {{64-value FP6 TMA requires a matching unswizzled [M, 64] store}}
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred : !desc, !mbar -> !dst
+    tt.return
+  }
 }
