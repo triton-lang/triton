@@ -94,9 +94,13 @@ public:
   void createBarrier(TritonLLVMIRRewriter &b, unsigned numWarps,
                      Value handle) override {
     Location loc = b.getLoc();
-    ROCDL::BarrierJoinOp::create(b, loc, handle);
-    ROCDL::BarrierSignalVarOp::create(b, loc, handle, numWarps);
-    ROCDL::BarrierWaitOp::create(b, loc, 1);
+    if (numWarps == 1) {
+      ROCDL::WaveBarrierOp::create(b, loc);
+    } else {
+      ROCDL::BarrierJoinOp::create(b, loc, handle);
+      ROCDL::BarrierSignalVarOp::create(b, loc, handle, numWarps);
+      ROCDL::BarrierWaitOp::create(b, loc, 1);
+    }
   }
 
 private:

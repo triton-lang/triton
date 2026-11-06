@@ -602,9 +602,10 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::NVIDIA::shuffleXor(loc, rewriter, val, i);
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int i) const {
-  return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, i);
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
+  return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, delta);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
