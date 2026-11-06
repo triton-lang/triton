@@ -9,6 +9,7 @@
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -547,6 +548,31 @@ int32_t DotScaledOp::deduceScaleFactor() {
 }
 
 //-- MakeRangeOp --
+void MakeRangeOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                              MLIRContext *ctx) {
+  // Fold a comparison with a constant when every element gives the same result.
+  patterns.add(+[](arith::CmpIOp op, PatternRewriter &rewriter) {
+    auto range = op.getLhs().getDefiningOp<MakeRangeOp>();
+    APInt bound;
+    if (!range || !matchPattern(op.getRhs(), m_ConstantInt(&bound)))
+      return failure();
+
+    // make_range has signed i32 endpoints and excludes end.
+    auto values = ConstantIntRanges::fromSigned(
+        range.getStartAttr().getValue(), range.getEndAttr().getValue() - 1);
+    auto result = intrange::evaluatePred(
+        static_cast<intrange::CmpPredicate>(op.getPredicate()), values,
+        ConstantIntRanges::constant(bound));
+    if (!result)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, DenseElementsAttr::get(cast<ShapedType>(op.getType()),
+                                   rewriter.getBoolAttr(*result)));
+    return success();
+  });
+}
+
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
   if (adaptor.getStart() + 1 == adaptor.getEnd()) {

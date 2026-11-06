@@ -1182,7 +1182,18 @@ SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
 
 Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
   assert(vals.size() > 0);
-  auto vecType = vec_ty(vals[0].getType(), vals.size());
+  Type elemTy = vals[0].getType();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(elemTy);
+  if (bits < 32 && vals.size() * bits > 32) {
+    assert(llvm::isPowerOf2_64(vals.size()) && "expected a power-of-two pack");
+    // Join 32-bit groups so the backend can reuse packed producer results.
+    size_t half = vals.size() / 2;
+    Value lo = packLLVector(loc, vals.take_front(half), rewriter);
+    Value hi = packLLVector(loc, vals.take_back(half), rewriter);
+    auto mask = llvm::to_vector(llvm::seq<int32_t>(0, vals.size()));
+    return LLVM::ShuffleVectorOp::create(rewriter, loc, lo, hi, mask);
+  }
+  auto vecType = vec_ty(elemTy, vals.size());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value vec = b.undef(vecType);
   for (int i = 0; i < vals.size(); i++) {
