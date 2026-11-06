@@ -829,6 +829,17 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
+    // 3) `amdgpu.scaled_upcast_fp4` uses a single `axis` for both the fp4
+    // unpacking and the scale grouping, so it can only express operands whose
+    // fp4 pairs are packed along K. When they are packed along M/N instead,
+    // reuse the common fp4_to_fp + multiply path, which keeps the two axes
+    // separate.
+    bool kPack = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
+    if (isFp4 && !kPack) {
+      return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
+                                                   computeType);
+    }
+
     unsigned groupSize =
         isFp4 ? 8 : (targetFeatures.supportsCvtPkScalePk8() ? 8 : 4);
 

@@ -574,3 +574,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: wmma_dot_scaled_mxfp4_packed_mn
+  tt.func public @wmma_dot_scaled_mxfp4_packed_mn(
+      %arg0: tensor<8x256xi8, #blocked>,
+      %arg1: tensor<256x256xf16, #blocked>,
+      %arg2: tensor<16x8xi8, #blocked1>,
+      %arg3: tensor<16x256x!tt.ptr<f32>, #blocked>
+      ) {
+    // CHECK-NOT: amdg.scaled_upcast_fp4
+    // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 0 : i32} : tensor<8x256xi8, {{.*}}> -> tensor<16x256xf16, {{.*}}>
+    // CHECK: tt.dot
+    // CHECK-NOT: amdg.scaled_upcast_fp4
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x256xf32, #blocked>
+    %0 = tt.dot_scaled %arg0 scale %arg2, %arg1, %cst lhs = e2m1 rhs = fp16 {fastMath = false, lhs_k_pack = false, rhs_k_pack = false} : tensor<8x256xi8, #blocked>, tensor<16x8xi8, #blocked1> * tensor<256x256xf16, #blocked> -> tensor<16x256xf32, #blocked>
+    tt.store %arg3, %0 : tensor<16x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
