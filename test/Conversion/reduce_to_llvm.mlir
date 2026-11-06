@@ -8,6 +8,7 @@
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #predicate_row = #ttg.slice<{dim = 1, parent = #blocked_reduce}>
+!predicate_result = tensor<128xi1, #predicate_row>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -207,18 +208,39 @@ tt.func private @reduce_minui_i16(%arg0: tensor<128x8xi16, #blocked_packed_reduc
 // PRED-CHAINS: llvm.intr.umin(%[[ALL]], %[[X6]])
 // PRED-CHAINS: %[[ANY:.*]] = llvm.intr.umax(%[[X0]], %[[X3]])
 // PRED-CHAINS: llvm.intr.umax(%[[ANY]], %[[X6]])
-tt.func private @reduce_register_predicates(%in: tensor<128x32xi1, #blocked_reduce>) -> (tensor<128xi1, #predicate_row>, tensor<128xi1, #predicate_row>) {
+// PRED-CHAINS: %[[PARITY:.*]] = llvm.xor %[[X0]], %[[X3]] : i1
+// PRED-CHAINS: llvm.xor %[[PARITY]], %[[X6]] : i1
+// PRED-CHAINS: llvm.intr.smin(%[[X0]], %[[X3]])
+// PRED-CHAINS: llvm.intr.smax(%[[X0]], %[[X3]])
+tt.func private @reduce_register_predicates(%in: tensor<128x32xi1, #blocked_reduce>)
+    -> (!predicate_result, !predicate_result, !predicate_result, !predicate_result, !predicate_result) {
   %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
   ^bb0(%a: i1, %b: i1):
     %c = arith.minui %a, %b : i1
     tt.reduce.return %c : i1
-  }) : (tensor<128x32xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row>
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
   %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
   ^bb0(%a: i1, %b: i1):
     %c = arith.maxui %a, %b : i1
     tt.reduce.return %c : i1
-  }) : (tensor<128x32xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row>
-  tt.return %all, %any : tensor<128xi1, #predicate_row>, tensor<128xi1, #predicate_row>
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %parity = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.xori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %signed_min = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.minsi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %signed_max = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.maxsi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  tt.return %all, %any, %parity, %signed_min, %signed_max :
+    !predicate_result, !predicate_result, !predicate_result, !predicate_result, !predicate_result
 }
 
 // An extra effect in the combiner makes the call order observable.

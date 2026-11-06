@@ -164,7 +164,7 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
-  // Whether to fold a Boolean AND/OR using three interleaved register chains.
+  // Whether to use three interleaved register chains for a Boolean reduction.
   virtual bool preferThreePredicateChains(unsigned valuesPerThread) const {
     return false;
   }

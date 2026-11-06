@@ -312,14 +312,15 @@ private:
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
-    // A combiner returning AND/OR may also contain observable effects.
-    bool isPureBooleanAndOr =
-        isa_and_nonnull<arith::AndIOp, arith::OrIOp, arith::MinUIOp,
+    // Extra operations in the combiner region may have observable effects.
+    bool isPureBooleanCombiner =
+        isa_and_nonnull<arith::AndIOp, arith::OrIOp, arith::XOrIOp,
+                        arith::MinSIOp, arith::MaxSIOp, arith::MinUIOp,
                         arith::MaxUIOp>(combinerOp) &&
         combinerOp->getResult(0).getType().isInteger(1) &&
         llvm::hasSingleElement(combineRegion.front().without_terminator());
-    bool usePredicateChains =
-        isPureBooleanAndOr && targetInfo.preferThreePredicateChains(axisPack);
+    bool usePredicateChains = isPureBooleanCombiner &&
+                              targetInfo.preferThreePredicateChains(axisPack);
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();
