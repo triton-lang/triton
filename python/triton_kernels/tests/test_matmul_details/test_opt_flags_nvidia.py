@@ -14,7 +14,7 @@ from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp, quantize_nvfp4_fn
 from triton_kernels.specialize import FnSpecs
 from triton_kernels.swiglu import swiglu_fn
-from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import BF16, FP4, FP8_E4M3FN, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -465,3 +465,46 @@ def test_matmul_blackwell_shuffled_mxfp4_weight(device):
 
     ref_y = matmul_torch(a.to(torch.bfloat16), b, None, precision_config=precision_config)
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
+
+
+def _mock_cuda_device(monkeypatch, capability, shared_memory_per_block_optin, multi_processor_count):
+    props = SimpleNamespace(shared_memory_per_block_optin=shared_memory_per_block_optin,
+                            shared_memory_per_multiprocessor=shared_memory_per_block_optin + 1024,
+                            multi_processor_count=multi_processor_count, major=capability[0], minor=capability[1],
+                            warp_size=32, name="mock")
+    geq = lambda major, minor=0: capability >= (major, minor)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda *_args, **_kwargs: props)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_args, **_kwargs: capability)
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", geq)
+    monkeypatch.setattr(opt_flags, "cuda_capability_geq", geq)
+
+
+def _make_unscaled_fp8_bf16_flags(m, n, k, constraints):
+    with scoped_opt_flags_constraints(constraints):
+        return opt_flags.make_opt_flags(BF16, FP8_E4M3FN, BF16, PrecisionConfig(), 1, m, n, k, None, True, True, 2,
+                                        False, False, None, torch.float32)
+
+
+@pytest.mark.parametrize("capability, smem, n_sms, expected_block_n, min_stages", [
+    # Not even one pipeline stage of the 64x256 tile fits in 99 KB, so a smaller tile has to be chosen.
+    ((12, 0), 101376, 188, 128, 2),
+    # Devices with a large shared memory keep the tile (and the stage count) the heuristic picked before.
+    ((9, 0), 232448, 132, 256, 2),
+    ((10, 3), 232448, 148, 256, 2),
+])
+def test_opt_flags_shrink_tile_when_no_stage_fits(device, monkeypatch, capability, smem, n_sms, expected_block_n,
+                                                  min_stages):
+    if device != "cuda" or not is_cuda():
+        pytest.skip("requires CUDA")
+    _mock_cuda_device(monkeypatch, capability, smem, n_sms)
+    flags = _make_unscaled_fp8_bf16_flags(64, 256, 128, {})
+    assert (flags.block_m, flags.block_n) == (64, expected_block_n)
+    assert flags.num_stages >= min_stages
+
+
+def test_opt_flags_shrink_tile_respects_constraints(device, monkeypatch):
+    if device != "cuda" or not is_cuda():
+        pytest.skip("requires CUDA")
+    _mock_cuda_device(monkeypatch, (12, 0), 101376, 188)
+    flags = _make_unscaled_fp8_bf16_flags(64, 256, 128, {"block_n": 256})
+    assert flags.block_n == 256
