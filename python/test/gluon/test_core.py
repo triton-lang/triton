@@ -35,7 +35,7 @@ from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
+from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2, mma_v2_sparse
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
@@ -4818,6 +4818,49 @@ def test_mma_v2(dtype):
     out = torch.empty((B, B), dtype=dtype, device="cuda")
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=0.05, rtol=1e-2)
+
+
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_sparse_mma_fp16(num_warps):
+    if not is_cuda() or torch.cuda.get_device_capability() not in ((8, 0), (9, 0)):
+        pytest.skip("requires A100 or H100")
+    use_wgmma = is_hopper()
+
+    @gluon.jit
+    def kernel(A, B, E, D, M: ttgl.constexpr, WGMMA: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+        row = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))
+        ak = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+        bk = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+        col = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        a = ttgl.load(A + row[:, None] * 16 + ak[None, :])
+        b = ttgl.load(B + bk[:, None] * 32 + col[None, :])
+        e = ttgl.load(E + row)[:, None]
+        if WGMMA:
+            sa = ttgl.allocate_shared_memory(ttgl.float16, [M, 16], ttgl.NVMMASharedLayout(32, 16), a)
+            sb = ttgl.allocate_shared_memory(ttgl.float16, [32, 32],
+                                             ttgl.NVMMASharedLayout(64, 16, transposed=True), b)
+            acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, 16])
+            acc = ttgl.full([M, 32], 1, ttgl.float32, acc_layout)
+            result = hopper.warpgroup_mma(sa, sb, acc, metadata=e, is_async=True)
+            result = hopper.warpgroup_mma_wait(deps=[result])
+        else:
+            acc = ttgl.full([M, 32], 1, ttgl.float32, layout)
+            result = mma_v2_sparse(a, b, e, acc)
+        ttgl.store(D + row[:, None] * 32 + col[None, :], ttgl.convert_layout(result, layout))
+
+    m = 16 * num_warps if use_wgmma else 128
+    a = torch.randint(-3, 4, (m, 16), device="cuda").half()
+    b = torch.randint(-3, 4, (32, 32), device="cuda").half()
+    # Keep positions 0 and 3 in every group of four.
+    e = torch.full((m,), -858993460, dtype=torch.int32, device="cuda")  # 0xcccccccc
+    out = torch.empty((m, 32), dtype=torch.float32, device="cuda")
+    compiled = kernel[(1,)](a, b, e, out, m, use_wgmma, num_warps=num_warps)
+    dense = torch.zeros((m, 32), device="cuda")
+    dense[:, ::4] = a[:, ::2]
+    dense[:, 3::4] = a[:, 1::2]
+    torch.testing.assert_close(out, dense @ b.float() + 1, atol=0, rtol=0)
+    assert ("wgmma.mma_async.sp.sync.aligned" if use_wgmma else "mma.sp.sync.aligned") in compiled.asm["ptx"]
 
 
 def test_dot_fma():

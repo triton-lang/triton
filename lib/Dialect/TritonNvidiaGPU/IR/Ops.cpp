@@ -31,6 +31,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -291,6 +292,11 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
   return success();
 }
 
+bool WarpGroupDotOp::verifyDims() {
+  return getA().getType().getShape().back() * (getMetadata() ? 2 : 1) ==
+         getB().getType().getDimSize(0);
+}
+
 LogicalResult WarpGroupDotOp::verify() {
   auto resTy = getD().getType();
   auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
@@ -316,6 +322,27 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("WGMMA result M dimension must be divisible by 64");
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
+
+  if (auto meta = getMetadata()) {
+    Type elem = getA().getType().getElementType();
+    int width = elem.getIntOrFloatBitWidth();
+    if (!(elem.isF16() || isa<Float8E4M3FNType, Float8E5M2Type>(elem)) ||
+        getB().getType().getElementType() != elem ||
+        !resTy.getElementType().isF32())
+      return emitOpError(
+          "sparse WGMMA requires FP16 or FP8 inputs and FP32 accumulation");
+    if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
+        getB().getType().getDimSize(0) != 512 / width ||
+        nvmmaEnc.getInstrShape()[2] != 256 / width ||
+        meta.getType().getShape() !=
+            ArrayRef<int64_t>({resTy.getDimSize(0), 16 / width}) ||
+        !meta.getType().getElementType().isInteger(32))
+      return emitOpError("invalid sparse WGMMA tile or metadata shape");
+    auto layouts = getWarpSparseMmaLayouts(getContext(), width,
+                                           resTy.getShape(), numWarps);
+    if (meta.getType().getEncoding() != layouts[2])
+      return emitOpError("invalid sparse WGMMA metadata layout");
+  }
 
   // Verify MMA version is supported for operands.
   int mmaVersion = nvmmaEnc.getVersionMajor();
@@ -356,14 +383,14 @@ void WarpGroupDotOp::getEffects(
 bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &a = getA();
   const auto &d = getD();
-  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(aElTy);
   bool accFP32 =
       cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
-  return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
+  return isFP8 && accFP32 &&
+         maxNumImpreciseAcc <= getB().getType().getDimSize(0);
 }
 
 // -- WarpGroupDotWaitOp --

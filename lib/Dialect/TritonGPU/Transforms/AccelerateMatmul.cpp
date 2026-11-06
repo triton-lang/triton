@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include <type_traits>
 
 namespace mlir {
@@ -568,7 +569,7 @@ public:
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
-          mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
+          mmaResult.newAcc, nullptr, Value(), dotOp.getInputPrecision(),
           dotOp.getMaxNumImpreciseAcc(), false);
     } else {
       int minBitwidth =
@@ -753,6 +754,66 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   }
   return newB;
 }
+
+class SparseDotToWarpMMA : public OpRewritePattern<SparseDotOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(SparseDotOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getAScale() || getNumCTAs(op.getType().getEncoding()) != 1)
+      return failure();
+    int warps = lookupNumWarps(op);
+    auto layouts = getWarpSparseMmaLayouts(
+        op.getContext(), op.getA().getType().getElementTypeBitWidth(),
+        op.getType().getShape(), warps);
+    bool prepared =
+        llvm::all_of(llvm::zip(op.getOperands(), layouts), [](auto pair) {
+          auto [operand, layout] = pair;
+          return cast<RankedTensorType>(operand.getType()).getEncoding() ==
+                 layout;
+        });
+    if (prepared)
+      return failure();
+    Value result =
+        buildWarpSparseDot(rewriter, op.getLoc(), op.getA(), op.getB(),
+                           op.getMetadata(), op.getAcc(), warps);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+class SparseDotToWGMMA : public OpRewritePattern<SparseDotOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(SparseDotOp op,
+                                PatternRewriter &rewriter) const override {
+    auto result = op.getType();
+    auto warps = lookupNumWarps(op);
+    if (op.getAScale() || warps % 4 || getNumCTAs(result.getEncoding()) != 1)
+      return failure();
+    unsigned n = result.getDimSize(1);
+    unsigned width = op.getA().getType().getElementTypeBitWidth();
+    auto encoding = NvidiaMmaEncodingAttr::get(
+        op.getContext(), 3, 0, {unsigned(warps), 1},
+        getCGALayout(result.getEncoding()), {16, n, 256 / width});
+    auto accTy = result.cloneWithEncoding(encoding);
+    Location loc = op.getLoc();
+    Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
+    Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
+    Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
+    auto layouts = getWarpSparseMmaLayouts(op.getContext(), width,
+                                           result.getShape(), warps);
+    Value e = ConvertLayoutOp::create(
+        rewriter, loc, op.getMetadata().getType().cloneWithEncoding(layouts[2]),
+        op.getMetadata());
+    Value dot = nvidia_gpu::WarpGroupDotOp::create(
+        rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
+        1u << 30, false);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, result, dot);
+    return success();
+  }
+};
 
 class SparseDotToMMAv5 : public OpRewritePattern<SparseDotOp> {
 public:
@@ -1285,6 +1346,10 @@ public:
 
     if (computeCapability == 100 || computeCapability == 103)
       patterns.add<SparseDotToMMAv5>(context);
+    else if (computeCapability == 90)
+      patterns.add<SparseDotToWGMMA>(context, benefitMMAv5);
+    if (computeCapability >= 80 && computeCapability < 100)
+      patterns.add<SparseDotToWarpMMA>(context);
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);

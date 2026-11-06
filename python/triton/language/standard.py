@@ -667,7 +667,9 @@ def unsqueeze(x, dim: core.constexpr):
 
 @jit
 def sparse_dot(a, b, metadata, acc=None, a_scale=None, b_scale=None):
-    """Multiply a compressed 128-row A tile by B on Blackwell.
+    """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
+
+    FP16 requires SM80+, FP8 requires SM89+, and NVFP4 requires SM100/SM103.
 
     Use logical K=32 for FP16, 64 for FP8, or 128 for paired NVFP4.
     Pack eight four-bit selectors per int32, least significant nibble first.

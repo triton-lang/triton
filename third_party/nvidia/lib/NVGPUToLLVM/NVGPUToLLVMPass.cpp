@@ -398,6 +398,9 @@ public:
     // Operand B (must be `desc`)
     operandsAndConstraints.push_back({opB, "l"});
 
+    if (op.getMetadata())
+      operandsAndConstraints.push_back({op.getMetadata(), "r"});
+
     // `scale-d`
     if (op.getOpC())
       operandsAndConstraints.push_back({opScaleD, "b"});
@@ -411,7 +414,7 @@ public:
     auto opB = op.getOpB();
     auto m = op.getM();
     auto n = op.getN();
-    auto k = op.getK();
+    auto k = op.getK() / (op.getMetadata() ? 2 : 1);
     auto eltTypeC = op.getEltTypeC();
     auto eltTypeA = op.getEltTypeA();
     auto eltTypeB = op.getEltTypeB();
@@ -498,6 +501,9 @@ public:
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
+    if (op.getMetadata())
+      args += "$" + std::to_string(asmOpIdx++) + ", 0, ";
+
     // `scale-d`
     if (op.getOpC())
       args += "$" + std::to_string(asmOpIdx++);
@@ -516,11 +522,14 @@ public:
       args += ", " + std::to_string(transB);
     }
 
-    auto ptxAsm = "wgmma.mma_async.sync.aligned"
+    auto ptxAsm = std::string(op.getMetadata() ? "wgmma.mma_async.sp"
+                                               : "wgmma.mma_async") +
+                  ".sync.aligned"
                   ".m" +
                   std::to_string(m) + "n" + std::to_string(n) + "k" +
-                  std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
-                  "." + stringifyEnum(eltTypeA).str() + "." +
+                  std::to_string(op.getK()) + "." +
+                  stringifyEnum(eltTypeC).str() + "." +
+                  stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
     return ptxAsm;
   }

@@ -290,7 +290,9 @@ def matmul(a, b, bias,
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
-    independently scaled contributions.
+    independently scaled contributions. Ampere uses warp-level sparse MMA for
+    FP16. Hopper uses sparse WGMMA for FP16 and FP8. SM100 and SM103 use
+    tcgen05.mma.sp for FP16, FP8 and paired NVFP4.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
