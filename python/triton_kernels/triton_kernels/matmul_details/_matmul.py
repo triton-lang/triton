@@ -607,7 +607,7 @@ def _matmul(
 
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
-        N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
+        N_MX_BLOCK = tl.cdiv(yN, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
         if PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
