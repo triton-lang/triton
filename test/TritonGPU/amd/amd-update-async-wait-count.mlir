@@ -747,3 +747,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %y : tensor<128xf32, #blocked>
   }
 }
+
+// -----
+
+// A TDM wait counts only TDM ops, so an async commit group nested in a region
+// op the walk does not analyze (here scf.index_switch) does not change the
+// outstanding count: the walk continues past it instead of falling back to a
+// conservative count of 0.
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_waitcnt_across_region_with_commit_group
+  tt.func public @tdm_waitcnt_across_region_with_commit_group(%memDesc: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %tensorDesc: !tt.tensordesc<128x16xf16>, %idx: index) {
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    scf.index_switch %idx
+    case 0 {
+      %c = ttg.async_commit_group
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    // One TDM op may stay outstanding => waitcnt 1
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 1
+    %w = amdg.async_tdm_wait {num = 1 : i32}
+    tt.return
+  }
+}

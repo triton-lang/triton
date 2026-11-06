@@ -185,14 +185,17 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
 // from Gluon are unrolled right now)
 using MemoCache = llvm::DenseSet<std::tuple<Operation *, int, int>>;
 
-// Whether any op nested in `op`'s regions is counted by `countFunc` or is an
-// async commit group, i.e. whether `op` can change the outstanding count.
+// Whether any op nested in `op`'s regions is counted by `countFunc` or, when
+// counting commit groups, is an async commit group, i.e. whether `op` can
+// change the outstanding count. Commit groups do not affect TDM waits.
+template <bool countCommitGroups>
 static bool
 regionsContainAsyncOps(Operation *op,
                        llvm::function_ref<int(Operation *)> countFunc) {
   for (Region &region : op->getRegions()) {
     WalkResult result = region.walk([&](Operation *inner) {
-      if (countFunc(inner) > 0 || isa<ttg::AsyncCommitGroupOp>(inner))
+      if (countFunc(inner) > 0 ||
+          (countCommitGroups && isa<ttg::AsyncCommitGroupOp>(inner)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
@@ -317,7 +320,7 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
       // Reached function boundary; return current sum (conservative)
       return std::min(bestPath, pathSum);
     } else if (cursor->getNumRegions() > 0 &&
-               regionsContainAsyncOps(cursor, countFunc)) {
+               regionsContainAsyncOps<countCommitGroups>(cursor, countFunc)) {
       // For unhandled ops with subregions that issue async ops we
       // conservatively bail out. Ops whose regions issue none (tt.reduce,
       // tt.map_elementwise, ...) are walked past like any other op.
