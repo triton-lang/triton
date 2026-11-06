@@ -619,8 +619,35 @@ def _replace_jit_callables(obj):
     return obj
 
 
-def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), str(options))
+def _constexpr_specialization_key(specialization):
+    """Fold a specialization into an in-memory lookup key.
+
+    This key fronts the string cache key and has to separate exactly what the
+    string key separates, or a lookup returns another entry's string key. The
+    string key reprs every constexpr value, so ``1`` and ``1.0`` are already
+    distinct there; tuple equality is not, and neither is it for ``0.0`` and
+    ``-0.0``. So a constexpr scalar keys on its type and, for floats, on its
+    repr: that is what keeps the two zeroes and a NaN apart, and it is cheap
+    enough to sit on the per-launch path.
+
+    Non-constexpr entries pass through untouched.
+    """
+    keyed = []
+    for entry in specialization:
+        if len(entry) == 2 and entry[0] == "constexpr":
+            value = entry[1]
+            if type(value) is float:
+                keyed.append(("constexpr", float, repr(value)))
+            else:
+                keyed.append(("constexpr", type(value), value))
+        else:
+            keyed.append(entry)
+    return tuple(keyed)
+
+
+def compute_cache_key(kernel_key_cache, specialization, options, has_constexpr=True):
+    specialization_key = _constexpr_specialization_key(specialization) if has_constexpr else tuple(specialization)
+    key = (specialization_key, str(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
@@ -765,7 +792,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
             inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
             specialization.append(f'("custom_pipeline", {inspect_stages_hash})')
 
-        key = compute_cache_key(kernel_key_cache, specialization, options)
+        key = compute_cache_key(kernel_key_cache, specialization, options, has_constexpr=bool(self.constexprs))
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
