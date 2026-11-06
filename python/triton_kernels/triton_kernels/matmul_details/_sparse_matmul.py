@@ -7,14 +7,10 @@ from triton_kernels.tensor_details.layout_details.strided import StridedLayout
 
 
 @triton.jit
-def _load_tile(ptr, row, col, valid_rows, width, row_stride, col_stride, other=0):
+def _load_tile(ptr, row, col, valid_rows, width, row_stride, col_stride, other=0.0):
     offsets = row[:, None].to(tl.int64) * row_stride + col[None, :].to(tl.int64) * col_stride
     mask = valid_rows[:, None] & (col[None, :] < width)
-    if ptr.dtype.element_ty.is_fp8():
-        bits = tl.load(ptr.to(tl.pointer_type(tl.uint8)) + offsets, mask, 0)
-        return bits.to(ptr.dtype.element_ty, bitcast=True)
-    else:
-        return tl.load(ptr + offsets, mask, other)
+    return tl.load(ptr + offsets, mask, other)
 
 
 @triton.jit
@@ -65,9 +61,9 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
             sk = tile * (BK // SCALE_K) + tl.arange(0, BK // SCALE_K)
             xs = _load_tile(SX, xm, sk, xmask, K // SCALE_K, SX_STRIDE[1], SX_STRIDE[2])
             ws = _load_tile(SW, n, sk, n < N, K // SCALE_K, SW_STRIDE[1], SW_STRIDE[2])
-            acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
         else:
-            acc = tl.sparse_dot(w, tl.trans(x), e, acc)
+            ws, xs = None, None
+        acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
     y = tl.trans(acc)
     if XScale is not None:
         y *= tl.load(XScale)
@@ -153,8 +149,8 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         raise ValueError("scatter must have one entry per routed row")
     output_shape = (*a.shape[:-2], rows, n)
     if c is None:
-        c = torch.zeros(output_shape, device=a.device, dtype=dtype) if scatter is not None else torch.empty(
-            output_shape, device=a.device, dtype=dtype)
+        allocate = torch.zeros if scatter is not None else torch.empty
+        c = allocate(output_shape, device=a.device, dtype=dtype)
     if c.shape != output_shape or c.dtype != dtype:
         raise ValueError("output shape or dtype does not match sparse matmul")
     for t in (b, metadata, xs, ws, config.a_mx_tensor_scale, config.b_mx_tensor_scale, bias, c, gather, scatter):

@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -666,4 +667,63 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters, emit);
+}
+
+LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
+                               int capability,
+                               const LLVMTypeConverter *typeConverter,
+                               ConversionPatternRewriter &rewriter) {
+  Type elem = op.getA().getType().getElementType();
+  if (op.getAScale() || capability < 80 || (!elem.isF16() && capability < 89))
+    return op.emitOpError(
+        "native warp sparse MMA requires SM80 for FP16 or SM89 for FP8");
+  int width = elem.getIntOrFloatBitWidth();
+  auto layouts = triton::gpu::getWarpSparseMmaLayouts(
+      op.getContext(), width, op.getType().getShape(),
+      triton::gpu::lookupNumWarps(op));
+  for (auto [operand, layout] : llvm::zip(op.getOperands(), layouts))
+    if (cast<RankedTensorType>(operand.getType()).getEncoding() != layout)
+      return op.emitOpError("expected warp sparse MMA register layouts");
+  Location loc = op.getLoc();
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  auto words = [&](Value tensor, Value lowered) {
+    auto elems = unpackTensorElements(loc, lowered, rewriter, tensor.getType());
+    SmallVector<Value> result;
+    int pack = 32 / width;
+    for (size_t i = 0; i < elems.size(); i += pack) {
+      Value packed =
+          packLLVector(loc, ArrayRef(elems).slice(i, pack), rewriter);
+      result.push_back(elem.isF16() ? packed : tb.bitcast(packed, i32_ty));
+    }
+    return result;
+  };
+  auto a = words(op.getA(), adaptor.getA());
+  auto b = words(op.getB(), adaptor.getB());
+  auto e = unpackTensorElements(loc, adaptor.getMetadata(), rewriter,
+                                op.getMetadata().getType());
+  auto c = unpackTensorElements(loc, adaptor.getAcc(), rewriter, op.getType());
+  auto format = getMmaPtxType(elem);
+  std::array<NVVM::MMATypes, 2> types{format, format};
+  std::array<int64_t, 3> shape{16, 8, 512 / width};
+  auto intrinsic = NVVM::MmaSpOp::getIntrinsicID(
+      16, 8, shape[2], std::nullopt, false, std::nullopt, format, format,
+      NVVM::MMATypes::f32, NVVM::MMATypes::f32);
+  MLIRContext *ctx = op.getContext();
+  Type ret = struct_ty(SmallVector<Type>(4, rewriter.getF32Type()));
+  unsigned nTiles = b.size() / 4;
+  for (unsigned m = 0; m < e.size(); ++m) {
+    for (unsigned n = 0; n < nTiles; ++n) {
+      unsigned dst = 4 * (m * nTiles + n);
+      auto mma = NVVM::MmaSpOp::create(
+          rewriter, loc, ret, ArrayRef(a).slice(4 * m, 4),
+          ArrayRef(b).slice(4 * n, 4), ArrayRef(c).slice(dst, 4), e[m],
+          tb.i32_val(0), shape, std::nullopt, types);
+      declareConvergentMma(mma, intrinsic, rewriter);
+      for (unsigned i = 0; i < 4; ++i)
+        c[dst + i] = tb.extract_val(mma, i);
+    }
+  }
+  rewriter.replaceOp(
+      op, packTensorElements(loc, typeConverter, c, rewriter, op.getType()));
+  return success();
 }
