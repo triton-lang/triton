@@ -1126,10 +1126,11 @@ void init_gluon_ir(py::module_ &m) {
              Value pred, std::vector<Value> &mbarriers,
              std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
              std::optional<tt::ScaleDotElemType> aType,
-             std::optional<tt::ScaleDotElemType> bType) {
+             std::optional<tt::ScaleDotElemType> bType,
+             std::optional<Value> metadata) {
             Value accDep;
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-            self.create<ttng::TCGen5MMAOp>(
+            auto mma = self.create<ttng::TCGen5MMAOp>(
                 tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
                 mbarriers, mbarrier_preds,
                 /*isAsync=*/true, /*isUnsigned=*/false,
@@ -1137,24 +1138,34 @@ void init_gluon_ir(py::module_ &m) {
                       : tt::ScaleDotElemTypeAttr{},
                 bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
                       : tt::ScaleDotElemTypeAttr{});
+            if (metadata)
+              mma.getMetadataMutable().assign(*metadata);
           },
           py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
           py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
           py::arg("two_ctas"), py::arg("multicast"), py::arg("a_type").none(),
-          py::arg("b_type").none())
-      .def("create_tcgen05_mma_scaled",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
-              Value bScale, tt::ScaleDotElemType aType,
-              tt::ScaleDotElemType bType, Value useAcc, Value pred,
-              std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas, bool multicast) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAScaledOp>(
-                 tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
-                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
-                 /*isAsync=*/true, multicast);
-           })
+          py::arg("b_type").none(), py::arg("metadata") = py::none())
+      .def(
+          "create_tcgen05_mma_scaled",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
+             Value bScale, tt::ScaleDotElemType aType,
+             tt::ScaleDotElemType bType, Value useAcc, Value pred,
+             std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
+             bool two_ctas, bool multicast, std::optional<Value> metadata) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            auto mma = self.create<ttng::TCGen5MMAScaledOp>(
+                tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
+                useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
+                /*isAsync=*/true, multicast);
+            if (metadata)
+              mma.getMetadataMutable().assign(*metadata);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("a_scale"),
+          py::arg("b_scale"), py::arg("a_type"), py::arg("b_type"),
+          py::arg("useAcc"), py::arg("pred"), py::arg("mbarriers"),
+          py::arg("mbarrier_preds"), py::arg("two_ctas"), py::arg("multicast"),
+          py::arg("metadata") = py::none())
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
               std::vector<Value> &descs) {

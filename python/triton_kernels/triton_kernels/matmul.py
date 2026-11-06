@@ -14,6 +14,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
+from .matmul_details._sparse_matmul import sparse_matmul
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
@@ -273,6 +274,7 @@ def matmul(a, b, bias,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
     maxabs_permute_sequence: tuple[int, ...] | None = None,
+    b_sparse_metadata: torch.Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -281,6 +283,14 @@ def matmul(a, b, bias,
 
     a_mx_tensor_scale and b_mx_tensor_scale apply only to NVFP4 operands.
     Each requires packed FP4 values and E4M3 block scales on the corresponding input.
+
+    With b_sparse_metadata, B is compressed along K. Metadata has shape
+    [N, ceil(K/32)] for FP8/FP16 or [N, ceil(K/64)] for byte-packed NVFP4.
+    Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
+    order, starting with the low nibble. NVFP4 scales follow logical K in blocks
+    of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
+    instruction uses one scale per 32 values. The 16-value path computes two
+    independently scaled contributions.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
@@ -309,6 +319,17 @@ def matmul(a, b, bias,
     dtype metadata; values must be read from the communication outputs. This
     requires split_k=1, no output TMA, no c_acc_in, and no output MX scales.
     """
+    if b_sparse_metadata is not None:
+        if any(v is not None for v in (b_ragged_metadata, betas, gammas, fused_comm, fused_activation, epilogue, c_acc_in,
+                                       maxabs_permute_sequence)):
+            raise NotImplementedError("unsupported fused operation or ragged-K layout for sparse matmul")
+        config = precision_config or PrecisionConfig()
+        defaults = replace(config, a_mx_scale=None, b_mx_scale=None, a_mx_tensor_scale=None,
+                           b_mx_tensor_scale=None, out_dtype=None, a_microblock_size=None, b_microblock_size=None)
+        if defaults != PrecisionConfig() or config.a_microblock_size not in (None, 16, 32) or config.b_microblock_size not in (None, 16, 32):
+            raise NotImplementedError("unsupported precision configuration for sparse matmul")
+        return sparse_matmul(a, b, b_sparse_metadata, bias, config, c, 1.0 if out_alpha is None else out_alpha,
+                             a_ragged_metadata, gather_indx, scatter_indx)
     is_input_batched = a.ndim == 3
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
