@@ -725,8 +725,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     } else {
       // The low five thread-ID bits select the lane. Shift the group-zero
       // bitset to this lane's group and test its bits in a converged ballot.
-      Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
-      Value leader = b.and_(tid, b.i32_val(groupBits));
+      Value leader = b.and_(getThreadId(rewriter, loc), b.i32_val(groupBits));
       Value members =
           b.shl(b.i32_val(nvidia_gpu::getGroupZeroMask(varyingBits)), leader);
       Value hit = all ? b.xor_(value, b.true_val()) : value;
