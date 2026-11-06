@@ -1112,6 +1112,63 @@ def async_copy_mbarrier_pipeline_drain():
         torch.testing.assert_close(output, source.view(num_tiles, block).sum(0, dtype=torch.int32))
 
 
+def multi_cta_startup():
+    shape = sys.argv[2]
+    num_regions = {"no_ws": 1, "three_workers": 4}[shape]
+    num_ctas, cga_layout = 2, ((1, 0), )
+    rows, cols = 8 * num_ctas, 32
+
+    @gluon.constexpr_function
+    def region_layout(num_warps, cga_layout):
+        return ttgl.BlockedLayout([1, 1], [1, 32], [num_warps, 1], [1, 0], cga_layout=[list(b) for b in cga_layout])
+
+    @gluon.constexpr_function
+    def shared_layout(cga_layout):
+        return ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[list(b) for b in cga_layout])
+
+    @gluon.jit
+    def region(smem, output, REGION: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, CGA_LAYOUT: ttgl.constexpr,
+               USER_PHASE: ttgl.constexpr):
+        if USER_PHASE:
+            ttgl.amd.cdna5.cluster.wait()
+        layout: ttgl.constexpr = region_layout(ttgl.num_warps(), CGA_LAYOUT)
+        row = ttgl.arange(0, M, ttgl.SliceLayout(1, layout))
+        col = ttgl.arange(0, N, ttgl.SliceLayout(0, layout))
+        offsets = REGION * M * N + row[:, None] * N + col[None, :]
+        smem.store(offsets)
+        ttgl.store(output + offsets, smem.load(layout))
+
+    @gluon.jit
+    def kernel(output, SHAPE: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, CGA_LAYOUT: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = shared_layout(CGA_LAYOUT)
+        smem0 = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        smem1 = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        smem2 = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        smem3 = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        for _ in ttgl.static_range(2):
+            ttgl.amd.cdna5.cluster.arrive()
+            if SHAPE == "no_ws":
+                ttgl.amd.cdna5.cluster.wait()
+                region(smem0, output, 0, M, N, CGA_LAYOUT, False)
+            else:
+                ttgl.warp_specialize([
+                    (region, (smem0, output, 0, M, N, CGA_LAYOUT, True)),
+                    (region, (smem1, output, 1, M, N, CGA_LAYOUT, True)),
+                    (region, (smem2, output, 2, M, N, CGA_LAYOUT, True)),
+                    (region, (smem3, output, 3, M, N, CGA_LAYOUT, True)),
+                ], [4, 4, 4])
+
+    expected = torch.full((4, rows, cols), -1, dtype=torch.int32)
+    expected[:num_regions] = torch.arange(num_regions * rows * cols, dtype=torch.int32).view(num_regions, rows, cols)
+    for mode in ("", "consan"):
+        knobs.compilation.instrumentation_mode = mode
+        for _ in range(2):
+            output = torch.full_like(expected, -1, device="cuda")
+            kernel[(1, )](output, SHAPE=shape, M=rows, N=cols, CGA_LAYOUT=cga_layout, num_warps=4, num_ctas=num_ctas)
+            torch.cuda.synchronize()
+            torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
 def tdm_store_kernel():
     FAILURE = sys.argv[2] == "True"
     XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
@@ -1435,6 +1492,7 @@ if __name__ == "__main__":
     tests["async_copy_mbarrier_warp_specialized"] = async_copy_mbarrier_warp_specialized
     tests["async_copy_mbarrier_storage"] = async_copy_mbarrier_storage
     tests["async_copy_mbarrier_pipeline_drain"] = async_copy_mbarrier_pipeline_drain
+    tests["multi_cta_startup"] = multi_cta_startup
     tests[sys.argv[1]]()
     torch.cuda.synchronize()
     print("ConSan helper completed", flush=True)

@@ -682,16 +682,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Value zero = arith::ConstantIntOp::create(b, 0, 32);
   Value isCTA0 =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
-  if (numCTAs > 1) {
-    SmallVector<Operation *> clusterBarriers =
-        hooks.createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
-  } else {
+  auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  if (numCTAs > 1)
+    startupClusterBarrierAnchor = lockRelease;
+  else
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
-  }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
   passValueToWarpSpecialize(lock.at(entryRegion), lock);
 
@@ -714,6 +709,18 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             captureBytes)))
     return failure();
   return success();
+}
+
+void AuxDataMap::createStartupClusterBarrier(const ConSanTargetHooks &hooks) {
+  if (!startupClusterBarrierAnchor)
+    return;
+  ImplicitLocOpBuilder b(startupClusterBarrierAnchor->getLoc(),
+                         startupClusterBarrierAnchor);
+  b.setInsertionPointAfter(startupClusterBarrierAnchor);
+  startupClusterBarrierAnchor = nullptr;
+  SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+  assert(!barriers.empty() &&
+         "target must provide a cluster initialization barrier");
 }
 
 namespace {
