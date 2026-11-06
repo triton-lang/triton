@@ -170,6 +170,8 @@ def elementwise_async_copy(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    # With these parameters, `SwizzledSharedLayout` is a plain shared memory
+    # layout without padding or swizzling.
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return kernel[grid](
