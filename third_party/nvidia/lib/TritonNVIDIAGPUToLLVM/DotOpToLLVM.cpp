@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -32,6 +33,83 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread);
 
 namespace {
+struct WarpSparseDotConversion : public ConvertOpToLLVMPattern<SparseDotOp> {
+  int capability;
+  WarpSparseDotConversion(LLVMTypeConverter &converter, int capability,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), capability(capability) {}
+
+  LogicalResult
+  matchAndRewrite(SparseDotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type elem = op.getA().getType().getElementType();
+    if (op.getAScale() || capability < 80 || (!elem.isF16() && capability < 89))
+      return op.emitOpError(
+          "native warp sparse MMA requires SM80 for FP16 or SM89 for FP8");
+    int width = elem.getIntOrFloatBitWidth();
+    auto layouts = triton::gpu::getWarpSparseMmaLayouts(
+        op.getContext(), width, op.getType().getShape(),
+        triton::gpu::lookupNumWarps(op));
+    for (auto [operand, layout] : llvm::zip(op.getOperands(), layouts))
+      if (cast<RankedTensorType>(operand.getType()).getEncoding() != layout)
+        return op.emitOpError("expected warp sparse MMA register layouts");
+    Location loc = op.getLoc();
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    auto words = [&](Value tensor, Value lowered) {
+      auto elems =
+          unpackTensorElements(loc, lowered, rewriter, tensor.getType());
+      SmallVector<Value> result;
+      int pack = 32 / width;
+      for (size_t i = 0; i < elems.size(); i += pack)
+        result.push_back(tb.bitcast(
+            packLLVector(loc, ArrayRef(elems).slice(i, pack), rewriter),
+            i32_ty));
+      return result;
+    };
+    auto a = words(op.getA(), adaptor.getA());
+    auto b = words(op.getB(), adaptor.getB());
+    auto e = unpackTensorElements(loc, adaptor.getMetadata(), rewriter,
+                                  op.getMetadata().getType());
+    auto c =
+        unpackTensorElements(loc, adaptor.getAcc(), rewriter, op.getType());
+    StringRef format = elem.isF16()                  ? "f16"
+                       : isa<Float8E4M3FNType>(elem) ? "e4m3"
+                                                     : "e5m2";
+    std::string asmText = "mma.sp.sync.aligned.m16n8k" +
+                          std::to_string(512 / width) + ".row.col.f32." +
+                          format.str() + "." + format.str() +
+                          ".f32 "
+                          "{$0,$1,$2,$3}, {$4,$5,$6,$7}, {$8,$9,$10,$11}, "
+                          "{$12,$13,$14,$15}, $16, 0;";
+    MLIRContext *ctx = op.getContext();
+    Type ret = struct_ty(SmallVector<Type>(4, rewriter.getF32Type()));
+    unsigned nTiles = b.size() / 4;
+    for (unsigned m = 0; m < e.size(); ++m) {
+      for (unsigned n = 0; n < nTiles; ++n) {
+        unsigned dst = 4 * (m * nTiles + n);
+        SmallVector<Value> args;
+        llvm::append_range(args, ArrayRef(a).slice(4 * m, 4));
+        llvm::append_range(args, ArrayRef(b).slice(4 * n, 4));
+        llvm::append_range(args, ArrayRef(c).slice(dst, 4));
+        args.push_back(e[m]);
+        Value d = LLVM::InlineAsmOp::create(
+                      rewriter, loc, ret, args, asmText,
+                      "=f,=f,=f,=f,r,r,r,r,r,r,r,r,f,f,f,f,r", false, false,
+                      LLVM::TailCallKind::None, true,
+                      LLVM::AsmDialectAttr::get(op.getContext(),
+                                                LLVM::AsmDialect::AD_ATT),
+                      ArrayAttr())
+                      ->getResult(0);
+        for (unsigned i = 0; i < 4; ++i)
+          c[dst + i] = tb.extract_val(d, i);
+      }
+    }
+    rewriter.replaceOp(op, packTensorElements(loc, getTypeConverter(), c,
+                                              rewriter, op.getType()));
+    return success();
+  }
+};
+
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
@@ -210,6 +288,8 @@ struct WarpGroupDotWaitOpConversion
 void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int computeCapability, PatternBenefit benefit) {
+  patterns.add<WarpSparseDotConversion>(typeConverter, computeCapability,
+                                        benefit);
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<DotI8OpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);

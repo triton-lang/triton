@@ -24,6 +24,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -988,13 +989,29 @@ void init_gluon_ir(py::module_ &m) {
              }
              return py::make_tuple(op->getResult(0), op->getResult(1));
            })
-      .def("create_warpgroup_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              triton::InputPrecision precision = triton::InputPrecision::IEEE,
-              int maxNumImpreciseAcc = 0, bool isAsync = false) -> Value {
-             return self.create<ttng::WarpGroupDotOp>(
-                 a, b, acc, useAcc, precision, maxNumImpreciseAcc, isAsync);
-           })
+      .def(
+          "create_warpgroup_mma",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+             triton::InputPrecision precision, int maxNumImpreciseAcc,
+             bool isAsync, std::optional<Value> metadata, int warps) -> Value {
+            Value e;
+            if (metadata) {
+              auto ty = cast<RankedTensorType>(metadata->getType());
+              auto result = cast<RankedTensorType>(acc.getType());
+              auto width = cast<ttg::TensorOrMemDesc>(a.getType())
+                               .getElementTypeBitWidth();
+              auto layouts = ttg::getWarpSparseMmaLayouts(
+                  self.getContext(), width, result.getShape(), warps);
+              e = self.create<ttg::ConvertLayoutOp>(
+                  ty.cloneWithEncoding(layouts[2]), *metadata);
+            }
+            return self.create<ttng::WarpGroupDotOp>(
+                a, b, acc, useAcc, e, precision, maxNumImpreciseAcc, isAsync);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("use_acc"),
+          py::arg("precision"), py::arg("max_num_imprecise_acc"),
+          py::arg("is_async"), py::arg("metadata") = py::none(),
+          py::arg("warps") = 4)
       .def("create_warpgroup_mma_wait",
            [](GluonOpBuilder &self, std::vector<Value> &deps, int pendings) {
              std::vector<Value> results;
@@ -1119,6 +1136,13 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_clc_get_program_id",
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
+           })
+      .def("create_warp_sparse_mma",
+           [](GluonOpBuilder &self, Value a, Value b, Value metadata, Value acc,
+              int warps) {
+             return ttg::buildWarpSparseDot(self.getBuilder(),
+                                            self.getLastLoc(), a, b, metadata,
+                                            acc, warps);
            })
       .def(
           "create_tcgen05_mma",

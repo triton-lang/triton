@@ -1409,8 +1409,15 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
 @pytest.mark.parametrize("dtype,scale_k", [(torch.float16, None), (torch.float8_e4m3fn, None),
                                           (torch.float8_e5m2, None), (torch.uint8, 16), (torch.uint8, 32)])
 def test_matmul_structured_sparse_weights(dtype, scale_k):
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
-        pytest.skip("requires SM100 or SM103")
+    if not torch.cuda.is_available() or not torch.version.cuda:
+        pytest.skip("requires NVIDIA GPU")
+    cc = torch.cuda.get_device_capability()
+    if dtype == torch.uint8 and cc not in ((10, 0), (10, 3)):
+        pytest.skip("native paired NVFP4 requires SM100/SM103")
+    if dtype != torch.float16 and cc < (8, 9):
+        pytest.skip("native FP8 requires SM89+")
+    if cc < (8, 0) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
+        pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
     m, n, k = 39, 143, 288
     group = 8 if nvfp4 else 4
@@ -1448,8 +1455,8 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
 
 @pytest.mark.parametrize("routed", [False, True])
 def test_matmul_structured_sparse_experts(routed):
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
-        pytest.skip("requires SM100 or SM103")
+    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability()[0] not in (8, 9, 10):
+        pytest.skip("requires native FP16 sparse MMA")
     experts, m, k, n = 3, 37, 64, 17
     a = torch.randint(4, (experts, m, k), device="cuda").half()
     b = torch.randint(4, (experts, k // 2, n), device="cuda").half()
@@ -1478,3 +1485,18 @@ def test_matmul_structured_sparse_experts(routed):
     out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparse_metadata=meta,
                  out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.float8_e4m3fn])
+def test_matmul_structured_sparse_unsupported_dtype(dtype):
+    if not torch.cuda.is_available() or not torch.version.cuda:
+        pytest.skip("requires NVIDIA GPU")
+    cc = torch.cuda.get_device_capability()
+    if cc not in ((8, 0), (9, 0)) or (cc == (9, 0) and dtype != torch.uint8):
+        pytest.skip("format is supported or outside the tested architectures")
+    a = torch.empty((16, 64), device="cuda", dtype=dtype)
+    b = torch.empty((32, 16), device="cuda", dtype=dtype)
+    metadata = torch.empty((16, 2), device="cuda", dtype=torch.int32)
+    error = "native paired NVFP4" if dtype == torch.uint8 else "native FP8"
+    with pytest.raises(ValueError, match=error):
+        matmul(a, b, None, b_sparse_metadata=metadata)

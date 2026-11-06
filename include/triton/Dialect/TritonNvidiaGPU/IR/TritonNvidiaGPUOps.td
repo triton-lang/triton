@@ -228,7 +228,8 @@ def TTNG_CLCGetProgramIdOp : TTNG_Op<"clc_get_program_id", [Pure]> {
 def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DeclareOpInterfaceMethods<DotOpInterface>,
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims"]>,
   TypesMatchWith<"result's type matches accumulator's type", "d", "c", "$_self">
 ]> {
   let summary = "warp group dot";
@@ -242,6 +243,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     TTG_MemDescType:$b,
     TT_FpIntTensor:$c,
     Optional<I1>:$useC,
+    Optional<TT_Tensor>:$metadata,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
     DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
     DefaultValuedAttr<BoolAttr, "false">:$isAsync
@@ -250,7 +252,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
   let results = (outs TT_FpIntTensor:$d);
 
   let assemblyFormat = [{
-    $a`,` $b`,` $c (`,` $useC^)? attr-dict
+    $a`,` $b`,` $c (`,` $useC^)? (`metadata` $metadata^ `:` type($metadata))? attr-dict
     `:` type($a) `*` qualified(type($b)) `->` type($d)
   }];
 

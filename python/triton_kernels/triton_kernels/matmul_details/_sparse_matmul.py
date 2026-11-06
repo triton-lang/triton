@@ -113,11 +113,16 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         if index is not None and (a.ndim != 2 or index.ndim != 1 or index.dtype not in (torch.int32, torch.int64)
                                   or index.stride(0) != 1):
             raise ValueError("routing indices must be contiguous integer vectors for rank-2 activations")
-    if not a.is_cuda or torch.cuda.get_device_capability(a.device) not in ((10, 0), (10, 3)):
-        raise ValueError("sparse matmul requires SM100 or SM103")
+    cc = torch.cuda.get_device_capability(a.device) if a.is_cuda and torch.version.cuda else (0, 0)
+    if not ((8, 0) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
+        raise ValueError("sparse matmul requires Ampere, Ada, Hopper or Blackwell SM100/SM103")
     if a.dtype != b.dtype or a.dtype not in (torch.float16, torch.float8_e4m3fn, torch.float8_e5m2, torch.uint8):
         raise ValueError("expected matching FP16, FP8 or byte-packed NVFP4 operands")
     nvfp4 = a.dtype == torch.uint8
+    if nvfp4 and cc < (10, 0):
+        raise ValueError("native paired NVFP4 sparse matmul requires SM100 or SM103")
+    if a.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) and cc < (8, 9):
+        raise ValueError("native FP8 sparse matmul requires SM89 or newer")
     m, stored_k = a.shape[-2:]
     k = stored_k * (2 if nvfp4 else 1)
     n = b.shape[-1]
