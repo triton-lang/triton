@@ -21,15 +21,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // Wait on token %1: 2 instructions outstanding (second async_copy emits 2)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 4
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %9 = ttg.async_wait %1 {num = 0 : i32}
     // Wait on token %3: 0 instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %10 = ttg.async_wait %3 {num = 0 : i32}
     // SCOPE: amdg.async_wait
     // SCOPE: amdg.async_wait
-    // SCOPE-SAME: ttg.amdg.completion_scope = "shared"
     // SCOPE-NEXT: {{.*}} = tt.load
     %observed = tt.load %arg3 : tensor<128x16x!tt.ptr<f16>, #blocked>
     tt.return %observed : tensor<128x16xf16, #blocked>
@@ -56,11 +53,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = ttg.async_commit_group tokens %2
     // Wait on token %1: 2 instructions outstanding (second buffer_load emits 2)
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %4 = ttg.async_wait %1 {num = 0 : i32}
     // Wait on token %3: 0 instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %5 = ttg.async_wait %3 {num = 0 : i32}
     tt.return
   }
@@ -485,16 +480,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // Wait on token %1: 2 store instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
-    // CHECK-SAME: ttg.amdg.completion_scope = "all"
     %9 = ttg.async_wait %1 {num = 0 : i32}
     // Wait on token %3: 0 outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
-    // CHECK-SAME: ttg.amdg.completion_scope = "all"
     %10 = ttg.async_wait %3 {num = 0 : i32}
     // SCOPE: amdg.async_wait
     // SCOPE: amdg.async_wait
-    // SCOPE-SAME: ttg.amdg.completion_scope = "all"
-    // SCOPE-NEXT: ttg.barrier local
     // SCOPE-NEXT: {{.*}} = tt.load
     %observed = tt.load %arg2 : tensor<32x32x!tt.ptr<f32>, #blocked>
     tt.return %observed : tensor<32x32xf32, #blocked>
@@ -582,7 +573,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     // Wait on token %21: 2 async_copy instructions outstanding
     // CHECK: amdg.async_wait {{.*}} {num_inst = 2
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %cw1 = ttg.async_wait %21 {num = 0 : i32}
 
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0
@@ -590,7 +580,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %w2 = amdg.async_tdm_wait %3 {num = 0 : i32}
 
     // CHECK: amdg.async_wait {{.*}} {num_inst = 0
-    // CHECK-SAME: ttg.amdg.completion_scope = "shared"
     %cw2 = ttg.async_wait %51 {num = 0 : i32}
     tt.return
   }
@@ -830,18 +819,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %store = amdg.async_copy_local_to_global %mem, %ptr : !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> tensor<64x128x!tt.ptr<f16>, #copy>
     %storeGroup = ttg.async_commit_group tokens %store
     amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
-    // A TDM wait neither inherits nor clears ordinary pending stores.
+    // Ordinary stores do not change the TDM wait scope.
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}ttg.amdg.completion_scope = "shared"
     amdg.async_tdm_wait {num = 0 : i32}
-    // CHECK: amdg.async_wait {{.*}}ttg.amdg.completion_scope = "all"
+    // CHECK: amdg.async_wait
     ttg.async_wait %storeGroup {num = 0 : i32}
 
     amdg.async_tdm_scatter %desc[%indices] from %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     %copy = ttg.async_copy_global_to_local %ptr, %mem : tensor<64x128x!tt.ptr<f16>, #copy> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
     %group = ttg.async_commit_group tokens %copy
-    // The same independence holds with the queues reversed, across a barrier.
+    // Ordinary waits and barriers must not retire a pending TDM store.
     ttg.barrier local
-    // CHECK: amdg.async_wait {{.*}}ttg.amdg.completion_scope = "shared"
+    // CHECK: amdg.async_wait
     ttg.async_wait %group {num = 0 : i32}
     // Draining ordinary copies must not discard the TDM store.
     amdg.async_tdm_gather %desc[%indices] to %mem : tensor<64xi32, #idx>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
@@ -936,7 +925,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c = ttg.async_copy_global_to_local %ptr, %mem : tensor<64x128x!tt.ptr<f16>, #copy> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
     %group = ttg.async_commit_group tokens %c
     // CHECK: amdg.async_wait
-    // CHECK-SAME: ttg.amdg.completion_scope = "all"
     %cw = ttg.async_wait %group {num = 0 : i32}
     tt.return
   }

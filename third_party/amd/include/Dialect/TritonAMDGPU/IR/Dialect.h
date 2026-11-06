@@ -40,8 +40,8 @@ struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
 } // namespace mlir::triton::amd
 
 namespace mlir::triton::amdgpu {
-/// Internal wait annotation computed by UpdateAsyncWaitCount and consumed by
-/// AMD Membar. "shared" rules out pending explicit async global writes
+/// Internal TDM wait annotation computed by UpdateAsyncWaitCount and consumed
+/// by AMD Membar. "shared" rules out pending explicit TDM global writes
 /// for the waited queue; "all" retains conservative ordering. The annotation
 /// neither replaces the hardware wait nor proves that accesses are warp-local.
 inline constexpr llvm::StringLiteral kAsyncCompletionScopeAttrName =
