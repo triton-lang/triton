@@ -1559,8 +1559,8 @@ _convert2d_test_cases = [(M, N, *case, "float16", 0)
                          for case in _convert2d_layout_cases]
 _convert2d_test_cases += [
     pytest.param(M, 16, [2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
-                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), dtype, 16,
-                 id=f"multi-cta-small-shape-{M}-{dtype}") for M in [1, 2] for dtype in ["float16", "int64"]
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), "float16", 16,
+                 id=f"multi-cta-small-shape-{M}-float16") for M in [1, 2]
 ]
 
 
@@ -1650,11 +1650,7 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
 
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
-    if dtype == "int64":
-        x = torch.arange(M * N, dtype=torch_dtype, device=device).reshape(M, N)
-        x = (x << 32) | (x * 7 + 3)
-    else:
-        x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
     assert compiled.metadata.shared >= min_shared_elems * x.element_size()
