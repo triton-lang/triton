@@ -8,6 +8,7 @@ add_triton_library(TritonAMDGPUIR
 
   LINK_LIBS PUBLIC
   MLIRLLVMDialect
+  MLIRROCDLDialect
   TritonIR
   TritonGPUIR
 )

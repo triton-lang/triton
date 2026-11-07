@@ -22,7 +22,9 @@ public:
 
   bool isCuMode() const { return cuMode; }
 
-  llvm::AMDGPU::GPUKind getGPUKind() const;
+  llvm::AMDGPU::GPUKind getGPUKind() const {
+    return targetFeatures.getGPUKind();
+  }
 
   int getWarpSize() const { return targetFeatures.getWarpSize(); }
 
@@ -30,7 +32,9 @@ public:
     return targetFeatures.getSharedMemorySize();
   }
 
-  int getSharedMemoryBanks() const override;
+  int getSharedMemoryBanks() const override {
+    return targetFeatures.getSharedMemoryBanks();
+  }
 
   size_t getSharedMemoryPartitionSize() const override {
     return targetFeatures.getSharedMemoryPartitionSize();
