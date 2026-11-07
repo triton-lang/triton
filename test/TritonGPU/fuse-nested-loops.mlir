@@ -701,3 +701,160 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   }
   tt.return
 }
+
+// A pointer can be invariant while its contents change between iterations.
+// CHECK-LABEL: @mutable_bound
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK: tt.store
+// CHECK: tt.load
+// CHECK: scf.for
+tt.func @mutable_bound(%read: !tt.ptr<i32>, %write: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %next = arith.addi %i, %c1 : i32
+    tt.store %write, %next : !tt.ptr<i32>
+    %bound = tt.load %read : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
+
+// CHECK-LABEL: @mutable_sliced_bound
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK: tt.store
+// CHECK: tt.load
+// CHECK: scf.for
+tt.func @mutable_sliced_bound(%read: !tt.ptr<i32>, %write: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %wp = tt.addptr %write, %i : !tt.ptr<i32>, i32
+    %next = arith.addi %i, %c1 : i32
+    tt.store %wp, %next : !tt.ptr<i32>
+    %rp = tt.addptr %read, %i : !tt.ptr<i32>, i32
+    %bound = tt.load %rp : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {"ttg.always-fuse"}
+  tt.return %res : i32
+}
+
+// CHECK-LABEL: @readonly_bound_fuses
+// CHECK: tt.load
+// CHECK: scf.for
+// CHECK-NOT: scf.for
+// CHECK: tt.return
+tt.func @readonly_bound_fuses(%read: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %bound = tt.load %read : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
+
+// A noinline-style helper has opaque effects at the call site.
+tt.func private @write_bound_helper(%write: !tt.ptr<i32>, %next: i32) {
+  tt.store %write, %next : !tt.ptr<i32>
+  tt.return
+}
+
+// CHECK-LABEL: @unknown_effect_bound
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK: tt.call @write_bound_helper
+// CHECK: tt.load
+// CHECK: scf.for
+tt.func @unknown_effect_bound(%read: !tt.ptr<i32>, %write: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %next = arith.addi %i, %c1 : i32
+    tt.call @write_bound_helper(%write, %next) : (!tt.ptr<i32>, i32) -> ()
+    %bound = tt.load %read : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
+
+// CHECK-LABEL: @volatile_bound_stays_in_loop
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK: tt.load {{.*}}isVolatile = true
+// CHECK: scf.for
+tt.func @volatile_bound_stays_in_loop(%read: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %bound = tt.load %read {isVolatile = true} : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
+
+// CHECK-LABEL: @nested_write_bound
+// CHECK-NOT: tt.load
+// CHECK: scf.for
+// CHECK: scf.if
+// CHECK: tt.store
+// CHECK: tt.load
+// CHECK: scf.for
+tt.func @nested_write_bound(%read: !tt.ptr<i32>, %write: !tt.ptr<i32>, %m: i32, %flag: i1) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    scf.if %flag {
+      %next = arith.addi %i, %c1 : i32
+      tt.store %write, %next : !tt.ptr<i32>
+    }
+    %bound = tt.load %read : !tt.ptr<i32>
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
+
+// CHECK-LABEL: @atomic_bound_stays_in_loop
+// CHECK-NOT: tt.atomic_load
+// CHECK: scf.for
+// CHECK: tt.atomic_load
+// CHECK: scf.for
+tt.func @atomic_bound_stays_in_loop(%read: !tt.ptr<i32>, %m: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %res = scf.for %i = %c0 to %m step %c1 iter_args(%acc = %c0) -> i32 : i32 {
+    %bound = tt.atomic_load acquire, gpu, %read : (!tt.ptr<i32>) -> i32
+    %inner = scf.for %j = %c0 to %bound step %c1 iter_args(%a = %acc) -> i32 : i32 {
+      %n = arith.addi %a, %c1 : i32
+      scf.yield %n : i32
+    }
+    scf.yield %inner : i32
+  } {tt.flatten}
+  tt.return %res : i32
+}
