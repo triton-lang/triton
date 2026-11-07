@@ -6035,9 +6035,9 @@ def _tcgen05_sparse_mma_kernel(dtype: ttgl.constexpr, words: ttgl.constexpr):
     if dtype == ttgl.uint8:
         sa = blackwell.allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
         sb = blackwell.allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
-        blackwell.tcgen05_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", metadata=meta)
+        blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", meta)
     else:
-        blackwell.tcgen05_mma(a, b, acc, metadata=meta)
+        blackwell.tcgen05_sparse_mma(a, b, acc, meta)
 
 
 @pytest.mark.parametrize("dtype,words", [(ttgl.float8e4nv, 2), (ttgl.uint8, 2)])
