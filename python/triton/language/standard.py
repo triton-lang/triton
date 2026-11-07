@@ -676,8 +676,9 @@ def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     Pack eight four-bit selectors per int32, least significant nibble first.
     Each selector contains two increasing two-bit positions. For NVFP4 the
     positions select adjacent pairs and both operands pack two values per byte.
-    Supply E4M3 scales per 32 logical K values for one native sparse MMA,
-    or per 16 logical K values for two independently scaled contributions.
+    Supply E4M3 scales with the sign bit clear (UE4M3). Use one scale per 32
+    logical K values for one native sparse MMA, or per 16 logical K values
+    for two independently scaled contributions.
     """
     if acc is None:
         acc = core.full((a.shape[0], b.shape[1]), 0, core.float32)

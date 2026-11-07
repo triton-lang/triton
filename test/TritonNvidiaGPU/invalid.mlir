@@ -2425,8 +2425,21 @@ module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 !subview = !ttg.memdesc<128x32xi8, #n4, #ttng.tensor_memory, 256x32>
 !d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
 !e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+!d16 = !ttg.memdesc<128x128xf16, #t, #ttng.tensor_memory, mutable>
+#n32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+!d32 = !ttg.memdesc<128x128xf32, #n32, #ttng.tensor_memory, mutable, 256x128>
 !scale = !ttg.memdesc<128x4xf8E4M3FN, #sf, #ttng.tensor_memory>
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_nvfp4_repeated_n32_scale_tiles(%a: !a, %b: !kb, %d: !d32, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{repeated sparse NVFP4 instructions require N >= 64 for B scales}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !kb, !d32, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_f16_accumulator(%a: !a, %b: !kb, %d: !d16, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse NVFP4 requires an f32 accumulator}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !kb, !d16, !scale, !scale
+    tt.return
+  }
   tt.func @sparse_nvfp4_wide_storage(%a: !a, %b: !b, %d: !d, %s: !scale, %e: !e, %p: i1) {
     // expected-error @below {{sparse NVFP4 requires packed byte operands}}
     ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !b, !d, !scale, !scale

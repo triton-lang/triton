@@ -673,10 +673,13 @@ def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, spars
     """Emit native paired 4:8 NVFP4 MMA with logical K=128.
 
     A stores 32 packed bytes per row. Each sparsity metadata nibble selects two of the four adjacent-element pairs.
-    Supply four E4M3 scales per row along logical K and use e2m1 for both operand formats.
+    Supply four unsigned E4M3 scales (sign bit clear) per row along logical K. Use e2m1 for both operands
+    and an f32 accumulator.
+    When the accumulator spans multiple instruction tiles along N, each instruction must cover at least 64 columns.
     Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
     In tensor memory, A must start on a four-column boundary and the accumulator, sparsity metadata, and
-    both scale descriptors must each start on a two-column boundary. These alignments apply to descriptor subviews too.
+    both scale descriptors must each start on a two-column boundary. Tensor-memory operands start at row zero.
+    These alignments apply to descriptor subviews too.
     """
     if not isinstance(sparsity_metadata, tensor_memory_descriptor):
         raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")

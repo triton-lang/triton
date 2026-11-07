@@ -273,7 +273,8 @@ def matmul(a, b, bias,
     Sparsity metadata must be contiguous along N (stride(-2) == 1). Use StridedLayout(-2)
     for wrapped tensors or sparsity_metadata.mT.contiguous().mT for a row-major PyTorch tensor.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
-    order, starting with the low nibble. NVFP4 scales follow logical K in blocks
+    order, starting with the low nibble. NVFP4 scales use E4M3 storage with the
+    sign bit clear (UE4M3). They follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). Activation and weight
     scale shapes are [M, K/block] and [K/block, N], respectively. The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
