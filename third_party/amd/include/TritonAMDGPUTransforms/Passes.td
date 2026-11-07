@@ -354,6 +354,21 @@ def TritonAMDGPUOptimizeDescriptorEncoding
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonAMDGPUExpandTDMReduce : Pass<"tritonamdgpu-expand-tdm-reduce", "mlir::ModuleOp"> {
+  let constructor = "mlir::createTritonAMDGPUExpandTDMReduce()";
+  let summary = "Expand CDNA5 descriptor reductions into global reductions";
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
+def TritonAMDGPULowerGlobalReduce : Pass<"tritonamdgpu-lower-global-reduce", "mlir::ModuleOp"> {
+  let constructor = "mlir::createTritonAMDGPULowerGlobalReduce()";
+  let summary = "Lower global reductions to ordered atomics";
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "mlir::ModuleOp"> {
   let summary = "Lower descriptor load/store to TDM load/stores";
 

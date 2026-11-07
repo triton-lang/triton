@@ -409,8 +409,6 @@ jobs:
           k_core="test_load_store_same_ptr or test_atomic_cas"  # expensive
           k_core+=" or (test_scan2d and shape365) or (test_scan2d and shape869)"
 
-          k_desc="tensor_descriptor_reduce"
-
           k_tdm_store="(test_tensor_descriptor_store and 1-1024-1-int8)"
           k_tdm_store+=" or (test_tensor_descriptor_store and 1-1024-1-uint8)"
           k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-float32)"
@@ -439,7 +437,7 @@ jobs:
             python/test/unit/test_debug.py \
             python/test/unit/runtime
           run_rocjitsu_pytest 12 2 \
-            -k "not ($k_core or $k_desc or $k_tdm_store)" \
+            -k "not ($k_core or $k_tdm_store)" \
             --deselect "python/test/unit/language/test_core.py::test_cat_nd[rank=1,dim=0]" \
             -p no:forked \
             python/test/unit/language/test_core.py \

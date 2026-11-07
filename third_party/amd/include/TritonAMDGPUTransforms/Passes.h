@@ -7,9 +7,13 @@
 
 namespace mlir {
 
+std::unique_ptr<Pass> createTritonAMDGPUExpandTDMReduce();
+
 // Generate the pass class declarations.
 #define GEN_PASS_DECL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
+
+std::unique_ptr<Pass> createTritonAMDGPULowerGlobalReduce();
 
 void registerConSanAMDHooks();
 
