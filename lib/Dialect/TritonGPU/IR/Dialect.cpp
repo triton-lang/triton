@@ -478,13 +478,9 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout,
     auto ll = toLinearLayout(layoutShape, layout);
     return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
   } else if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    // SharedLinearEncodingAttr.
     return sharedLinear.basesPerDim(kBlock);
   } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    // SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr,
-    // AMDRotatingSharedEncodingAttr, PaddedSharedEncodingAttr,
-    // PartitionedSharedEncodingAttr, TensorMemoryEncodingAttr, and
-    // TensorMemoryScalesEncodingAttr.
+    // Special encodings such as TensorMemoryScalesEncodingAttr
     auto splitNum = ttgLayout.getCGALayout().getCTASplitNum();
     for (auto [split, size] : llvm::zip_equal(splitNum, layoutShape))
       split = std::min<int64_t>(split, size);
