@@ -1451,10 +1451,16 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
     expected = x.float() @ dense.reshape(n, k).T
     result = matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
     torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
+    tiled = convert_layout(wrap_torch_tensor(metadata), layout.SparseMetadataLayout(1 if dtype == torch.float16 else 2))
+    restored = convert_layout(tiled, layout.StridedLayout())
+    torch.testing.assert_close(restored.data, metadata, rtol=0, atol=0)
+    result = matmul(a, b, None, precision_config=config, b_sparse_metadata=tiled)
+    torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("routed", [False, True])
-def test_matmul_structured_sparse_experts(routed):
+@pytest.mark.parametrize("tiled", [False, True])
+def test_matmul_structured_sparse_experts(routed, tiled):
     if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability()[0] not in (8, 9, 10):
         pytest.skip("requires native FP16 sparse MMA")
     experts, m, k, n = 3, 37, 64, 17
@@ -1482,6 +1488,8 @@ def test_matmul_structured_sparse_experts(routed):
             expected[scatter[start:start + sizes[i]]] = 2 * (rows @ dense[i] + bias[i])
     else:
         expected = 2 * (a.float() @ dense + bias[:, None, :])
+    if tiled:
+        meta = convert_layout(wrap_torch_tensor(meta), layout.SparseMetadataLayout(1))
     out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparse_metadata=meta,
                  out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
