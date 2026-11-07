@@ -98,12 +98,12 @@ def WGMMA_EltTypeAttr : I32EnumAttr<"WGMMAEltType",
 def WGMMA_OperandType : AnyTypeOf<[LLVM_AnyStruct, I64], "wgmma operand A/B type">;
 
 def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", [AttrSizedOperandSegments]> {
-  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, I1:$useC, Optional<LLVM_AnyStruct>:$opC, Optional<I32>:$metadata,
+  let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, I1:$useC, Optional<LLVM_AnyStruct>:$opC, Optional<I32>:$sparsityMetadata,
                    I32Attr:$m, I32Attr:$n, I32Attr:$k,
                    WGMMA_EltTypeAttr:$eltTypeC, WGMMA_EltTypeAttr:$eltTypeA, WGMMA_EltTypeAttr:$eltTypeB,
                    WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
   let results = (outs LLVM_AnyStruct:$res);
-  let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? (`metadata` $metadata^)? attr-dict `:` functional-type(operands, $res)";
+  let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? (`sparsity_metadata` $sparsityMetadata^)? attr-dict `:` functional-type(operands, $res)";
 }
 
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {

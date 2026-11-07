@@ -186,7 +186,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value useCOperand, Value loadedA, Value loadedB,
-                         Value loadedC, Value metadata, Value loadedMetadata,
+                         Value loadedC, Value sparsityMetadata, Value loadedSparsityMetadata,
                          bool allowTF32, bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -250,10 +250,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   }
   bool transB = !bLoader->getDescriptor().transposed;
 
-  SmallVector<Value> meta;
-  if (metadata)
-    meta =
-        unpackTensorElements(loc, loadedMetadata, rewriter, metadata.getType());
+  SmallVector<Value> selectorWords;
+  if (sparsityMetadata)
+    selectorWords =
+        unpackTensorElements(loc, loadedSparsityMetadata, rewriter, sparsityMetadata.getType());
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
@@ -344,7 +344,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = triton::nvgpu::WGMMAOp::create(
             rewriter, loc, accTy, a, b, useC, mmaAcc,
-            metadata ? meta[m] : Value(), M, N, logicalK, eltTypeC, eltTypeA,
+            sparsityMetadata ? selectorWords[m] : Value(), M, N, logicalK, eltTypeC, eltTypeA,
             eltTypeB, layoutA, layoutB);
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
@@ -389,7 +389,7 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                    op.getMetadata(), adaptor.getMetadata(),
+                    op.getSparsityMetadata(), adaptor.getSparsityMetadata(),
                     op.getInputPrecision() == InputPrecision::TF32,
                     op.needsPartialAccumulator(), op.getMaxNumImpreciseAcc(),
                     !op.getIsAsync(), thread);

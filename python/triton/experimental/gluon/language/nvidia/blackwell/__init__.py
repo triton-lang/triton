@@ -601,20 +601,20 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
 
 
 @builtin
-def tcgen05_sparse_mma(a, b, acc, metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
+def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
                       mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
     """Emit 2:4 FP8 MMA with logical K=64.
 
-    A stores 32 FP8 values per row. Each metadata nibble selects two positions in a group of four.
+    A stores 32 FP8 values per row. Each sparsity metadata nibble selects two positions in a group of four.
     Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
     """
-    if not isinstance(metadata, tensor_memory_descriptor):
-        raise ValueError("sparse MMA requires a tensor-memory metadata descriptor")
-    _tcgen05_mma(a, b, acc, metadata.handle,
+    if not isinstance(sparsity_metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
+    _tcgen05_mma(a, b, acc, sparsity_metadata.handle,
                  use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
 
 
-def _tcgen05_mma(a, b, acc, metadata,
+def _tcgen05_mma(a, b, acc, sparsity_metadata,
                  use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
@@ -638,7 +638,7 @@ def _tcgen05_mma(a, b, acc, metadata,
     b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type,
-                                         metadata)
+                                         sparsity_metadata)
 
 
 @builtin
@@ -667,21 +667,21 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
 
 @builtin
-def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata, *, use_acc=True, pred=True,
+def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, *, use_acc=True, pred=True,
                              multicast=False, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """Emit native paired 4:8 NVFP4 MMA with logical K=128.
 
-    A stores 32 packed bytes per row. Each metadata nibble selects two of the four adjacent-element pairs.
+    A stores 32 packed bytes per row. Each sparsity metadata nibble selects two of the four adjacent-element pairs.
     Supply four E4M3 scales per row along logical K and use e2m1 for both operand formats.
     Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
     """
-    if not isinstance(metadata, tensor_memory_descriptor):
-        raise ValueError("sparse MMA requires a tensor-memory metadata descriptor")
-    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata.handle,
+    if not isinstance(sparsity_metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata.handle,
                         use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic)
 
 
-def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata,
+def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata,
                         use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
@@ -707,7 +707,7 @@ def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata,
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast, metadata)
+                                                acc.layout.two_ctas, multicast, sparsity_metadata)
 
 
 @constexpr_function

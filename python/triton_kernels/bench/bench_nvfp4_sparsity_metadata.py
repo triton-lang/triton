@@ -80,7 +80,7 @@ def bench_loads(batch, n, k, steps=16):
 
 
 def bench_matmul(batch, m, n, k, scale_k):
-    meta = _selectors(batch, n, k).mT.contiguous().mT
+    sparsity_metadata = _selectors(batch, n, k).mT.contiguous().mT
 
     def packed(shape):
         return torch.randint(256, shape, dtype=torch.uint8, device="cuda")
@@ -95,7 +95,7 @@ def bench_matmul(batch, m, n, k, scale_k):
     out = torch.empty((batch, m, n), device="cuda")
 
     def run():
-        matmul(a, b, None, c=out, precision_config=config, b_sparse_metadata=meta)
+        matmul(a, b, None, c=out, precision_config=config, b_sparsity_metadata=sparsity_metadata)
 
     print("matmul (column)", batch, m, n, k, scale_k, _measure([run])[0], flush=True)
 

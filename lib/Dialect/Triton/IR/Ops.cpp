@@ -343,7 +343,7 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
 
 LogicalResult SparseDotOp::verify() {
   auto a = getA().getType(), b = getB().getType(), acc = getAcc().getType();
-  auto meta = getMetadata().getType();
+  auto sparsityMetadata = getSparsityMetadata().getType();
   if (a.getRank() != 2 || b.getRank() != 2 || acc.getRank() != 2 ||
       a.getDimSize(0) != 128 || b.getDimSize(1) < 16 || b.getDimSize(1) > 256 ||
       acc.getDimSize(0) != 128 || acc.getDimSize(1) != b.getDimSize(1) ||
@@ -357,9 +357,9 @@ LogicalResult SparseDotOp::verify() {
               : !isa<Float8E4M3FNType, Float8E5M2Type>(elem)))
     return emitOpError("expected FP8 or packed NVFP4 with two scales");
   if (a.getDimSize(1) != 32 || b.getDimSize(0) != 64 ||
-      !meta.getElementType().isInteger(32) ||
-      meta.getShape() != ArrayRef<int64_t>({128, 2}))
-    return emitOpError("invalid compressed K dimension or metadata tile");
+      !sparsityMetadata.getElementType().isInteger(32) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, 2}))
+    return emitOpError("invalid compressed K dimension or sparsity metadata tile");
   if (scaled) {
     for (auto [scale, rows] : {std::pair{getAScale(), int64_t(128)},
                                std::pair{getBScale(), b.getDimSize(1)}})

@@ -128,7 +128,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
 
 @_core.builtin
-def warpgroup_sparse_mma(a, b, acc, metadata, *, use_acc=True, precision=None, max_num_imprecise_acc=None,
+def warpgroup_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, precision=None, max_num_imprecise_acc=None,
                          is_async=False, _semantic=None, _generator=None):
     """Perform Hopper 2:4 sparse WGMMA with compressed FP8 A and matching FP8 B.
 
@@ -138,12 +138,12 @@ def warpgroup_sparse_mma(a, b, acc, metadata, *, use_acc=True, precision=None, m
     """
     if a.dtype not in (_core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
         raise ValueError("sparse WGMMA requires matching FP8 inputs")
-    metadata = _core._unwrap_if_constexpr(metadata)
-    if (not isinstance(metadata, _core.tensor) or list(metadata.type.shape) != [a.type.shape[0], 2]
-            or metadata.dtype not in (_core.int32, _core.uint32)):
-        raise ValueError("sparse WGMMA requires two int32 or uint32 metadata words per row of A")
+    sparsity_metadata = _core._unwrap_if_constexpr(sparsity_metadata)
+    if (not isinstance(sparsity_metadata, _core.tensor) or list(sparsity_metadata.type.shape) != [a.type.shape[0], 2]
+            or sparsity_metadata.dtype not in (_core.int32, _core.uint32)):
+        raise ValueError("sparse WGMMA requires two int32 or uint32 sparsity metadata words per row of A")
     return _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic,
-                          metadata.handle, _semantic.num_warps(_generator).value)
+                          sparsity_metadata.handle, _semantic.num_warps(_generator).value)
 
 
 def _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic, *sparse_args):

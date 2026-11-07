@@ -810,15 +810,15 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 def TT_SparseDotOp : TT_Op<"sparse_dot", [Pure, AttrSizedOperandSegments,
     AllTypesMatch<["acc", "result"]>]> {
   let summary = "structured sparse dot product with compressed A";
-  let arguments = (ins TT_Tensor:$a, TT_Tensor:$b, TT_Tensor:$metadata,
+  let arguments = (ins TT_Tensor:$a, TT_Tensor:$b, TT_Tensor:$sparsityMetadata,
                        TT_Tensor:$acc, Optional<TT_Tensor>:$a_scale,
                        Optional<TT_Tensor>:$b_scale);
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $a `,` $b `,` $metadata `,` $acc
+    $a `,` $b `,` $sparsityMetadata `,` $acc
     (`a_scale` $a_scale^ `:` type($a_scale))?
     (`b_scale` $b_scale^ `:` type($b_scale))?
-    attr-dict `:` type($a) `,` type($b) `,` type($metadata) `,` type($acc)
+    attr-dict `:` type($a) `,` type($b) `,` type($sparsityMetadata) `,` type($acc)
   }];
   let hasVerifier = 1;
 }

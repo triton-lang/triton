@@ -111,9 +111,9 @@ void ttng::MMAv5PipelineableOperandsHelper::run() {
       }
     }
   }
-  if (Value metadata = mmaOp.getMetadata()) {
+  if (Value sparsityMetadata = mmaOp.getSparsityMetadata()) {
     Operation *foundDef = nullptr;
-    if (!isOperandPipelineable(metadata, foundDef)) {
+    if (!isOperandPipelineable(sparsityMetadata, foundDef)) {
       if (foundDef)
         unpipelineableOperandDefs.push_back(foundDef);
       else

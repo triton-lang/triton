@@ -295,7 +295,7 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 bool WarpGroupDotOp::verifyDims() {
   int64_t storedK = getA().getType().getShape().back();
   int64_t logicalK = getB().getType().getDimSize(0);
-  if (getMetadata())
+  if (getSparsityMetadata())
     return kFp8Sparse2To4.matches(storedK, logicalK);
   return storedK == logicalK;
 }
@@ -326,7 +326,7 @@ LogicalResult WarpGroupDotOp::verify() {
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
 
-  if (auto meta = getMetadata()) {
+  if (auto sparsityMetadata = getSparsityMetadata()) {
     Type elem = getA().getType().getElementType();
     if (!isa<Float8E4M3FNType, Float8E5M2Type>(elem) ||
         getB().getType().getElementType() != elem ||
@@ -335,14 +335,14 @@ LogicalResult WarpGroupDotOp::verify() {
           "sparse WGMMA requires FP8 inputs and FP32 accumulation");
     if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
         nvmmaEnc.getInstrShape()[2] != kFp8Sparse2To4.storedA ||
-        meta.getType().getShape() !=
+        sparsityMetadata.getType().getShape() !=
             ArrayRef<int64_t>({resTy.getDimSize(0), 2}) ||
-        !meta.getType().getElementType().isInteger(32))
-      return emitOpError("invalid sparse WGMMA tile or metadata shape");
+        !sparsityMetadata.getType().getElementType().isInteger(32))
+      return emitOpError("invalid sparse WGMMA tile or sparsity metadata shape");
     auto layouts = getWarpSparseMmaLayouts(getContext(),
                                            resTy.getShape(), numWarps);
-    if (meta.getType().getEncoding() != layouts[2])
-      return emitOpError("invalid sparse WGMMA metadata layout");
+    if (sparsityMetadata.getType().getEncoding() != layouts[2])
+      return emitOpError("invalid sparse WGMMA sparsity metadata layout");
   }
 
   // Verify MMA version is supported for operands.
@@ -1233,14 +1233,14 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
 bool TCGen5MMAOp::verifyDims() {
   int64_t storedK = getA().getType().getDimSize(1);
   int64_t logicalK = getB().getType().getDimSize(0);
-  if (getMetadata())
+  if (getSparsityMetadata())
     return kFp8Sparse2To4.matches(storedK, logicalK);
   return storedK == logicalK;
 }
 
-// Each instruction reads metadata from one 128-row tile, starting at selector
+// Each instruction reads sparsity metadata from one 128-row tile, starting at selector
 // zero, with two words per row.
-static LogicalResult verifySparseTile(Operation *op, MemDescType metadata,
+static LogicalResult verifySparseTile(Operation *op, MemDescType sparsityMetadata,
                                       MemDescType acc, int64_t k,
                                       int64_t instructionK, int64_t words) {
   auto module = op->getParentOfType<ModuleOp>();
@@ -1249,22 +1249,22 @@ static LogicalResult verifySparseTile(Operation *op, MemDescType metadata,
     if (cc != 100 && cc != 103)
       return op->emitOpError("sparse MMA requires SM100 or SM103");
   }
-  auto layout = dyn_cast<TensorMemoryEncodingAttr>(metadata.getEncoding());
+  auto layout = dyn_cast<TensorMemoryEncodingAttr>(sparsityMetadata.getEncoding());
   auto accLayout = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
-  if (!layout || !accLayout || !metadata.getElementType().isInteger(32) ||
-      metadata.getShape() != ArrayRef<int64_t>({128, words}) ||
+  if (!layout || !accLayout || !sparsityMetadata.getElementType().isInteger(32) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, words}) ||
       layout.getBlockM() != 128 || layout.getColStride() != 1 ||
-      getNumCTAs(metadata.getEncoding()) != 1 ||
+      getNumCTAs(sparsityMetadata.getEncoding()) != 1 ||
       getNumCTAs(acc.getEncoding()) != 1 || layout.getTwoCTAs() ||
       accLayout.getTwoCTAs() || accLayout.getBlockM() != 128 ||
       acc.getDimSize(0) != 128 || k != instructionK)
     return op->emitOpError(
                "expected one 128-row sparse MMA tile with logical K=")
            << instructionK << " and 128x" << words
-           << " i32 tensor memory metadata";
-  if (words == 2 && getTMemSubSliceOffset(metadata, 1, 1) != 1)
+           << " i32 tensor memory sparsity metadata";
+  if (words == 2 && getTMemSubSliceOffset(sparsityMetadata, 1, 1) != 1)
     return op->emitOpError(
-        "sparse metadata words must occupy adjacent TMEM columns");
+        "sparsity metadata words must occupy adjacent TMEM columns");
   return success();
 }
 
@@ -1293,10 +1293,10 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
-  if (auto metadata = getMetadata()) {
+  if (auto sparsityMetadata = getSparsityMetadata()) {
     if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
       return emitOpError("sparse MMA requires FP8 operands");
-    if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(),
+    if (failed(verifySparseTile(*this, sparsityMetadata.getType(), getD().getType(),
                                 getB().getType().getDimSize(0), kFp8Sparse2To4.logical, 2)))
       return failure();
   }
@@ -1382,8 +1382,8 @@ LogicalResult TCGen5MMAOp::verify() {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  if (getMetadata())
-    effects.emplace_back(MemoryEffects::Read::get(), &getMetadataMutable()[0],
+  if (getSparsityMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(), &getSparsityMetadataMutable()[0],
                          TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
@@ -1620,7 +1620,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
-  if (auto metadata = getMetadata()) {
+  if (auto sparsityMetadata = getSparsityMetadata()) {
     if (getAType() != ScaleDotElemType::E2M1 ||
         getBType() != ScaleDotElemType::E2M1 ||
         !isa<Float8E4M3FNType>(aScaleType.getElementType()) ||
@@ -1632,7 +1632,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
         !isa<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding()))
       return emitOpError(
           "expected E4M3 tensor memory scales per 32 logical K values");
-    if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(), k,
+    if (failed(verifySparseTile(*this, sparsityMetadata.getType(), getD().getType(), k,
                                 kNvfp4Sparse4To8.logical, 2)))
       return failure();
   }
@@ -1691,8 +1691,8 @@ LogicalResult TCGen5MMAScaledOp::verify() {
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  if (getMetadata())
-    effects.emplace_back(MemoryEffects::Read::get(), &getMetadataMutable()[0],
+  if (getSparsityMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(), &getSparsityMetadataMutable()[0],
                          TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
@@ -1725,7 +1725,7 @@ void TCGen5MMAScaledOp::getEffects(
 bool TCGen5MMAScaledOp::verifyDims() {
   int64_t storedK = getStoredAK();
   int64_t logicalK = getBlockK();
-  if (getMetadata())
+  if (getSparsityMetadata())
     return kNvfp4Sparse4To8.matches(storedK, logicalK);
   return storedK == logicalK;
 }

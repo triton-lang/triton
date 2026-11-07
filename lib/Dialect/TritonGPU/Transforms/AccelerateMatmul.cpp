@@ -569,7 +569,7 @@ public:
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
-          mmaResult.newAcc, /*useC=*/nullptr, /*metadata=*/nullptr,
+          mmaResult.newAcc, /*useC=*/nullptr, /*sparsityMetadata=*/nullptr,
           dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(), false);
     } else {
       int minBitwidth =
@@ -771,7 +771,7 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
       return;
     if (capability != 90 || warps % 4) {
       Value dot = buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
-                                     op.getMetadata(), op.getAcc(), warps);
+                                     op.getSparsityMetadata(), op.getAcc(), warps);
       rewriter.replaceOp(op, dot);
       return;
     }
@@ -787,8 +787,8 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
     auto layouts = getWarpSparseMmaLayouts(op.getContext(),
                                            resultTy.getShape(), warps);
     Value e = ConvertLayoutOp::create(
-        rewriter, loc, op.getMetadata().getType().cloneWithEncoding(layouts[2]),
-        op.getMetadata());
+        rewriter, loc, op.getSparsityMetadata().getType().cloneWithEncoding(layouts[2]),
+        op.getSparsityMetadata());
     Value dot = nvidia_gpu::WarpGroupDotOp::create(
         rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
         1u << 30, false);
@@ -797,9 +797,9 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   }
 
   auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
-      ctx, 128, op.getMetadata().getType().getDimSize(1), 1, cga);
+      ctx, 128, op.getSparsityMetadata().getType().getDimSize(1), 1, cga);
   auto space = nv::TensorMemorySpaceAttr::get(ctx);
-  Value meta = createReadOnlyTmemOperand(op.getMetadata(), metaEncoding, space,
+  Value sparsityMetadata = createReadOnlyTmemOperand(op.getSparsityMetadata(), metaEncoding, space,
                                          warps, loc, rewriter);
   auto accEncoding = nv::TensorMemoryEncodingAttr::get(
       ctx, 128, resultTy.getDimSize(1), 1, cga);
@@ -822,12 +822,12 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
     auto mma = nv::TCGen5MMAScaledOp::create(
         rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
         ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
-    mma.getMetadataMutable().assign(meta);
+    mma.getSparsityMetadataMutable().assign(sparsityMetadata);
     token = mma.getToken();
   } else {
     auto mma = nv::TCGen5MMAOp::create(rewriter, loc, tokenTy, a, b, acc,
                                        acc.getToken(), pred, pred);
-    mma.getMetadataMutable().assign(meta);
+    mma.getSparsityMetadataMutable().assign(sparsityMetadata);
     token = mma.getToken();
   }
   auto ld = nv::TMEMLoadOp::create(rewriter, loc, accType, tokenTy, acc, token);

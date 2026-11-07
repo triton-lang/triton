@@ -129,18 +129,18 @@ def mma_v2(a, b, acc, input_precision=None, _semantic=None):
 
 
 @builtin
-def mma_v2_sparse(a, b, metadata, acc, _semantic=None, _generator=None):
-    """SM89+ FP8 sparse MMA with logical K=64 and two int32 metadata words per row."""
+def mma_v2_sparse(a, b, sparsity_metadata, acc, _semantic=None, _generator=None):
+    """SM89+ FP8 sparse MMA with logical K=64 and two int32 sparsity metadata words per row."""
     if acc.dtype != ttgl.float32 or a.dtype != b.dtype or a.dtype not in (ttgl.float8e4nv, ttgl.float8e5):
         raise ValueError("mma_v2_sparse requires matching FP8 operands and an FP32 accumulator")
     if len(acc.type.shape) != 2:
         raise ValueError("expected a rank-2 sparse MMA accumulator")
     if list(a.type.shape) != [128, 32] or list(b.type.shape) != [64, acc.type.shape[1]]:
         raise ValueError("invalid warp sparse MMA operand shapes")
-    if list(metadata.type.shape) != [128, 2] or metadata.dtype not in (ttgl.int32, ttgl.uint32):
-        raise ValueError("invalid sparse metadata tile")
+    if list(sparsity_metadata.type.shape) != [128, 2] or sparsity_metadata.dtype not in (ttgl.int32, ttgl.uint32):
+        raise ValueError("invalid sparsity metadata tile")
     if acc.type.shape[0] != 128 or not 16 <= acc.type.shape[1] <= 256:
         raise ValueError("invalid sparse accumulator tile")
-    handle = _semantic.builder.create_warp_sparse_mma(a.handle, b.handle, metadata.handle, acc.handle,
+    handle = _semantic.builder.create_warp_sparse_mma(a.handle, b.handle, sparsity_metadata.handle, acc.handle,
                                                       _semantic.num_warps(_generator).value)
     return ttgl.tensor(handle, acc.type)

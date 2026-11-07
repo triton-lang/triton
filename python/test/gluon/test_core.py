@@ -4842,7 +4842,7 @@ def test_sparse_mma_fp8(num_warps):
                                              ttgl.NVMMASharedLayout(64, 8, transposed=True), b)
             acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, 32])
             acc = ttgl.full([M, 32], 1, ttgl.float32, acc_layout)
-            result = hopper.warpgroup_sparse_mma(sa, sb, acc, e, is_async=True)
+            result = hopper.warpgroup_sparse_mma(sa, sb, acc, sparsity_metadata=e, is_async=True)
             result = hopper.warpgroup_mma_wait(deps=[result])
         else:
             acc = ttgl.full([M, 32], 1, ttgl.float32, layout)
