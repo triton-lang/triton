@@ -1,5 +1,6 @@
 """Time paired NVFP4 selector loads and sparse matmul on SM100/SM103."""
 
+import argparse
 import statistics
 
 import torch
@@ -62,9 +63,8 @@ def _layouts(batch, n, k):
     return row, row.mT.contiguous().mT, convert_layout(wrap_torch_tensor(row), SparseMetadataLayout())
 
 
-def bench_loads(batch, n, k):
+def bench_loads(batch, n, k, steps=16):
     layouts = _layouts(batch, n, k)
-    steps = 16
     grid = (n // 128, k // (128 * steps), batch)
     ref = layouts[0].view(batch, n // 128, 128, grid[1], steps, 2).sum(4).transpose(2, 3).int()
     out = torch.empty_like(ref, memory_format=torch.contiguous_format)
@@ -78,7 +78,7 @@ def bench_loads(batch, n, k):
         run()
         torch.testing.assert_close(out, ref, rtol=0, atol=0)
         calls.append(run)
-    print("selector loads", batch, n, k, _measure(calls), flush=True)
+    print("selector loads", batch, n, k, steps, _measure(calls), flush=True)
 
 
 def bench_matmul(batch, m, n, k, scale_k):
@@ -112,8 +112,24 @@ def bench_matmul(batch, m, n, k, scale_k):
 if __name__ == "__main__":
     torch.manual_seed(17)
     print(torch.cuda.get_device_name(), "median microseconds [row, column, tile]", flush=True)
-    for batch in (1, 64):
-        bench_loads(batch, 8192, 8192)
-    for batch, m in ((1, 16), (1, 512), (16, 16)):
-        for scale_k in (16, 32):
-            bench_matmul(batch, m, 4096, 8192, scale_k)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sweep", action="store_true", help="sweep CTA access depth and independent weight count")
+    parser.add_argument("--aspect-sweep", action="store_true", help="vary N and K at fixed weight bytes")
+    args = parser.parse_args()
+    if args.aspect_sweep:
+        for n, k in ((512, 65536), (2048, 16384), (8192, 4096), (32768, 1024)):
+            for scale_k in (16, 32):
+                bench_matmul(16, 16, n, k, scale_k)
+    elif args.sweep:
+        for batch in (1, 64):
+            for steps in (1, 4, 16, 64):
+                bench_loads(batch, 8192, 8192, steps)
+        for batch in (1, 2, 4, 8, 16, 32, 64):
+            for scale_k in (16, 32):
+                bench_matmul(batch, 16, 4096, 8192, scale_k)
+    else:
+        for batch in (1, 64):
+            bench_loads(batch, 8192, 8192)
+        for batch, m in ((1, 16), (1, 512), (16, 16)):
+            for scale_k in (16, 32):
+                bench_matmul(batch, m, 4096, 8192, scale_k)
