@@ -319,8 +319,8 @@ private:
                         arith::MaxUIOp>(combinerOp) &&
         combinerOp->getResult(0).getType().isInteger(1) &&
         llvm::hasSingleElement(combineRegion.front().without_terminator());
-    bool usePredicateChains = isPureBooleanCombiner &&
-                              targetInfo.preferThreePredicateChains(axisPack);
+    bool usePredicateChains =
+        isPureBooleanCombiner && targetInfo.preferThreePredicateChains();
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();
@@ -334,8 +334,6 @@ private:
         for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        // ptxas can fuse comparisons into each chain and merge the three
-        // partial predicates with one PLOP3.
         if (usePredicateChains && i >= 3)
           accumulate(loc, rewriter, combineRegion, vals[i % 3], cur);
         else

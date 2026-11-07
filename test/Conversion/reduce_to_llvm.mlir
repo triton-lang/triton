@@ -261,8 +261,8 @@ tt.func private @reduce_register_any_with_effect(%in: tensor<128x32xi1, #blocked
 
 // PRED-CHAINS-LABEL: @reduce_register_all_16
 // PRED-CHAINS-DAG: %[[X0:.*]] = llvm.extractvalue %arg0[0]
-// PRED-CHAINS-DAG: %[[X1:.*]] = llvm.extractvalue %arg0[1]
-// PRED-CHAINS: llvm.and %[[X0]], %[[X1]] : i1
+// PRED-CHAINS-DAG: %[[X3:.*]] = llvm.extractvalue %arg0[3]
+// PRED-CHAINS: llvm.and %[[X0]], %[[X3]] : i1
 tt.func private @reduce_register_all_16(%in: tensor<128x16xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row> {
   %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
   ^bb0(%a: i1, %b: i1):
