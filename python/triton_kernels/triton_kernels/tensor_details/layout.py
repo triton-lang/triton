@@ -8,7 +8,6 @@ from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
 from .layout_details.cdna5_scale import CDNA5MXScaleLayout
 from .layout_details.strided import StridedLayout
-from .layout_details.sparse_metadata import SparseMetadataLayout
 from .layout_details.tiled import TiledLayout
 from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_cdna5
 
@@ -23,7 +22,6 @@ __all__ = [
     "CDNA5MXScaleLayout",
     "StridedLayout",
     "TiledLayout",
-    "SparseMetadataLayout",
     "BlackwellActMXScaleLayout",
 ]
 

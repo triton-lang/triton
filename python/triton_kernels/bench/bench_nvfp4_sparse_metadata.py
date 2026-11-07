@@ -8,8 +8,6 @@ import triton
 import triton.language as tl
 
 from triton_kernels.matmul import PrecisionConfig, matmul
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor
-from triton_kernels.tensor_details.layout import SparseMetadataLayout
 
 
 @triton.jit
@@ -56,21 +54,21 @@ def _measure(calls):
     return [round(statistics.median(t), 2) for t in times]
 
 
-def _layouts(batch, n, k):
+def _selectors(batch, n, k):
     # Eight valid selectors per word. Vary the word so address errors affect the checksum.
     codes = torch.tensor([4, 8, 9, 12, 13, 14], device="cuda") * 0x11111111
-    row = codes[torch.randint(6, (batch, n, k // 64), device="cuda")].int()
-    return row, row.mT.contiguous().mT, convert_layout(wrap_torch_tensor(row), SparseMetadataLayout())
+    return codes[torch.randint(6, (batch, n, k // 64), device="cuda")].int()
 
 
 def bench_loads(batch, n, k, steps=16):
-    layouts = _layouts(batch, n, k)
+    row = _selectors(batch, n, k)
+    tiled = row.view(batch, n // 128, 128, k // 128, 2).transpose(2, 3).contiguous()
+    layouts = (row, row.mT.contiguous().mT, tiled)
     grid = (n // 128, k // (128 * steps), batch)
     ref = layouts[0].view(batch, n // 128, 128, grid[1], steps, 2).sum(4).transpose(2, 3).int()
     out = torch.empty_like(ref, memory_format=torch.contiguous_format)
     calls = []
-    for i, meta in enumerate(layouts):
-        data = meta.data if i == 2 else meta
+    for i, data in enumerate(layouts):
 
         def run(data=data, tiled=i == 2):
             _read_selectors[grid](data, out, n, k, data.stride(), tiled, steps, num_warps=4)
@@ -82,7 +80,7 @@ def bench_loads(batch, n, k, steps=16):
 
 
 def bench_matmul(batch, m, n, k, scale_k):
-    layouts = _layouts(batch, n, k)
+    meta = _selectors(batch, n, k).mT.contiguous().mT
 
     def packed(shape):
         return torch.randint(256, shape, dtype=torch.uint8, device="cuda")
@@ -95,23 +93,17 @@ def bench_matmul(batch, m, n, k, scale_k):
                              b_mx_scale=scales((batch, n, k // scale_k)),
                              a_microblock_size=scale_k, b_microblock_size=scale_k, out_dtype=torch.float32)
     out = torch.empty((batch, m, n), device="cuda")
-    calls = []
-    for meta in layouts:
-        def run(meta=meta):
-            matmul(a, b, None, c=out, precision_config=config, b_sparse_metadata=meta)
 
-        run()
-        if calls:
-            torch.testing.assert_close(out, ref, rtol=0, atol=0)
-        else:
-            ref = out.clone()
-        calls.append(run)
-    print("matmul", batch, m, n, k, scale_k, _measure(calls), flush=True)
+    def run():
+        matmul(a, b, None, c=out, precision_config=config, b_sparse_metadata=meta)
+
+    print("matmul (column)", batch, m, n, k, scale_k, _measure([run])[0], flush=True)
+
 
 
 if __name__ == "__main__":
     torch.manual_seed(17)
-    print(torch.cuda.get_device_name(), "median microseconds [row, column, tile]", flush=True)
+    print(torch.cuda.get_device_name(), "median microseconds; selector loads [row, column, tile]", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true", help="sweep CTA access depth and independent weight count")
     parser.add_argument("--aspect-sweep", action="store_true", help="vary N and K at fixed weight bytes")
