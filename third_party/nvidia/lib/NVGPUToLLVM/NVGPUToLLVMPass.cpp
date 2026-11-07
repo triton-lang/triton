@@ -414,7 +414,7 @@ public:
     auto opB = op.getOpB();
     auto m = op.getM();
     auto n = op.getN();
-    auto k = op.getK() / (op.getMetadata() ? 2 : 1);
+    auto k = op.getK();
     auto eltTypeC = op.getEltTypeC();
     auto eltTypeA = op.getEltTypeA();
     auto eltTypeB = op.getEltTypeB();
@@ -442,7 +442,7 @@ public:
     supported |=
         (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
         (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-        (m == 64 && 8 <= n && n <= 256 && k == 16);
+        (m == 64 && 8 <= n && n <= 256 && k == (op.getMetadata() ? 32 : 16));
     supported |= (eltTypeA == WGMMAEltType::bf16) &&
                  (eltTypeB == WGMMAEltType::bf16) &&
                  (eltTypeC == WGMMAEltType::f32) &&
@@ -459,7 +459,7 @@ public:
           (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
           (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
           (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-          (m == 64 && 8 <= n && n <= 256 && k == 32);
+          (m == 64 && 8 <= n && n <= 256 && k == (op.getMetadata() ? 64 : 32));
       floatTypeWGMMA = supported;
       // Below instructions are integer-based
       supported |= (eltTypeA == WGMMAEltType::s8) &&

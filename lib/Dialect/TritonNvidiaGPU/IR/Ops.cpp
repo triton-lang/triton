@@ -1721,14 +1721,7 @@ void TCGen5MMAScaledOp::getEffects(
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  auto aKdim = getBlockK();
-  auto bShape = getB().getType().getShape();
-  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
-  auto bKdim = bShape[bShape.size() - 2];
-  if (getBType() == ScaleDotElemType::E2M1 && !transB)
-    bKdim *= 2;
-
-  return aKdim == bKdim;
+  return getStoredAK() * (getMetadata() ? 2 : 1) == getBlockK();
 }
 
 bool TCGen5MMAScaledOp::verifyOutputDims() {
@@ -1804,12 +1797,19 @@ int64_t TCGen5MMAScaledOp::getBlockN() {
 }
 
 int64_t TCGen5MMAScaledOp::getBlockK() {
-  ArrayRef<int64_t> shape = getA().getType().getShape();
-  int64_t blockK = shape[shape.size() - 1];
-  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
-    blockK *= 2;
-  return getMetadata() ? blockK * 2 : blockK;
+  int64_t k = getB().getType().getDimSize(0);
+  if (getBType() == ScaleDotElemType::E2M1 &&
+      !isScaledMMATransposed(getB().getType(), /*isLhs=*/false))
+    k *= 2;
+  return k;
+}
+
+int64_t TCGen5MMAScaledOp::getStoredAK() {
+  int64_t k = getA().getType().getDimSize(1);
+  if (getAType() == ScaleDotElemType::E2M1 &&
+      !isScaledMMATransposed(getA().getType(), /*isLhs=*/true))
+    k *= 2;
+  return k;
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,

@@ -237,7 +237,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   } else {
     structA = unpackTensorElements(loc, loadedA, rewriter, aTensorTy);
   }
-  unsigned logicalK = metadata ? 2 * K : K;
+  // The encoding gives the instruction width in stored A values. B spans
+  // the logical reduction axis, including positions omitted from sparse A.
+  unsigned logicalK = K * (bTensorTy.getDimSize(0) / aTensorTy.getShape()[1]);
   auto bLoader = DotOpMmaSmemLoader::build(
       loc, rewriter, bTensorTy, baseB, {logicalK, N}, 1, 3, false, dTensorTy);
   if (failed(bLoader)) {
