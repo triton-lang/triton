@@ -634,10 +634,12 @@ def matmul_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     issue_copy(0, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K, NUM_BUFFERS)
     issue_copy(1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K, NUM_BUFFERS)
     async_copy.wait_group(1)
+
     a0, b0 = load_subtiled_operands(0, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
     a1, b1 = load_subtiled_operands(0, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     acc = cdna4.mfma(a0, b0, acc)
+
     for k in range(1, num_k - 1):
         async_copy.wait_group(0)
         a0, b0 = load_subtiled_operands(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
@@ -645,6 +647,7 @@ def matmul_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         issue_copy(k + 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K, NUM_BUFFERS)
         a1, b1 = load_subtiled_operands(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
         acc = cdna4.mfma(a0, b0, acc)
+
     async_copy.wait_group(0)
     a0, b0 = load_subtiled_operands(num_k - 1, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
     acc = cdna4.mfma(a1, b1, acc)
@@ -689,8 +692,10 @@ if __name__ == "__main__":
 # ```
 
 # %%
-# This tutorial shows how important layouts are in Gluon for AMD GPUs. Many
+# This tutorial shows the importance of layouts are in Gluon for AMD GPUs. Many
 # optimizations come from choosing the right layout and letting the compiler
 # generate the expected instructions. Layouts control how data flows from global
 # memory to shared memory, from shared memory to registers, and between
-# registers.
+# registers. We can see that the data path must be carefully managed in order to
+# keep the compute unit busy. Later tutorials will introduce more advanced
+# layouts-based optimizations.
