@@ -130,7 +130,9 @@ def mma_v2(a, b, acc, input_precision=None, _semantic=None):
 
 @builtin
 def mma_v2_sparse(a, b, sparsity_metadata, acc, _semantic=None, _generator=None):
-    """Perform 2:4 sparse MMA with matching FP16/BF16 (SM80+) or FP8 (SM89+) inputs.
+    """Perform warp-level 2:4 sparse MMA with matching inputs.
+
+    Ampere supports FP16 and BF16. SM90 and later also support FP8.
 
     FP8 uses logical K=64 and two packed selector words per row of A.
     FP16/BF16 use logical K=32 and one word per row in selector-zero order:

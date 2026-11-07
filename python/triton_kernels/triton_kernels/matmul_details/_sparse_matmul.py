@@ -153,14 +153,14 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
                                   or index.stride(0) != 1):
             raise ValueError("routing indices must be contiguous integer vectors for rank-2 activations")
     cc = torch.cuda.get_device_capability(a.device) if a.is_cuda and torch.version.cuda else (0, 0)
-    if not ((8, 0) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
-        raise ValueError("sparse matmul requires Ampere, Ada, Hopper or Blackwell SM100/SM103")
+    if cc not in ((8, 0), (8, 6), (8, 7), (9, 0), (10, 0), (10, 3)):
+        raise ValueError("sparse matmul requires Ampere, Hopper or Blackwell SM100/SM103")
     half = a.dtype in (torch.float16, torch.bfloat16)
     fp8 = a.dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
     if a.dtype != b.dtype or not (half or fp8 or a.dtype == torch.uint8):
         raise ValueError("expected matching FP16, BF16, FP8 or byte-packed NVFP4 operands")
-    if fp8 and cc < (8, 9):
-        raise ValueError("native FP8 sparse matmul requires SM89 or newer")
+    if fp8 and cc < (9, 0):
+        raise ValueError("native FP8 sparse matmul requires Hopper or Blackwell")
     nvfp4 = a.dtype == torch.uint8
     if nvfp4 and cc < (10, 0):
         raise ValueError("native paired NVFP4 sparse matmul requires SM100 or SM103")

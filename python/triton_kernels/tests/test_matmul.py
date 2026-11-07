@@ -1436,8 +1436,6 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
     if not torch.cuda.is_available() or not torch.version.cuda:
         pytest.skip("requires NVIDIA GPU")
     cc = torch.cuda.get_device_capability()
-    if cc < (8, 0) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
-        pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
     m, n, k = 39, 143, (272 if scale_k is None else 288) + extra_k
     group = 8 if nvfp4 else 4
@@ -1476,7 +1474,11 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
             a = wrap_torch_tensor(a.view(storage_dtype), dtype=dtype)
             b = wrap_torch_tensor(b.view(storage_dtype), dtype=dtype)
         config = PrecisionConfig(out_dtype=torch.float32)
-    if dtype in (torch.float8_e4m3fn, torch.float8_e5m2) and cc < (8, 9):
+    if cc not in ((8, 0), (8, 6), (8, 7), (9, 0), (10, 0), (10, 3)):
+        with pytest.raises(ValueError, match="sparse matmul requires Ampere, Hopper or Blackwell"):
+            matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
+        return
+    if dtype in (torch.float8_e4m3fn, torch.float8_e5m2) and cc < (9, 0):
         with pytest.raises(ValueError, match="native FP8"):
             matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
         return
@@ -1495,7 +1497,7 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
 
 @pytest.mark.parametrize("routed", [False, True])
 def test_matmul_structured_sparse_experts(routed):
-    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in ((8, 9), (9, 0), (10, 0), (10, 3)):
+    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in ((9, 0), (10, 0), (10, 3)):
         pytest.skip("requires native FP8 sparse MMA")
     experts, m, k, n = 3, 37, 64 if routed else 1216, 17
     a = torch.randint(4, (experts, m, k), device="cuda").to(torch.float8_e4m3fn)
@@ -1535,7 +1537,7 @@ def test_matmul_structured_sparse_experts(routed):
 def test_matmul_structured_sparse_remapped_experts(sizes, slice_map):
     from triton_kernels.tensor_details.ragged_tensor import remap_ragged_tensor_metadata
     if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in (
-            (8, 9), (9, 0), (10, 0), (10, 3)):
+            (9, 0), (10, 0), (10, 3)):
         pytest.skip("requires native FP8 sparse MMA")
     rows, experts = sum(sizes), len(sizes)
     device = "cuda"

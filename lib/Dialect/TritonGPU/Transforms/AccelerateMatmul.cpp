@@ -773,8 +773,8 @@ static LogicalResult lowerSparseDot(SparseDotOp op, int capability) {
     return op.emitOpError(
         "Blackwell tensor-memory operands require at least four warps");
   if (!blackwell) {
-    if (capability < (elementBitWidth == 16 ? 80 : 89) || capability >= 100 ||
-        op.getAScale())
+    if (!supportsWarpSparseMma(capability, elementBitWidth) ||
+        capability > 90 || op.getAScale())
       return op.emitOpError("unsupported sparse MMA format or target");
     if (capability != 90 || warps % 4) {
       Value dot =

@@ -675,9 +675,8 @@ LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
                                ConversionPatternRewriter &rewriter) {
   Type elem = op.getA().getType().getElementType();
   unsigned width = elem.getIntOrFloatBitWidth();
-  if (op.getAScale() || capability < 80 || (width == 8 && capability < 89))
-    return op.emitOpError(
-        "warp sparse MMA requires SM80+ for FP16/BF16 or SM89+ for FP8");
+  if (op.getAScale() || !triton::gpu::supportsWarpSparseMma(capability, width))
+    return op.emitOpError("unsupported warp sparse MMA format or target");
   auto layouts = triton::gpu::getWarpSparseMmaLayouts(
       op.getContext(), width, op.getType().getShape(),
       triton::gpu::lookupNumWarps(op));

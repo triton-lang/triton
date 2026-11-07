@@ -19,6 +19,12 @@ inline constexpr SparseMmaKShape kF16Sparse2To4{16, 32};
 inline constexpr SparseMmaKShape kFp8Sparse2To4{32, 64};
 inline constexpr SparseMmaKShape kNvfp4Sparse4To8{64, 128};
 
+inline bool supportsWarpSparseMma(int capability, unsigned elementBitWidth) {
+  if (capability == 80 || capability == 86 || capability == 87)
+    return elementBitWidth == 16;
+  return capability >= 90 && (elementBitWidth == 8 || elementBitWidth == 16);
+}
+
 // Register layouts for A, B, sparsity metadata and D of a warp-level sparse
 // MMA.
 std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,

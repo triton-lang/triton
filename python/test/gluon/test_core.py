@@ -4826,9 +4826,9 @@ def test_mma_v2(dtype):
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e4m3fn])
 def test_sparse_mma_2to4(num_warps, use_acc, use_wgmma, dtype):
     fp8 = dtype == torch.float8_e4m3fn
-    min_cc = (8, 9) if fp8 else (8, 0)
-    if not is_cuda() or not min_cc <= torch.cuda.get_device_capability() <= (9, 0):
-        pytest.skip("requires SM80+ for FP16/BF16 or SM89+ for FP8")
+    targets = ((9, 0), ) if fp8 else ((8, 0), (8, 6), (8, 7), (9, 0))
+    if not is_cuda() or torch.cuda.get_device_capability() not in targets:
+        pytest.skip("requires Ampere or Hopper for FP16/BF16, or Hopper for FP8")
     if use_wgmma and not is_hopper():
         pytest.skip("requires Hopper WGMMA")
 

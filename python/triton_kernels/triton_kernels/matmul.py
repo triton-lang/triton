@@ -294,10 +294,10 @@ def matmul(a, b, bias,
     of 16 (default) or 32 (set both microblock sizes to 32). Activation and weight
     scale shapes are [M, K/block] and [K/block, N], respectively. The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
-    independently scaled contributions. FP16 and BF16 use warp-level sparse MMA
-    on Ampere and Ada, sparse WGMMA on Hopper, and tcgen05.mma.sp on SM100
-    and SM103. FP8 requires SM89 or newer on these targets. Sparse matmul accepts scalar outer
-    scales. When neither out_dtype nor c is supplied, its output is BF16 for
+    independently scaled contributions. Ampere uses warp-level sparse MMA for
+    FP16 and BF16. Hopper uses sparse WGMMA for FP16, BF16 and FP8. SM100
+    and SM103 use tcgen05.mma.sp for all four formats. Sparse matmul accepts
+    scalar outer scales. When neither out_dtype nor c is supplied, its output is BF16 for
     NVFP4 and the input dtype for unscaled operands.
 
     A gather index of -1 denotes an inactive input row: its values contribute
