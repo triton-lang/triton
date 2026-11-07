@@ -5,6 +5,19 @@
 #include <array>
 
 namespace mlir::triton::gpu {
+// K extents are in operand elements, including individual FP4 values.
+struct SparseMmaKShape {
+  int64_t storedA;
+  int64_t logical;
+
+  bool matches(int64_t a, int64_t b) const {
+    return a == storedA && b == logical;
+  }
+};
+
+inline constexpr SparseMmaKShape kFp8Sparse2To4{32, 64};
+inline constexpr SparseMmaKShape kNvfp4Sparse4To8{64, 128};
+
 // Register layouts for A, B, metadata and D of a warp-level sparse MMA.
 std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
                                                  ArrayRef<int64_t> shape,

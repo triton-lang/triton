@@ -7,6 +7,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
@@ -357,6 +358,19 @@ public:
 
   LogicalResult matchAndRewrite(ttn::WGMMAOp op,
                                 PatternRewriter &rewriter) const override {
+    // Validate the explicit instruction K against the FP8 opcode forms.
+    // The operand shapes have already determined K before this lowering.
+    auto fp8 = [](ttn::WGMMAEltType type) {
+      return type == ttn::WGMMAEltType::e4m3 || type == ttn::WGMMAEltType::e5m2;
+    };
+    if (op.getMetadata()) {
+      if (!fp8(op.getEltTypeA()) || !fp8(op.getEltTypeB()) ||
+          op.getK() != gpu::kFp8Sparse2To4.logical)
+        return op.emitOpError(
+            "unsupported sparse WGMMA instruction shape or operand type");
+    } else if (fp8(op.getEltTypeA()) && op.getK() != 32) {
+      return op.emitOpError("dense FP8 WGMMA requires instruction K=32");
+    }
     return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
                            getOperandsAndConstraints(op),
                            getOutputConstraints(op));
@@ -459,7 +473,7 @@ public:
           (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
           (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
           (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-          (m == 64 && 8 <= n && n <= 256 && k == (op.getMetadata() ? 64 : 32));
+          (m == 64 && 8 <= n && n <= 256);
       floatTypeWGMMA = supported;
       // Below instructions are integer-based
       supported |= (eltTypeA == WGMMAEltType::s8) &&
@@ -527,7 +541,7 @@ public:
                   ".sync.aligned"
                   ".m" +
                   std::to_string(m) + "n" + std::to_string(n) + "k" +
-                  std::to_string(op.getK()) + "." +
+                  std::to_string(k) + "." +
                   stringifyEnum(eltTypeC).str() + "." +
                   stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
