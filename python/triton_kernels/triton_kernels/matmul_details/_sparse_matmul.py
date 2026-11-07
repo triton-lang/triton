@@ -76,7 +76,7 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         if NVFP4:
             sk = tile * (BK // SCALE_K) + tl.arange(0, BK // SCALE_K)
             xs = _load_tile(SX, xm, sk, xmask, K // SCALE_K, SX_STRIDE[1], SX_STRIDE[2])
-            ws = _load_tile(SW, n, sk, n < N, K // SCALE_K, SW_STRIDE[1], SW_STRIDE[2])
+            ws = _load_tile(SW, n, sk, n < N, K // SCALE_K, SW_STRIDE[2], SW_STRIDE[1])
         else:
             ws, xs = None, None
         acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
@@ -175,10 +175,9 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     if nvfp4:
         if (config.b_microblock_size or 16) != scale_k or k % scale_k:
             raise ValueError("NVFP4 requires equal scale block sizes that divide K")
-        for scale, prefix, rows in ((xs, a.shape[:-2], m), (ws, b.shape[:-2], n)):
-            shape = (*prefix, rows, k // scale_k)
+        for scale, shape in ((xs, (*a.shape[:-2], m, k // scale_k)), (ws, (*b.shape[:-2], k // scale_k, n))):
             if not isinstance(scale, torch.Tensor) or scale.dtype != torch.float8_e4m3fn or scale.shape != shape:
-                raise ValueError("NVFP4 requires E4M3 scales for each row and scale block")
+                raise ValueError(f"NVFP4 requires E4M3 scales with shape {shape}")
     elif xs is not None or ws is not None:
         raise ValueError("microscaling requires NVFP4")
     if bias is not None and bias.shape not in ((n, ), (*b.shape[:-2], n)):

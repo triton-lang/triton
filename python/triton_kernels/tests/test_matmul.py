@@ -1460,7 +1460,7 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
         a, b = pack(x).cuda(), pack(w).T.cuda()
         xs = torch.randint(1, 4, (m, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
         ws = torch.randint(1, 4, (n, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
-        config = PrecisionConfig(a_mx_scale=xs.cuda(), b_mx_scale=ws.cuda(), a_microblock_size=scale_k,
+        config = PrecisionConfig(a_mx_scale=xs.cuda(), b_mx_scale=ws.cuda().mT, a_microblock_size=scale_k,
                                  b_microblock_size=scale_k, out_dtype=torch.float32)
         x = e2m1[x] * xs.float().repeat_interleave(scale_k, dim=1)
         w = e2m1[w] * ws.float().repeat_interleave(scale_k // 2, dim=1)
