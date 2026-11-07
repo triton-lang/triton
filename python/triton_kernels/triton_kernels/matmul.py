@@ -274,7 +274,8 @@ def matmul(a, b, bias,
     for wrapped tensors or sparsity_metadata.mT.contiguous().mT for a row-major PyTorch tensor.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
-    of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
+    of 16 (default) or 32 (set both microblock sizes to 32). Activation and weight
+    scale shapes are [M, K/block] and [K/block, N], respectively. The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
     independently scaled contributions. Ada uses warp-level sparse MMA for
     FP8. Hopper uses sparse WGMMA for FP8. SM100 and SM103 use
