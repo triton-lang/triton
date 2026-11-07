@@ -598,8 +598,6 @@ def test_matmul(M, N, K):
 @gluon.jit
 def load_subtiled_operands(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.constexpr, k_start: gl.constexpr,
                            k_size: gl.constexpr):
-    # Read the K slice [k_start, k_start + k_size) of K-tile k of A and B from
-    # shared memory.
     a_buf = a_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
     b_buf = b_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
