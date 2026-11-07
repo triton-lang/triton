@@ -3382,6 +3382,26 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    // The dense MMA emulation indexes A with logical K. Sparse operands
+    // require expanding A with its selectors before this emulation is valid.
+    if (getOperation()
+            .walk([](Operation *op) {
+              auto wgmma = dyn_cast<ttng::WarpGroupDotOp>(op);
+              auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
+              if (isa<tt::SparseDotOp>(op) ||
+                  (wgmma && wgmma.getSparsityMetadata()) ||
+                  (mma && mma.getSparsityMetadata())) {
+                op->emitOpError(
+                    "structured sparse MMA is unsupported by fpsan");
+                return WalkResult::interrupt();
+              }
+              return WalkResult::advance();
+            })
+            .wasInterrupted()) {
+      signalPassFailure();
+      return;
+    }
+
     auto calls = getFpSanCallsRequiringInlining(getOperation());
     for (auto [call, requirement] : calls) {
       auto diagnostic = call.emitOpError("must be inlined before FPSan");

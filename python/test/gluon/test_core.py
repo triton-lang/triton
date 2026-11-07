@@ -4822,10 +4822,12 @@ def test_mma_v2(dtype):
 
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_acc", [False, True])
-def test_sparse_mma_fp8(num_warps, use_acc):
+@pytest.mark.parametrize("use_wgmma", [False, True], ids=["warp", "warpgroup"])
+def test_sparse_mma_fp8(num_warps, use_acc, use_wgmma):
     if not is_cuda() or torch.cuda.get_device_capability() not in ((8, 9), (9, 0)):
         pytest.skip("requires SM89 or SM90")
-    use_wgmma = is_hopper()
+    if use_wgmma and not is_hopper():
+        pytest.skip("requires Hopper WGMMA")
 
     @gluon.jit
     def kernel(A, B, E, D, UseAcc, M: ttgl.constexpr, WGMMA: ttgl.constexpr):
@@ -8378,7 +8380,8 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="requires native paired NVFP4 sparse MMA")
-def test_tcgen05_sparse_mma_scaled_pair_selectors():
+@pytest.mark.parametrize("tmem_a", [False, True], ids=["shared_a", "tmem_a_subview"])
+def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a):
 
     @gluon.jit
     def load_rows(ptr, width: ttgl.constexpr, layout: ttgl.constexpr):
@@ -8387,9 +8390,15 @@ def test_tcgen05_sparse_mma_scaled_pair_selectors():
         return ttgl.load(ptr + r[:, None] * width + c[None, :])
 
     @gluon.jit
-    def kernel(A, B, E, SA, SB, D):
+    def kernel(A, B, E, SA, SB, D, TMEM_A: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-        a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 32], ttgl.NVMMASharedLayout(32, 8), load_rows(A, 32, layout))
+        if TMEM_A:
+            a_full = allocate_tensor_memory(ttgl.uint8, [256, 32], TensorMemoryLayout([128, 32], 1))
+            a = a_full.slice(128, 128, dim=0)
+            a.store(load_rows(A, 32, a.get_reg_layout()))
+        else:
+            a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 32], ttgl.NVMMASharedLayout(32, 8),
+                                            load_rows(A, 32, layout))
         b = ttgl.allocate_shared_memory(ttgl.uint8, [64, 128], ttgl.NVMMASharedLayout(64, 8, transposed=True),
                                         ttgl.permute(load_rows(B, 64, layout), (1, 0)))
         e = allocate_tensor_memory(ttgl.int32, [128, 2], TensorMemoryLayout([128, 2], 1))
@@ -8419,9 +8428,40 @@ def test_tcgen05_sparse_mma_scaled_pair_selectors():
         return (x[:, ::2] | (x[:, 1::2] << 4)).byte()
 
     out = torch.empty((128, 128), device=device)
-    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out)
+    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out, tmem_a)
     pos = (2 * pairs[..., None] + torch.arange(2, device=device)).flatten(-2)
     dense = torch.zeros(128, 16, 8, device=device).scatter_(2, pos, a.reshape(128, 16, 4).float() * 0.5)
     expected = (dense.reshape(128, 128) * sa.float().repeat_interleave(32, 1)) @ (b.float() * 0.5 *
                                                                                   sb.float().repeat_interleave(32, 1)).T
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="requires Blackwell sparse MMA")
+@pytest.mark.parametrize("operand,alignment", [("A", 4), ("accumulator", 2), ("sparsity metadata", 2), ("A scales", 2),
+                                               ("B scales", 2)])
+def test_tcgen05_sparse_mma_misaligned_subview(operand, alignment, capfd):
+
+    @gluon.jit
+    def kernel(OPERAND: ttgl.constexpr):
+        scaled: ttgl.constexpr = OPERAND == "A scales" or OPERAND == "B scales"
+        dtype: ttgl.constexpr = ttgl.uint8 if scaled else ttgl.float8e4nv
+        a = allocate_tensor_memory(dtype, [128, 64], TensorMemoryLayout([128, 64], 1))
+        a = a.slice(8 if OPERAND == "A" else 0, 32)
+        b = ttgl.allocate_shared_memory(dtype, [64, 128], ttgl.NVMMASharedLayout(64, 8, transposed=True))
+        d = allocate_tensor_memory(ttgl.float32, [128, 256], TensorMemoryLayout([128, 128], 1))
+        d = d.slice(1 if OPERAND == "accumulator" else 0, 128)
+        e = allocate_tensor_memory(ttgl.int32, [128, 4], TensorMemoryLayout([128, 4], 1))
+        selectors = e.slice(0, 2)
+        if OPERAND == "sparsity metadata" and ttgl.program_id(0) == 0:
+            selectors = e.slice(1, 2)
+        if scaled:
+            scales = allocate_tensor_memory(ttgl.float8e4nv, [256, 4], TensorMemoryScalesLayout())
+            sa = scales.slice(32 if OPERAND == "A scales" else 0, 128, dim=0)
+            sb = scales.slice(32 if OPERAND == "B scales" else 0, 128, dim=0)
+            blackwell.tcgen05_sparse_mma_scaled(a, b, d, sa, sb, "e2m1", "e2m1", selectors, use_acc=False)
+        else:
+            blackwell.tcgen05_sparse_mma(a, b, d, selectors, use_acc=False)
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        kernel.warmup(operand, grid=(2, ))
+    assert f"sparse MMA {operand} must start at a {alignment}-column aligned TMEM address" in capfd.readouterr().err

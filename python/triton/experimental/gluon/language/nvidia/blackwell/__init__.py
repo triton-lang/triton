@@ -606,6 +606,8 @@ def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True,
 
     A stores 32 FP8 values per row. Each sparsity metadata nibble selects two positions in a group of four.
     Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    In tensor memory, A must start on a four-column boundary and the accumulator and sparsity metadata
+    must each start on a two-column boundary. These alignments apply to descriptor subviews too.
     """
     if not isinstance(sparsity_metadata, tensor_memory_descriptor):
         raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
@@ -673,6 +675,8 @@ def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, spars
     A stores 32 packed bytes per row. Each sparsity metadata nibble selects two of the four adjacent-element pairs.
     Supply four E4M3 scales per row along logical K and use e2m1 for both operand formats.
     Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    In tensor memory, A must start on a four-column boundary and the accumulator, sparsity metadata, and
+    both scale descriptors must each start on a two-column boundary. These alignments apply to descriptor subviews too.
     """
     if not isinstance(sparsity_metadata, tensor_memory_descriptor):
         raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")

@@ -333,6 +333,17 @@ LogicalResult WarpGroupDotOp::verify() {
         !resTy.getElementType().isF32())
       return emitOpError(
           "sparse WGMMA requires FP8 inputs and FP32 accumulation");
+    // FP8 WGMMA has no transpose immediates. Both shared descriptors must
+    // store K contiguously. Register A already uses the instruction layout.
+    for (auto [operand, transposed] :
+         {std::pair{Value(getA()), false}, std::pair{Value(getB()), true}}) {
+      if (auto mem = dyn_cast<MemDescType>(operand.getType())) {
+        auto attrs = getNvmmaSmemAttrs(mem);
+        if (!attrs || attrs->transposed != transposed)
+          return emitOpError(
+              "sparse FP8 WGMMA requires K-major shared operands");
+      }
+    }
     if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
         nvmmaEnc.getInstrShape()[2] != kFp8Sparse2To4.storedA ||
         sparsityMetadata.getType().getShape() !=
@@ -1239,36 +1250,50 @@ bool TCGen5MMAOp::verifyDims() {
   return storedK == logicalK;
 }
 
-// Each instruction reads sparsity metadata from one 128-row tile, starting at
-// selector zero, with two words per row.
-static LogicalResult verifySparseTile(Operation *op,
-                                      MemDescType sparsityMetadata,
-                                      MemDescType acc, int64_t k,
-                                      int64_t instructionK, int64_t words) {
-  auto module = op->getParentOfType<ModuleOp>();
+// The instruction consumes one packed tile, including when the descriptor is a
+// subview of a larger TMEM allocation. Extra allocation padding after the tile
+// is legal, but an interleaved tile or padding between columns is not.
+static bool isPackedSparseTmemTile(MemDescType type) {
+  auto enc = dyn_cast<TensorMemoryEncodingAttr>(type.getEncoding());
+  if (!enc || enc.getTwoCTAs() || getNumCTAs(enc) != 1)
+    return false;
+  auto *ctx = type.getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  auto tile =
+      LinearLayout::identity1D(128, StringAttr::get(ctx, "row"), dims[0]) *
+      LinearLayout::identity1D(type.getDimSize(1), StringAttr::get(ctx, "col"),
+                               dims[1]);
+  return divideLeft(toLinearLayout(type), tile).has_value();
+}
+
+static LogicalResult verifySparseTile(MMAv5OpInterface mma) {
+  auto module = mma->getParentOfType<ModuleOp>();
   if (module->hasAttr(triton::gpu::AttrTargetName)) {
     auto cc = getNVIDIAComputeCapability(module);
     if (cc != 100 && cc != 103)
-      return op->emitOpError("sparse MMA requires SM100 or SM103");
+      return mma->emitOpError("sparse MMA requires SM100 or SM103");
   }
-  auto layout =
-      dyn_cast<TensorMemoryEncodingAttr>(sparsityMetadata.getEncoding());
+  auto acc = mma.getAccumulator().getType();
   auto accLayout = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
-  if (!layout || !accLayout ||
-      !sparsityMetadata.getElementType().isInteger(32) ||
-      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, words}) ||
-      layout.getBlockM() != 128 || layout.getColStride() != 1 ||
-      getNumCTAs(sparsityMetadata.getEncoding()) != 1 ||
-      getNumCTAs(acc.getEncoding()) != 1 || layout.getTwoCTAs() ||
-      accLayout.getTwoCTAs() || accLayout.getBlockM() != 128 ||
-      acc.getDimSize(0) != 128 || k != instructionK)
-    return op->emitOpError(
-               "expected one 128-row sparse MMA tile with logical K=")
-           << instructionK << " and 128x" << words
-           << " i32 tensor memory sparsity metadata";
-  if (words == 2 && getTMemSubSliceOffset(sparsityMetadata, 1, 1) != 1)
-    return op->emitOpError(
-        "sparsity metadata words must occupy adjacent TMEM columns");
+  if (!accLayout || acc.getDimSize(0) != 128 || accLayout.getBlockM() != 128 ||
+      accLayout.getTwoCTAs() || getNumCTAs(accLayout) != 1)
+    return mma->emitOpError(
+        "sparse MMA requires one 128-row, single-CTA accumulator tile");
+
+  auto a = mma.getA().getType();
+  if (isa<TensorMemorySpaceAttr>(a.getMemorySpace()) &&
+      !isPackedSparseTmemTile(a))
+    return mma->emitOpError(
+        "sparse MMA requires packed 128-row TMEM storage for A");
+
+  // Both supported instructions use selector zero and consume two words per
+  // row.
+  auto sparsityMetadata = mma.getSparsityMetadata().getType();
+  if (!sparsityMetadata.getElementType().isInteger(32) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, 2}) ||
+      !isPackedSparseTmemTile(sparsityMetadata))
+    return mma->emitOpError(
+        "sparsity metadata must be a packed 128x2 i32 TMEM tile");
   return success();
 }
 
@@ -1297,12 +1322,11 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
-  if (auto sparsityMetadata = getSparsityMetadata()) {
-    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
+  if (getSparsityMetadata()) {
+    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype) ||
+        !isa<Float8E4M3FNType, Float8E5M2Type>(btype))
       return emitOpError("sparse MMA requires FP8 operands");
-    if (failed(verifySparseTile(
-            *this, sparsityMetadata.getType(), getD().getType(),
-            getB().getType().getDimSize(0), kFp8Sparse2To4.logical, 2)))
+    if (failed(verifySparseTile(*this)))
       return failure();
   }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
@@ -1625,21 +1649,29 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
-  if (auto sparsityMetadata = getSparsityMetadata()) {
+  if (getSparsityMetadata()) {
     if (getAType() != ScaleDotElemType::E2M1 ||
         getBType() != ScaleDotElemType::E2M1 ||
         !isa<Float8E4M3FNType>(aScaleType.getElementType()) ||
         !isa<Float8E4M3FNType>(bScaleType.getElementType()))
       return emitOpError("sparse scaled MMA requires NVFP4 operands");
+    for (MemDescType operand : {getA().getType(), getB().getType()}) {
+      Type elem = operand.getElementType();
+      if (!elem.isInteger(8) && !isa<PackedFloat4E2M1Type>(elem))
+        return emitOpError("sparse NVFP4 requires packed byte operands");
+      if (isa<SharedMemorySpaceAttr>(operand.getMemorySpace())) {
+        auto attrs = getNvmmaSmemAttrs(operand);
+        if (!attrs || attrs->fp4Padded)
+          return emitOpError("sparse NVFP4 requires unpadded shared operands");
+      }
+    }
     if (aScaleType.getShape() != ArrayRef<int64_t>({128, 4}) ||
         bScaleType.getShape() != ArrayRef<int64_t>({getBlockN(), 4}) ||
         !isa<TensorMemoryScalesEncodingAttr>(aScaleType.getEncoding()) ||
         !isa<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding()))
       return emitOpError(
           "expected E4M3 tensor memory scales per 32 logical K values");
-    if (failed(verifySparseTile(*this, sparsityMetadata.getType(),
-                                getD().getType(), k, kNvfp4Sparse4To8.logical,
-                                2)))
+    if (failed(verifySparseTile(*this)))
       return failure();
   }
   int64_t minK = 32;

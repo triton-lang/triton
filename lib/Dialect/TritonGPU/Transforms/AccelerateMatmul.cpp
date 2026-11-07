@@ -756,7 +756,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   return newB;
 }
 
-static void lowerSparseDot(SparseDotOp op, int capability) {
+static LogicalResult lowerSparseDot(SparseDotOp op, int capability) {
   namespace nv = triton::nvidia_gpu;
   PatternRewriter rewriter(op.getContext());
   rewriter.setInsertionPoint(op);
@@ -766,16 +766,20 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   int warps = lookupNumWarps(op);
   auto cga = getCGALayout(resultTy.getEncoding());
   bool blackwell = capability == 100 || capability == 103;
+  if (getNumCTAs(resultTy.getEncoding()) != 1)
+    return op.emitOpError("requires a single CTA");
+  if (blackwell && warps < 4)
+    return op.emitOpError(
+        "Blackwell tensor-memory operands require at least four warps");
   if (!blackwell) {
-    if (capability < 89 || capability >= 100 || op.getAScale() ||
-        getNumCTAs(resultTy.getEncoding()) != 1)
-      return;
+    if (capability < 89 || capability >= 100 || op.getAScale())
+      return op.emitOpError("unsupported sparse MMA format or target");
     if (capability != 90 || warps % 4) {
       Value dot =
           buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
                              op.getSparsityMetadata(), op.getAcc(), warps);
       rewriter.replaceOp(op, dot);
-      return;
+      return success();
     }
   }
   Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
@@ -796,7 +800,7 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
         rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
         1u << 30, false);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, dot);
-    return;
+    return success();
   }
 
   auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
@@ -838,6 +842,7 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   }
   auto ld = nv::TMEMLoadOp::create(rewriter, loc, accType, tokenTy, acc, token);
   rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, ld);
+  return success();
 }
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
@@ -1326,7 +1331,12 @@ public:
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
                                        benefitMMAv5);
 
-    m.walk([&](SparseDotOp op) { lowerSparseDot(op, computeCapability); });
+    if (m.walk([&](SparseDotOp op) {
+           return failed(lowerSparseDot(op, computeCapability))
+                      ? WalkResult::interrupt()
+                      : WalkResult::advance();
+         }).wasInterrupted())
+      return signalPassFailure();
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively

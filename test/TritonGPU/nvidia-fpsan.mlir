@@ -4,6 +4,8 @@
 // RUN: triton-opt %t/required-calls.mlir -split-input-file -tritoninstrument-fp-sanitizer -verify-diagnostics
 // RUN: triton-opt %t/blocked-call.mlir -inline -tritoninstrument-fp-sanitizer -verify-diagnostics
 
+// RUN: triton-opt %t/sparse.mlir -tritoninstrument-fp-sanitizer -verify-diagnostics
+
 //--- success.mlir
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -792,5 +794,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   ^zero:
     %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
     tt.return %zero : tensor<128x128xf32, #blocked>
+  }
+}
+
+
+//--- sparse.mlir
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x32xf8E4M3FN, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xf8E4M3FN, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+module attributes {ttg.target = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @unsupported_sparse_mma(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{structured sparse MMA is unsupported by fpsan}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
+    tt.return
   }
 }

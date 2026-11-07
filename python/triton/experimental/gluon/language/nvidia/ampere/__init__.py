@@ -10,7 +10,7 @@ from triton.experimental.gluon.language._layouts import DotOperandLayout, NVMMAD
 from ..._core import builtin, _unwrap_if_constexpr
 from . import async_copy, mbarrier
 
-__all__ = ["CachePolicy", "FractionalEvictionPolicy", "async_copy", "mbarrier", "mma_v2"]
+__all__ = ["CachePolicy", "FractionalEvictionPolicy", "async_copy", "mbarrier", "mma_v2", "mma_v2_sparse"]
 
 _EVICTION_PRIORITIES = {
     "evict_normal",

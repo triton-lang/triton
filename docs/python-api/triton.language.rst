@@ -65,6 +65,7 @@ Linear Algebra Ops
 
     dot
     dot_scaled
+    sparse_dot
 
 
 Memory/Pointer Ops
