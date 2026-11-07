@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -243,6 +244,16 @@ bool TargetFeatures::requiresAliasInfoForAsyncOps() const {
 bool TargetFeatures::useAsyncMarks() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                             getISAFamily());
+}
+
+bool TargetFeatures::useStagedAsyncMarks() const {
+  if (!isCDNA5())
+    return false;
+  // Escape hatch: TRITON_HIP_USE_STAGED_ASYNC_MARKS=0 restores the previous
+  // single-count async wait behavior. Unset means on for CDNA5.
+  auto knob = mlir::triton::tools::isEnvValueBool(
+      mlir::triton::tools::getStrEnv("TRITON_HIP_USE_STAGED_ASYNC_MARKS"));
+  return !knob.has_value() || *knob;
 }
 
 bool TargetFeatures::supportsTDM() const { return isCDNA5(); }
