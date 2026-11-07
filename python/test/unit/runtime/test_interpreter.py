@@ -8,6 +8,56 @@ import triton.language as tl
 from triton.runtime import interpreter
 
 
+@pytest.mark.parametrize("value, expected_fp32", [
+    (1.0, 1.0),
+    (1.00000001, 1.0),
+    (1.0000001, 1.0000001192092896),
+    (0.99999999, 1.0),
+    (2.0, 2.0),
+])
+def test_implicit_cvt_float_rounds_to_fp32(value, expected_fp32):
+    result = interpreter._implicit_cvt(value)
+    assert isinstance(result, tl.tensor)
+    assert result.dtype == tl.float32
+    assert result.handle.data.dtype == np.float32
+    np.testing.assert_equal(result.handle.data[0], np.float32(expected_fp32))
+
+
+@pytest.mark.parametrize("annotation, dtype", [
+    ("fp16", tl.float16),
+    ("bf16", tl.bfloat16),
+    ("fp32", tl.float32),
+    ("fp64", tl.float64),
+])
+def test_implicit_cvt_float_follows_annotation(annotation, dtype):
+    result = interpreter._implicit_cvt(1.00000001, annotation)
+    assert result.dtype == dtype
+    assert result.handle.data.dtype == interpreter._get_np_dtype(dtype)
+
+
+def test_implicit_cvt_bf16_truncates_like_launcher():
+    # fp32 bits 0x3F80C000: keeping the upper half gives 0x3F80 (1.0); rounding would give 0x3F81.
+    result = interpreter._implicit_cvt(1.005859375, "bf16")
+    assert result.dtype == tl.bfloat16
+    assert result.handle.data[0] == np.uint16(0x3F80)
+
+
+def test_float_arg_precision_follows_annotation():
+    import torch
+
+    def default_fp32(out, x):
+        tl.store(out, x > 1.0)
+
+    def annotated_fp64(out, x: tl.float64):
+        tl.store(out, x > 1.0)
+
+    out = torch.zeros(2, dtype=torch.int32)
+    interpreter.InterpretedFunction(default_fp32)[(1, )](out, 1.00000001)
+    interpreter.InterpretedFunction(annotated_fp64)[(1, )](out[1:], 1.00000001)
+    # 1.00000001 rounds to 1.0 in fp32 but stays above 1.0 in fp64, as in compiled kernels.
+    assert out.tolist() == [0, 1]
+
+
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
     base = np.uint64(array.ctypes.data)
     offsets = np.arange(array.size, dtype=np.uint64) * np.uint64(array.itemsize)
