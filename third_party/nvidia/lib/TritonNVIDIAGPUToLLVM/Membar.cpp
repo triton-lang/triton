@@ -34,6 +34,9 @@ static LogicalResult verifySparseMmaAlignment(ttng::MMAv5OpInterface mma,
             cast<gpu::MemDescType>(operand.getType()).getMemorySpace()))
       return success();
     for (const BufferRegionView &view : regions.getRegionInfo(operand).views) {
+      if (view.region.baseOffset >> 16)
+        return mma->emitOpError()
+               << "sparse MMA " << name << " must start at TMEM row zero";
       if (view.region.baseOffset % columns)
         return mma->emitOpError()
                << "sparse MMA " << name << " must start at a " << columns

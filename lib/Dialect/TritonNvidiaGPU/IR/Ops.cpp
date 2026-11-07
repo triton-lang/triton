@@ -1655,6 +1655,8 @@ LogicalResult TCGen5MMAScaledOp::verify() {
         !isa<Float8E4M3FNType>(aScaleType.getElementType()) ||
         !isa<Float8E4M3FNType>(bScaleType.getElementType()))
       return emitOpError("sparse scaled MMA requires NVFP4 operands");
+    if (!dtype.isF32())
+      return emitOpError("sparse NVFP4 requires an f32 accumulator");
     for (MemDescType operand : {getA().getType(), getB().getType()}) {
       Type elem = operand.getElementType();
       if (!elem.isInteger(8) && !isa<PackedFloat4E2M1Type>(elem))
@@ -1671,6 +1673,13 @@ LogicalResult TCGen5MMAScaledOp::verify() {
         !isa<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding()))
       return emitOpError(
           "expected E4M3 tensor memory scales per 32 logical K values");
+    // A 32-row block of four B scales occupies one column. A second
+    // instruction narrower than 64 would start inside the same column or
+    // at an odd column, neither of which is a valid scale operand address.
+    unsigned instrN = getMMAv5InstructionN(getD().getType());
+    if (instrN < 64 && instrN < getBlockN())
+      return emitOpError(
+          "repeated sparse NVFP4 instructions require N >= 64 for B scales");
     if (failed(verifySparseTile(*this)))
       return failure();
   }

@@ -8379,18 +8379,20 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="requires native paired NVFP4 sparse MMA")
-@pytest.mark.parametrize("tmem_a", [False, True], ids=["shared_a", "tmem_a_subview"])
-def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a):
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="requires sparse MMA on SM100 or SM103")
+@pytest.mark.parametrize("tmem_a,n", [(False, 128), (True, 128), (False, 16)],
+                         ids=["shared_a", "tmem_a_subview", "n16"])
+def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a, n):
 
     @gluon.jit
-    def load_rows(ptr, width: ttgl.constexpr, layout: ttgl.constexpr):
-        r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+    def load_rows(ptr, width: ttgl.constexpr, layout: ttgl.constexpr, rows: ttgl.constexpr = 128):
+        r = ttgl.arange(0, rows, layout=ttgl.SliceLayout(1, layout))
         c = ttgl.arange(0, width, layout=ttgl.SliceLayout(0, layout))
         return ttgl.load(ptr + r[:, None] * width + c[None, :])
 
     @gluon.jit
-    def kernel(A, B, E, SA, SB, D, TMEM_A: ttgl.constexpr):
+    def kernel(A, B, E, SA, SB, D, TMEM_A: ttgl.constexpr, N: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
         if TMEM_A:
             a_full = allocate_tensor_memory(ttgl.uint8, [256, 32], TensorMemoryLayout([128, 32], 1))
@@ -8399,36 +8401,36 @@ def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a):
         else:
             a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 32], ttgl.NVMMASharedLayout(32, 8),
                                             load_rows(A, 32, layout))
-        b = ttgl.allocate_shared_memory(ttgl.uint8, [64, 128], ttgl.NVMMASharedLayout(64, 8, transposed=True),
-                                        ttgl.permute(load_rows(B, 64, layout), (1, 0)))
+        b = ttgl.allocate_shared_memory(ttgl.uint8, [64, N], ttgl.NVMMASharedLayout(64, 8, transposed=True),
+                                        ttgl.permute(load_rows(B, 64, layout, N), (1, 0)))
         e = allocate_tensor_memory(ttgl.int32, [128, 2], TensorMemoryLayout([128, 2], 1))
         sa = allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
-        sb = allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.float8e4nv, [N, 4], TensorMemoryScalesLayout())
         e.store(load_rows(E, 2, e.get_reg_layout()))
         sa.store(load_rows(SA, 4, sa.get_reg_layout()))
-        sb.store(load_rows(SB, 4, sb.get_reg_layout()))
-        acc = allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], 1))
+        sb.store(load_rows(SB, 4, sb.get_reg_layout(), N))
+        acc = allocate_tensor_memory(ttgl.float32, [128, N], TensorMemoryLayout([128, N], 1))
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
         blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", e, use_acc=False, mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
-        c = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
-        ttgl.store(D + r[:, None] * 128 + c[None, :], ttgl.convert_layout(acc.load(), layout))
+        c = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))
+        ttgl.store(D + r[:, None] * N + c[None, :], ttgl.convert_layout(acc.load(), layout))
 
     device = "cuda"
     pairs = torch.combinations(torch.arange(4, device=device))[torch.randint(6, (128, 16), device=device)]
     nibbles = pairs[..., 0] | (pairs[..., 1] << 2)
     selectors = (nibbles.reshape(128, 2, 8) << (4 * torch.arange(8, device=device))).sum(-1).int()
     a = torch.randint(4, (128, 64), device=device)
-    b = torch.randint(4, (128, 128), device=device)
-    sa, sb = [torch.randint(1, 5, (128, 4), device=device).to(torch.float8_e4m3fn) for _ in range(2)]
+    b = torch.randint(4, (n, 128), device=device)
+    sa, sb = [torch.randint(1, 5, (rows, 4), device=device).to(torch.float8_e4m3fn) for rows in (128, n)]
 
     def pack(x):
         return (x[:, ::2] | (x[:, 1::2] << 4)).byte()
 
-    out = torch.empty((128, 128), device=device)
-    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out, tmem_a)
+    out = torch.empty((128, n), device=device)
+    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out, tmem_a, n)
     pos = (2 * pairs[..., None] + torch.arange(2, device=device)).flatten(-2)
     dense = torch.zeros(128, 16, 8, device=device).scatter_(2, pos, a.reshape(128, 16, 4).float() * 0.5)
     expected = (dense.reshape(128, 128) * sa.float().repeat_interleave(32, 1)) @ (b.float() * 0.5 *
@@ -8436,20 +8438,22 @@ def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a):
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="requires Blackwell sparse MMA")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="requires sparse MMA on SM100 or SM103")
 @pytest.mark.parametrize("operand,alignment", [("A", 4), ("accumulator", 2), ("sparsity metadata", 2), ("A scales", 2),
-                                               ("B scales", 2)])
+                                               ("B scales", 2), ("B scale rows", 0)])
 def test_tcgen05_sparse_mma_misaligned_subview(operand, alignment, capfd):
 
     @gluon.jit
     def kernel(OPERAND: ttgl.constexpr):
-        scaled: ttgl.constexpr = OPERAND == "A scales" or OPERAND == "B scales"
+        scaled: ttgl.constexpr = OPERAND == "A scales" or OPERAND == "B scales" or OPERAND == "B scale rows"
+        N: ttgl.constexpr = 16 if OPERAND == "B scale rows" else 128
         dtype: ttgl.constexpr = ttgl.uint8 if scaled else ttgl.float8e4nv
         a = allocate_tensor_memory(dtype, [128, 64], TensorMemoryLayout([128, 64], 1))
         a = a.slice(8 if OPERAND == "A" else 0, 32)
-        b = ttgl.allocate_shared_memory(dtype, [64, 128], ttgl.NVMMASharedLayout(64, 8, transposed=True))
-        d = allocate_tensor_memory(ttgl.float32, [128, 256], TensorMemoryLayout([128, 128], 1))
-        d = d.slice(1 if OPERAND == "accumulator" else 0, 128)
+        b = ttgl.allocate_shared_memory(dtype, [64, N], ttgl.NVMMASharedLayout(64, 8, transposed=True))
+        d = allocate_tensor_memory(ttgl.float32, [128, 256], TensorMemoryLayout([128, N], 1))
+        d = d.slice(1 if OPERAND == "accumulator" else 0, N)
         e = allocate_tensor_memory(ttgl.int32, [128, 4], TensorMemoryLayout([128, 4], 1))
         selectors = e.slice(0, 2)
         if OPERAND == "sparsity metadata" and ttgl.program_id(0) == 0:
@@ -8457,11 +8461,14 @@ def test_tcgen05_sparse_mma_misaligned_subview(operand, alignment, capfd):
         if scaled:
             scales = allocate_tensor_memory(ttgl.float8e4nv, [256, 4], TensorMemoryScalesLayout())
             sa = scales.slice(32 if OPERAND == "A scales" else 0, 128, dim=0)
-            sb = scales.slice(32 if OPERAND == "B scales" else 0, 128, dim=0)
+            b_offset: ttgl.constexpr = 32 if OPERAND == "B scales" else (16 if OPERAND == "B scale rows" else 0)
+            sb = scales.slice(b_offset, N, dim=0)
             blackwell.tcgen05_sparse_mma_scaled(a, b, d, sa, sb, "e2m1", "e2m1", selectors, use_acc=False)
         else:
             blackwell.tcgen05_sparse_mma(a, b, d, selectors, use_acc=False)
 
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
         kernel.warmup(operand, grid=(2, ))
-    assert f"sparse MMA {operand} must start at a {alignment}-column aligned TMEM address" in capfd.readouterr().err
+    message = (f"sparse MMA {operand} must start at a {alignment}-column aligned TMEM address"
+               if alignment else "sparse MMA B scales must start at TMEM row zero")
+    assert message in capfd.readouterr().err

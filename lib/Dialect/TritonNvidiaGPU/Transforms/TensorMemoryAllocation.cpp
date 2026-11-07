@@ -184,7 +184,8 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
   return chunk;
 }
 
-static SmallVector<Operation *> getAlloc(Value value) {
+static SmallVector<Operation *> getAlloc(Value value,
+                                         bool allowUnknown = false) {
   SmallVector<Operation *> allocs;
   DenseSet<Value> seen;
   SmallVector<Value> worklist{value};
@@ -205,6 +206,8 @@ static SmallVector<Operation *> getAlloc(Value value) {
           Operation *predOp = pred->getTerminator();
           auto br = dyn_cast<BranchOpInterface>(predOp);
           if (!br) {
+            if (allowUnknown)
+              continue;
             llvm::report_fatal_error("unhandled branch op: " +
                                      predOp->getName().getStringRef());
           }
@@ -212,6 +215,9 @@ static SmallVector<Operation *> getAlloc(Value value) {
           auto it = llvm::find(br->getSuccessors(), block);
           unsigned idx = std::distance(br->getSuccessors().begin(), it);
           SuccessorOperands args = br.getSuccessorOperands(idx);
+          if (allowUnknown &&
+              arg.getArgNumber() < args.getProducedOperandCount())
+            continue;
           Value operand =
               args.getForwardedOperands()[arg.getArgNumber() -
                                           args.getProducedOperandCount()];
@@ -235,7 +241,7 @@ static SmallVector<Operation *> getAlloc(Value value) {
           worklist.push_back(whileOp.getYieldedValues()[idx]);
           worklist.push_back(whileOp.getInits()[idx]);
         }
-      } else {
+      } else if (!allowUnknown) {
         llvm::report_fatal_error(
             "unhandled parent op when looking for TMEM alloc: " +
             parentOp->getName().getStringRef());
@@ -260,7 +266,7 @@ static SmallVector<Operation *> getAlloc(Value value) {
       worklist.push_back(forOp.getInits()[idx]);
     } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
       worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
-    } else {
+    } else if (!allowUnknown) {
       llvm::report_fatal_error("unhandled op when looking for TMEM alloc: " +
                                defOp->getName().getStringRef());
     }
@@ -302,10 +308,19 @@ allocateTMem(Operation *parentOp,
   SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
   DenseMap<Operation *, int> operationId;
   RowIdConstraints rowIdConstraints;
+  DenseSet<Operation *> sparseScaleAllocs;
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     operationId[op] = operationId.size();
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
+    }
+    if (auto scaled = dyn_cast<TCGen5MMAScaledOp>(op)) {
+      if (scaled.getSparsityMetadata() &&
+          scaled.getBScale().getType().getDimSize(0) < 32) {
+        for (Operation *alloc :
+             getAlloc(scaled.getBScale(), /*allowUnknown=*/true))
+          sparseScaleAllocs.insert(alloc);
+      }
     }
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
       if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
@@ -363,6 +378,10 @@ allocateTMem(Operation *parentOp,
 
     std::optional<int> rowIdConstraint =
         rowIdConstraints.getRowIdConstraint(alloc);
+    // A narrow B scale tile may occupy half the rows, but sparse scaled MMA
+    // still requires the scale descriptor to start at row zero.
+    if (sparseScaleAllocs.contains(alloc))
+      rowIdConstraint = 0;
     // TODO: clarify the alignment requirements for different allocations. For
     // now enforce an alignment of 4 columns.
     const int columnAlignment = 4;
