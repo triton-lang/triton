@@ -116,7 +116,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         b (shared_memory_descriptor): Right hand side operand.
         acc (tensor): Accumulator tensor.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
-        metadata (tensor, optional): Packed selector-zero metadata for 2:4 sparse A. FP16 uses interleaved half-words.
+        metadata (tensor, optional): Packed selector-zero metadata for 2:4 sparse A.
         precision (str, optional): Dot input precision. Defaults to builder default.
         max_num_imprecise_acc (int): Max imprecise accumulations. Used for fp8 -> fp32 dot. Determines how many accumulation are done in limited precision. Defaults to None, which means no upcasting is done.
         is_async (bool): Whether operation is asynchronous. Defaults to False.
@@ -134,10 +134,9 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     metadata = _core._unwrap_if_constexpr(metadata)
     if metadata is not None:
-        if a.dtype not in (_core.float16, _core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
-            raise ValueError("sparse WGMMA requires matching FP16 or FP8 inputs")
-        words = 1 if a.dtype == _core.float16 else 2
-        if list(metadata.type.shape) != [a.type.shape[0], words] or metadata.dtype not in (_core.int32, _core.uint32):
+        if a.dtype not in (_core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
+            raise ValueError("sparse WGMMA requires matching FP8 inputs")
+        if list(metadata.type.shape) != [a.type.shape[0], 2] or metadata.dtype not in (_core.int32, _core.uint32):
             raise ValueError("invalid sparse WGMMA metadata tile")
     K = b.type.shape[0]
     if max_num_imprecise_acc is None:

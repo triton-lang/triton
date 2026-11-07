@@ -285,16 +285,15 @@ def matmul(a, b, bias,
     Each requires packed FP4 values and E4M3 block scales on the corresponding input.
 
     With b_sparse_metadata, B is compressed along K. Metadata has shape
-    [N, ceil(K/32)] for FP8/FP16 or [N, ceil(K/64)] for byte-packed NVFP4.
-    To prepack reusable metadata, convert its wrapped tensor to SparseMetadataLayout
-    with words_per_tile=1 for FP16 or 2 for FP8 and NVFP4.
+    [N, ceil(K/32)] for FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
+    To prepack reusable metadata, convert its wrapped tensor to SparseMetadataLayout().
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
-    independently scaled contributions. Ampere uses warp-level sparse MMA for
-    FP16. Hopper uses sparse WGMMA for FP16 and FP8. SM100 and SM103 use
-    tcgen05.mma.sp for FP16, FP8 and paired NVFP4.
+    independently scaled contributions. Ada uses warp-level sparse MMA for
+    FP8. Hopper uses sparse WGMMA for FP8. SM100 and SM103 use
+    tcgen05.mma.sp for FP8 and paired NVFP4.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other

@@ -6026,7 +6026,7 @@ def test_tma_cache_policy_frontend_invalid(kind, policy, message):
 
 @gluon.jit
 def _tcgen05_sparse_mma_kernel(dtype: ttgl.constexpr, words: ttgl.constexpr):
-    packed_k: ttgl.constexpr = 16 if dtype == ttgl.float16 else 32
+    packed_k: ttgl.constexpr = 32
     a = ttgl.allocate_shared_memory(dtype, [128, packed_k], ttgl.NVMMASharedLayout(32, dtype.primitive_bitwidth))
     b = ttgl.allocate_shared_memory(dtype, [packed_k * 2, 128],
                                     ttgl.NVMMASharedLayout(32, dtype.primitive_bitwidth, transposed=True))
@@ -6040,7 +6040,7 @@ def _tcgen05_sparse_mma_kernel(dtype: ttgl.constexpr, words: ttgl.constexpr):
         blackwell.tcgen05_mma(a, b, acc, metadata=meta)
 
 
-@pytest.mark.parametrize("dtype,words", [(ttgl.float16, 1), (ttgl.float8e4nv, 2), (ttgl.uint8, 2)])
+@pytest.mark.parametrize("dtype,words", [(ttgl.float8e4nv, 2), (ttgl.uint8, 2)])
 def test_tcgen05_mma_sparse_metadata(dtype, words):
     mod = run_parser(_tcgen05_sparse_mma_kernel, *make_args(dtype, words), target=BLACKWELL_TARGET)
     assert re.search(r"ttng.tc_gen5_mma.* metadata %", mod.str_nodebug())

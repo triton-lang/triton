@@ -767,7 +767,7 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   auto cga = getCGALayout(resultTy.getEncoding());
   bool blackwell = capability == 100 || capability == 103;
   if (!blackwell) {
-    if (capability < 80 || capability >= 100 || op.getAScale() ||
+    if (capability < 89 || capability >= 100 || op.getAScale() ||
         getNumCTAs(resultTy.getEncoding()) != 1)
       return;
     if (capability != 90 || warps % 4) {
@@ -781,12 +781,11 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
   if (!blackwell) {
     unsigned n = resultTy.getDimSize(1);
-    unsigned width = op.getA().getType().getElementTypeBitWidth();
     auto encoding = NvidiaMmaEncodingAttr::get(
-        op.getContext(), 3, 0, {unsigned(warps), 1}, cga, {16, n, 256 / width});
+        op.getContext(), 3, 0, {unsigned(warps), 1}, cga, {16, n, 32});
     auto accTy = resultTy.cloneWithEncoding(encoding);
     Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
-    auto layouts = getWarpSparseMmaLayouts(op.getContext(), width,
+    auto layouts = getWarpSparseMmaLayouts(op.getContext(),
                                            resultTy.getShape(), warps);
     Value e = ConvertLayoutOp::create(
         rewriter, loc, op.getMetadata().getType().cloneWithEncoding(layouts[2]),
