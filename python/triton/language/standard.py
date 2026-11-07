@@ -669,9 +669,9 @@ def unsqueeze(x, dim: core.constexpr):
 def sparse_dot(a, b, metadata, acc=None, a_scale=None, b_scale=None):
     """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
 
-    FP16 requires SM80+, FP8 requires SM89+, and NVFP4 requires SM100/SM103.
+    FP8 requires SM89+, and NVFP4 requires SM100/SM103.
 
-    Use logical K=32 for FP16, 64 for FP8, or 128 for paired NVFP4.
+    Use logical K=64 for FP8, or 128 for paired NVFP4.
     Pack eight four-bit selectors per int32, least significant nibble first.
     Each selector contains two increasing two-bit positions. For NVFP4 the
     positions select adjacent pairs and both operands pack two values per byte.
@@ -680,13 +680,6 @@ def sparse_dot(a, b, metadata, acc=None, a_scale=None, b_scale=None):
     """
     if acc is None:
         acc = core.full((a.shape[0], b.shape[1]), 0, core.float32)
-    if a.dtype == core.float16:
-        # Selector zero interleaves pairs of rows eight apart in half-words.
-        rows = core.arange(0, 128)
-        lo = core.gather(metadata, core.expand_dims(rows & ~8, 1), 0)
-        hi = core.gather(metadata, core.expand_dims(rows | 8, 1), 0)
-        shift = core.expand_dims((rows & 8) * 2, 1)
-        metadata = ((lo >> shift) & 65535) | ((hi >> shift) << 16)
     if a_scale is not None:
         core.static_assert(b_scale is not None)
         if a_scale.shape[1] == 8:

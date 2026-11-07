@@ -354,12 +354,11 @@ LogicalResult SparseDotOp::verify() {
   bool scaled = bool(getAScale());
   if (scaled != bool(getBScale()) || b.getElementType() != elem ||
       (scaled ? !elem.isInteger(8)
-              : !(elem.isF16() || isa<Float8E4M3FNType, Float8E5M2Type>(elem))))
-    return emitOpError("expected FP16, FP8, or packed NVFP4 with two scales");
-  int64_t storedK = elem.isF16() ? 16 : 32;
-  if (a.getDimSize(1) != storedK || b.getDimSize(0) != 2 * storedK ||
+              : !isa<Float8E4M3FNType, Float8E5M2Type>(elem)))
+    return emitOpError("expected FP8 or packed NVFP4 with two scales");
+  if (a.getDimSize(1) != 32 || b.getDimSize(0) != 64 ||
       !meta.getElementType().isInteger(32) ||
-      meta.getShape() != ArrayRef<int64_t>({128, storedK / 16}))
+      meta.getShape() != ArrayRef<int64_t>({128, 2}))
     return emitOpError("invalid compressed K dimension or metadata tile");
   if (scaled) {
     for (auto [scale, rows] : {std::pair{getAScale(), int64_t(128)},

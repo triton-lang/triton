@@ -48,7 +48,7 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         SX += batch.to(tl.int64) * SX_STRIDE[0]
         SW += expert.to(tl.int64) * SW_STRIDE[0]
     pack: tl.constexpr = 2 if NVFP4 else 1
-    words: tl.constexpr = 1 if BK == 32 else 2
+    words: tl.constexpr = 2
     acc = tl.full((128, 128), 0, tl.float32)
     for tile in range(tl.cdiv(K, BK)):
         xk = tile * (BK // pack) + tl.arange(0, BK // pack)
@@ -68,10 +68,7 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
             ws = _load_tile(SW, n, sk, n < N, K // SCALE_K, SW_STRIDE[1], SW_STRIDE[2])
         else:
             ws, xs = None, None
-        if TILED_META and BK == 32:
-            acc = tl.core._sparse_dot(w, tl.trans(x), e, acc, None, None)
-        else:
-            acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
+        acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
     y = tl.trans(acc)
     if XScale is not None:
         y *= tl.load(XScale)
@@ -124,15 +121,13 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
                                   or index.stride(0) != 1):
             raise ValueError("routing indices must be contiguous integer vectors for rank-2 activations")
     cc = torch.cuda.get_device_capability(a.device) if a.is_cuda and torch.version.cuda else (0, 0)
-    if not ((8, 0) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
-        raise ValueError("sparse matmul requires Ampere, Ada, Hopper or Blackwell SM100/SM103")
-    if a.dtype != b.dtype or a.dtype not in (torch.float16, torch.float8_e4m3fn, torch.float8_e5m2, torch.uint8):
-        raise ValueError("expected matching FP16, FP8 or byte-packed NVFP4 operands")
+    if not ((8, 9) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
+        raise ValueError("sparse matmul requires Ada, Hopper or Blackwell SM100/SM103")
+    if a.dtype != b.dtype or a.dtype not in (torch.float8_e4m3fn, torch.float8_e5m2, torch.uint8):
+        raise ValueError("expected matching FP8 or byte-packed NVFP4 operands")
     nvfp4 = a.dtype == torch.uint8
     if nvfp4 and cc < (10, 0):
         raise ValueError("native paired NVFP4 sparse matmul requires SM100 or SM103")
-    if a.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) and cc < (8, 9):
-        raise ValueError("native FP8 sparse matmul requires SM89 or newer")
     m, stored_k = a.shape[-2:]
     k = stored_k * (2 if nvfp4 else 1)
     n = b.shape[-1]
@@ -141,8 +136,7 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         raise ValueError("compressed weights must store half the logical K values")
     if metadata.dtype != torch.int32 or meta_shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
         raise ValueError("expected one int32 metadata word per eight selector groups per output column")
-    if tiled and (layout.words_per_tile != (1 if a.dtype == torch.float16 else 2) or
-                  list(metadata.shape) != layout.storage_shape(list(meta_shape), False)):
+    if tiled and list(metadata.shape) != layout.storage_shape(list(meta_shape), False):
         raise ValueError("sparse metadata tile shape does not match the operands")
     xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
     scale_k = config.a_microblock_size or 16
@@ -180,7 +174,7 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         raise ValueError("routing metadata must be on the same device as the activations")
     m_tiles = triton.cdiv(rows, 128) if ragged is None else ragged.n_blocks(ragged.n_slices, rows, 128)
     if batch and m_tiles and n:
-        bk = 128 if nvfp4 else 32 if a.dtype == torch.float16 else 64
+        bk = 128 if nvfp4 else 64
         grid = (triton.cdiv(n, 128), m_tiles, batch)
         _sparse_matmul[grid](a, b, metadata, xs, ws, bias, c, gather, scatter, schedule, offsets, rows, n, k,
                              _strides(a, 3), _strides(b, 3), _strides(metadata, 5 if tiled else 3), _strides(xs, 3), _strides(ws, 3),

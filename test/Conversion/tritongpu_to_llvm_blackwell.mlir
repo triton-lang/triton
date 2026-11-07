@@ -1787,20 +1787,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
-#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
-#e = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, colStride = 1>
+#e = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @sparse_f16
-  // CHECK: tcgen05.mma.sp.cta_group::1.kind::f16
-  tt.func @sparse_f16(%a: !ttg.memdesc<128x16xf16, #a, #ttg.shared_memory>,
-                      %b: !ttg.memdesc<32x128xf16, #b, #ttg.shared_memory>,
+  // CHECK-LABEL: @sparse_fp8
+  // CHECK: tcgen05.mma.sp.cta_group::1.kind::f8f6f4
+  tt.func @sparse_fp8(%a: !ttg.memdesc<128x32xf8E4M3FN, #a, #ttg.shared_memory>,
+                      %b: !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
                       %d: !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>,
-                      %e: !ttg.memdesc<128x1xi32, #e, #ttng.tensor_memory>, %use: i1, %pred: i1) {
-    ttng.tc_gen5_mma %a, %b, %d, %use, %pred metadata %e : !ttg.memdesc<128x1xi32, #e, #ttng.tensor_memory> {is_async} :
-      !ttg.memdesc<128x16xf16, #a, #ttg.shared_memory>,
-      !ttg.memdesc<32x128xf16, #b, #ttg.shared_memory>,
+                      %e: !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory>, %use: i1, %pred: i1) {
+    ttng.tc_gen5_mma %a, %b, %d, %use, %pred metadata %e : !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory> {is_async} :
+      !ttg.memdesc<128x32xf8E4M3FN, #a, #ttg.shared_memory>,
+      !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
       !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>
     tt.return
   }

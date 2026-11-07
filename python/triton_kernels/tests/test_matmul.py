@@ -1406,13 +1406,13 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("dtype,scale_k", [(torch.float16, None), (torch.float8_e4m3fn, None),
+@pytest.mark.parametrize("dtype,scale_k", [(torch.float8_e4m3fn, None),
                                           (torch.float8_e5m2, None), (torch.uint8, 16), (torch.uint8, 32)])
 def test_matmul_structured_sparse_weights(dtype, scale_k):
     if not torch.cuda.is_available() or not torch.version.cuda:
         pytest.skip("requires NVIDIA GPU")
     cc = torch.cuda.get_device_capability()
-    if cc < (8, 0) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
+    if cc < (8, 9) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
         pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
     m, n, k = 39, 143, 288
@@ -1443,15 +1443,15 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
         positions = indices
         a, b = x.to(dtype).cuda(), w.to(dtype).T.cuda()
         config = PrecisionConfig(out_dtype=torch.float32)
-    if (nvfp4 and cc < (10, 0)) or (dtype != torch.float16 and cc < (8, 9)):
-        with pytest.raises(ValueError, match="native paired NVFP4" if nvfp4 else "native FP8"):
+    if nvfp4 and cc < (10, 0):
+        with pytest.raises(ValueError, match="native paired NVFP4"):
             matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
         return
     dense = torch.zeros(n, k // group, group).scatter_(2, positions, w.float().reshape(n, k // group, group // 2))
     expected = x.float() @ dense.reshape(n, k).T
     result = matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
     torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
-    tiled = convert_layout(wrap_torch_tensor(metadata), layout.SparseMetadataLayout(1 if dtype == torch.float16 else 2))
+    tiled = convert_layout(wrap_torch_tensor(metadata), layout.SparseMetadataLayout())
     restored = convert_layout(tiled, layout.StridedLayout())
     torch.testing.assert_close(restored.data, metadata, rtol=0, atol=0)
     result = matmul(a, b, None, precision_config=config, b_sparse_metadata=tiled)
@@ -1461,11 +1461,11 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
 @pytest.mark.parametrize("routed", [False, True])
 @pytest.mark.parametrize("tiled", [False, True])
 def test_matmul_structured_sparse_experts(routed, tiled):
-    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability()[0] not in (8, 9, 10):
-        pytest.skip("requires native FP16 sparse MMA")
+    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in ((8, 9), (9, 0), (10, 0), (10, 3)):
+        pytest.skip("requires native FP8 sparse MMA")
     experts, m, k, n = 3, 37, 64, 17
-    a = torch.randint(4, (experts, m, k), device="cuda").half()
-    b = torch.randint(4, (experts, k // 2, n), device="cuda").half()
+    a = torch.randint(4, (experts, m, k), device="cuda").to(torch.float8_e4m3fn)
+    b = torch.randint(4, (experts, k // 2, n), device="cuda").to(torch.float8_e4m3fn)
     dense = torch.zeros((experts, k // 4, 4, n), device="cuda")
     dense[:, :, :2] = b.view(experts, k // 4, 2, n)
     dense = dense.view(experts, k, n)
@@ -1480,7 +1480,7 @@ def test_matmul_structured_sparse_experts(routed, tiled):
         scatter = torch.randperm(m, device="cuda")
         ragged = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), m)
         kwargs = dict(a_ragged_metadata=ragged, gather_indx=gather, scatter_indx=scatter)
-        x = a[gather.clamp_min(0)].float()
+        x = a.float()[gather.clamp_min(0)]
         x[gather == -1] = 0
         expected = torch.empty((m, n), device="cuda")
         for i, rows in enumerate(x.split(sizes)):
@@ -1489,7 +1489,7 @@ def test_matmul_structured_sparse_experts(routed, tiled):
     else:
         expected = 2 * (a.float() @ dense + bias[:, None, :])
     if tiled:
-        meta = convert_layout(wrap_torch_tensor(meta), layout.SparseMetadataLayout(1))
+        meta = convert_layout(wrap_torch_tensor(meta), layout.SparseMetadataLayout())
     out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparse_metadata=meta,
                  out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)

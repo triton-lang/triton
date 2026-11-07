@@ -325,20 +325,19 @@ LogicalResult WarpGroupDotOp::verify() {
 
   if (auto meta = getMetadata()) {
     Type elem = getA().getType().getElementType();
-    int width = elem.getIntOrFloatBitWidth();
-    if (!(elem.isF16() || isa<Float8E4M3FNType, Float8E5M2Type>(elem)) ||
+    if (!isa<Float8E4M3FNType, Float8E5M2Type>(elem) ||
         getB().getType().getElementType() != elem ||
         !resTy.getElementType().isF32())
       return emitOpError(
-          "sparse WGMMA requires FP16 or FP8 inputs and FP32 accumulation");
+          "sparse WGMMA requires FP8 inputs and FP32 accumulation");
     if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
-        getB().getType().getDimSize(0) != 512 / width ||
-        nvmmaEnc.getInstrShape()[2] != 256 / width ||
+        getB().getType().getDimSize(0) != 64 ||
+        nvmmaEnc.getInstrShape()[2] != 32 ||
         meta.getType().getShape() !=
-            ArrayRef<int64_t>({resTy.getDimSize(0), 16 / width}) ||
+            ArrayRef<int64_t>({resTy.getDimSize(0), 2}) ||
         !meta.getType().getElementType().isInteger(32))
       return emitOpError("invalid sparse WGMMA tile or metadata shape");
-    auto layouts = getWarpSparseMmaLayouts(getContext(), width,
+    auto layouts = getWarpSparseMmaLayouts(getContext(),
                                            resTy.getShape(), numWarps);
     if (meta.getType().getEncoding() != layouts[2])
       return emitOpError("invalid sparse WGMMA metadata layout");
@@ -1235,7 +1234,7 @@ bool TCGen5MMAOp::verifyDims() {
 }
 
 // Each instruction reads metadata from one 128-row tile, starting at selector
-// zero. FP16 uses one word per row, FP8 and paired FP4 use two.
+// zero, with two words per row.
 static LogicalResult verifySparseTile(Operation *op, MemDescType metadata,
                                       MemDescType acc, int64_t k,
                                       int64_t instructionK, int64_t words) {
@@ -1290,12 +1289,10 @@ LogicalResult TCGen5MMAOp::verify() {
     return failure();
 
   if (auto metadata = getMetadata()) {
-    if (!atype.isF16() && !isa<Float8E4M3FNType, Float8E5M2Type>(atype))
-      return emitOpError("sparse MMA requires FP16 or FP8 operands");
-    int64_t instructionK = atype.isF16() ? 32 : 64;
+    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
+      return emitOpError("sparse MMA requires FP8 operands");
     if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(),
-                                getB().getType().getDimSize(0), instructionK,
-                                instructionK / 32)))
+                                getB().getType().getDimSize(0), 64, 2)))
       return failure();
   }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;

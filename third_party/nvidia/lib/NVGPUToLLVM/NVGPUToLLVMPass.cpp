@@ -442,7 +442,7 @@ public:
     supported |=
         (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
         (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-        (m == 64 && 8 <= n && n <= 256 && k == (op.getMetadata() ? 32 : 16));
+        (m == 64 && 8 <= n && n <= 256 && k == 16);
     supported |= (eltTypeA == WGMMAEltType::bf16) &&
                  (eltTypeB == WGMMAEltType::bf16) &&
                  (eltTypeC == WGMMAEltType::f32) &&

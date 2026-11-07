@@ -4821,26 +4821,26 @@ def test_mma_v2(dtype):
 
 
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_sparse_mma_fp16(num_warps):
-    if not is_cuda() or torch.cuda.get_device_capability() not in ((8, 0), (9, 0)):
-        pytest.skip("requires A100 or H100")
+def test_sparse_mma_fp8(num_warps):
+    if not is_cuda() or torch.cuda.get_device_capability() not in ((8, 9), (9, 0)):
+        pytest.skip("requires SM89 or SM90")
     use_wgmma = is_hopper()
 
     @gluon.jit
     def kernel(A, B, E, D, M: ttgl.constexpr, WGMMA: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
         row = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))
-        ak = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
-        bk = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+        ak = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        bk = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, layout))
         col = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
-        a = ttgl.load(A + row[:, None] * 16 + ak[None, :])
+        a = ttgl.load(A + row[:, None] * 32 + ak[None, :])
         b = ttgl.load(B + bk[:, None] * 32 + col[None, :])
-        e = ttgl.load(E + row)[:, None]
+        e = ttgl.load(E + row[:, None] * 2 + ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))[None, :])
         if WGMMA:
-            sa = ttgl.allocate_shared_memory(ttgl.float16, [M, 16], ttgl.NVMMASharedLayout(32, 16), a)
-            sb = ttgl.allocate_shared_memory(ttgl.float16, [32, 32],
-                                             ttgl.NVMMASharedLayout(64, 16, transposed=True), b)
-            acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, 16])
+            sa = ttgl.allocate_shared_memory(ttgl.float8e4nv, [M, 32], ttgl.NVMMASharedLayout(32, 8), a)
+            sb = ttgl.allocate_shared_memory(ttgl.float8e4nv, [64, 32],
+                                             ttgl.NVMMASharedLayout(64, 8, transposed=True), b)
+            acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, 32])
             acc = ttgl.full([M, 32], 1, ttgl.float32, acc_layout)
             result = hopper.warpgroup_mma(sa, sb, acc, metadata=e, is_async=True)
             result = hopper.warpgroup_mma_wait(deps=[result])
@@ -4850,13 +4850,13 @@ def test_sparse_mma_fp16(num_warps):
         ttgl.store(D + row[:, None] * 32 + col[None, :], ttgl.convert_layout(result, layout))
 
     m = 16 * num_warps if use_wgmma else 128
-    a = torch.randint(-3, 4, (m, 16), device="cuda").half()
-    b = torch.randint(-3, 4, (32, 32), device="cuda").half()
+    a = torch.randint(-3, 4, (m, 32), device="cuda").to(torch.float8_e4m3fn)
+    b = torch.randint(-3, 4, (64, 32), device="cuda").to(torch.float8_e4m3fn)
     # Keep positions 0 and 3 in every group of four.
-    e = torch.full((m,), -858993460, dtype=torch.int32, device="cuda")  # 0xcccccccc
+    e = torch.full((m, 2), -858993460, dtype=torch.int32, device="cuda")  # 0xcccccccc
     out = torch.empty((m, 32), dtype=torch.float32, device="cuda")
     compiled = kernel[(1,)](a, b, e, out, m, use_wgmma, num_warps=num_warps)
-    dense = torch.zeros((m, 32), device="cuda")
+    dense = torch.zeros((m, 64), device="cuda")
     dense[:, ::4] = a[:, ::2]
     dense[:, 3::4] = a[:, 1::2]
     torch.testing.assert_close(out, dense @ b.float() + 1, atol=0, rtol=0)

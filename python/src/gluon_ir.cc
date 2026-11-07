@@ -998,10 +998,8 @@ void init_gluon_ir(py::module_ &m) {
             if (metadata) {
               auto ty = cast<RankedTensorType>(metadata->getType());
               auto result = cast<RankedTensorType>(acc.getType());
-              auto width = cast<ttg::TensorOrMemDesc>(a.getType())
-                               .getElementTypeBitWidth();
               auto layouts = ttg::getWarpSparseMmaLayouts(
-                  self.getContext(), width, result.getShape(), warps);
+                  self.getContext(), result.getShape(), warps);
               e = self.create<ttg::ConvertLayoutOp>(
                   ty.cloneWithEncoding(layouts[2]), *metadata);
             }

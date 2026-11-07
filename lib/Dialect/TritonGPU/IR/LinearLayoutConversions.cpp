@@ -1859,12 +1859,10 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
       .transposeOuts(standardOutDimNames(ctx, numDims));
 }
 
-std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx, int width,
+std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
                                                  ArrayRef<int64_t> shape,
                                                  int numWarps) {
-  // PTX mma.sp.m16n8k32 (FP16) and m16n8k64 (FP8) use the same four
-  // 32-bit registers for each multiplicand. The packed K width differs.
-  const unsigned pack = 32 / width;
+  constexpr unsigned pack = 4;
   auto dims = standardOutDimNames(ctx, 2);
   auto cga = CGAEncodingAttr::get1CTALayout(ctx, 2);
   auto warpM = LinearLayout::identity1D(numWarps, S("warp"), dims[0]);
@@ -1878,23 +1876,21 @@ std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx, int width,
   auto a = nvidiaMmaTile(ctx, {16, 8 * pack}, pack, {1, 0}, {1, 0});
   auto b = nvidiaMmaTile(ctx, {16 * pack, 8}, pack, {0, 1}, {0, 1});
   auto d = nvidiaMmaTile(ctx, {16, 8}, 2, {1, 0}, {1, 0});
-  // Selector zero takes two lanes per quad for FP16, and all four for FP8.
+  // FP8 selector zero takes all four lanes per quad.
   LinearLayout metadata(
       {{S("register"), {}},
-       {S("lane"), {{8, 0}, {0, width == 8 ? 1 : 0}, {1, 0}, {2, 0}, {4, 0}}}},
+       {S("lane"), {{8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}}}},
       dims);
   return {tile(a, warpM, {shape[0], 8 * pack}),
           tile(b, broadcastWarp, {16 * pack, shape[1]}),
-          tile(metadata, warpM, {shape[0], 16 / width}), tile(d, warpM, shape)};
+          tile(metadata, warpM, {shape[0], 2}), tile(d, warpM, shape)};
 }
 
 Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,
                          Value metadata, Value acc, int numWarps) {
   auto resultTy = cast<RankedTensorType>(acc.getType());
   auto layouts = getWarpSparseMmaLayouts(
-      builder.getContext(),
-      cast<RankedTensorType>(a.getType()).getElementTypeBitWidth(),
-      resultTy.getShape(), numWarps);
+      builder.getContext(), resultTy.getShape(), numWarps);
   auto cvt = [&](Value v, Attribute layout) -> Value {
     auto ty = cast<RankedTensorType>(v.getType()).cloneWithEncoding(layout);
     return ConvertLayoutOp::create(builder, loc, ty, v);

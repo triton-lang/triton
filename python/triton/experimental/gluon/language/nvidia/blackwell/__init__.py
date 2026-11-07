@@ -589,9 +589,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
         metadata (tensor_memory_descriptor, optional): Emit sparse MMA with a compressed A operand.
-            Use a 128-row i32 TMEM tile with one word per row for FP16 (logical K=32)
-            or two for FP8 (logical K=64). FP16 uses the PTX selector-zero half-word
-            interleave. FP8 packs eight consecutive four-bit selectors per word.
+            Use a 128-row i32 TMEM tile with two words per row for FP8 (logical K=64). FP8 packs eight consecutive four-bit selectors per word.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
