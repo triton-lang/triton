@@ -698,8 +698,8 @@ LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
   };
   auto a = words(op.getA(), adaptor.getA());
   auto b = words(op.getB(), adaptor.getB());
-  auto e = unpackTensorElements(loc, adaptor.getMetadata(), rewriter,
-                                op.getMetadata().getType());
+  auto e = unpackTensorElements(loc, adaptor.getSparsityMetadata(), rewriter,
+                                op.getSparsityMetadata().getType());
   auto c = unpackTensorElements(loc, adaptor.getAcc(), rewriter, op.getType());
   auto format = getMmaPtxType(elem);
   std::array<NVVM::MMATypes, 2> types{format, format};

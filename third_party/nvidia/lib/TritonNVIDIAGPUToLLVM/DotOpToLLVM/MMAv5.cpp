@@ -190,7 +190,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
   TCGen5InstructionDescriptor desc{};
-  desc.sparsity = bool(op.getMetadata());
+  desc.sparsity = bool(op.getSparsityMetadata());
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 4;
@@ -203,7 +203,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   } else {
     desc.dType = dstElType.isF16() ? 0 : 1;
   }
-  if (kSize == 64 && !op.getMetadata())
+  if (kSize == 64 && !op.getSparsityMetadata())
     desc.kSize = 1;
 
   return b.int_val(32, std::bit_cast<uint32_t>(desc));
@@ -255,7 +255,7 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
   TCGen5InstructionDescriptor desc{};
-  desc.sparsity = bool(op.getMetadata());
+  desc.sparsity = bool(op.getSparsityMetadata());
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 5;
@@ -304,7 +304,7 @@ static Value createScaleInstDescriptorFp4(
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
   TCGen5InstructionDescriptor desc{};
-  desc.sparsity = bool(op.getMetadata());
+  desc.sparsity = bool(op.getSparsityMetadata());
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 5;
@@ -322,7 +322,7 @@ static Value createScaleInstDescriptorFp4(
     desc.kSizeLower = 1;
     return b.int_val(32, std::bit_cast<uint32_t>(desc));
   }
-  if (kSize == 128 && !op.getMetadata()) {
+  if (kSize == 128 && !op.getSparsityMetadata()) {
     desc.kSizeUpper = 1;
   }
 
@@ -393,10 +393,10 @@ std::string getCollectorModifier(CollectorAction reuse, StringRef operand) {
 void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                    StringRef kind, MemDescOperand a, Value b, MemDescOperand d,
                    Value pred, const MMAInstOperands &inst, Value useInitAcc,
-                   bool twoCTAs, OperandReuse reuse, Value metadata) {
+                   bool twoCTAs, OperandReuse reuse, Value sparsityMetadata) {
   PTXBuilder ptxBuilder;
   std::string opcode =
-      std::string(metadata ? "tcgen05.mma.sp" : "tcgen05.mma") +
+      std::string(sparsityMetadata ? "tcgen05.mma.sp" : "tcgen05.mma") +
       ".cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
       ".kind::" + kind.str() + getCollectorModifier(reuse.a, "a") +
       getCollectorModifier(reuse.b, "b");
@@ -406,8 +406,8 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(inst.descriptor, "r");
   SmallVector<PTXBuilder::Operand *> operands{accOp, aOp, bOp};
-  if (metadata)
-    operands.push_back(ptxBuilder.newAddrOperand(metadata, "r"));
+  if (sparsityMetadata)
+    operands.push_back(ptxBuilder.newAddrOperand(sparsityMetadata, "r"));
   operands.push_back(instDescOp);
   assert(bool(inst.scaleA) == bool(inst.scaleB));
   if (inst.scaleA) {
@@ -479,7 +479,7 @@ struct DotConversion {
   using GetInstOperandsFn =
       std::function<MMAInstOperands(const InstDesc &, int, int, int)>;
 
-  Value metadata;
+  Value sparsityMetadata;
   unsigned blockK;
   unsigned storedAK;
   int mmaSizeK;
@@ -692,7 +692,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
     createGen5MMA(rewriter, loc, op.kind, a, b, accAddress, elect,
                   op.getInstOperands(desc, m, n, k), useInitAcc, twoCTAs, reuse,
-                  op.metadata);
+                  op.sparsityMetadata);
     previous = indices;
   }
 
@@ -754,9 +754,9 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
     dot.mmaSizeK = 64;
   }
 
-  if (Value metadata = adaptor.getMetadata()) {
-    dot.metadata =
-        TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, metadata);
+  if (Value sparsityMetadata = adaptor.getSparsityMetadata()) {
+    dot.sparsityMetadata =
+        TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, sparsityMetadata);
     dot.mmaSizeK = dot.blockK; // Sparse ops verify a single K tile.
   }
   dot.numBitsPerElementA = aTensorTy.getElementTypeBitWidth();
@@ -869,9 +869,9 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     dot.mmaSizeK = opKindIsMXFP4 ? std::min(blockK, 128) : std::min(blockK, 64);
   }
 
-  if (Value metadata = adaptor.getMetadata()) {
-    dot.metadata =
-        TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, metadata);
+  if (Value sparsityMetadata = adaptor.getSparsityMetadata()) {
+    dot.sparsityMetadata =
+        TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, sparsityMetadata);
     dot.mmaSizeK = dot.blockK;
   }
   dot.numBitsPerElementA = getFormatBitSize(op.getAType());

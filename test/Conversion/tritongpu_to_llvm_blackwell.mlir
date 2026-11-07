@@ -1798,7 +1798,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
                       %b: !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
                       %d: !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>,
                       %e: !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory>, %use: i1, %pred: i1) {
-    ttng.tc_gen5_mma %a, %b, %d, %use, %pred metadata %e : !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory> {is_async} :
+    ttng.tc_gen5_mma %a, %b, %d, %use, %pred sparsity_metadata %e : !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory> {is_async} :
       !ttg.memdesc<128x32xf8E4M3FN, #a, #ttg.shared_memory>,
       !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
       !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>

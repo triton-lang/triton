@@ -363,7 +363,7 @@ public:
     auto fp8 = [](ttn::WGMMAEltType type) {
       return type == ttn::WGMMAEltType::e4m3 || type == ttn::WGMMAEltType::e5m2;
     };
-    if (op.getMetadata()) {
+    if (op.getSparsityMetadata()) {
       if (!fp8(op.getEltTypeA()) || !fp8(op.getEltTypeB()) ||
           op.getK() != gpu::kFp8Sparse2To4.logical)
         return op.emitOpError(
@@ -412,8 +412,8 @@ public:
     // Operand B (must be `desc`)
     operandsAndConstraints.push_back({opB, "l"});
 
-    if (op.getMetadata())
-      operandsAndConstraints.push_back({op.getMetadata(), "r"});
+    if (op.getSparsityMetadata())
+      operandsAndConstraints.push_back({op.getSparsityMetadata(), "r"});
 
     // `scale-d`
     if (op.getOpC())
@@ -515,7 +515,7 @@ public:
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
-    if (op.getMetadata())
+    if (op.getSparsityMetadata())
       args += "$" + std::to_string(asmOpIdx++) + ", 0, ";
 
     // `scale-d`
@@ -536,7 +536,7 @@ public:
       args += ", " + std::to_string(transB);
     }
 
-    auto ptxAsm = std::string(op.getMetadata() ? "wgmma.mma_async.sp"
+    auto ptxAsm = std::string(op.getSparsityMetadata() ? "wgmma.mma_async.sp"
                                                : "wgmma.mma_async") +
                   ".sync.aligned"
                   ".m" +

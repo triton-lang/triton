@@ -1877,17 +1877,17 @@ std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
   auto b = nvidiaMmaTile(ctx, {16 * pack, 8}, pack, {0, 1}, {0, 1});
   auto d = nvidiaMmaTile(ctx, {16, 8}, 2, {1, 0}, {1, 0});
   // FP8 selector zero takes all four lanes per quad.
-  LinearLayout metadata(
+  LinearLayout sparsityMetadata(
       {{S("register"), {}},
        {S("lane"), {{8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}}}},
       dims);
   return {tile(a, warpM, {shape[0], 8 * pack}),
           tile(b, broadcastWarp, {16 * pack, shape[1]}),
-          tile(metadata, warpM, {shape[0], 2}), tile(d, warpM, shape)};
+          tile(sparsityMetadata, warpM, {shape[0], 2}), tile(d, warpM, shape)};
 }
 
 Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,
-                         Value metadata, Value acc, int numWarps) {
+                         Value sparsityMetadata, Value acc, int numWarps) {
   auto resultTy = cast<RankedTensorType>(acc.getType());
   auto layouts = getWarpSparseMmaLayouts(
       builder.getContext(), resultTy.getShape(), numWarps);
@@ -1897,7 +1897,7 @@ Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,
   };
   Value c = cvt(acc, layouts[3]);
   auto mma = SparseDotOp::create(builder, loc, c.getType(), cvt(a, layouts[0]),
-                                 cvt(b, layouts[1]), cvt(metadata, layouts[2]),
+                                 cvt(b, layouts[1]), cvt(sparsityMetadata, layouts[2]),
                                  c, Value(), Value());
   return ConvertLayoutOp::create(builder, loc, resultTy, mma.getResult());
 }

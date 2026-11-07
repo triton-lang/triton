@@ -830,8 +830,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   auto mmaAsDotOp = cast<DotOpInterface>(mma.getOperation());
   waitBuffers.push_back(mmaAsDotOp.getA());
   waitBuffers.push_back(mmaAsDotOp.getB());
-  if (Value metadata = mma.getMetadata())
-    waitBuffers.push_back(metadata);
+  if (Value sparsityMetadata = mma.getSparsityMetadata())
+    waitBuffers.push_back(sparsityMetadata);
   if (auto mmaAsScaledDotOp =
           dyn_cast<ttng::TCGen5MMAScaledOp>(mma.getOperation())) {
     waitBuffers.push_back(mmaAsScaledDotOp.getAScale());

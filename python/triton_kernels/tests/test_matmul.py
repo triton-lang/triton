@@ -1444,7 +1444,7 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
     indices = pairs[torch.randint(6, (n, k // group), generator=rng)]
     selectors = indices[..., 0] + 4 * indices[..., 1]
     selectors = torch.nn.functional.pad(selectors, (0, -selectors.shape[-1] % 8), value=4)
-    metadata = (selectors.reshape(n, -1, 8) << (torch.arange(8) * 4)).sum(-1).int().cuda()
+    sparsity_metadata = (selectors.reshape(n, -1, 8) << (torch.arange(8) * 4)).sum(-1).int().cuda()
 
     x = torch.randint(4, (m, k), generator=rng)
     w = torch.randint(4, (n, k // 2), generator=rng)
@@ -1467,14 +1467,14 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
         config = PrecisionConfig(out_dtype=torch.float32)
     if nvfp4 and cc < (10, 0):
         with pytest.raises(ValueError, match="native paired NVFP4"):
-            matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
+            matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
         return
     dense = torch.zeros(n, k // group, group).scatter_(2, positions, w.float().reshape(n, k // group, group // 2))
     expected = x.float() @ dense.reshape(n, k).T
     with pytest.raises(ValueError, match="must be column-major"):
-        matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
-    metadata = convert_layout(wrap_torch_tensor(metadata), layout.StridedLayout(-2))
-    result = matmul(a, b, None, precision_config=config, b_sparse_metadata=metadata)
+        matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
+    sparsity_metadata = convert_layout(wrap_torch_tensor(sparsity_metadata), layout.StridedLayout(-2))
+    result = matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
     torch.testing.assert_close(result.cpu(), expected, rtol=0, atol=0)
 
 
@@ -1488,7 +1488,7 @@ def test_matmul_structured_sparse_experts(routed):
     dense = torch.zeros((experts, k // 4, 4, n), device="cuda")
     dense[:, :, :2] = b.view(experts, k // 4, 2, n)
     dense = dense.view(experts, k, n)
-    meta = torch.full((experts * 2, k // 32, n + 3), 0x44444444, device="cuda", dtype=torch.int32)[::2, :, :n].mT
+    sparsity_metadata = torch.full((experts * 2, k // 32, n + 3), 0x44444444, device="cuda", dtype=torch.int32)[::2, :, :n].mT
     bias = torch.randint(4, (experts, n), device="cuda").float()
     kwargs = {}
     if routed:
@@ -1507,6 +1507,6 @@ def test_matmul_structured_sparse_experts(routed):
             expected[scatter[start:start + sizes[i]]] = 2 * (rows @ dense[i] + bias[i])
     else:
         expected = 2 * (a.float() @ dense + bias[:, None, :])
-    out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparse_metadata=meta,
+    out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparsity_metadata=sparsity_metadata,
                  out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)

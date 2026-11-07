@@ -238,7 +238,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
 
     B's K extent defines the reduction. For sparse MMA, A stores half as
-    many values along K and $metadata selects their logical positions.
+    many values along K and $sparsityMetadata selects their logical positions.
   }];
 
   let arguments = (ins
@@ -246,7 +246,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     TTG_MemDescType:$b,
     TT_FpIntTensor:$c,
     Optional<I1>:$useC,
-    Optional<TT_Tensor>:$metadata,
+    Optional<TT_Tensor>:$sparsityMetadata,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
     DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
     DefaultValuedAttr<BoolAttr, "false">:$isAsync
@@ -255,7 +255,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
   let results = (outs TT_FpIntTensor:$d);
 
   let assemblyFormat = [{
-    $a`,` $b`,` $c (`,` $useC^)? (`metadata` $metadata^ `:` type($metadata))? attr-dict
+    $a`,` $b`,` $c (`,` $useC^)? (`sparsity_metadata` $sparsityMetadata^ `:` type($sparsityMetadata))? attr-dict
     `:` type($a) `*` qualified(type($b)) `->` type($d)
   }];
 
@@ -780,7 +780,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     If true, the integer values are treated as unsigned, otherwise they are treated as signed.
 
     B's K extent defines the reduction. For sparse MMA, A stores half as
-    many values along K and $metadata selects their logical positions.
+    many values along K and $sparsityMetadata selects their logical positions.
   }];
 
   let arguments = (ins
@@ -792,7 +792,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
-    Optional<TTG_MemDescType>:$metadata,
+    Optional<TTG_MemDescType>:$sparsityMetadata,
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
@@ -818,7 +818,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
     $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-    (`metadata` $metadata^ `:` qualified(type($metadata)))?
+    (`sparsity_metadata` $sparsityMetadata^ `:` qualified(type($sparsityMetadata)))?
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
@@ -855,7 +855,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     be used to check aliasing and modref on the accumulator memory.
 
     B's K extent defines the reduction. For sparse MMA, A stores half as
-    many values along K and $metadata selects their logical positions.
+    many values along K and $sparsityMetadata selects their logical positions.
     Element counts include both values in each K-packed FP4 byte.
   }];
 
@@ -872,7 +872,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
-    Optional<TTG_MemDescType>:$metadata,
+    Optional<TTG_MemDescType>:$sparsityMetadata,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
     UnitAttr:$is_async
@@ -906,7 +906,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
-    (`metadata` $metadata^ `:` qualified(type($metadata)))?
+    (`sparsity_metadata` $sparsityMetadata^ `:` qualified(type($sparsityMetadata)))?
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
     qualified(type($b_scale)) (`,` qualified(type($barriers))^)?

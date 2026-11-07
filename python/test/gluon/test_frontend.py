@@ -6031,16 +6031,16 @@ def _tcgen05_sparse_mma_kernel(dtype: ttgl.constexpr, words: ttgl.constexpr):
     b = ttgl.allocate_shared_memory(dtype, [packed_k * 2, 128],
                                     ttgl.NVMMASharedLayout(32, dtype.primitive_bitwidth, transposed=True))
     acc = blackwell.allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], 1))
-    meta = blackwell.allocate_tensor_memory(ttgl.int32, [128, words], TensorMemoryLayout([128, words], 1))
+    sparsity_metadata = blackwell.allocate_tensor_memory(ttgl.int32, [128, words], TensorMemoryLayout([128, words], 1))
     if dtype == ttgl.uint8:
         sa = blackwell.allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
         sb = blackwell.allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
-        blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", meta)
+        blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", sparsity_metadata)
     else:
-        blackwell.tcgen05_sparse_mma(a, b, acc, meta)
+        blackwell.tcgen05_sparse_mma(a, b, acc, sparsity_metadata)
 
 
 @pytest.mark.parametrize("dtype,words", [(ttgl.float8e4nv, 2), (ttgl.uint8, 2)])
-def test_tcgen05_mma_sparse_metadata(dtype, words):
+def test_tcgen05_mma_sparsity_metadata(dtype, words):
     mod = run_parser(_tcgen05_sparse_mma_kernel, *make_args(dtype, words), target=BLACKWELL_TARGET)
-    assert re.search(r"ttng.tc_gen5_mma.* metadata %", mod.str_nodebug())
+    assert re.search(r"ttng.tc_gen5_mma.* sparsity_metadata %", mod.str_nodebug())

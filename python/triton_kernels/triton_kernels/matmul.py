@@ -274,7 +274,7 @@ def matmul(a, b, bias,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
     maxabs_permute_sequence: tuple[int, ...] | None = None,
-    b_sparse_metadata: torch.Tensor | Tensor | None = None,
+    b_sparsity_metadata: torch.Tensor | Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -284,10 +284,10 @@ def matmul(a, b, bias,
     a_mx_tensor_scale and b_mx_tensor_scale apply only to NVFP4 operands.
     Each requires packed FP4 values and E4M3 block scales on the corresponding input.
 
-    With b_sparse_metadata, B is compressed along K. Metadata has shape
+    With b_sparsity_metadata, B is compressed along K. Sparsity metadata has shape
     [N, ceil(K/32)] for FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
-    Metadata must be contiguous along N (stride(-2) == 1). Use StridedLayout(-2)
-    for wrapped tensors or meta.mT.contiguous().mT for a row-major PyTorch tensor.
+    Sparsity metadata must be contiguous along N (stride(-2) == 1). Use StridedLayout(-2)
+    for wrapped tensors or sparsity_metadata.mT.contiguous().mT for a row-major PyTorch tensor.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
@@ -323,7 +323,7 @@ def matmul(a, b, bias,
     dtype metadata; values must be read from the communication outputs. This
     requires split_k=1, no output TMA, no c_acc_in, and no output MX scales.
     """
-    if b_sparse_metadata is not None:
+    if b_sparsity_metadata is not None:
         if any(v is not None for v in (b_ragged_metadata, betas, gammas, fused_comm, fused_activation, epilogue, c_acc_in,
                                        maxabs_permute_sequence)):
             raise NotImplementedError("unsupported fused operation or ragged-K layout for sparse matmul")
@@ -332,7 +332,7 @@ def matmul(a, b, bias,
                            b_mx_tensor_scale=None, out_dtype=None, a_microblock_size=None, b_microblock_size=None)
         if defaults != PrecisionConfig() or config.a_microblock_size not in (None, 16, 32) or config.b_microblock_size not in (None, 16, 32):
             raise NotImplementedError("unsupported precision configuration for sparse matmul")
-        return sparse_matmul(a, b, b_sparse_metadata, bias, config, c, 1.0 if out_alpha is None else out_alpha,
+        return sparse_matmul(a, b, b_sparsity_metadata, bias, config, c, 1.0 if out_alpha is None else out_alpha,
                              a_ragged_metadata, gather_indx, scatter_indx)
     is_input_batched = a.ndim == 3
     if is_input_batched:

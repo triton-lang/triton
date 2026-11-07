@@ -666,7 +666,7 @@ def unsqueeze(x, dim: core.constexpr):
 
 
 @jit
-def sparse_dot(a, b, metadata, acc=None, a_scale=None, b_scale=None):
+def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
 
     FP8 requires SM89+, and NVFP4 requires SM100/SM103.
@@ -690,9 +690,9 @@ def sparse_dot(a, b, metadata, acc=None, a_scale=None, b_scale=None):
             sa0, sa1 = core.split(core.reshape(a_scale, (128, 4, 2)))
             sb0, sb1 = core.split(core.reshape(b_scale, (b.shape[1], 4, 2)))
             even = (byte[None, :] & 4) == 0
-            acc = core._sparse_dot(core.where(even, a, 0).to(a.dtype), b, metadata, acc, sa0, sb0)
-            return core._sparse_dot(core.where(even, 0, a).to(a.dtype), b, metadata, acc, sa1, sb1)
+            acc = core._sparse_dot(core.where(even, a, 0).to(a.dtype), b, sparsity_metadata, acc, sa0, sb0)
+            return core._sparse_dot(core.where(even, 0, a).to(a.dtype), b, sparsity_metadata, acc, sa1, sb1)
         else:
-            return core._sparse_dot(a, b, metadata, acc, a_scale, b_scale)
+            return core._sparse_dot(a, b, sparsity_metadata, acc, a_scale, b_scale)
     else:
-        return core._sparse_dot(a, b, metadata, acc, None, None)
+        return core._sparse_dot(a, b, sparsity_metadata, acc, None, None)

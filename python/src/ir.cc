@@ -1778,14 +1778,14 @@ void init_triton_ir(py::module_ &m) {
            })
       .def(
           "create_sparse_dot",
-          [](TritonOpBuilder &self, Value a, Value b, Value metadata, Value acc,
+          [](TritonOpBuilder &self, Value a, Value b, Value sparsityMetadata, Value acc,
              std::optional<Value> aScale,
              std::optional<Value> bScale) -> Value {
-            return self.create<SparseDotOp>(acc.getType(), a, b, metadata, acc,
+            return self.create<SparseDotOp>(acc.getType(), a, b, sparsityMetadata, acc,
                                             aScale.value_or(Value()),
                                             bScale.value_or(Value()));
           },
-          py::arg("a"), py::arg("b"), py::arg("metadata"), py::arg("acc"),
+          py::arg("a"), py::arg("b"), py::arg("sparsity_metadata"), py::arg("acc"),
           py::arg("a_scale").none(), py::arg("b_scale").none())
       .def("create_dot",
            [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,

@@ -2318,9 +2318,9 @@ module attributes {ttg.target = "cuda:103"} {
 !d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
 !e = !ttg.memdesc<128x1xi32, #t, #ttng.tensor_memory, 128x2>
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @short_sparse_metadata_subview(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
-    // expected-error @below {{expected one 128-row sparse MMA tile with logical K=64 and 128x2 i32 tensor memory metadata}}
-    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred metadata %e : !e {is_async} : !a, !b, !d
+  tt.func @short_sparsity_metadata_subview(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{expected one 128-row sparse MMA tile with logical K=64 and 128x2 i32 tensor memory sparsity metadata}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
     tt.return
   }
 }
@@ -2336,7 +2336,7 @@ module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @sparse_mma_requires_compressed_a(%a: !full_a, %b: !b, %d: !d, %e: !e, %pred: i1) {
     // expected-error @below {{expected the last dimension of the first operand}}
-    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred metadata %e : !e {is_async} : !full_a, !b, !d
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !full_a, !b, !d
     tt.return
   }
 }
@@ -2349,7 +2349,7 @@ module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 !b = !ttg.memdesc<32x128xf16, #s, #ttg.shared_memory>
 !d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @compressed_mma_requires_metadata(%a: !a, %b: !b, %d: !d, %pred: i1) {
+  tt.func @compressed_mma_requires_sparsity_metadata(%a: !a, %b: !b, %d: !d, %pred: i1) {
     // expected-error @below {{expected the last dimension of the first operand}}
     ttng.tc_gen5_mma %a, %b, %d, %pred, %pred {is_async} : !a, !b, !d
     tt.return
@@ -2368,7 +2368,7 @@ module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @unsupported_sparse_fp16(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
     // expected-error @below {{sparse MMA requires FP8 operands}}
-    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred metadata %e : !e {is_async} : !a, !b, !d
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
     tt.return
   }
 }

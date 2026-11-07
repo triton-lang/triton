@@ -93,7 +93,7 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "getB">,
     InterfaceMethod<"Return the optional sparsity metadata operand.",
                     "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
-                    "getMetadata">,
+                    "getSparsityMetadata">,
     InterfaceMethod<"Return the accumulator init flag.",
                     "::mlir::Value",
                     "useAccumulator">,

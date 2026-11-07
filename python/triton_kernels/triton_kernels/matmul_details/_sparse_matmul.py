@@ -97,10 +97,10 @@ def _strides(tensor, rank):
     return (0, ) * (rank - tensor.ndim) + tensor.stride()
 
 
-def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatter):
+def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gather, scatter):
     a, b = _storage(a, -1), _storage(b, -2)
-    metadata = _storage(metadata)
-    if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b, metadata)):
+    sparsity_metadata = _storage(sparsity_metadata)
+    if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b, sparsity_metadata)):
         raise ValueError("sparse matmul expects strided matrices or batches of matrices")
     if ragged is None and a.shape[:-2] != b.shape[:-2]:
         raise ValueError("input and weight batch dimensions must match")
@@ -124,10 +124,10 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
     group = 8 if nvfp4 else 4
     if k % group or (nvfp4 and k % 16) or b.shape[-2] * 2 != stored_k:
         raise ValueError("compressed weights must store half the logical K values")
-    if metadata.dtype != torch.int32 or metadata.shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
-        raise ValueError("expected one int32 metadata word per eight selector groups per output column")
-    if metadata.stride(-2) != 1:
-        raise ValueError("b_sparse_metadata must be column-major (stride(-2) == 1)")
+    if sparsity_metadata.dtype != torch.int32 or sparsity_metadata.shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
+        raise ValueError("expected one int32 sparsity metadata word per eight selector groups per output column")
+    if sparsity_metadata.stride(-2) != 1:
+        raise ValueError("b_sparsity_metadata must be column-major (stride(-2) == 1)")
     xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
     scale_k = config.a_microblock_size or 16
     if nvfp4:
@@ -154,7 +154,7 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         c = allocate(output_shape, device=a.device, dtype=dtype)
     if c.shape != output_shape or c.dtype != dtype:
         raise ValueError("output shape or dtype does not match sparse matmul")
-    for t in (b, metadata, xs, ws, config.a_mx_tensor_scale, config.b_mx_tensor_scale, bias, c, gather, scatter):
+    for t in (b, sparsity_metadata, xs, ws, config.a_mx_tensor_scale, config.b_mx_tensor_scale, bias, c, gather, scatter):
         if t is not None and t.device != a.device:
             raise ValueError("sparse matmul operands must share a device")
     batch = a.shape[0] if a.ndim == 3 else 1
@@ -166,8 +166,8 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
     if batch and m_tiles and n:
         bk = 128 if nvfp4 else 64
         grid = (triton.cdiv(n, 128), m_tiles, batch)
-        _sparse_matmul[grid](a, b, metadata, xs, ws, bias, c, gather, scatter, schedule, offsets, rows, n, k,
-                             _strides(a, 3), _strides(b, 3), _strides(metadata, 3), _strides(xs, 3), _strides(ws, 3),
+        _sparse_matmul[grid](a, b, sparsity_metadata, xs, ws, bias, c, gather, scatter, schedule, offsets, rows, n, k,
+                             _strides(a, 3), _strides(b, 3), _strides(sparsity_metadata, 3), _strides(xs, 3), _strides(ws, 3),
                              _strides(c, 3), _strides(bias, 2), config.a_mx_tensor_scale, config.b_mx_tensor_scale,
                              alpha, bk, nvfp4, scale_k, num_warps=4)
     return c
