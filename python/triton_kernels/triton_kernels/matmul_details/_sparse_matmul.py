@@ -62,7 +62,8 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         SX += batch.to(tl.int64) * SX_STRIDE[0]
         SW += expert.to(tl.int64) * SW_STRIDE[0]
     pack: tl.constexpr = 2 if NVFP4 else 1
-    words: tl.constexpr = 2
+    k_per_word: tl.constexpr = 64 if NVFP4 else 32
+    words: tl.constexpr = BK // k_per_word
     acc = tl.full((128, BLOCK_M), 0, tl.float32)
     for tile in range(split, tl.cdiv(K, BK), SPLIT_K):
         xk = tile * (BK // pack) + tl.arange(0, BK // pack)
@@ -70,9 +71,9 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         ek = tile * words + tl.arange(0, words)
         x = _load_tile(X, xm, xk, xmask, K // pack, X_STRIDE[1], X_STRIDE[2])
         w = _load_tile(W, n, wk, n < N, K // (2 * pack), W_STRIDE[2], W_STRIDE[1])
-        e = _load_tile(E, n, ek, n < N, tl.cdiv(K, BK // words), E_STRIDE[1], E_STRIDE[2], 0x44444444)
+        e = _load_tile(E, n, ek, n < N, tl.cdiv(K, k_per_word), E_STRIDE[1], E_STRIDE[2], 0x44444444)
         if PARTIAL_GROUPS:
-            e = _pad_selector_word(e, ek, K // (BK // words), PARTIAL_GROUPS)
+            e = _pad_selector_word(e, ek, K // k_per_word, PARTIAL_GROUPS)
         if NVFP4:
             sk = tile * (BK // SCALE_K) + tl.arange(0, BK // SCALE_K)
             xs = _load_tile(SX, xm, sk, xmask, K // SCALE_K, SX_STRIDE[1], SX_STRIDE[2])
@@ -152,10 +153,14 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
                                   or index.stride(0) != 1):
             raise ValueError("routing indices must be contiguous integer vectors for rank-2 activations")
     cc = torch.cuda.get_device_capability(a.device) if a.is_cuda and torch.version.cuda else (0, 0)
-    if not ((8, 9) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
-        raise ValueError("sparse matmul requires Ada, Hopper or Blackwell SM100/SM103")
-    if a.dtype != b.dtype or a.dtype not in (torch.float8_e4m3fn, torch.float8_e5m2, torch.uint8):
-        raise ValueError("expected matching FP8 or byte-packed NVFP4 operands")
+    if not ((8, 0) <= cc < (10, 0) or cc in ((10, 0), (10, 3))):
+        raise ValueError("sparse matmul requires Ampere, Ada, Hopper or Blackwell SM100/SM103")
+    half = a.dtype in (torch.float16, torch.bfloat16)
+    fp8 = a.dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+    if a.dtype != b.dtype or not (half or fp8 or a.dtype == torch.uint8):
+        raise ValueError("expected matching FP16, BF16, FP8 or byte-packed NVFP4 operands")
+    if fp8 and cc < (8, 9):
+        raise ValueError("native FP8 sparse matmul requires SM89 or newer")
     nvfp4 = a.dtype == torch.uint8
     if nvfp4 and cc < (10, 0):
         raise ValueError("native paired NVFP4 sparse matmul requires SM100 or SM103")
@@ -210,13 +215,13 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     m_tiles = triton.cdiv(rows, block_m) if ragged is None else min(schedule.numel(),
                                                                     ragged.n_blocks(ragged.n_slices, rows, 128))
     if batch and m_tiles and n:
-        bk = 128 if nvfp4 else 64
+        bk = 32 if half else 64 if fp8 else 128
         tiles = triton.cdiv(n, 128) * m_tiles * batch
         split_k = 1
         if ragged is None and gather is None and scatter is None:
             split_k = compute_split_k(bk, k, tiles, device=a.device)
-            # FP8 needs a substantially underfilled grid to amortize the FP32 scratch traffic.
-            if not nvfp4 and split_k < 4:
+            # A two- or three-way split needs a long FP16/BF16 reduction to pay for FP32 scratch.
+            if split_k < 4 and (fp8 or (half and k < 4096)):
                 split_k = 1
         # Each CTA writes an FP32 partial. Apply bias, scales and the output cast once after reduction.
         dest = c if split_k == 1 else torch.empty((batch * split_k, rows, n), device=a.device, dtype=torch.float32)

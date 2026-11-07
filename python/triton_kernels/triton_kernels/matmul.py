@@ -285,7 +285,7 @@ def matmul(a, b, bias,
     Each requires packed FP4 values and E4M3 block scales on the corresponding input.
 
     With b_sparsity_metadata, B is compressed along K. Sparsity metadata has shape
-    [N, ceil(K/32)] for FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
+    [N, ceil(K/32)] for FP16, BF16 and FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
     Sparsity metadata must be contiguous along N (stride(-2) == 1). Use StridedLayout(-2)
     for wrapped tensors or sparsity_metadata.mT.contiguous().mT for a row-major PyTorch tensor.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
@@ -294,11 +294,11 @@ def matmul(a, b, bias,
     of 16 (default) or 32 (set both microblock sizes to 32). Activation and weight
     scale shapes are [M, K/block] and [K/block, N], respectively. The native sparse
     instruction uses one scale per 32 values. The 16-value path computes two
-    independently scaled contributions. Ada uses warp-level sparse MMA for
-    FP8. Hopper uses sparse WGMMA for FP8. SM100 and SM103 use
-    tcgen05.mma.sp for FP8 and paired NVFP4. Sparse matmul accepts scalar outer
+    independently scaled contributions. FP16 and BF16 use warp-level sparse MMA
+    on Ampere and Ada, sparse WGMMA on Hopper, and tcgen05.mma.sp on SM100
+    and SM103. FP8 requires SM89 or newer on these targets. Sparse matmul accepts scalar outer
     scales. When neither out_dtype nor c is supplied, its output is BF16 for
-    NVFP4 and the input dtype for FP8.
+    NVFP4 and the input dtype for unscaled operands.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
