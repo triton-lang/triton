@@ -2162,16 +2162,8 @@ SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
 
 TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
                                                      uint16_t broadcastBits) {
-  // Compute the map that goes from cta_id to lead_cta_id (fixedBits)
-  // and the pattern that goes from cta_id to the multicast group (pattern).
-  int blockBits = llvm::Log2_32(numCTAs);
-  uint32_t fixedBits = (~broadcastBits) & (numCTAs - 1);
-  uint32_t pattern = 1;
-  for (int i = 0; i < blockBits; ++i) {
-    if ((fixedBits & (1u << i)) == 0)
-      pattern |= (pattern << (1u << i));
-  }
-  return {fixedBits, pattern};
+  uint32_t varyingBits = broadcastBits & (numCTAs - 1);
+  return {(numCTAs - 1u) ^ varyingBits, getGroupZeroMask(varyingBits)};
 }
 
 } // namespace nvidia_gpu

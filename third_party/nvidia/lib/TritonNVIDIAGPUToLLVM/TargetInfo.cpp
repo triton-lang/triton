@@ -8,6 +8,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <limits>
 
@@ -102,7 +104,9 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
   if (computeCapability < 80)
     return std::nullopt;
   Operation *reduceOp = op.getSingleCombiner();
-  if (!reduceOp)
+  // A warp instruction replaces the whole combine region.
+  if (!reduceOp ||
+      !llvm::hasSingleElement(op.getCombineOp().front().without_terminator()))
     return std::nullopt;
   if (computeCapability / 10 == 10 && reduceOp->getResultTypes()[0].isF32()) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
@@ -707,17 +711,29 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                         getComputeCapability());
   };
   Value value = acc[0];
-  if (value.getType().isInteger(1) && reduceLaneIdMask == 31) {
-    bool all =
-        *kind == NVVM::ReductionKind::AND || *kind == NVVM::ReductionKind::UMIN;
-    bool any =
-        *kind == NVVM::ReductionKind::OR || *kind == NVVM::ReductionKind::UMAX;
-    if (all || any) {
+  bool all =
+      *kind == NVVM::ReductionKind::AND || *kind == NVVM::ReductionKind::UMIN;
+  bool any =
+      *kind == NVVM::ReductionKind::OR || *kind == NVVM::ReductionKind::UMAX;
+  if (value.getType().isInteger(1) && (all || any)) {
+    // Repeating predicates preserves AND/OR, so replicas share a group.
+    unsigned varyingBits = reduceLaneIdMask | broadcastLaneIdMask;
+    unsigned groupBits = 31 & ~varyingBits;
+    if (!groupBits) {
       auto vote = all ? NVVM::VoteSyncKind::all : NVVM::VoteSyncKind::any;
       acc[0] = NVVM::VoteSyncOp::create(rewriter, loc, value.getType(),
                                         b.i32_val(-1), value, vote);
-      return true;
+    } else {
+      // The low five thread-ID bits select the lane. Shift the group-zero
+      // bitset to this lane's group and test its bits in a converged ballot.
+      Value leader = b.and_(getThreadId(rewriter, loc), b.i32_val(groupBits));
+      Value members = b.shl(b.i32_val(getGroupZeroMask(varyingBits)), leader);
+      Value hit = all ? b.xor_(value, b.true_val()) : value;
+      Value groupHit = b.and_(ballot(rewriter, loc, i32_ty, hit), members);
+      acc[0] = all ? b.icmp_eq(groupHit, b.i32_val(0))
+                   : b.icmp_ne(groupHit, b.i32_val(0));
     }
+    return true;
   }
   if (value.getType().isInteger(64)) {
     // The i64 tree uses two shuffles per stage for all groups, while REDUX

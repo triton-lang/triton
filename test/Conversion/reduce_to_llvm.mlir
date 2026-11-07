@@ -9,6 +9,7 @@
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#warp_rows = #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>
 
 #packed_shuffle = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
@@ -21,18 +22,104 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // REDUX: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
 // REDUX: nvvm.vote.sync any %[[MASK]], {{.*}} -> i1
 // REDUX: nvvm.vote.sync all %[[MASK]], {{.*}} -> i1
-tt.func private @reduce_warp_predicates(%in: tensor<4x32xi1, #blocked_warp_reduce>) -> (tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+tt.func private @reduce_warp_predicates(%in: tensor<4x32xi1, #blocked_warp_reduce>)
+    -> (tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>) {
   %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
   ^bb0(%a: i1, %b: i1):
     %c = arith.ori %a, %b : i1
     tt.reduce.return %c : i1
-  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
   %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
   ^bb0(%a: i1, %b: i1):
     %c = arith.minui %a, %b : i1
     tt.reduce.return %c : i1
-  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
-  tt.return %any, %all : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
+  tt.return %any, %all : tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>
+}
+
+// Each warp holds eight copies of its four predicates. XOR counts each once.
+// REDUX-LABEL: @reduce_replicated_predicates
+// REDUX: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// REDUX: nvvm.vote.sync all %[[MASK]], %[[P:.*]] -> i1
+// REDUX: nvvm.vote.sync any %[[MASK]], %[[P]] -> i1
+// REDUX: %[[UNIQUE:.*]] = llvm.select
+// REDUX: nvvm.redux.sync xor %[[UNIQUE]], %[[MASK]]
+tt.func private @reduce_replicated_predicates(%in: tensor<4x4xi1, #blocked_warp_reduce>)
+    -> (tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>) {
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.andi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x4xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
+  %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.maxui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x4xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
+  %xor = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.xori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x4xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
+  tt.return %all, %any, %xor : tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>, tensor<4xi1, #warp_rows>
+}
+
+// REDUX-LABEL: @reduce_predicate_with_print
+// REDUX: nvvm.shfl.sync bfly
+// REDUX: llvm.call @vprintf
+tt.func private @reduce_predicate_with_print(%in: tensor<4x4xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows> {
+  %r = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    tt.print "combine" {hex = false, isSigned = array<i32: 0>} : %a : i1
+    %c = arith.ori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<4x4xi1, #blocked_warp_reduce>) -> tensor<4xi1, #warp_rows>
+  tt.return %r : tensor<4xi1, #warp_rows>
+}
+
+// Each half warp holds eight copies of its two predicates. All tests for
+// the absence of a false predicate in the selected half.
+// REDUX-LABEL: @reduce_halves_all
+// REDUX-DAG: %[[FULL:.*]] = llvm.mlir.constant(-1 : i32)
+// REDUX-DAG: %[[BIT:.*]] = llvm.mlir.constant(16 : i32)
+// REDUX-DAG: %[[LOW:.*]] = llvm.mlir.constant(65535 : i32)
+// REDUX-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// REDUX-DAG: %[[LEADER:.*]] = llvm.and %{{.*}}, %[[BIT]]
+// REDUX-DAG: %[[MEMBERS:.*]] = llvm.shl %[[LOW]], %[[LEADER]]
+// REDUX-DAG: %[[NEG:.*]] = llvm.xor
+// REDUX-DAG: %[[BALLOT:.*]] = nvvm.vote.sync ballot %[[FULL]], %[[NEG]] -> i32
+// REDUX-DAG: %[[HIT:.*]] = llvm.and %[[BALLOT]], %[[MEMBERS]]
+// REDUX: llvm.icmp "eq" %[[HIT]], %[[ZERO]]
+tt.func private @reduce_halves_all(%in: tensor<8x2xi1, #halves>)
+    -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.minui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<8x2xi1, #halves>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %all : tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>>
+}
+
+// Alternating lanes hold independent rows. Any tests for a set bit in
+// the even or odd positions of the full-warp ballot.
+// REDUX-LABEL: @reduce_even_odd_any
+// REDUX-DAG: %[[FULL:.*]] = llvm.mlir.constant(-1 : i32)
+// REDUX-DAG: %[[BIT:.*]] = llvm.mlir.constant(1 : i32)
+// REDUX-DAG: %[[EVEN:.*]] = llvm.mlir.constant(1431655765 : i32)
+// REDUX-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// REDUX-DAG: %[[LEADER:.*]] = llvm.and %{{.*}}, %[[BIT]]
+// REDUX-DAG: %[[MEMBERS:.*]] = llvm.shl %[[EVEN]], %[[LEADER]]
+// REDUX-DAG: %[[BALLOT:.*]] = nvvm.vote.sync ballot %[[FULL]], %{{.*}} -> i32
+// REDUX-DAG: %[[HIT:.*]] = llvm.and %[[BALLOT]], %[[MEMBERS]]
+// REDUX: llvm.icmp "ne" %[[HIT]], %[[ZERO]]
+tt.func private @reduce_even_odd_any(%in: tensor<8x2xi1, #even_odd>)
+    -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #even_odd}>> {
+  %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.maxui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<8x2xi1, #even_odd>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #even_odd}>>
+  tt.return %any : tensor<8xi1, #ttg.slice<{dim = 1, parent = #even_odd}>>
 }
 
 // CHECK-LABEL: @reduce_linear_layout
