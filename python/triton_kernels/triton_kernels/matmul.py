@@ -286,7 +286,8 @@ def matmul(a, b, bias,
 
     With b_sparse_metadata, B is compressed along K. Metadata has shape
     [N, ceil(K/32)] for FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
-    To prepack reusable metadata, convert its wrapped tensor to SparseMetadataLayout().
+    Metadata must be contiguous along N (stride(-2) == 1). Use StridedLayout(-2)
+    for wrapped tensors or meta.mT.contiguous().mT for a row-major PyTorch tensor.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
