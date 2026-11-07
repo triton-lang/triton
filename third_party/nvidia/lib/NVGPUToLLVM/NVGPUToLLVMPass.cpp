@@ -537,13 +537,12 @@ public:
     }
 
     auto ptxAsm = std::string(op.getSparsityMetadata() ? "wgmma.mma_async.sp"
-                                               : "wgmma.mma_async") +
+                                                       : "wgmma.mma_async") +
                   ".sync.aligned"
                   ".m" +
                   std::to_string(m) + "n" + std::to_string(n) + "k" +
-                  std::to_string(k) + "." +
-                  stringifyEnum(eltTypeC).str() + "." +
-                  stringifyEnum(eltTypeA).str() + "." +
+                  std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
+                  "." + stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
     return ptxAsm;
   }

@@ -14,10 +14,19 @@ def _load_tile(ptr, row, col, valid_rows, width, row_stride, col_stride, other=0
 
 
 @triton.jit
-def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceOffsets, M, N, K, X_STRIDE: tl.constexpr,
-                   W_STRIDE: tl.constexpr, E_STRIDE: tl.constexpr, SX_STRIDE: tl.constexpr, SW_STRIDE: tl.constexpr,
-                   OUT_STRIDE: tl.constexpr, BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha, BK: tl.constexpr,
-                   NVFP4: tl.constexpr, SCALE_K: tl.constexpr):
+def _pad_selector_word(word, word_idx, last_word, groups: tl.constexpr):
+    # Unused nibbles in the last word must also be legal selectors.
+    valid_bits: tl.constexpr = (1 << (4 * groups)) - 1
+    padded = (word & valid_bits) | (0x44444444 & ~valid_bits)
+    return tl.where(word_idx[None, :] == last_word, padded, word)
+
+
+@triton.jit
+def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceOffsets, SliceSizes, M, N, K,
+                   PARTIAL_GROUPS: tl.constexpr, X_STRIDE: tl.constexpr, W_STRIDE: tl.constexpr, E_STRIDE: tl.constexpr,
+                   SX_STRIDE: tl.constexpr, SW_STRIDE: tl.constexpr, OUT_STRIDE: tl.constexpr,
+                   BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha, BK: tl.constexpr, NVFP4: tl.constexpr,
+                   SCALE_K: tl.constexpr):
     # The instruction compresses its left operand. Compute W.T @ X.T.
     batch = tl.program_id(2)
     expert = batch
@@ -28,9 +37,9 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         if entry == -1:
             return
         expert = entry & 65535
-        m_tile = entry >> 16
+        m_tile = (entry.to(tl.uint32) >> 16).to(tl.int32)
         start = tl.load(SliceOffsets + expert)
-        M = tl.load(SliceOffsets + expert + 1)
+        M = start + tl.load(SliceSizes + expert)
     n = tl.program_id(0) * 128 + tl.arange(0, 128)
     m = start + m_tile * 128 + tl.arange(0, 128)
     xm = m
@@ -57,6 +66,8 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         x = _load_tile(X, xm, xk, xmask, K // pack, X_STRIDE[1], X_STRIDE[2])
         w = _load_tile(W, n, wk, n < N, K // (2 * pack), W_STRIDE[2], W_STRIDE[1])
         e = _load_tile(E, n, ek, n < N, tl.cdiv(K, BK // words), E_STRIDE[1], E_STRIDE[2], 0x44444444)
+        if PARTIAL_GROUPS:
+            e = _pad_selector_word(e, ek, K // (BK // words), PARTIAL_GROUPS)
         if NVFP4:
             sk = tile * (BK // SCALE_K) + tl.arange(0, BK // SCALE_K)
             xs = _load_tile(SX, xm, sk, xmask, K // SCALE_K, SX_STRIDE[1], SX_STRIDE[2])
@@ -124,7 +135,8 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     group = 8 if nvfp4 else 4
     if k % group or (nvfp4 and k % 16) or b.shape[-2] * 2 != stored_k:
         raise ValueError("compressed weights must store half the logical K values")
-    if sparsity_metadata.dtype != torch.int32 or sparsity_metadata.shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
+    if sparsity_metadata.dtype != torch.int32 or sparsity_metadata.shape != (*b.shape[:-2], n, triton.cdiv(
+            k, group * 8)):
         raise ValueError("expected one int32 sparsity metadata word per eight selector groups per output column")
     if sparsity_metadata.stride(-2) != 1:
         raise ValueError("b_sparsity_metadata must be column-major (stride(-2) == 1)")
@@ -154,20 +166,23 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
         c = allocate(output_shape, device=a.device, dtype=dtype)
     if c.shape != output_shape or c.dtype != dtype:
         raise ValueError("output shape or dtype does not match sparse matmul")
-    for t in (b, sparsity_metadata, xs, ws, config.a_mx_tensor_scale, config.b_mx_tensor_scale, bias, c, gather, scatter):
+    for t in (b, sparsity_metadata, xs, ws, config.a_mx_tensor_scale, config.b_mx_tensor_scale, bias, c, gather,
+              scatter):
         if t is not None and t.device != a.device:
             raise ValueError("sparse matmul operands must share a device")
     batch = a.shape[0] if a.ndim == 3 else 1
     schedule = ragged.block_schedule(128) if ragged is not None else None
     offsets = ragged.slice_offs if ragged is not None else None
-    if offsets is not None and (offsets.device != a.device or schedule.device != a.device):
+    sizes = ragged.slice_sizes if ragged is not None else None
+    if offsets is not None and any(t.device != a.device for t in (offsets, schedule, sizes)):
         raise ValueError("routing metadata must be on the same device as the activations")
     m_tiles = triton.cdiv(rows, 128) if ragged is None else ragged.n_blocks(ragged.n_slices, rows, 128)
     if batch and m_tiles and n:
         bk = 128 if nvfp4 else 64
         grid = (triton.cdiv(n, 128), m_tiles, batch)
-        _sparse_matmul[grid](a, b, sparsity_metadata, xs, ws, bias, c, gather, scatter, schedule, offsets, rows, n, k,
-                             _strides(a, 3), _strides(b, 3), _strides(sparsity_metadata, 3), _strides(xs, 3), _strides(ws, 3),
-                             _strides(c, 3), _strides(bias, 2), config.a_mx_tensor_scale, config.b_mx_tensor_scale,
-                             alpha, bk, nvfp4, scale_k, num_warps=4)
+        _sparse_matmul[grid](a, b, sparsity_metadata, xs, ws, bias, c, gather, scatter, schedule, offsets,
+                             sizes, rows, n, k, k // group % 8, _strides(a, 3), _strides(b, 3),
+                             _strides(sparsity_metadata, 3), _strides(xs, 3), _strides(ws, 3), _strides(c, 3),
+                             _strides(bias, 2), config.a_mx_tensor_scale, config.b_mx_tensor_scale, alpha, bk, nvfp4,
+                             scale_k, num_warps=4)
     return c

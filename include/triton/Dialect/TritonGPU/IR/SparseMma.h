@@ -18,7 +18,8 @@ struct SparseMmaKShape {
 inline constexpr SparseMmaKShape kFp8Sparse2To4{32, 64};
 inline constexpr SparseMmaKShape kNvfp4Sparse4To8{64, 128};
 
-// Register layouts for A, B, sparsity metadata and D of a warp-level sparse MMA.
+// Register layouts for A, B, sparsity metadata and D of a warp-level sparse
+// MMA.
 std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
                                                  ArrayRef<int64_t> shape,
                                                  int numWarps);

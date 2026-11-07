@@ -186,8 +186,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value useCOperand, Value loadedA, Value loadedB,
-                         Value loadedC, Value sparsityMetadata, Value loadedSparsityMetadata,
-                         bool allowTF32, bool needsPartialAccumulator,
+                         Value loadedC, Value sparsityMetadata,
+                         Value loadedSparsityMetadata, bool allowTF32,
+                         bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
@@ -252,8 +253,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   SmallVector<Value> selectorWords;
   if (sparsityMetadata)
-    selectorWords =
-        unpackTensorElements(loc, loadedSparsityMetadata, rewriter, sparsityMetadata.getType());
+    selectorWords = unpackTensorElements(loc, loadedSparsityMetadata, rewriter,
+                                         sparsityMetadata.getType());
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
@@ -280,6 +281,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       Value d;
       Value useC = tb.i1_val(0);
       if (!zeroAcc) {
+        // Partial accumulation adds C in software, outside the MMA predicate.
+        if (needsPartialAccumulator && useCOperand)
+          for (Value &value : mmaOut)
+            value = LLVM::SelectOp::create(rewriter, loc, useCOperand, value,
+                                           tb.f32_val(0));
         d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
         useC = tb.i1_val(1);
       }
@@ -344,8 +350,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = triton::nvgpu::WGMMAOp::create(
             rewriter, loc, accTy, a, b, useC, mmaAcc,
-            sparsityMetadata ? selectorWords[m] : Value(), M, N, logicalK, eltTypeC, eltTypeA,
-            eltTypeB, layoutA, layoutB);
+            sparsityMetadata ? selectorWords[m] : Value(), M, N, logicalK,
+            eltTypeC, eltTypeA, eltTypeB, layoutA, layoutB);
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;

@@ -596,13 +596,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
-    _tcgen05_mma(a, b, acc, None,
-                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
+    _tcgen05_mma(a, b, acc, None, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
 
 
 @builtin
 def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
-                      mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
+                       mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
     """Emit 2:4 FP8 MMA with logical K=64.
 
     A stores 32 FP8 values per row. Each sparsity metadata nibble selects two positions in a group of four.
@@ -610,12 +609,12 @@ def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True,
     """
     if not isinstance(sparsity_metadata, tensor_memory_descriptor):
         raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
-    _tcgen05_mma(a, b, acc, sparsity_metadata.handle,
-                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
+    _tcgen05_mma(a, b, acc, sparsity_metadata.handle, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type,
+                 b_type, _semantic)
 
 
-def _tcgen05_mma(a, b, acc, sparsity_metadata,
-                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic):
+def _tcgen05_mma(a, b, acc, sparsity_metadata, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type,
+                 _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -662,13 +661,13 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
-    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, None,
-                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic)
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, None, use_acc, pred, multicast, mbarriers,
+                        mbarrier_preds, _semantic)
 
 
 @builtin
-def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, *, use_acc=True, pred=True,
-                             multicast=False, mbarriers=None, mbarrier_preds=None, _semantic=None):
+def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, *, use_acc=True,
+                              pred=True, multicast=False, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """Emit native paired 4:8 NVFP4 MMA with logical K=128.
 
     A stores 32 packed bytes per row. Each sparsity metadata nibble selects two of the four adjacent-element pairs.
@@ -677,12 +676,12 @@ def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, spars
     """
     if not isinstance(sparsity_metadata, tensor_memory_descriptor):
         raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
-    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata.handle,
-                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic)
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata.handle, use_acc, pred, multicast,
+                        mbarriers, mbarrier_preds, _semantic)
 
 
-def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata,
-                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic):
+def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, use_acc, pred, multicast,
+                        mbarriers, mbarrier_preds, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
     assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"

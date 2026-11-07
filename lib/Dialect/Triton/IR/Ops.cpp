@@ -359,7 +359,8 @@ LogicalResult SparseDotOp::verify() {
   if (a.getDimSize(1) != 32 || b.getDimSize(0) != 64 ||
       !sparsityMetadata.getElementType().isInteger(32) ||
       sparsityMetadata.getShape() != ArrayRef<int64_t>({128, 2}))
-    return emitOpError("invalid compressed K dimension or sparsity metadata tile");
+    return emitOpError(
+        "invalid compressed K dimension or sparsity metadata tile");
   if (scaled) {
     for (auto [scale, rows] : {std::pair{getAScale(), int64_t(128)},
                                std::pair{getBScale(), b.getDimSize(1)}})

@@ -1889,16 +1889,16 @@ std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
 Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,
                          Value sparsityMetadata, Value acc, int numWarps) {
   auto resultTy = cast<RankedTensorType>(acc.getType());
-  auto layouts = getWarpSparseMmaLayouts(
-      builder.getContext(), resultTy.getShape(), numWarps);
+  auto layouts = getWarpSparseMmaLayouts(builder.getContext(),
+                                         resultTy.getShape(), numWarps);
   auto cvt = [&](Value v, Attribute layout) -> Value {
     auto ty = cast<RankedTensorType>(v.getType()).cloneWithEncoding(layout);
     return ConvertLayoutOp::create(builder, loc, ty, v);
   };
   Value c = cvt(acc, layouts[3]);
-  auto mma = SparseDotOp::create(builder, loc, c.getType(), cvt(a, layouts[0]),
-                                 cvt(b, layouts[1]), cvt(sparsityMetadata, layouts[2]),
-                                 c, Value(), Value());
+  auto mma = SparseDotOp::create(
+      builder, loc, c.getType(), cvt(a, layouts[0]), cvt(b, layouts[1]),
+      cvt(sparsityMetadata, layouts[2]), c, Value(), Value());
   return ConvertLayoutOp::create(builder, loc, resultTy, mma.getResult());
 }
 
