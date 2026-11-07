@@ -150,13 +150,15 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
 }
 
 Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc, Value a,
-                     Value b) {
+                     Value b, Value useA) {
   int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
   Value newStruct = LLVM::UndefOp::create(rewriter, loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
     Value lhs = LLVM::ExtractValueOp::create(rewriter, loc, a, i);
     Value rhs = LLVM::ExtractValueOp::create(rewriter, loc, b, i);
     Value add = LLVM::FAddOp::create(rewriter, loc, lhs, rhs);
+    if (useA)
+      add = LLVM::SelectOp::create(rewriter, loc, useA, add, rhs);
     newStruct = LLVM::InsertValueOp::create(rewriter, loc, newStruct, add, i);
   }
   return newStruct;
@@ -281,16 +283,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       Value d;
       Value useC = tb.i1_val(0);
       if (!zeroAcc) {
-        // Partial accumulation adds C in software, outside the MMA predicate.
-        if (needsPartialAccumulator && useCOperand)
-          for (Value &value : mmaOut)
-            value = LLVM::SelectOp::create(rewriter, loc, useCOperand, value,
-                                           tb.f32_val(0));
         d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
         useC = tb.i1_val(1);
       }
       if (useCOperand)
         useC = tb.and_(useC, useCOperand);
+      Value useInitialAcc = useCOperand;
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -360,7 +358,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         // If we need accumulate separately to have higher precision, insert
         // adds.
         if (requireAddAccumulator) {
-          d = d ? faddAccumulate(rewriter, loc, d, partialAcc) : partialAcc;
+          if (d) {
+            // The scalar add reads the asynchronous MMA result.
+            NVVM::WgmmaGroupSyncAlignedOp::create(rewriter, loc);
+            partialAcc = triton::nvgpu::WGMMAWaitGroupOp::create(
+                rewriter, loc, partialAcc, /*pendings=*/0);
+            d = faddAccumulate(rewriter, loc, d, partialAcc, useInitialAcc);
+          } else {
+            d = partialAcc;
+          }
+          useInitialAcc = Value();
           numLowPrecisionAcc = 0;
           partialAcc = Value();
         }
