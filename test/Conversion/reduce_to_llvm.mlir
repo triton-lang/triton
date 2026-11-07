@@ -1,11 +1,14 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck %s --check-prefixes=TERNARY,REDUX,FASTMINMAX
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX,PACKEDSHFL
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=120 ptx-version=88' -cse | FileCheck %s --check-prefixes=REDUX,FASTMINMAX
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck %s --check-prefixes=TERNARY,REDUX,FASTMINMAX,PRED-CHAINS
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=90' -cse | FileCheck %s --check-prefix=PRED-CHAINS
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX,PRED-CHAINS
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX,PACKEDSHFL,PRED-CHAINS
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=120 ptx-version=88' -cse | FileCheck %s --check-prefixes=REDUX,FASTMINMAX,PRED-CHAINS
 
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#predicate_row = #ttg.slice<{dim = 1, parent = #blocked_reduce}>
+!predicate_result = tensor<128xi1, #predicate_row>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -281,6 +284,92 @@ tt.func private @reduce_minui_i16(%arg0: tensor<128x8xi16, #blocked_packed_reduc
     tt.reduce.return %minimum : i16
   }) : (tensor<128x8xi16, #blocked_packed_reduce>) -> tensor<128xi16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
   tt.return %0 : tensor<128xi16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
+}
+
+// Each lane owns 32 flags. The first chain combines registers 0, 3 and 6.
+// PRED-CHAINS-LABEL: @reduce_register_predicates
+// PRED-CHAINS-DAG: %[[X0:.*]] = llvm.extractvalue %arg0[0]
+// PRED-CHAINS-DAG: %[[X3:.*]] = llvm.extractvalue %arg0[3]
+// PRED-CHAINS-DAG: %[[X6:.*]] = llvm.extractvalue %arg0[6]
+// PRED-CHAINS: %[[ALL:.*]] = llvm.intr.umin(%[[X0]], %[[X3]])
+// PRED-CHAINS: llvm.intr.umin(%[[ALL]], %[[X6]])
+// PRED-CHAINS: %[[ANY:.*]] = llvm.intr.umax(%[[X0]], %[[X3]])
+// PRED-CHAINS: llvm.intr.umax(%[[ANY]], %[[X6]])
+// PRED-CHAINS: %[[PARITY:.*]] = llvm.xor %[[X0]], %[[X3]] : i1
+// PRED-CHAINS: llvm.xor %[[PARITY]], %[[X6]] : i1
+// PRED-CHAINS: llvm.intr.smin(%[[X0]], %[[X3]])
+// PRED-CHAINS: llvm.intr.smax(%[[X0]], %[[X3]])
+tt.func private @reduce_register_predicates(%in: tensor<128x32xi1, #blocked_reduce>)
+    -> (!predicate_result, !predicate_result, !predicate_result, !predicate_result, !predicate_result) {
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.minui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.maxui %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %parity = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.xori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %signed_min = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.minsi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  %signed_max = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.maxsi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> !predicate_result
+  tt.return %all, %any, %parity, %signed_min, %signed_max :
+    !predicate_result, !predicate_result, !predicate_result, !predicate_result, !predicate_result
+}
+
+// An extra effect in the combiner makes the call order observable.
+// PRED-CHAINS-LABEL: @reduce_register_any_with_effect
+// PRED-CHAINS-DAG: %[[X0:.*]] = llvm.extractvalue %arg0[0]
+// PRED-CHAINS-DAG: %[[X1:.*]] = llvm.extractvalue %arg0[1]
+// PRED-CHAINS: llvm.call @vprintf
+// PRED-CHAINS: llvm.or %[[X0]], %[[X1]] : i1
+tt.func private @reduce_register_any_with_effect(%in: tensor<128x32xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row> {
+  %any = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    tt.print "combine" {hex = false, isSigned = array<i32: 0>} : %a : i1
+    %c = arith.ori %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x32xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row>
+  tt.return %any : tensor<128xi1, #predicate_row>
+}
+
+// PRED-CHAINS-LABEL: @reduce_register_all_16
+// PRED-CHAINS-DAG: %[[X0:.*]] = llvm.extractvalue %arg0[0]
+// PRED-CHAINS-DAG: %[[X3:.*]] = llvm.extractvalue %arg0[3]
+// PRED-CHAINS: llvm.and %[[X0]], %[[X3]] : i1
+tt.func private @reduce_register_all_16(%in: tensor<128x16xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row> {
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.andi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x16xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row>
+  tt.return %all : tensor<128xi1, #predicate_row>
+}
+
+// PRED-CHAINS-LABEL: @reduce_register_all_512
+// PRED-CHAINS-DAG: %[[X0:.*]] = llvm.extractvalue %arg0[0]
+// PRED-CHAINS-DAG: %[[X3:.*]] = llvm.extractvalue %arg0[3]
+// PRED-CHAINS: llvm.and %[[X0]], %[[X3]] : i1
+tt.func private @reduce_register_all_512(%in: tensor<128x512xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row> {
+  %all = "tt.reduce"(%in) <{axis = 1 : i32}> ({
+  ^bb0(%a: i1, %b: i1):
+    %c = arith.andi %a, %b : i1
+    tt.reduce.return %c : i1
+  }) : (tensor<128x512xi1, #blocked_reduce>) -> tensor<128xi1, #predicate_row>
+  tt.return %all : tensor<128xi1, #predicate_row>
 }
 
 // A supported opcode need not combine the block arguments.
