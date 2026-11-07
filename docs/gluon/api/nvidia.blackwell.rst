@@ -30,6 +30,8 @@ rejected on unsupported targets before instrumentation and lowering.
     mma_v2
     mul2
     sub2
+    tcgen05_sparse_mma
+    tcgen05_sparse_mma_scaled
     tensor_memory_descriptor
     tensor_memory_descriptor_type
     TensorMemoryLayout

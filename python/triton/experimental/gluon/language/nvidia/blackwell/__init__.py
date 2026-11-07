@@ -35,6 +35,8 @@ __all__ = [
     "mma_v2",
     "mul2",
     "sub2",
+    "tcgen05_sparse_mma",
+    "tcgen05_sparse_mma_scaled",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
@@ -575,7 +577,7 @@ def tcgen05_copy(src, dst, pred=True, _semantic=None):
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                a_type=None, b_type=None, metadata=None, _semantic=None):
+                a_type=None, b_type=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -588,14 +590,32 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
-        metadata (tensor_memory_descriptor, optional): Emit sparse MMA with a compressed A operand.
-            Use a 128-row i32 TMEM tile with two words per row for FP8 (logical K=64). FP8 packs eight consecutive four-bit selectors per word.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
+    _tcgen05_mma(a, b, acc, None,
+                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
+
+
+@builtin
+def tcgen05_sparse_mma(a, b, acc, metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
+                      mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
+    """Emit 2:4 FP8 MMA with logical K=64.
+
+    A stores 32 FP8 values per row. Each metadata nibble selects two positions in a group of four.
+    Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    """
+    if not isinstance(metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory metadata descriptor")
+    _tcgen05_mma(a, b, acc, metadata.handle,
+                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
+
+
+def _tcgen05_mma(a, b, acc, metadata,
+                 use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -618,12 +638,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type,
-                                         metadata.handle if metadata is not None else None)
+                                         metadata)
 
 
 @builtin
 def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
-                       mbarriers=None, mbarrier_preds=None, metadata=None, _semantic=None):
+                       mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA scaled instruction.
     acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
@@ -636,16 +656,33 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         b_scale (tensor): Scale factor for operand B.
         a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
         b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
-        metadata (tensor_memory_descriptor, optional): Emit paired 4:8 NVFP4 MMA.
-            For logical K=128, store compressed A in 32 bytes per row. Supply a
-            128-by-2 i32 TMEM tile with eight pair selectors per word, lowest
-            nibble first. Each operand uses four E4M3 scales along logical K.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, None,
+                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic)
+
+
+@builtin
+def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata, *, use_acc=True, pred=True,
+                             multicast=False, mbarriers=None, mbarrier_preds=None, _semantic=None):
+    """Emit native paired 4:8 NVFP4 MMA with logical K=128.
+
+    A stores 32 packed bytes per row. Each metadata nibble selects two of the four adjacent-element pairs.
+    Supply four E4M3 scales per row along logical K and use e2m1 for both operand formats.
+    Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    """
+    if not isinstance(metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory metadata descriptor")
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata.handle,
+                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic)
+
+
+def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, metadata,
+                        use_acc, pred, multicast, mbarriers, mbarrier_preds, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
     assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
@@ -670,7 +707,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast, metadata.handle if metadata is not None else None)
+                                                acc.layout.two_ctas, multicast, metadata)
 
 
 @constexpr_function
