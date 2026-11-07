@@ -1415,13 +1415,13 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
     if cc < (8, 9) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
         pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
-    m, n, k = 39, 143, 288
+    m, n, k = 39, 143, 272 if scale_k is None else 288
     group = 8 if nvfp4 else 4
     rng = torch.Generator().manual_seed(17)
     pairs = torch.combinations(torch.arange(4), r=2)
     indices = pairs[torch.randint(6, (n, k // group), generator=rng)]
     selectors = indices[..., 0] + 4 * indices[..., 1]
-    selectors = torch.nn.functional.pad(selectors, (0, -selectors.shape[-1] % 8), value=4)
+    selectors = torch.nn.functional.pad(selectors, (0, -selectors.shape[-1] % 8), value=0)
     sparsity_metadata = (selectors.reshape(n, -1, 8) << (torch.arange(8) * 4)).sum(-1).int().cuda()
 
     x = torch.randint(4, (m, k), generator=rng)
@@ -1488,3 +1488,54 @@ def test_matmul_structured_sparse_experts(routed):
     out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparsity_metadata=sparsity_metadata,
                  out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("sizes,slice_map", [([2, 3, 1], [0, 1, 2]), ([2, 3, 1], [0, -1, 1]),
+                                             ([32768 * 128 + 1], [0])])
+def test_matmul_structured_sparse_remapped_experts(sizes, slice_map):
+    from triton_kernels.tensor_details.ragged_tensor import remap_ragged_tensor_metadata
+    if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in (
+            (8, 9), (9, 0), (10, 0), (10, 3)):
+        pytest.skip("requires native FP8 sparse MMA")
+    rows, experts = sum(sizes), len(sizes)
+    device = "cuda"
+    ragged = make_ragged_tensor_metadata(torch.tensor(sizes, device=device, dtype=torch.int32), rows)
+    ragged = remap_ragged_tensor_metadata(ragged, torch.tensor(slice_map, device=device, dtype=torch.int32))
+    a = torch.zeros((1, 64), dtype=torch.float8_e4m3fn, device=device).expand(rows, -1)
+    b = torch.zeros((experts, 32, 1), dtype=a.dtype, device=device)
+    selectors = torch.full((experts, 2, 1), 0x44444444, device=device, dtype=torch.int32).mT
+    bias = torch.arange(1, experts + 1, device=device, dtype=torch.float32)[:, None]
+    out = torch.full((rows, 1), -99., device=device)
+    matmul(a, b, bias, c=out, a_ragged_metadata=ragged, b_sparsity_metadata=selectors)
+    for chunk, expert in zip(out.split(sizes), slice_map):
+        torch.testing.assert_close(chunk, torch.full_like(chunk, expert + 1 if expert >= 0 else -99))
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_sparse_dot_one_sided_scales(left):
+    @triton.jit
+    def kernel(LEFT: tl.constexpr):
+        a = tl.full((128, 32), 0, tl.uint8)
+        b = tl.full((64, 128), 0, tl.uint8)
+        e = tl.full((128, 2), 0x44444444, tl.int32)
+        scale = tl.full((128, 4), 1, tl.float32).to(tl.float8e4nv)
+        tl.sparse_dot(a, b, e, a_scale=scale if LEFT else None, b_scale=None if LEFT else scale)
+
+    with pytest.raises(triton.CompilationError) as exc:
+        kernel[(1,)](left)
+    assert "requires both operand scales" in str(exc.value.__cause__)
+
+def test_sparse_matmul_partial_selector_word():
+    from triton_kernels.matmul_details._sparse_matmul import _pad_selector_word
+
+    @triton.jit
+    def kernel(src, dst):
+        col = tl.arange(0, 2)
+        words = tl.load(src + col)[None, :]
+        padded = _pad_selector_word(words, col, 1, 4)
+        tl.store(dst + col, tl.reshape(padded, (2,)))
+
+    src = torch.tensor([0x698c698c, 0x0000ec94], device="cuda", dtype=torch.int32)
+    dst = torch.empty_like(src)
+    kernel[(1,)](src, dst)
+    assert dst.tolist() == [0x698c698c, 0x4444ec94]

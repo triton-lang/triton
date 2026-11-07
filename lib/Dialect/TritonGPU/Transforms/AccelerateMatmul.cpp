@@ -321,8 +321,9 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
 }
 
 static Value createReadOnlyTmemOperand(Value tensor, Attribute tmemEncoding,
-                                    Attribute tensorMemorySpace, int numWarps,
-                                    Location loc, PatternRewriter &rewriter) {
+                                       Attribute tensorMemorySpace,
+                                       int numWarps, Location loc,
+                                       PatternRewriter &rewriter) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto tmemType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -770,8 +771,9 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
         getNumCTAs(resultTy.getEncoding()) != 1)
       return;
     if (capability != 90 || warps % 4) {
-      Value dot = buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
-                                     op.getSparsityMetadata(), op.getAcc(), warps);
+      Value dot =
+          buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
+                             op.getSparsityMetadata(), op.getAcc(), warps);
       rewriter.replaceOp(op, dot);
       return;
     }
@@ -784,10 +786,11 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
         op.getContext(), 3, 0, {unsigned(warps), 1}, cga, {16, n, 32});
     auto accTy = resultTy.cloneWithEncoding(encoding);
     Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
-    auto layouts = getWarpSparseMmaLayouts(op.getContext(),
-                                           resultTy.getShape(), warps);
+    auto layouts =
+        getWarpSparseMmaLayouts(op.getContext(), resultTy.getShape(), warps);
     Value e = ConvertLayoutOp::create(
-        rewriter, loc, op.getSparsityMetadata().getType().cloneWithEncoding(layouts[2]),
+        rewriter, loc,
+        op.getSparsityMetadata().getType().cloneWithEncoding(layouts[2]),
         op.getSparsityMetadata());
     Value dot = nvidia_gpu::WarpGroupDotOp::create(
         rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
@@ -799,26 +802,29 @@ static void lowerSparseDot(SparseDotOp op, int capability) {
   auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
       ctx, 128, op.getSparsityMetadata().getType().getDimSize(1), 1, cga);
   auto space = nv::TensorMemorySpaceAttr::get(ctx);
-  Value sparsityMetadata = createReadOnlyTmemOperand(op.getSparsityMetadata(), metaEncoding, space,
-                                         warps, loc, rewriter);
+  Value sparsityMetadata = createReadOnlyTmemOperand(
+      op.getSparsityMetadata(), metaEncoding, space, warps, loc, rewriter);
   auto accEncoding = nv::TensorMemoryEncodingAttr::get(
       ctx, 128, resultTy.getDimSize(1), 1, cga);
   auto tokenTy = rewriter.getType<AsyncTokenType>();
-  auto accDesc = MemDescType::get(resultTy.getShape(), resultTy.getElementType(),
-                                  accEncoding, space, /*mutableMemory=*/true);
+  auto accDesc =
+      MemDescType::get(resultTy.getShape(), resultTy.getElementType(),
+                       accEncoding, space, /*mutableMemory=*/true);
   auto accType = resultTy.cloneWithEncoding(
       nv::getDefaultLayoutForTmemLdSt(accDesc, warps));
-  Value initialAcc = ConvertLayoutOp::create(rewriter, loc, accType, op.getAcc());
-  auto acc = nv::TMEMAllocOp::create(rewriter, loc, accDesc, tokenTy, initialAcc);
+  Value initialAcc =
+      ConvertLayoutOp::create(rewriter, loc, accType, op.getAcc());
+  auto acc =
+      nv::TMEMAllocOp::create(rewriter, loc, accDesc, tokenTy, initialAcc);
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   Value token;
   if (op.getAScale()) {
     auto enc = nv::TensorMemoryScalesEncodingAttr::get(
         ctx, cga, nv::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
-    Value sa =
-        createReadOnlyTmemOperand(op.getAScale(), enc, space, warps, loc, rewriter);
-    Value sb =
-        createReadOnlyTmemOperand(op.getBScale(), enc, space, warps, loc, rewriter);
+    Value sa = createReadOnlyTmemOperand(op.getAScale(), enc, space, warps, loc,
+                                         rewriter);
+    Value sb = createReadOnlyTmemOperand(op.getBScale(), enc, space, warps, loc,
+                                         rewriter);
     auto mma = nv::TCGen5MMAScaledOp::create(
         rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
         ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
@@ -1168,14 +1174,14 @@ public:
     if (!scaleA) {
       scaleA =
           createReadOnlyTmemOperand(dotOp.getAScale(), scaleAEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+                                    tensorMemorySpace, numWarps, loc, rewriter);
     }
     Value scaleB =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
     if (!scaleB) {
       scaleB =
           createReadOnlyTmemOperand(dotOp.getBScale(), scaleBEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+                                    tensorMemorySpace, numWarps, loc, rewriter);
     }
 
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);

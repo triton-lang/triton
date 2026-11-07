@@ -328,7 +328,8 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
   // fine-grained overlapping of the wgmma ops but empirically 2 splits gave the
   // best performance. In future this may be something we want to allow the user
   // to tune.
-  if (dotOp.getSparsityMetadata() || !isa<RankedTensorType>(dotOp.getA().getType())) {
+  if (dotOp.getSparsityMetadata() ||
+      !isa<RankedTensorType>(dotOp.getA().getType())) {
     return {dotOp};
   }
 

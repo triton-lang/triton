@@ -680,8 +680,8 @@ def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     """
     if acc is None:
         acc = core.full((a.shape[0], b.shape[1]), 0, core.float32)
+    core.static_assert((a_scale is None) == (b_scale is None), "sparse_dot requires both operand scales or neither")
     if a_scale is not None:
-        core.static_assert(b_scale is not None)
         if a_scale.shape[1] == 8:
             core.static_assert(b_scale.shape[1] == 8)
             # A compressed byte holds two FP4 values. Four bytes represent a

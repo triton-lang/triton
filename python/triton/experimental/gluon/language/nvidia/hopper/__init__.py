@@ -143,7 +143,8 @@ def warpgroup_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, precisio
             or sparsity_metadata.dtype not in (_core.int32, _core.uint32)):
         raise ValueError("sparse WGMMA requires two int32 or uint32 sparsity metadata words per row of A")
     return _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic,
-                          sparsity_metadata.handle, _semantic.num_warps(_generator).value)
+                          sparsity_metadata.handle,
+                          _semantic.num_warps(_generator).value)
 
 
 def _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic, *sparse_args):

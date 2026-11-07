@@ -993,7 +993,8 @@ void init_gluon_ir(py::module_ &m) {
           "create_warpgroup_mma",
           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
              triton::InputPrecision precision, int maxNumImpreciseAcc,
-             bool isAsync, std::optional<Value> sparsityMetadata, int warps) -> Value {
+             bool isAsync, std::optional<Value> sparsityMetadata,
+             int warps) -> Value {
             Value e;
             if (sparsityMetadata) {
               auto ty = cast<RankedTensorType>(sparsityMetadata->getType());
@@ -1136,11 +1137,11 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
       .def("create_warp_sparse_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value sparsityMetadata, Value acc,
-              int warps) {
+           [](GluonOpBuilder &self, Value a, Value b, Value sparsityMetadata,
+              Value acc, int warps) {
              return ttg::buildWarpSparseDot(self.getBuilder(),
-                                            self.getLastLoc(), a, b, sparsityMetadata,
-                                            acc, warps);
+                                            self.getLastLoc(), a, b,
+                                            sparsityMetadata, acc, warps);
            })
       .def(
           "create_tcgen05_mma",
@@ -1173,7 +1174,8 @@ void init_gluon_ir(py::module_ &m) {
              Value bScale, tt::ScaleDotElemType aType,
              tt::ScaleDotElemType bType, Value useAcc, Value pred,
              std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-             bool two_ctas, bool multicast, std::optional<Value> sparsityMetadata) {
+             bool two_ctas, bool multicast,
+             std::optional<Value> sparsityMetadata) {
             Value accDep;
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
             auto mma = self.create<ttng::TCGen5MMAScaledOp>(

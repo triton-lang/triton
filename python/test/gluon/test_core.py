@@ -4821,13 +4821,14 @@ def test_mma_v2(dtype):
 
 
 @pytest.mark.parametrize("num_warps", [4, 8])
-def test_sparse_mma_fp8(num_warps):
+@pytest.mark.parametrize("use_acc", [False, True])
+def test_sparse_mma_fp8(num_warps, use_acc):
     if not is_cuda() or torch.cuda.get_device_capability() not in ((8, 9), (9, 0)):
         pytest.skip("requires SM89 or SM90")
     use_wgmma = is_hopper()
 
     @gluon.jit
-    def kernel(A, B, E, D, M: ttgl.constexpr, WGMMA: ttgl.constexpr):
+    def kernel(A, B, E, D, UseAcc, M: ttgl.constexpr, WGMMA: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
         row = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))
         ak = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
@@ -4838,14 +4839,15 @@ def test_sparse_mma_fp8(num_warps):
         e = ttgl.load(E + row[:, None] * 2 + ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))[None, :])
         if WGMMA:
             sa = ttgl.allocate_shared_memory(ttgl.float8e4nv, [M, 32], ttgl.NVMMASharedLayout(32, 8), a)
-            sb = ttgl.allocate_shared_memory(ttgl.float8e4nv, [64, 32],
-                                             ttgl.NVMMASharedLayout(64, 8, transposed=True), b)
+            sb = ttgl.allocate_shared_memory(ttgl.float8e4nv, [64, 32], ttgl.NVMMASharedLayout(64, 8, transposed=True),
+                                             b)
             acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, 32])
             acc = ttgl.full([M, 32], 1, ttgl.float32, acc_layout)
-            result = hopper.warpgroup_sparse_mma(sa, sb, acc, sparsity_metadata=e, is_async=True)
+            result = hopper.warpgroup_sparse_mma(sa, sb, acc, sparsity_metadata=e, use_acc=ttgl.load(UseAcc),
+                                                 max_num_imprecise_acc=64, is_async=True)
             result = hopper.warpgroup_mma_wait(deps=[result])
         else:
-            acc = ttgl.full([M, 32], 1, ttgl.float32, layout)
+            acc = ttgl.full([M, 32], 1, ttgl.float32, layout) * ttgl.load(UseAcc)
             result = mma_v2_sparse(a, b, e, acc)
         ttgl.store(D + row[:, None] * 32 + col[None, :], ttgl.convert_layout(result, layout))
 
@@ -4855,11 +4857,11 @@ def test_sparse_mma_fp8(num_warps):
     # Keep positions 0 and 3 in every group of four.
     e = torch.full((m, 2), -858993460, dtype=torch.int32, device="cuda")  # 0xcccccccc
     out = torch.empty((m, 32), dtype=torch.float32, device="cuda")
-    compiled = kernel[(1,)](a, b, e, out, m, use_wgmma, num_warps=num_warps)
+    compiled = kernel[(1, )](a, b, e, out, torch.tensor(use_acc, device="cuda"), m, use_wgmma, num_warps=num_warps)
     dense = torch.zeros((m, 64), device="cuda")
     dense[:, ::4] = a[:, ::2]
     dense[:, 3::4] = a[:, 1::2]
-    torch.testing.assert_close(out, dense @ b.float() + 1, atol=0, rtol=0)
+    torch.testing.assert_close(out, dense @ b.float() + int(use_acc), atol=0, rtol=0)
     assert ("wgmma.mma_async.sp.sync.aligned" if use_wgmma else "mma.sp.sync.aligned") in compiled.asm["ptx"]
 
 
@@ -8373,3 +8375,53 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     if not atomic:
         assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="requires native paired NVFP4 sparse MMA")
+def test_tcgen05_sparse_mma_scaled_pair_selectors():
+
+    @gluon.jit
+    def load_rows(ptr, width: ttgl.constexpr, layout: ttgl.constexpr):
+        r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        c = ttgl.arange(0, width, layout=ttgl.SliceLayout(0, layout))
+        return ttgl.load(ptr + r[:, None] * width + c[None, :])
+
+    @gluon.jit
+    def kernel(A, B, E, SA, SB, D):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 32], ttgl.NVMMASharedLayout(32, 8), load_rows(A, 32, layout))
+        b = ttgl.allocate_shared_memory(ttgl.uint8, [64, 128], ttgl.NVMMASharedLayout(64, 8, transposed=True),
+                                        ttgl.permute(load_rows(B, 64, layout), (1, 0)))
+        e = allocate_tensor_memory(ttgl.int32, [128, 2], TensorMemoryLayout([128, 2], 1))
+        sa = allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
+        e.store(load_rows(E, 2, e.get_reg_layout()))
+        sa.store(load_rows(SA, 4, sa.get_reg_layout()))
+        sb.store(load_rows(SB, 4, sb.get_reg_layout()))
+        acc = allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], 1))
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", e, use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0)
+        r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        c = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
+        ttgl.store(D + r[:, None] * 128 + c[None, :], ttgl.convert_layout(acc.load(), layout))
+
+    device = "cuda"
+    pairs = torch.combinations(torch.arange(4, device=device))[torch.randint(6, (128, 16), device=device)]
+    nibbles = pairs[..., 0] | (pairs[..., 1] << 2)
+    selectors = (nibbles.reshape(128, 2, 8) << (4 * torch.arange(8, device=device))).sum(-1).int()
+    a = torch.randint(4, (128, 64), device=device)
+    b = torch.randint(4, (128, 128), device=device)
+    sa, sb = [torch.randint(1, 5, (128, 4), device=device).to(torch.float8_e4m3fn) for _ in range(2)]
+
+    def pack(x):
+        return (x[:, ::2] | (x[:, 1::2] << 4)).byte()
+
+    out = torch.empty((128, 128), device=device)
+    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out)
+    pos = (2 * pairs[..., None] + torch.arange(2, device=device)).flatten(-2)
+    dense = torch.zeros(128, 16, 8, device=device).scatter_(2, pos, a.reshape(128, 16, 4).float() * 0.5)
+    expected = (dense.reshape(128, 128) * sa.float().repeat_interleave(32, 1)) @ (b.float() * 0.5 *
+                                                                                  sb.float().repeat_interleave(32, 1)).T
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
