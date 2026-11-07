@@ -103,7 +103,7 @@ bool isFp4Padded(MemDescType operand) {
 }
 
 static int getScaleVecSize(ttng::TCGen5MMAScaledOp op) {
-  int blockK = op.getBlockK() / (op.getMetadata() ? 2 : 1);
+  int blockK = op.getStoredAK();
   int64_t scaleCols = op.getAScale().getType().getShape().back();
   assert(blockK % scaleCols == 0);
   return blockK / scaleCols;
@@ -481,11 +481,16 @@ struct DotConversion {
 
   Value metadata;
   unsigned blockK;
+  unsigned storedAK;
   int mmaSizeK;
   SmallVector<int> kOffsets;
 
   int getKOffset(int k) const {
     return kOffsets.empty() ? k * mmaSizeK : kOffsets[k];
+  }
+
+  unsigned getACoordinate(unsigned logicalK) const {
+    return logicalK / (blockK / storedAK);
   }
 
   int getKSize(int k) const { return getKOffset(k + 1) - getKOffset(k); }
@@ -563,8 +568,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
   // along M.
-  SmallVector<unsigned> aOperandShape = {mmaSizeM,
-                                         op.metadata ? mmaSizeK / 2 : mmaSizeK};
+  SmallVector<unsigned> aOperandShape = {mmaSizeM, op.getACoordinate(mmaSizeK)};
   // For M=128 twoCTAs, A and C have the same split and B has a split half of C
   // along N.
   SmallVector<unsigned> bOperandShape = {mmaSizeK,
@@ -680,9 +684,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto [m, n, k] = indices;
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
-    MemDescOperand a =
-        aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k), rewriter, loc,
-                         op.metadata ? op.getKSize(k) / 2 : op.getKSize(k));
+    MemDescOperand a = aLoader->memLoad(
+        m * aOperandShape[0], op.getACoordinate(op.getKOffset(k)), rewriter,
+        loc, op.getACoordinate(op.getKSize(k)));
     Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
                                 rewriter, loc, op.getKSize(k));
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
@@ -732,7 +736,8 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
     llvm_unreachable("Unsupported type.");
   }
 
-  dot.blockK = aTensorTy.getDimSize(1);
+  dot.blockK = bTensorTy.getDimSize(0);
+  dot.storedAK = aTensorTy.getDimSize(1);
   dot.mmaSizeK = 256 / aTensorTy.getElementTypeBitWidth();
 
   auto tensorMemAttr =
@@ -752,8 +757,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   if (Value metadata = adaptor.getMetadata()) {
     dot.metadata =
         TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, metadata);
-    dot.mmaSizeK = 512 / aTensorTy.getElementTypeBitWidth();
-    dot.blockK = dot.mmaSizeK;
+    dot.mmaSizeK = dot.blockK; // Sparse ops verify a single K tile.
   }
   dot.numBitsPerElementA = aTensorTy.getElementTypeBitWidth();
   dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
@@ -848,6 +852,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   unsigned mmaSizeN = ttng::getMMAv5InstructionN(dTensorTy);
 
   dot.blockK = blockK; // K is not split across CTAs
+  dot.storedAK = op.getStoredAK();
 
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
@@ -867,8 +872,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   if (Value metadata = adaptor.getMetadata()) {
     dot.metadata =
         TritonLLVMOpBuilder(loc, rewriter).ptrtoint(i32_ty, metadata);
-    dot.mmaSizeK = 128;
-    dot.blockK = dot.mmaSizeK;
+    dot.mmaSizeK = dot.blockK;
   }
   dot.numBitsPerElementA = getFormatBitSize(op.getAType());
   dot.numBitsPerElementB = getFormatBitSize(op.getBType());

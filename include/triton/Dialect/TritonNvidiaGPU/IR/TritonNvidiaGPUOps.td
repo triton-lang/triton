@@ -236,6 +236,9 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let description = [{
     $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
+
+    B's K extent defines the reduction. For sparse MMA, A stores half as
+    many values along K and $metadata selects their logical positions.
   }];
 
   let arguments = (ins
@@ -775,6 +778,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
     The `isUnsigned` attribute is only relevant when performing an integer MMA operation.
     If true, the integer values are treated as unsigned, otherwise they are treated as signed.
+
+    B's K extent defines the reduction. For sparse MMA, A stores half as
+    many values along K and $metadata selects their logical positions.
   }];
 
   let arguments = (ins
@@ -847,6 +853,10 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
+
+    B's K extent defines the reduction. For sparse MMA, A stores half as
+    many values along K and $metadata selects their logical positions.
+    Element counts include both values in each K-packed FP4 byte.
   }];
 
   let arguments = (ins
@@ -872,7 +882,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let extraClassDeclaration = [{
     int64_t getBlockM();
     int64_t getBlockN();
-    int64_t getBlockK();
+    int64_t getBlockK(); // Logical reduction extent from B.
+    int64_t getStoredAK(); // A values along K, after unpacking FP4 bytes.
   }];
 
   let builders = [
