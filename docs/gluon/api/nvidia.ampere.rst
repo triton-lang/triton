@@ -16,3 +16,4 @@ NVIDIA Ampere
     :nosignatures:
 
     mma_v2
+    mma_v2_sparse

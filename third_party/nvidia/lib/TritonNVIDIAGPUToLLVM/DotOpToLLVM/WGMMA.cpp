@@ -150,13 +150,15 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
 }
 
 Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc, Value a,
-                     Value b) {
+                     Value b, Value useA) {
   int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
   Value newStruct = LLVM::UndefOp::create(rewriter, loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
     Value lhs = LLVM::ExtractValueOp::create(rewriter, loc, a, i);
     Value rhs = LLVM::ExtractValueOp::create(rewriter, loc, b, i);
     Value add = LLVM::FAddOp::create(rewriter, loc, lhs, rhs);
+    if (useA)
+      add = LLVM::SelectOp::create(rewriter, loc, useA, add, rhs);
     newStruct = LLVM::InsertValueOp::create(rewriter, loc, newStruct, add, i);
   }
   return newStruct;
@@ -186,7 +188,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
                          Operation *op, Value a, Value b, Value c, Value d,
                          Value useCOperand, Value loadedA, Value loadedB,
-                         Value loadedC, bool allowTF32,
+                         Value loadedC, Value sparsityMetadata,
+                         Value loadedSparsityMetadata, bool allowTF32,
                          bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -237,8 +240,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   } else {
     structA = unpackTensorElements(loc, loadedA, rewriter, aTensorTy);
   }
-  auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
-                                           {K, N}, 1, 3, false, dTensorTy);
+  // The encoding gives the instruction width in stored A values. B spans
+  // the logical reduction axis, including positions omitted from sparse A.
+  unsigned logicalK = K * (bTensorTy.getDimSize(0) / aTensorTy.getShape()[1]);
+  auto bLoader = DotOpMmaSmemLoader::build(
+      loc, rewriter, bTensorTy, baseB, {logicalK, N}, 1, 3, false, dTensorTy);
   if (failed(bLoader)) {
     return mlir::emitError(loc, "failed to find valid wgmma layout for "
                                 "operand B in shared memory ")
@@ -247,6 +253,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   }
   bool transB = !bLoader->getDescriptor().transposed;
 
+  SmallVector<Value> selectorWords;
+  if (sparsityMetadata)
+    selectorWords = unpackTensorElements(loc, loadedSparsityMetadata, rewriter,
+                                         sparsityMetadata.getType());
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
@@ -278,6 +288,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
       if (useCOperand)
         useC = tb.and_(useC, useCOperand);
+      Value useInitialAcc = useCOperand;
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -327,8 +338,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
-        auto b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
-        numLowPrecisionAcc += K;
+        auto b = bLoader->smemLoad(k * logicalK, n * mmaSizeN, rewriter, loc);
+        numLowPrecisionAcc += logicalK;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.
         bool requireAddAccumulator =
@@ -336,8 +347,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
             (numLowPrecisionAcc >= maxNumImpreciseAcc || k == numRepK - 1);
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = triton::nvgpu::WGMMAOp::create(
-            rewriter, loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC,
-            eltTypeA, eltTypeB, layoutA, layoutB);
+            rewriter, loc, accTy, a, b, useC, mmaAcc,
+            sparsityMetadata ? selectorWords[m] : Value(), M, N, logicalK,
+            eltTypeC, eltTypeA, eltTypeB, layoutA, layoutB);
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;
@@ -346,7 +358,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         // If we need accumulate separately to have higher precision, insert
         // adds.
         if (requireAddAccumulator) {
-          d = d ? faddAccumulate(rewriter, loc, d, partialAcc) : partialAcc;
+          if (d) {
+            // The scalar add reads the asynchronous MMA result.
+            NVVM::WgmmaGroupSyncAlignedOp::create(rewriter, loc);
+            partialAcc = triton::nvgpu::WGMMAWaitGroupOp::create(
+                rewriter, loc, partialAcc, /*pendings=*/0);
+            d = faddAccumulate(rewriter, loc, d, partialAcc, useInitialAcc);
+          } else {
+            d = partialAcc;
+          }
+          useInitialAcc = Value();
           numLowPrecisionAcc = 0;
           partialAcc = Value();
         }
@@ -380,7 +401,8 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread) {
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
-                    adaptor.getA(), adaptor.getB(), adaptor.getC(),           //
+                    adaptor.getA(), adaptor.getB(), adaptor.getC(),
+                    op.getSparsityMetadata(), adaptor.getSparsityMetadata(),
                     op.getInputPrecision() == InputPrecision::TF32,
                     op.needsPartialAccumulator(), op.getMaxNumImpreciseAcc(),
                     !op.getIsAsync(), thread);

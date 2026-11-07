@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include <type_traits>
 
 namespace mlir {
@@ -319,9 +320,10 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
                               reshape2D.getResult());
 }
 
-static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
-                                    Attribute tensorMemorySpace, int numWarps,
-                                    Location loc, PatternRewriter &rewriter) {
+static Value createReadOnlyTmemOperand(Value tensor, Attribute tmemEncoding,
+                                       Attribute tensorMemorySpace,
+                                       int numWarps, Location loc,
+                                       PatternRewriter &rewriter) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto tmemType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -568,8 +570,8 @@ public:
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
-          mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc(), false);
+          mmaResult.newAcc, /*useC=*/nullptr, /*sparsityMetadata=*/nullptr,
+          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(), false);
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
@@ -752,6 +754,99 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
     newB = mapping.lookup(value);
   }
   return newB;
+}
+
+static LogicalResult lowerSparseDot(SparseDotOp op, int capability) {
+  namespace nv = triton::nvidia_gpu;
+  PatternRewriter rewriter(op.getContext());
+  rewriter.setInsertionPoint(op);
+  auto resultTy = op.getType();
+  auto loc = op.getLoc();
+  auto ctx = op.getContext();
+  int warps = lookupNumWarps(op);
+  auto cga = getCGALayout(resultTy.getEncoding());
+  bool blackwell = capability == 100 || capability == 103;
+  unsigned elementBitWidth = op.getA().getType().getElementTypeBitWidth();
+  if (getNumCTAs(resultTy.getEncoding()) != 1)
+    return op.emitOpError("requires a single CTA");
+  if (blackwell && warps < 4)
+    return op.emitOpError(
+        "Blackwell tensor-memory operands require at least four warps");
+  if (!blackwell) {
+    if (capability < (elementBitWidth == 16 ? 80 : 89) || capability >= 100 ||
+        op.getAScale())
+      return op.emitOpError("unsupported sparse MMA format or target");
+    if (capability != 90 || warps % 4) {
+      Value dot =
+          buildWarpSparseDot(rewriter, loc, op.getA(), op.getB(),
+                             op.getSparsityMetadata(), op.getAcc(), warps);
+      rewriter.replaceOp(op, dot);
+      return success();
+    }
+  }
+  bool allowTranspose = elementBitWidth == 16;
+  Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, allowTranspose);
+  Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, allowTranspose);
+  if (!blackwell) {
+    unsigned n = resultTy.getDimSize(1);
+    auto encoding = NvidiaMmaEncodingAttr::get(
+        ctx, 3, 0, {unsigned(warps), 1}, cga,
+        {16, n, static_cast<unsigned>(op.getA().getType().getDimSize(1))});
+    auto accTy = resultTy.cloneWithEncoding(encoding);
+    Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
+    auto layouts = getWarpSparseMmaLayouts(ctx, elementBitWidth,
+                                           resultTy.getShape(), warps);
+    Value e = ConvertLayoutOp::create(
+        rewriter, loc,
+        op.getSparsityMetadata().getType().cloneWithEncoding(layouts[2]),
+        op.getSparsityMetadata());
+    Value dot = nvidia_gpu::WarpGroupDotOp::create(
+        rewriter, loc, accTy, a, b, acc, Value(), e, InputPrecision::IEEE,
+        1u << 30, false);
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, dot);
+    return success();
+  }
+
+  auto metaEncoding = nv::TensorMemoryEncodingAttr::get(
+      ctx, 128, op.getSparsityMetadata().getType().getDimSize(1), 1, cga);
+  auto space = nv::TensorMemorySpaceAttr::get(ctx);
+  Value sparsityMetadata = createReadOnlyTmemOperand(
+      op.getSparsityMetadata(), metaEncoding, space, warps, loc, rewriter);
+  auto accEncoding = nv::TensorMemoryEncodingAttr::get(
+      ctx, 128, resultTy.getDimSize(1), 1, cga);
+  auto tokenTy = rewriter.getType<AsyncTokenType>();
+  auto accDesc =
+      MemDescType::get(resultTy.getShape(), resultTy.getElementType(),
+                       accEncoding, space, /*mutableMemory=*/true);
+  auto accType = resultTy.cloneWithEncoding(
+      nv::getDefaultLayoutForTmemLdSt(accDesc, warps));
+  Value initialAcc =
+      ConvertLayoutOp::create(rewriter, loc, accType, op.getAcc());
+  auto acc =
+      nv::TMEMAllocOp::create(rewriter, loc, accDesc, tokenTy, initialAcc);
+  Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+  Value token;
+  if (op.getAScale()) {
+    auto enc = nv::TensorMemoryScalesEncodingAttr::get(
+        ctx, cga, nv::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+    Value sa = createReadOnlyTmemOperand(op.getAScale(), enc, space, warps, loc,
+                                         rewriter);
+    Value sb = createReadOnlyTmemOperand(op.getBScale(), enc, space, warps, loc,
+                                         rewriter);
+    auto mma = nv::TCGen5MMAScaledOp::create(
+        rewriter, loc, tokenTy, a, b, acc, acc.getToken(), sa, sb,
+        ScaleDotElemType::E2M1, ScaleDotElemType::E2M1, pred, pred);
+    mma.getSparsityMetadataMutable().assign(sparsityMetadata);
+    token = mma.getToken();
+  } else {
+    auto mma = nv::TCGen5MMAOp::create(rewriter, loc, tokenTy, a, b, acc,
+                                       acc.getToken(), pred, pred);
+    mma.getSparsityMetadataMutable().assign(sparsityMetadata);
+    token = mma.getToken();
+  }
+  auto ld = nv::TMEMLoadOp::create(rewriter, loc, accType, tokenTy, acc, token);
+  rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultTy, ld);
+  return success();
 }
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
@@ -1087,15 +1182,15 @@ public:
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
     if (!scaleA) {
       scaleA =
-          createTmemScaleOperand(dotOp.getAScale(), scaleAEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+          createReadOnlyTmemOperand(dotOp.getAScale(), scaleAEncoding,
+                                    tensorMemorySpace, numWarps, loc, rewriter);
     }
     Value scaleB =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
     if (!scaleB) {
       scaleB =
-          createTmemScaleOperand(dotOp.getBScale(), scaleBEncoding,
-                                 tensorMemorySpace, numWarps, loc, rewriter);
+          createReadOnlyTmemOperand(dotOp.getBScale(), scaleBEncoding,
+                                    tensorMemorySpace, numWarps, loc, rewriter);
     }
 
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
@@ -1240,6 +1335,12 @@ public:
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
                                        benefitMMAv5);
 
+    if (m.walk([&](SparseDotOp op) {
+           return failed(lowerSparseDot(op, computeCapability))
+                      ? WalkResult::interrupt()
+                      : WalkResult::advance();
+         }).wasInterrupted())
+      return signalPassFailure();
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();
     // Now that we have picked the mma type, decompose dot that are not natively

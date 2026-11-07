@@ -192,6 +192,8 @@ public:
       namedOperands = {{mmav5Op.getA(), "A"},
                        {mmav5Op.getB(), "B"},
                        {mmav5Op.getAccumulator(), "Acc"}};
+      if (Value sparsityMetadata = mmav5Op.getSparsityMetadata())
+        namedOperands.emplace_back(sparsityMetadata, "SparsityMetadata");
       if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
         namedOperands.emplace_back(mmaScaledOp.getAScale(), "AScale");
         namedOperands.emplace_back(mmaScaledOp.getBScale(), "BScale");

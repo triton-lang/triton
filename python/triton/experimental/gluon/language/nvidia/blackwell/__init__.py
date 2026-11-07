@@ -35,6 +35,8 @@ __all__ = [
     "mma_v2",
     "mul2",
     "sub2",
+    "tcgen05_sparse_mma",
+    "tcgen05_sparse_mma_scaled",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
@@ -594,6 +596,30 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
+    _tcgen05_mma(a, b, acc, None, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type, _semantic)
+
+
+@builtin
+def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
+                       mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
+    """Emit native 2:4 MMA with logical K=32 for FP16/BF16 or K=64 for FP8.
+
+    A stores half of K. Each four-bit selector identifies two positions in a group of four.
+    For FP8, supply [128, 2] int32 words in tensor memory, eight selectors per word, low nibble first.
+    For matching FP16 or BF16 inputs, supply [128, 1] int32 words in the selector-zero layout. For every
+    pair of rows r and r+8 with bit 3 of r clear, word r packs their first four selectors each.
+    Word r+8 packs their last four selectors each. In both words, row r occupies the low 16 bits.
+    In tensor memory, A must start on a four-column boundary and the accumulator and sparsity metadata
+    must each start on a two-column boundary. These alignments apply to descriptor subviews too.
+    """
+    if not isinstance(sparsity_metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
+    _tcgen05_mma(a, b, acc, sparsity_metadata.handle, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type,
+                 b_type, _semantic)
+
+
+def _tcgen05_mma(a, b, acc, sparsity_metadata, use_acc, pred, multicast, mbarriers, mbarrier_preds, a_type, b_type,
+                 _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -615,7 +641,8 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     a_type = _semantic._str_to_fp_type(a_type) if a_type is not None else None
     b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type,
+                                         sparsity_metadata)
 
 
 @builtin
@@ -639,6 +666,32 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, None, use_acc, pred, multicast, mbarriers,
+                        mbarrier_preds, _semantic)
+
+
+@builtin
+def tcgen05_sparse_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, *, use_acc=True,
+                              pred=True, multicast=False, mbarriers=None, mbarrier_preds=None, _semantic=None):
+    """Emit native paired 4:8 NVFP4 MMA with logical K=128.
+
+    A stores 32 packed bytes per row. Each sparsity metadata nibble selects two of the four adjacent-element pairs.
+    Supply four unsigned E4M3 scales (sign bit clear) per row along logical K. Use e2m1 for both operands
+    and an f32 accumulator.
+    When the accumulator spans multiple instruction tiles along N, each instruction must cover at least 64 columns.
+    Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    In tensor memory, A must start on a four-column boundary and the accumulator, sparsity metadata, and
+    both scale descriptors must each start on a two-column boundary. Tensor-memory operands start at row zero.
+    These alignments apply to descriptor subviews too.
+    """
+    if not isinstance(sparsity_metadata, tensor_memory_descriptor):
+        raise ValueError("sparse MMA requires a tensor-memory sparsity metadata descriptor")
+    _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata.handle, use_acc, pred, multicast,
+                        mbarriers, mbarrier_preds, _semantic)
+
+
+def _tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, sparsity_metadata, use_acc, pred, multicast,
+                        mbarriers, mbarrier_preds, _semantic):
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
     assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
@@ -663,7 +716,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast)
+                                                acc.layout.two_ctas, multicast, sparsity_metadata)
 
 
 @constexpr_function

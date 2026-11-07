@@ -31,6 +31,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -291,6 +292,18 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
   return success();
 }
 
+bool WarpGroupDotOp::verifyDims() {
+  int64_t storedK = getA().getType().getShape().back();
+  int64_t logicalK = getB().getType().getDimSize(0);
+  if (getSparsityMetadata()) {
+    Type elem = getA().getType().getElementType();
+    const auto &tile =
+        elem.isF16() || elem.isBF16() ? kF16Sparse2To4 : kFp8Sparse2To4;
+    return tile.matches(storedK, logicalK);
+  }
+  return storedK == logicalK;
+}
+
 LogicalResult WarpGroupDotOp::verify() {
   auto resTy = getD().getType();
   auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
@@ -316,6 +329,41 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("WGMMA result M dimension must be divisible by 64");
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
+
+  if (auto sparsityMetadata = getSparsityMetadata()) {
+    Type elem = getA().getType().getElementType();
+    bool fp8 = isa<Float8E4M3FNType, Float8E5M2Type>(elem);
+    if ((!fp8 && !elem.isF16() && !elem.isBF16()) ||
+        getB().getType().getElementType() != elem ||
+        !resTy.getElementType().isF32())
+      return emitOpError("sparse WGMMA requires matching FP16, BF16 or FP8 "
+                         "inputs and FP32 accumulation");
+    // FP8 WGMMA has no transpose immediates. Both shared descriptors must
+    // store K contiguously. Register A already uses the instruction layout.
+    if (fp8) {
+      for (auto [operand, transposed] :
+           {std::pair{Value(getA()), false}, std::pair{Value(getB()), true}}) {
+        if (auto mem = dyn_cast<MemDescType>(operand.getType())) {
+          auto attrs = getNvmmaSmemAttrs(mem);
+          if (!attrs || attrs->transposed != transposed)
+            return emitOpError(
+                "sparse FP8 WGMMA requires K-major shared operands");
+        }
+      }
+    }
+    const auto &tile = fp8 ? kFp8Sparse2To4 : kF16Sparse2To4;
+    if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
+        nvmmaEnc.getInstrShape()[2] != tile.storedA ||
+        sparsityMetadata.getType().getShape() !=
+            ArrayRef<int64_t>({resTy.getDimSize(0), tile.logical / 32}) ||
+        !sparsityMetadata.getType().getElementType().isInteger(32))
+      return emitOpError(
+          "invalid sparse WGMMA tile or sparsity metadata shape");
+    auto layouts = getWarpSparseMmaLayouts(
+        getContext(), elem.getIntOrFloatBitWidth(), resTy.getShape(), numWarps);
+    if (sparsityMetadata.getType().getEncoding() != layouts[2])
+      return emitOpError("invalid sparse WGMMA sparsity metadata layout");
+  }
 
   // Verify MMA version is supported for operands.
   int mmaVersion = nvmmaEnc.getVersionMajor();
@@ -356,14 +404,14 @@ void WarpGroupDotOp::getEffects(
 bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &a = getA();
   const auto &d = getD();
-  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(aElTy);
   bool accFP32 =
       cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
-  return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
+  return isFP8 && accFP32 &&
+         maxNumImpreciseAcc <= getB().getType().getDimSize(0);
 }
 
 // -- WarpGroupDotWaitOp --
@@ -1202,6 +1250,64 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
   return success();
 }
 
+bool TCGen5MMAOp::verifyDims() {
+  int64_t storedK = getA().getType().getDimSize(1);
+  int64_t logicalK = getB().getType().getDimSize(0);
+  if (getSparsityMetadata()) {
+    auto elem = getAElementType();
+    auto shape =
+        elem.isF16() || elem.isBF16() ? kF16Sparse2To4 : kFp8Sparse2To4;
+    return shape.matches(storedK, logicalK);
+  }
+  return storedK == logicalK;
+}
+
+// The instruction consumes one packed tile, including when the descriptor is a
+// subview of a larger TMEM allocation. Extra allocation padding after the tile
+// is legal, but an interleaved tile or padding between columns is not.
+static bool isPackedSparseTmemTile(MemDescType type) {
+  auto enc = dyn_cast<TensorMemoryEncodingAttr>(type.getEncoding());
+  if (!enc || enc.getTwoCTAs() || getNumCTAs(enc) != 1)
+    return false;
+  auto *ctx = type.getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  auto tile =
+      LinearLayout::identity1D(128, StringAttr::get(ctx, "row"), dims[0]) *
+      LinearLayout::identity1D(type.getDimSize(1), StringAttr::get(ctx, "col"),
+                               dims[1]);
+  return divideLeft(toLinearLayout(type), tile).has_value();
+}
+
+static LogicalResult verifySparseTile(MMAv5OpInterface mma,
+                                      int64_t wordsPerRow) {
+  auto module = mma->getParentOfType<ModuleOp>();
+  if (module->hasAttr(triton::gpu::AttrTargetName)) {
+    auto cc = getNVIDIAComputeCapability(module);
+    if (cc != 100 && cc != 103)
+      return mma->emitOpError("sparse MMA requires SM100 or SM103");
+  }
+  auto acc = mma.getAccumulator().getType();
+  auto accLayout = dyn_cast<TensorMemoryEncodingAttr>(acc.getEncoding());
+  if (!accLayout || acc.getDimSize(0) != 128 || accLayout.getBlockM() != 128 ||
+      accLayout.getTwoCTAs() || getNumCTAs(accLayout) != 1)
+    return mma->emitOpError(
+        "sparse MMA requires one 128-row, single-CTA accumulator tile");
+
+  auto a = mma.getA().getType();
+  if (isa<TensorMemorySpaceAttr>(a.getMemorySpace()) &&
+      !isPackedSparseTmemTile(a))
+    return mma->emitOpError(
+        "sparse MMA requires packed 128-row TMEM storage for A");
+
+  auto sparsityMetadata = mma.getSparsityMetadata().getType();
+  if (!sparsityMetadata.getElementType().isInteger(32) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, wordsPerRow}) ||
+      !isPackedSparseTmemTile(sparsityMetadata))
+    return mma->emitOpError("sparsity metadata must be a packed 128x")
+           << wordsPerRow << " i32 TMEM tile";
+  return success();
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1227,6 +1333,16 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
+  if (getSparsityMetadata()) {
+    bool fp16 = atype.isF16() || atype.isBF16();
+    bool fp8 = isa<Float8E4M3FNType, Float8E5M2Type>(atype) &&
+               isa<Float8E4M3FNType, Float8E5M2Type>(btype);
+    if (!(fp16 && atype == btype) && !fp8)
+      return emitOpError(
+          "sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs");
+    if (failed(verifySparseTile(*this, fp16 ? 1 : 2)))
+      return failure();
+  }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
   int64_t minK = kind == MMADTypeKind::tf32  ? 8
                  : kind == MMADTypeKind::f16 ? 16
@@ -1309,6 +1425,9 @@ LogicalResult TCGen5MMAOp::verify() {
 void TCGen5MMAOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  if (getSparsityMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(),
+                         &getSparsityMetadataMutable()[0], TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
   if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
@@ -1388,7 +1507,7 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
-        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, Value(), isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
         isUnsigned ? builder.getUnitAttr() : UnitAttr(), aType, bType);
@@ -1544,6 +1663,40 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
+  if (getSparsityMetadata()) {
+    if (getAType() != ScaleDotElemType::E2M1 ||
+        getBType() != ScaleDotElemType::E2M1 ||
+        !isa<Float8E4M3FNType>(aScaleType.getElementType()) ||
+        !isa<Float8E4M3FNType>(bScaleType.getElementType()))
+      return emitOpError("sparse scaled MMA requires NVFP4 operands");
+    if (!dtype.isF32())
+      return emitOpError("sparse NVFP4 requires an f32 accumulator");
+    for (MemDescType operand : {getA().getType(), getB().getType()}) {
+      Type elem = operand.getElementType();
+      if (!elem.isInteger(8) && !isa<PackedFloat4E2M1Type>(elem))
+        return emitOpError("sparse NVFP4 requires packed byte operands");
+      if (isa<SharedMemorySpaceAttr>(operand.getMemorySpace())) {
+        auto attrs = getNvmmaSmemAttrs(operand);
+        if (!attrs || attrs->fp4Padded)
+          return emitOpError("sparse NVFP4 requires unpadded shared operands");
+      }
+    }
+    if (aScaleType.getShape() != ArrayRef<int64_t>({128, 4}) ||
+        bScaleType.getShape() != ArrayRef<int64_t>({getBlockN(), 4}) ||
+        !isa<TensorMemoryScalesEncodingAttr>(aScaleType.getEncoding()) ||
+        !isa<TensorMemoryScalesEncodingAttr>(bScaleType.getEncoding()))
+      return emitOpError(
+          "expected E4M3 tensor memory scales per 32 logical K values");
+    // A 32-row block of four B scales occupies one column. A second
+    // instruction narrower than 64 would start inside the same column or
+    // at an odd column, neither of which is a valid scale operand address.
+    unsigned instrN = getMMAv5InstructionN(getD().getType());
+    if (instrN < 64 && instrN < getBlockN())
+      return emitOpError(
+          "repeated sparse NVFP4 instructions require N >= 64 for B scales");
+    if (failed(verifySparseTile(*this, /*wordsPerRow=*/2)))
+      return failure();
+  }
   int64_t minK = 32;
   if (getAType() == ScaleDotElemType::E2M1 &&
       getBType() == ScaleDotElemType::E2M1) {
@@ -1599,6 +1752,9 @@ LogicalResult TCGen5MMAScaledOp::verify() {
 void TCGen5MMAScaledOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
+  if (getSparsityMetadata())
+    effects.emplace_back(MemoryEffects::Read::get(),
+                         &getSparsityMetadataMutable()[0], TensorMemory::get());
   // The op reads the accumulator if `useD` is not known to be false.
   APInt useD;
   if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
@@ -1628,14 +1784,11 @@ void TCGen5MMAScaledOp::getEffects(
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  auto aKdim = getBlockK();
-  auto bShape = getB().getType().getShape();
-  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
-  auto bKdim = bShape[bShape.size() - 2];
-  if (getBType() == ScaleDotElemType::E2M1 && !transB)
-    bKdim *= 2;
-
-  return aKdim == bKdim;
+  int64_t storedK = getStoredAK();
+  int64_t logicalK = getBlockK();
+  if (getSparsityMetadata())
+    return kNvfp4Sparse4To8.matches(storedK, logicalK);
+  return storedK == logicalK;
 }
 
 bool TCGen5MMAScaledOp::verifyOutputDims() {
@@ -1711,12 +1864,19 @@ int64_t TCGen5MMAScaledOp::getBlockN() {
 }
 
 int64_t TCGen5MMAScaledOp::getBlockK() {
-  ArrayRef<int64_t> shape = getA().getType().getShape();
-  int64_t blockK = shape[shape.size() - 1];
-  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
-  if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
-    blockK *= 2;
-  return blockK;
+  int64_t k = getB().getType().getDimSize(0);
+  if (getBType() == ScaleDotElemType::E2M1 &&
+      !isScaledMMATransposed(getB().getType(), /*isLhs=*/false))
+    k *= 2;
+  return k;
+}
+
+int64_t TCGen5MMAScaledOp::getStoredAK() {
+  int64_t k = getA().getType().getDimSize(1);
+  if (getAType() == ScaleDotElemType::E2M1 &&
+      !isScaledMMATransposed(getA().getType(), /*isLhs=*/true))
+    k *= 2;
+  return k;
 }
 
 void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
@@ -1733,7 +1893,7 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, Value(), twoCTAs ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
         isAsync ? builder.getUnitAttr() : UnitAttr());
 }

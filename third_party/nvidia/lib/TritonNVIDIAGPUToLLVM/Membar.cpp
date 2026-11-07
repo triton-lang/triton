@@ -24,6 +24,39 @@ namespace {
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
+// TMEM allocations are aligned, but slicing or indexing a descriptor can move
+// its origin. The converged region analysis includes all control-flow paths.
+static LogicalResult verifySparseMmaAlignment(ttng::MMAv5OpInterface mma,
+                                              BufferRegionAnalysis &regions) {
+  auto verify = [&](Value operand, StringRef name,
+                    unsigned columns) -> LogicalResult {
+    if (!isa<ttng::TensorMemorySpaceAttr>(
+            cast<gpu::MemDescType>(operand.getType()).getMemorySpace()))
+      return success();
+    for (const BufferRegionView &view : regions.getRegionInfo(operand).views) {
+      if (view.region.baseOffset >> 16)
+        return mma->emitOpError()
+               << "sparse MMA " << name << " must start at TMEM row zero";
+      if (view.region.baseOffset % columns)
+        return mma->emitOpError()
+               << "sparse MMA " << name << " must start at a " << columns
+               << "-column aligned TMEM address";
+    }
+    return success();
+  };
+  if (failed(verify(mma.getA(), "A", 4)) ||
+      failed(verify(mma.getAccumulator(), "accumulator", 2)))
+    return failure();
+  if (failed(verify(mma.getSparsityMetadata(), "sparsity metadata", 2)))
+    return failure();
+  if (auto scaled = dyn_cast<ttng::TCGen5MMAScaledOp>(mma.getOperation())) {
+    if (failed(verify(scaled.getAScale(), "A scales", 2)))
+      return failure();
+    return verify(scaled.getBScale(), "B scales", 2);
+  }
+  return success();
+}
+
 struct TritonNvidiaGPUMembar
     : public impl::TritonNvidiaGPUMembarBase<TritonNvidiaGPUMembar> {
   using TritonNvidiaGPUMembarBase::TritonNvidiaGPUMembarBase;
@@ -37,6 +70,17 @@ struct TritonNvidiaGPUMembar
     auto *regions = solver->load<triton::BufferRegionAnalysis>(
         triton::BufferRegionAnalysis::Mode::AllMemory, &allocation);
     if (failed(solver->initializeAndRun(mod))) {
+      signalPassFailure();
+      return;
+    }
+
+    if (mod.walk([&](ttng::MMAv5OpInterface mma) {
+             return mma.getSparsityMetadata() &&
+                            failed(verifySparseMmaAlignment(mma, *regions))
+                        ? WalkResult::interrupt()
+                        : WalkResult::advance();
+           })
+            .wasInterrupted()) {
       signalPassFailure();
       return;
     }
