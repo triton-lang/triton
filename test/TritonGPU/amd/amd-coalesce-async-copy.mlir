@@ -149,7 +149,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4], order = [1, 0]}>
+  // Re-stamping the src order here would produce writes the direct-to-LDS lowering
+  // cannot coalesce, so the pass keeps the shared order instead.
+  // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
   // CHECK-LABEL: async_copy_different_order
   tt.func public @async_copy_different_order(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
@@ -288,6 +290,26 @@ tt.func @async_copy_with_mismatching_order_and_unsupported_vec_width(%input: ten
   // CHECK: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local %[[CVT]], %{{.*}} : tensor<64x2x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
   %token = ttg.async_copy_global_to_local %input, %view {contiguity = 2 : i32} : tensor<64x2x!tt.ptr<f32>, #blocked> -> <64x2xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+// With the src order re-stamped, a warp spans 16 rows while the shared layout is
+// contiguous along dim0, so consecutive lanes would stride through LDS and the
+// direct-to-LDS lowering rejects the copy. The pass must keep the shared order.
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+// CHECK-LABEL: async_copy_fallback_to_shared_order
+tt.func @async_copy_fallback_to_shared_order(%input: tensor<16x4x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
+    %view: !ttg.memdesc<16x4xf32, #shared, #smem, mutable>) {
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<16x4x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %[[CVT]], %{{.*}} : tensor<16x4x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  %token = ttg.async_copy_global_to_local %input, %view : tensor<16x4x!tt.ptr<f32>, #blocked> -> <16x4xf32, #shared, #smem, mutable>
   tt.return
 }
 }
