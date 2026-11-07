@@ -294,7 +294,9 @@ def matmul(a, b, bias,
     instruction uses one scale per 32 values. The 16-value path computes two
     independently scaled contributions. Ada uses warp-level sparse MMA for
     FP8. Hopper uses sparse WGMMA for FP8. SM100 and SM103 use
-    tcgen05.mma.sp for FP8 and paired NVFP4.
+    tcgen05.mma.sp for FP8 and paired NVFP4. Sparse matmul accepts scalar outer
+    scales. When neither out_dtype nor c is supplied, its output is BF16 for
+    NVFP4 and the input dtype for FP8.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other

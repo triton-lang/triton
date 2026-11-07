@@ -119,10 +119,10 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     return block_k
 
 
-def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
+def compute_split_k(block_k: int, k: int | None, grid_size: int, device=0) -> int:
     if grid_size == 0:
         return 1
-    device_props = torch.cuda.get_device_properties(0)
+    device_props = torch.cuda.get_device_properties(device)
     n_sms = device_props.multi_processor_count
     split_k = n_sms // grid_size
     if k is not None:
