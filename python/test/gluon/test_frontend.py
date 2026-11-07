@@ -1744,14 +1744,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
+def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr,
+                         descriptor_mode: ttgl.constexpr = None):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=acc_layout)
-    acc = hopper.warpgroup_mma(a, b, acc)
+    acc = hopper.warpgroup_mma(a, b, acc, descriptor_mode=descriptor_mode)
     ttgl.static_assert(isinstance(acc, ttgl.tensor))
 
-    acc = hopper.warpgroup_mma(a, b, acc, is_async=True)
+    acc = hopper.warpgroup_mma(a, b, acc, is_async=True, descriptor_mode=descriptor_mode)
     ttgl.static_assert(isinstance(acc, hopper.warpgroup_mma_accumulator))
 
 
@@ -1782,6 +1783,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("descriptor_mode", [None, "inline"])
+def test_warpgroup_mma_descriptor_mode(descriptor_mode):
+    shared = ttgl.NVMMASharedLayout(128, 16, rank=2)
+    mma = ttgl.NVMMADistributedLayout([3, 0], [4, 1], [16, 32, 16])
+    mod = run_parser(warpgroup_mma_kernel, *make_args(shared, mma, descriptor_mode), target=HOPPER_TARGET)
+    text = mod.str_nodebug()
+    if descriptor_mode == "inline":
+        assert text.count("descriptorMode = 1 : i32") == 2
+    else:
+        assert "descriptorMode = 1" not in text
+
+
+@pytest.mark.parametrize("descriptor_mode", ["default", "scoped_pack", "scoped_expr", True, 1])
+def test_warpgroup_mma_descriptor_mode_invalid(descriptor_mode):
+    shared = ttgl.NVMMASharedLayout(128, 16, rank=2)
+    mma = ttgl.NVMMADistributedLayout([3, 0], [4, 1], [16, 32, 16])
+    with pytest.raises(CompilationError, match="descriptor_mode must be None or 'inline'"):
+        run_parser(warpgroup_mma_kernel, *make_args(shared, mma, descriptor_mode), target=HOPPER_TARGET)
 
 
 @gluon.jit

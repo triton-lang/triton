@@ -32,6 +32,23 @@
 using namespace mlir;
 using namespace mlir::triton::nvgpu;
 
+LogicalResult WGMMAOp::verify() {
+  auto verifyOperand = [&](Value operand, IntegerAttr bits,
+                           bool allowRegisters) -> LogicalResult {
+    Type type = operand.getType();
+    if (type.isInteger(32) && bits)
+      return success();
+    if (!bits && (type.isInteger(64) ||
+                  (allowRegisters && isa<LLVM::LLVMStructType>(type))))
+      return success();
+    return emitOpError("expected an i64 descriptor without descriptor bits, "
+                       "an i32 base with descriptor bits, or registers for A");
+  };
+  if (failed(verifyOperand(getOpA(), getDescriptorBitsAAttr(), true)))
+    return failure();
+  return verifyOperand(getOpB(), getDescriptorBitsBAttr(), false);
+}
+
 void mlir::triton::nvgpu::NVGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST

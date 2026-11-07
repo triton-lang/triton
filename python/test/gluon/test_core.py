@@ -1996,7 +1996,8 @@ def test_device_tma_stride_alignment():
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
                shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
-               ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
+               ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr, DESCRIPTOR_MODE: ttgl.constexpr = None,
+               REGISTER_A: ttgl.constexpr = False):
     a_offs_m = ttgl.arange(0, M)[:, None]
     a_offs_k = ttgl.arange(0, K)[None, :]
     b_offs_k = ttgl.arange(0, K)[:, None]
@@ -2026,7 +2027,11 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         acc = acc_tmem.load()
     else:
         acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=acc_layout)
-        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
+        if REGISTER_A:
+            a_operand = ttgl.convert_layout(a_tile, ttgl.DotOperandLayout(0, acc_layout, 2))
+        else:
+            a_operand = smem_a
+        acc = hopper.warpgroup_mma(a_operand, smem_b, acc, is_async=ASYNC, descriptor_mode=DESCRIPTOR_MODE)
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
@@ -2072,6 +2077,35 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize("descriptor_mode", [None, "inline"])
+@pytest.mark.parametrize("register_a", [False, True])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("num_warps,transpose", [(4, False), (8, True)])
+def test_warpgroup_mma_descriptor_mode(descriptor_mode, register_a, is_async, dtype, num_warps, transpose):
+    torch.manual_seed(0)
+    M, N, K = 128, 64, 128
+    warps = [num_warps, 1]
+    blocked = ttgl.BlockedLayout([1, 4], [4, 8], warps, [1, 0])
+    mma = ttgl.NVMMADistributedLayout([3, 0], warps, [16, 64, 16])
+    shared_a = ttgl.NVMMASharedLayout(128, 16, rank=2, transposed=transpose)
+    shared_b = ttgl.NVMMASharedLayout(128, 16, rank=2, transposed=transpose)
+    a = torch.randn((M, K), device="cuda", dtype=dtype)
+    b = torch.randn((K, N), device="cuda", dtype=dtype)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    compiled = mma_kernel[(1, )](a, b, out, M, N, K, blocked, blocked, (), mma, shared_a, shared_b, ttgl.float32,
+                                 is_async, False, descriptor_mode, register_a, num_warps=num_warps)
+    torch.testing.assert_close(out, a.float() @ b.float(), atol=1e-3, rtol=1e-3)
+    ptx = compiled.asm["ptx"]
+    if descriptor_mode == "inline":
+        assert ".reg .b64 desc_b" in ptx
+        assert (".reg .b64 desc_a" in ptx) == (not register_a)
+        assert "add.u32 desc_b_low" in ptx
+    else:
+        assert "desc_b_low" not in ptx
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

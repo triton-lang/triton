@@ -988,13 +988,26 @@ void init_gluon_ir(py::module_ &m) {
              }
              return py::make_tuple(op->getResult(0), op->getResult(1));
            })
-      .def("create_warpgroup_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              triton::InputPrecision precision = triton::InputPrecision::IEEE,
-              int maxNumImpreciseAcc = 0, bool isAsync = false) -> Value {
-             return self.create<ttng::WarpGroupDotOp>(
-                 a, b, acc, useAcc, precision, maxNumImpreciseAcc, isAsync);
-           })
+      .def(
+          "create_warpgroup_mma",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+             triton::InputPrecision precision = triton::InputPrecision::IEEE,
+             int maxNumImpreciseAcc = 0, bool isAsync = false,
+             std::optional<std::string> descriptorMode =
+                 std::nullopt) -> Value {
+            auto mode = ttng::WGMMADescriptorMode::Default;
+            if (descriptorMode) {
+              check(*descriptorMode == "inline",
+                    "descriptor_mode must be None or 'inline'");
+              mode = ttng::WGMMADescriptorMode::Inline;
+            }
+            return self.create<ttng::WarpGroupDotOp>(
+                a, b, acc, useAcc, precision, maxNumImpreciseAcc, isAsync,
+                mode);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
+          py::arg("precision"), py::arg("maxNumImpreciseAcc"),
+          py::arg("isAsync"), py::arg("descriptorMode").none() = py::none())
       .def("create_warpgroup_mma_wait",
            [](GluonOpBuilder &self, std::vector<Value> &deps, int pendings) {
              std::vector<Value> results;
