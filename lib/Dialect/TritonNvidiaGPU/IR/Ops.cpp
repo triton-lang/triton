@@ -295,8 +295,12 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 bool WarpGroupDotOp::verifyDims() {
   int64_t storedK = getA().getType().getShape().back();
   int64_t logicalK = getB().getType().getDimSize(0);
-  if (getSparsityMetadata())
-    return kFp8Sparse2To4.matches(storedK, logicalK);
+  if (getSparsityMetadata()) {
+    Type elem = getA().getType().getElementType();
+    const auto &tile =
+        elem.isF16() || elem.isBF16() ? kF16Sparse2To4 : kFp8Sparse2To4;
+    return tile.matches(storedK, logicalK);
+  }
   return storedK == logicalK;
 }
 
@@ -328,31 +332,35 @@ LogicalResult WarpGroupDotOp::verify() {
 
   if (auto sparsityMetadata = getSparsityMetadata()) {
     Type elem = getA().getType().getElementType();
-    if (!isa<Float8E4M3FNType, Float8E5M2Type>(elem) ||
+    bool fp8 = isa<Float8E4M3FNType, Float8E5M2Type>(elem);
+    if ((!fp8 && !elem.isF16() && !elem.isBF16()) ||
         getB().getType().getElementType() != elem ||
         !resTy.getElementType().isF32())
-      return emitOpError(
-          "sparse WGMMA requires FP8 inputs and FP32 accumulation");
+      return emitOpError("sparse WGMMA requires matching FP16, BF16 or FP8 "
+                         "inputs and FP32 accumulation");
     // FP8 WGMMA has no transpose immediates. Both shared descriptors must
     // store K contiguously. Register A already uses the instruction layout.
-    for (auto [operand, transposed] :
-         {std::pair{Value(getA()), false}, std::pair{Value(getB()), true}}) {
-      if (auto mem = dyn_cast<MemDescType>(operand.getType())) {
-        auto attrs = getNvmmaSmemAttrs(mem);
-        if (!attrs || attrs->transposed != transposed)
-          return emitOpError(
-              "sparse FP8 WGMMA requires K-major shared operands");
+    if (fp8) {
+      for (auto [operand, transposed] :
+           {std::pair{Value(getA()), false}, std::pair{Value(getB()), true}}) {
+        if (auto mem = dyn_cast<MemDescType>(operand.getType())) {
+          auto attrs = getNvmmaSmemAttrs(mem);
+          if (!attrs || attrs->transposed != transposed)
+            return emitOpError(
+                "sparse FP8 WGMMA requires K-major shared operands");
+        }
       }
     }
+    const auto &tile = fp8 ? kFp8Sparse2To4 : kF16Sparse2To4;
     if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
-        nvmmaEnc.getInstrShape()[2] != kFp8Sparse2To4.storedA ||
+        nvmmaEnc.getInstrShape()[2] != tile.storedA ||
         sparsityMetadata.getType().getShape() !=
-            ArrayRef<int64_t>({resTy.getDimSize(0), 2}) ||
+            ArrayRef<int64_t>({resTy.getDimSize(0), tile.logical / 32}) ||
         !sparsityMetadata.getType().getElementType().isInteger(32))
       return emitOpError(
           "invalid sparse WGMMA tile or sparsity metadata shape");
-    auto layouts =
-        getWarpSparseMmaLayouts(getContext(), resTy.getShape(), numWarps);
+    auto layouts = getWarpSparseMmaLayouts(
+        getContext(), elem.getIntOrFloatBitWidth(), resTy.getShape(), numWarps);
     if (sparsityMetadata.getType().getEncoding() != layouts[2])
       return emitOpError("invalid sparse WGMMA sparsity metadata layout");
   }
@@ -1245,8 +1253,12 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
 bool TCGen5MMAOp::verifyDims() {
   int64_t storedK = getA().getType().getDimSize(1);
   int64_t logicalK = getB().getType().getDimSize(0);
-  if (getSparsityMetadata())
-    return kFp8Sparse2To4.matches(storedK, logicalK);
+  if (getSparsityMetadata()) {
+    auto elem = getAElementType();
+    auto shape =
+        elem.isF16() || elem.isBF16() ? kF16Sparse2To4 : kFp8Sparse2To4;
+    return shape.matches(storedK, logicalK);
+  }
   return storedK == logicalK;
 }
 
@@ -1266,7 +1278,8 @@ static bool isPackedSparseTmemTile(MemDescType type) {
   return divideLeft(toLinearLayout(type), tile).has_value();
 }
 
-static LogicalResult verifySparseTile(MMAv5OpInterface mma) {
+static LogicalResult verifySparseTile(MMAv5OpInterface mma,
+                                      int64_t wordsPerRow) {
   auto module = mma->getParentOfType<ModuleOp>();
   if (module->hasAttr(triton::gpu::AttrTargetName)) {
     auto cc = getNVIDIAComputeCapability(module);
@@ -1286,14 +1299,12 @@ static LogicalResult verifySparseTile(MMAv5OpInterface mma) {
     return mma->emitOpError(
         "sparse MMA requires packed 128-row TMEM storage for A");
 
-  // Both supported instructions use selector zero and consume two words per
-  // row.
   auto sparsityMetadata = mma.getSparsityMetadata().getType();
   if (!sparsityMetadata.getElementType().isInteger(32) ||
-      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, 2}) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, wordsPerRow}) ||
       !isPackedSparseTmemTile(sparsityMetadata))
-    return mma->emitOpError(
-        "sparsity metadata must be a packed 128x2 i32 TMEM tile");
+    return mma->emitOpError("sparsity metadata must be a packed 128x")
+           << wordsPerRow << " i32 TMEM tile";
   return success();
 }
 
@@ -1323,10 +1334,13 @@ LogicalResult TCGen5MMAOp::verify() {
     return failure();
 
   if (getSparsityMetadata()) {
-    if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype) ||
-        !isa<Float8E4M3FNType, Float8E5M2Type>(btype))
-      return emitOpError("sparse MMA requires FP8 operands");
-    if (failed(verifySparseTile(*this)))
+    bool fp16 = atype.isF16() || atype.isBF16();
+    bool fp8 = isa<Float8E4M3FNType, Float8E5M2Type>(atype) &&
+               isa<Float8E4M3FNType, Float8E5M2Type>(btype);
+    if (!(fp16 && atype == btype) && !fp8)
+      return emitOpError(
+          "sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs");
+    if (failed(verifySparseTile(*this, fp16 ? 1 : 2)))
       return failure();
   }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
@@ -1680,7 +1694,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     if (instrN < 64 && instrN < getBlockN())
       return emitOpError(
           "repeated sparse NVFP4 instructions require N >= 64 for B scales");
-    if (failed(verifySparseTile(*this)))
+    if (failed(verifySparseTile(*this, /*wordsPerRow=*/2)))
       return failure();
   }
   int64_t minK = 32;

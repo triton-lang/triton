@@ -766,13 +766,15 @@ static LogicalResult lowerSparseDot(SparseDotOp op, int capability) {
   int warps = lookupNumWarps(op);
   auto cga = getCGALayout(resultTy.getEncoding());
   bool blackwell = capability == 100 || capability == 103;
+  unsigned elementBitWidth = op.getA().getType().getElementTypeBitWidth();
   if (getNumCTAs(resultTy.getEncoding()) != 1)
     return op.emitOpError("requires a single CTA");
   if (blackwell && warps < 4)
     return op.emitOpError(
         "Blackwell tensor-memory operands require at least four warps");
   if (!blackwell) {
-    if (capability < 89 || capability >= 100 || op.getAScale())
+    if (capability < (elementBitWidth == 16 ? 80 : 89) || capability >= 100 ||
+        op.getAScale())
       return op.emitOpError("unsupported sparse MMA format or target");
     if (capability != 90 || warps % 4) {
       Value dot =
@@ -782,16 +784,18 @@ static LogicalResult lowerSparseDot(SparseDotOp op, int capability) {
       return success();
     }
   }
-  Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, false);
-  Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, false);
+  bool allowTranspose = elementBitWidth == 16;
+  Value a = getSharedMemoryMMAOperand(op.getA(), rewriter, 0, allowTranspose);
+  Value b = getSharedMemoryMMAOperand(op.getB(), rewriter, 1, allowTranspose);
   if (!blackwell) {
     unsigned n = resultTy.getDimSize(1);
     auto encoding = NvidiaMmaEncodingAttr::get(
-        op.getContext(), 3, 0, {unsigned(warps), 1}, cga, {16, n, 32});
+        ctx, 3, 0, {unsigned(warps), 1}, cga,
+        {16, n, static_cast<unsigned>(op.getA().getType().getDimSize(1))});
     auto accTy = resultTy.cloneWithEncoding(encoding);
     Value acc = ConvertLayoutOp::create(rewriter, loc, accTy, op.getAcc());
-    auto layouts =
-        getWarpSparseMmaLayouts(op.getContext(), resultTy.getShape(), warps);
+    auto layouts = getWarpSparseMmaLayouts(ctx, elementBitWidth,
+                                           resultTy.getShape(), warps);
     Value e = ConvertLayoutOp::create(
         rewriter, loc,
         op.getSparsityMetadata().getType().cloneWithEncoding(layouts[2]),

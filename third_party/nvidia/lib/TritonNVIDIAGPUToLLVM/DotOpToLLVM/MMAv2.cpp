@@ -674,11 +674,12 @@ LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
                                const LLVMTypeConverter *typeConverter,
                                ConversionPatternRewriter &rewriter) {
   Type elem = op.getA().getType().getElementType();
-  if (op.getAScale() || capability < 89)
+  unsigned width = elem.getIntOrFloatBitWidth();
+  if (op.getAScale() || capability < 80 || (width == 8 && capability < 89))
     return op.emitOpError(
-        "native warp sparse MMA requires SM89 or newer for FP8");
+        "warp sparse MMA requires SM80+ for FP16/BF16 or SM89+ for FP8");
   auto layouts = triton::gpu::getWarpSparseMmaLayouts(
-      op.getContext(), op.getType().getShape(),
+      op.getContext(), width, op.getType().getShape(),
       triton::gpu::lookupNumWarps(op));
   for (auto [operand, layout] : llvm::zip(op.getOperands(), layouts))
     if (cast<RankedTensorType>(operand.getType()).getEncoding() != layout)
@@ -688,11 +689,13 @@ LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
   auto words = [&](Value tensor, Value lowered) {
     auto elems = unpackTensorElements(loc, lowered, rewriter, tensor.getType());
     SmallVector<Value> result;
-    constexpr int pack = 4;
+    unsigned pack = 32 / width;
     for (size_t i = 0; i < elems.size(); i += pack) {
       Value packed =
           packLLVector(loc, ArrayRef(elems).slice(i, pack), rewriter);
-      result.push_back(tb.bitcast(packed, i32_ty));
+      // NVVM represents an FP16 register as vector<2xf16> and a BF16
+      // or FP8 register as i32.
+      result.push_back(elem.isF16() ? packed : tb.bitcast(packed, i32_ty));
     }
     return result;
   };
@@ -703,7 +706,7 @@ LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
   auto c = unpackTensorElements(loc, adaptor.getAcc(), rewriter, op.getType());
   auto format = getMmaPtxType(elem);
   std::array<NVVM::MMATypes, 2> types{format, format};
-  std::array<int64_t, 3> shape{16, 8, 64};
+  std::array<int64_t, 3> shape{16, 8, op.getB().getType().getDimSize(0)};
   auto intrinsic = NVVM::MmaSpOp::getIntrinsicID(
       16, 8, shape[2], std::nullopt, false, std::nullopt, format, format,
       NVVM::MMATypes::f32, NVVM::MMATypes::f32);

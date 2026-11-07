@@ -130,18 +130,22 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 @_core.builtin
 def warpgroup_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, precision=None, max_num_imprecise_acc=None,
                          is_async=False, _semantic=None, _generator=None):
-    """Perform Hopper 2:4 sparse WGMMA with compressed FP8 A and matching FP8 B.
+    """Perform Hopper 2:4 sparse WGMMA with matching FP16, BF16 or FP8 inputs.
 
-    Supply two packed int32 or uint32 selector words per row of A. Each word
-    encodes eight consecutive groups of four logical K values, low nibble first.
+    FP8 uses logical K=64 and two packed selector words per row of A.
+    FP16/BF16 use logical K=32 and one word per row in selector-zero order:
+    word r holds selectors from rows r & ~8 and r | 8 in its low and high
+    halves, respectively. Bit 3 of r selects the first or second half of K.
     Accumulation and asynchronous waits follow warpgroup_mma.
     """
-    if a.dtype not in (_core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
-        raise ValueError("sparse WGMMA requires matching FP8 inputs")
+    if a.dtype not in (_core.float16, _core.bfloat16, _core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
+        raise ValueError("sparse WGMMA requires matching FP16, BF16 or FP8 inputs")
+    words = 2 if a.dtype.is_fp8() else 1
     sparsity_metadata = _core._unwrap_if_constexpr(sparsity_metadata)
-    if (not isinstance(sparsity_metadata, _core.tensor) or list(sparsity_metadata.type.shape) != [a.type.shape[0], 2]
+    if (not isinstance(sparsity_metadata, _core.tensor)
+            or list(sparsity_metadata.type.shape) != [a.type.shape[0], words]
             or sparsity_metadata.dtype not in (_core.int32, _core.uint32)):
-        raise ValueError("sparse WGMMA requires two int32 or uint32 sparsity metadata words per row of A")
+        raise ValueError(f"sparse WGMMA requires {words} int32 or uint32 sparsity metadata word(s) per row of A")
     return _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic,
                           sparsity_metadata.handle,
                           _semantic.num_warps(_generator).value)

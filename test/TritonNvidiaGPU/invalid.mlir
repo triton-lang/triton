@@ -2365,10 +2365,24 @@ module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 !b = !ttg.memdesc<64x128xf16, #s, #ttg.shared_memory>
 !d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
 !e = !ttg.memdesc<128x1xi32, #t, #ttng.tensor_memory>
+!abf16 = !ttg.memdesc<128x16xbf16, #s, #ttg.shared_memory>
+!bbf16 = !ttg.memdesc<32x128xbf16, #s, #ttg.shared_memory>
+!e2 = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+!af16 = !ttg.memdesc<128x16xf16, #s, #ttg.shared_memory>
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @unsupported_sparse_fp16(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
-    // expected-error @below {{sparse MMA requires FP8 operands}}
+  tt.func @sparse_fp16_wrong_k(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{expected the last dimension of the first operand}}
     ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
+    tt.return
+  }
+  tt.func @sparse_mixed_f16_bf16(%a: !af16, %b: !bbf16, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !af16, !bbf16, !d
+    tt.return
+  }
+  tt.func @sparse_bf16_wrong_metadata(%a: !abf16, %b: !bbf16, %d: !d, %e: !e2, %pred: i1) {
+    // expected-error @below {{sparsity metadata must be a packed 128x1 i32 TMEM tile}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e2 {is_async} : !abf16, !bbf16, !d
     tt.return
   }
 }
@@ -2399,7 +2413,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 !e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
 module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @unsupported_sparse_fp6_rhs(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
-    // expected-error @below {{sparse MMA requires FP8 operands}}
+    // expected-error @below {{sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs}}
     ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {b_type = 2 : i32, is_async} : !a, !b, !d
     tt.return
   }

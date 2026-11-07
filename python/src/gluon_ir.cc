@@ -1000,7 +1000,10 @@ void init_gluon_ir(py::module_ &m) {
               auto ty = cast<RankedTensorType>(sparsityMetadata->getType());
               auto result = cast<RankedTensorType>(acc.getType());
               auto layouts = ttg::getWarpSparseMmaLayouts(
-                  self.getContext(), result.getShape(), warps);
+                  self.getContext(),
+                  cast<ttg::TensorOrMemDesc>(a.getType())
+                      .getElementTypeBitWidth(),
+                  result.getShape(), warps);
               e = self.create<ttg::ConvertLayoutOp>(
                   ty.cloneWithEncoding(layouts[2]), *sparsityMetadata);
             }

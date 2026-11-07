@@ -358,18 +358,26 @@ public:
 
   LogicalResult matchAndRewrite(ttn::WGMMAOp op,
                                 PatternRewriter &rewriter) const override {
-    // Validate the explicit instruction K against the FP8 opcode forms.
+    // Validate the explicit instruction K against the opcode form.
     // The operand shapes have already determined K before this lowering.
     auto fp8 = [](ttn::WGMMAEltType type) {
       return type == ttn::WGMMAEltType::e4m3 || type == ttn::WGMMAEltType::e5m2;
     };
+    auto a = op.getEltTypeA();
+    auto b = op.getEltTypeB();
+    bool f16 =
+        a == b && (a == ttn::WGMMAEltType::f16 || a == ttn::WGMMAEltType::bf16);
     if (op.getSparsityMetadata()) {
-      if (!fp8(op.getEltTypeA()) || !fp8(op.getEltTypeB()) ||
-          op.getK() != gpu::kFp8Sparse2To4.logical)
+      bool supported =
+          (f16 && op.getK() == gpu::kF16Sparse2To4.logical) ||
+          (fp8(a) && fp8(b) && op.getK() == gpu::kFp8Sparse2To4.logical);
+      if (!supported)
         return op.emitOpError(
             "unsupported sparse WGMMA instruction shape or operand type");
-    } else if (fp8(op.getEltTypeA()) && op.getK() != 32) {
+    } else if (fp8(a) && op.getK() != 32) {
       return op.emitOpError("dense FP8 WGMMA requires instruction K=32");
+    } else if (f16 && op.getK() != 16) {
+      return op.emitOpError("dense FP16/BF16 WGMMA requires instruction K=16");
     }
     return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
                            getOperandsAndConstraints(op),
@@ -456,11 +464,10 @@ public:
     supported |=
         (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
         (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-        (m == 64 && 8 <= n && n <= 256 && k == 16);
-    supported |= (eltTypeA == WGMMAEltType::bf16) &&
-                 (eltTypeB == WGMMAEltType::bf16) &&
-                 (eltTypeC == WGMMAEltType::f32) &&
-                 (m == 64 && 8 <= n && n <= 256 && k == 16);
+        (m == 64 && 8 <= n && n <= 256);
+    supported |=
+        (eltTypeA == WGMMAEltType::bf16) && (eltTypeB == WGMMAEltType::bf16) &&
+        (eltTypeC == WGMMAEltType::f32) && (m == 64 && 8 <= n && n <= 256);
     needTransArgs = supported;
     floatTypeWGMMA = supported;
     // Below instructions do not support transposing
