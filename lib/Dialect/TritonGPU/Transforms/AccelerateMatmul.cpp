@@ -569,8 +569,8 @@ public:
 
       newDot = triton::nvidia_gpu::WarpGroupDotOp::create(
           rewriter, dotOp.getLoc(), mmaResult.newRetType, a, b,
-          mmaResult.newAcc, nullptr, Value(), dotOp.getInputPrecision(),
-          dotOp.getMaxNumImpreciseAcc(), false);
+          mmaResult.newAcc, /*useC=*/nullptr, /*metadata=*/nullptr,
+          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(), false);
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
