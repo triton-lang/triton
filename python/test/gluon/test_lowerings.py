@@ -1554,14 +1554,14 @@ _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_conver
 _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
                                 ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
 
-_convert2d_test_cases = [(M, N, *case, "float16", 0)
-                         for M, N in [[64, 1], [64, 64], [64, 128], [1, 64]]
-                         for case in _convert2d_layout_cases]
-_convert2d_test_cases += [
+_multi_cta_small_convert2d_layout_cases = [
     pytest.param(M, 16, [2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
                  ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), "float16", 16,
                  id=f"multi-cta-small-shape-{M}-float16") for M in [1, 2]
 ]
+_convert2d_test_cases = [(M, N, *case, "float16", 0)
+                         for M, N in [[64, 1], [64, 64], [64, 128], [1, 64]]
+                         for case in _convert2d_layout_cases] + _multi_cta_small_convert2d_layout_cases
 
 
 @pytest.mark.parametrize(
