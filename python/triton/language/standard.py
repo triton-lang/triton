@@ -669,7 +669,8 @@ def unsqueeze(x, dim: core.constexpr):
 def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
 
-    FP8 requires SM89+, and NVFP4 requires SM100/SM103.
+    FP8 is supported on SM89, SM90, SM100 and SM103. NVFP4 requires SM100 or SM103.
+    Use a single CTA. On SM100 and SM103 the kernel requires at least four warps.
 
     Use logical K=64 for FP8, or 128 for paired NVFP4.
     Pack eight four-bit selectors per int32, least significant nibble first.

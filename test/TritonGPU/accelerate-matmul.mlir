@@ -1556,3 +1556,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x256xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sparse_dot_too_few_warps(%a: tensor<128x32xf8E4M3FN, #blocked>, %b: tensor<64x32xf8E4M3FN, #blocked>,
+                             %e: tensor<128x2xi32, #blocked>, %c: tensor<128x32xf32, #blocked>) -> tensor<128x32xf32, #blocked> {
+    // expected-error @below {{Blackwell tensor-memory operands require at least four warps}}
+    %d = tt.sparse_dot %a, %b, %e, %c : tensor<128x32xf8E4M3FN, #blocked>, tensor<64x32xf8E4M3FN, #blocked>, tensor<128x2xi32, #blocked>, tensor<128x32xf32, #blocked>
+    tt.return %d : tensor<128x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sparse_dot_multiple_ctas(%a: tensor<128x32xf8E4M3FN, #blocked>, %b: tensor<64x32xf8E4M3FN, #blocked>,
+                             %e: tensor<128x2xi32, #blocked>, %c: tensor<128x32xf32, #blocked>) -> tensor<128x32xf32, #blocked> {
+    // expected-error @below {{requires a single CTA}}
+    %d = tt.sparse_dot %a, %b, %e, %c : tensor<128x32xf8E4M3FN, #blocked>, tensor<64x32xf8E4M3FN, #blocked>, tensor<128x2xi32, #blocked>, tensor<128x32xf32, #blocked>
+    tt.return %d : tensor<128x32xf32, #blocked>
+  }
+}
