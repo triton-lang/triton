@@ -1406,14 +1406,15 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("dtype,scale_k", [(torch.float8_e4m3fn, None),
-                                          (torch.float8_e5m2, None), (torch.uint8, 16), (torch.uint8, 32)])
+@pytest.mark.parametrize("dtype,scale_k", [(torch.float16, None), (torch.bfloat16, None),
+                                          (torch.float8_e4m3fn, None), (torch.float8_e5m2, None),
+                                          (torch.uint8, 16), (torch.uint8, 32)])
 @pytest.mark.parametrize("extra_k", [0, 1024])
 def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
     if not torch.cuda.is_available() or not torch.version.cuda:
         pytest.skip("requires NVIDIA GPU")
     cc = torch.cuda.get_device_capability()
-    if cc < (8, 9) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
+    if cc < (8, 0) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
         pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
     m, n, k = 39, 143, (272 if scale_k is None else 288) + extra_k
@@ -1444,11 +1445,19 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
         w = e2m1[w] * ws.float().repeat_interleave(scale_k // 2, dim=1)
     else:
         positions = indices
+        x, w = x * 0.25, w * 0.5
         a, b = x.to(dtype).cuda(), w.to(dtype).T.cuda()
         if extra_k:
-            a = wrap_torch_tensor(a.view(torch.uint8), dtype=dtype)
-            b = wrap_torch_tensor(b.view(torch.uint8), dtype=dtype)
+            if a.element_size() == 2:
+                b = b.contiguous()
+            storage_dtype = torch.int16 if a.element_size() == 2 else torch.uint8
+            a = wrap_torch_tensor(a.view(storage_dtype), dtype=dtype)
+            b = wrap_torch_tensor(b.view(storage_dtype), dtype=dtype)
         config = PrecisionConfig(out_dtype=torch.float32)
+    if dtype in (torch.float8_e4m3fn, torch.float8_e5m2) and cc < (8, 9):
+        with pytest.raises(ValueError, match="native FP8"):
+            matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
+        return
     if nvfp4 and cc < (10, 0):
         with pytest.raises(ValueError, match="native paired NVFP4"):
             matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
