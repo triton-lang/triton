@@ -7,6 +7,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tdm_explicit_fused_waitcnt
   // CHECK: amdg.async_tdm_fused_copy_global_to_local
   // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0 : i32
+  // CHECK-SAME: ttg.amdg.completion_scope = "shared"
   tt.func public @tdm_explicit_fused_waitcnt(
       %desc0: !tt.tensordesc<64x64xf16, #shared>,
       %desc1: !tt.tensordesc<64x64xf16, #shared>,
