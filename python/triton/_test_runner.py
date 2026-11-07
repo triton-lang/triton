@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -85,8 +86,86 @@ def _run(command, *, phase=None, num_gpus=None, cwd=ROOT, environment=None, time
 
 
 def _concurrent(commands):
-    processes = [subprocess.Popen(command, cwd=cwd, env=environment) for command, cwd, environment in commands]
-    return max(process.wait() for process in processes)
+    if not hasattr(os, "waitid"):
+        raise RuntimeError("concurrent test cleanup requires waitid")
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        raise RuntimeError("concurrent test cleanup requires the default SIGCHLD handler")
+
+    processes = []
+    previous_handlers = {}
+    defer_signals = False
+    pending_signal = None
+    groups_stopped = False
+
+    def terminate_runner(signum, _frame):
+        nonlocal pending_signal
+        if defer_signals:
+            if pending_signal is None:
+                pending_signal = signum
+            return
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + signum)
+
+    def deliver_pending_signal():
+        nonlocal pending_signal
+        signum, pending_signal = pending_signal, None
+        if signum is not None:
+            terminate_runner(signum, None)
+
+    def stop_groups():
+        for process in processes:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    # Keep each session leader unreaped until all groups have been signaled.
+    # This pins its PID even when it has exited but its workers are still alive.
+    try:
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                previous = signal.getsignal(sig)
+                default = signal.default_int_handler if sig == signal.SIGINT else signal.SIG_DFL
+                if previous == default:
+                    previous_handlers[sig] = previous
+                    signal.signal(sig, terminate_runner)
+        for command, cwd, environment in commands:
+            # A terminating signal after Popen succeeds but before append must
+            # not leave a child outside the cleanup list.
+            defer_signals = True
+            try:
+                processes.append(subprocess.Popen(command, cwd=cwd, env=environment, start_new_session=True))
+            finally:
+                defer_signals = False
+            deliver_pending_signal()
+        for process in processes:
+            os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+
+        # All leaders have exited; remove any leftover workers before reaping.
+        # Defer signals until every group is stopped and every leader is reaped.
+        defer_signals = True
+        try:
+            stop_groups()
+            groups_stopped = True
+            status = max(process.wait() for process in processes)
+        finally:
+            defer_signals = False
+        deliver_pending_signal()
+        return status
+    except BaseException:
+        defer_signals = True
+        try:
+            if not groups_stopped:
+                stop_groups()
+            for process in processes:
+                process.wait()
+        finally:
+            defer_signals = False
+        raise
+    finally:
+        for sig, previous in previous_handlers.items():
+            signal.signal(sig, previous)
 
 
 def _capability():
