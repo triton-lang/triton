@@ -19,6 +19,7 @@ __all__ = [
     "mma_v2",
     "tma",
     "warpgroup_mma",
+    "warpgroup_sparse_mma",
     "warpgroup_mma_wait",
 ]
 
@@ -106,7 +107,7 @@ def warpgroup_mma_init(value, _semantic=None):
 
 @_core.builtin
 def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_acc=None, is_async=False,
-                  metadata=None, _semantic=None, _generator=None):
+                  _semantic=None):
     """
     Perform warpgroup MMA (Tensor Core) operations.
     acc = a * b + (acc if use_acc else 0)
@@ -116,7 +117,6 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         b (shared_memory_descriptor): Right hand side operand.
         acc (tensor): Accumulator tensor.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
-        metadata (tensor, optional): Packed selector-zero metadata for 2:4 sparse A.
         precision (str, optional): Dot input precision. Defaults to builder default.
         max_num_imprecise_acc (int): Max imprecise accumulations. Used for fp8 -> fp32 dot. Determines how many accumulation are done in limited precision. Defaults to None, which means no upcasting is done.
         is_async (bool): Whether operation is asynchronous. Defaults to False.
@@ -124,6 +124,29 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     Returns:
         tensor or warpgroup_mma_accumulator: Returns the result if synchronous, or a token to load the value once computed if asynchronous.
     """
+    return _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic)
+
+
+@_core.builtin
+def warpgroup_sparse_mma(a, b, acc, metadata, *, use_acc=True, precision=None, max_num_imprecise_acc=None,
+                         is_async=False, _semantic=None, _generator=None):
+    """Perform Hopper 2:4 sparse WGMMA with compressed FP8 A and matching FP8 B.
+
+    Supply two packed int32 or uint32 selector words per row of A. Each word
+    encodes eight consecutive groups of four logical K values, low nibble first.
+    Accumulation and asynchronous waits follow warpgroup_mma.
+    """
+    if a.dtype not in (_core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
+        raise ValueError("sparse WGMMA requires matching FP8 inputs")
+    metadata = _core._unwrap_if_constexpr(metadata)
+    if (not isinstance(metadata, _core.tensor) or list(metadata.type.shape) != [a.type.shape[0], 2]
+            or metadata.dtype not in (_core.int32, _core.uint32)):
+        raise ValueError("sparse WGMMA requires two int32 or uint32 metadata words per row of A")
+    return _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic,
+                          metadata.handle, _semantic.num_warps(_generator).value)
+
+
+def _warpgroup_mma(a, b, acc, use_acc, precision, max_num_imprecise_acc, is_async, _semantic, *sparse_args):
     use_acc = _semantic.to_tensor(use_acc)
 
     if precision is None:
@@ -132,12 +155,6 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     precision = _semantic._str_to_dot_input_precision(precision)
 
-    metadata = _core._unwrap_if_constexpr(metadata)
-    if metadata is not None:
-        if a.dtype not in (_core.float8e4nv, _core.float8e5) or a.dtype != b.dtype:
-            raise ValueError("sparse WGMMA requires matching FP8 inputs")
-        if list(metadata.type.shape) != [a.type.shape[0], 2] or metadata.dtype not in (_core.int32, _core.uint32):
-            raise ValueError("invalid sparse WGMMA metadata tile")
     K = b.type.shape[0]
     if max_num_imprecise_acc is None:
         if a.dtype.is_fp8() and b.dtype.is_fp8():
@@ -152,9 +169,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     is_async = _core._unwrap_if_constexpr(is_async)
 
     handle = _semantic.builder.create_warpgroup_mma(a.handle, b.handle, acc.handle, use_acc.handle, precision,
-                                                    max_num_imprecise_acc, is_async,
-                                                    metadata.handle if metadata is not None else None,
-                                                    _semantic.num_warps(_generator).value)
+                                                    max_num_imprecise_acc, is_async, *sparse_args)
     tensor_ty = acc.type.tensor_type if isinstance(acc, warpgroup_mma_accumulator) else acc.type
     if is_async:
         return warpgroup_mma_accumulator(handle, tensor_ty)
