@@ -4481,7 +4481,7 @@ def test_buffer_descriptor_tensor_soffset(num_elements, rows_per_thread):
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
 @pytest.mark.parametrize("lane_bytes", ["element", 16])
-@pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
+@pytest.mark.parametrize("num_records", [2**31, 2**32 - 16, 2**32 - 15, 2**32 - 4, 2**32 - 1])
 @pytest.mark.parametrize("soffset", [0, 5])
 def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffset):
     elem_bytes = dtype.itemsize
@@ -4517,6 +4517,63 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
     if lane_bytes == 16:
         amdgcn = compiled.asm["amdgcn"]
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("num_records", [0, 12, 28, 60])
+@pytest.mark.parametrize("vec", [1, 4])
+@pytest.mark.parametrize("soffset", [0, 1])
+def test_buffer_descriptor_mask_partial_bounds(num_records, vec, soffset):
+
+    @gluon.jit
+    def kernel(src, dst, out, bound, soffset, VEC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [64], [1], [0])
+        offsets = ttgl.arange(0, 64 * VEC, layout=layout)
+        mask = (offsets // VEC) % 3 != 2
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, bound.to(ttgl.uint32))
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
+        ttgl.store(out + offsets, x)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, bound.to(ttgl.uint32))
+        ttgl.amd.cdna3.buffer.store(offsets + 1, dst_desc, offsets, mask=mask, soffset=soffset)
+
+    n = 64 * vec
+    src = torch.arange(1, soffset + n + 1, dtype=torch.int32, device="cuda")
+    dst = torch.full_like(src, -1)
+    out = torch.empty(n, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, out, num_records, soffset, vec, num_warps=1)
+    index = torch.arange(n, device="cuda")
+    active = (index // vec) % 3 != 2
+    in_bounds = (soffset + index + 1) * 4 <= num_records
+    expected_load = torch.where(active, torch.where(in_bounds, src[soffset:], 0), -5)
+    torch.testing.assert_close(out, expected_load, atol=0, rtol=0)
+    expected_store = torch.full_like(dst, -1)
+    expected_store[soffset:] = torch.where(active & in_bounds, index + 1, -1).int()
+    torch.testing.assert_close(dst, expected_store, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_buffer_descriptor_mask_changing_bound():
+
+    @gluon.jit
+    def kernel(src, bounds, out, steps):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        mask = offsets % 2 == 0
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, ttgl.load(bounds))
+        acc = ttgl.zeros([64], ttgl.int32, layout)
+        for step in range(steps):
+            acc += ttgl.amd.cdna3.buffer.load(desc, offsets, mask=mask)
+            bound = ttgl.load(bounds + step + 1)
+            desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src + (step + 1) * 64, bound)
+        ttgl.store(out + offsets, acc)
+
+    src = torch.arange(1, 257, dtype=torch.int32, device="cuda")
+    bounds = torch.tensor([28, 2**32 - 1, 20, 0], dtype=torch.uint32, device="cuda")
+    out = torch.empty(64, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, bounds, out, 3, num_warps=1)
+    index = torch.arange(64, device="cuda")
+    expected = (torch.where(index < 7, src[:64], 0) + src[64:128] + torch.where(index < 5, src[128:192], 0))
+    torch.testing.assert_close(out, torch.where(index % 2 == 0, expected, 0), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
