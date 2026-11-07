@@ -5,6 +5,7 @@ import triton.language as tl
 import pytest
 
 import pathlib
+from types import SimpleNamespace
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -375,6 +376,55 @@ def test_config_ir_override_changes_disk_cache_key():
     second = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="second.ttir")
 
     assert str(first) != str(second)
+
+
+def test_disk_cache_keeps_non_json_config_values(monkeypatch, fresh_triton_cache):
+    # The disk cache used to rebuild each Config from its JSON-encoded __dict__, so a
+    # tuple meta-parameter came back as an unhashable list and a `tl.dtype` one could
+    # not be written at all.
+    # The disk cache is off under the interpreter; fresh_triton_cache restores this knob.
+    triton.knobs.runtime.interpret = False
+    launched = []
+    benchmarked = []
+
+    def benchmark(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append(launched[-1])
+        return [0.0 if launched[-1] == ((64, 64), tl.float16) else 1.0] * 3
+
+    monkeypatch.setattr(
+        "triton.runtime.autotuner.driver",
+        SimpleNamespace(active=SimpleNamespace(get_current_target=lambda: "target", get_benchmarker=lambda: benchmark)))
+    monkeypatch.setattr("triton.compiler.compiler.make_backend", lambda target: SimpleNamespace(hash=lambda: "backend"))
+
+    @triton.jit
+    def _kernel(N, TILE: tl.constexpr, ACC_TYPE: tl.constexpr):
+        pass
+
+    class Kernel:
+        fn = _kernel
+
+        def run(self, **kwargs):
+            launched.append((kwargs["TILE"], kwargs["ACC_TYPE"]))
+
+    def make_tuner():
+        configs = [
+            triton.Config({"TILE": (32, 32), "ACC_TYPE": tl.float32}),
+            triton.Config({"TILE": (64, 64), "ACC_TYPE": tl.float16}),
+        ]
+        return triton.runtime.Autotuner(Kernel(), arg_names=["N", "TILE", "ACC_TYPE"], configs=configs, key=["N"],
+                                        reset_to_zero=None, restore_value=None, cache_results=True)
+
+    make_tuner().run(N=1024)
+    assert benchmarked == [((32, 32), tl.float32), ((64, 64), tl.float16)]
+    assert launched[-1] == ((64, 64), tl.float16)
+
+    # A new autotuner has an empty in-memory cache, so it must reuse the disk result.
+    launched.clear()
+    benchmarked.clear()
+    make_tuner().run(N=1024)
+    assert benchmarked == []
+    assert launched == [((64, 64), tl.float16)]
 
 
 @pytest.mark.parametrize("prune_kind", ["early_config_prune", "perf_model"])
