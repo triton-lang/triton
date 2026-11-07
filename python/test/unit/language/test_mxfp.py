@@ -107,6 +107,30 @@ class TestMXFP4Tensor(MXBaseTest):
 
 class TestMXScaleTensor(MXBaseTest):
 
+    @pytest.mark.parametrize("direction", [-1, 0, 1])
+    def test_scale_encoding_power_of_two_neighbors(self, device, direction):
+        powers = torch.tensor([math.ldexp(1.0, e) for e in range(-127, 128)], dtype=torch.float32, device=device)
+        expected = torch.arange(255, dtype=torch.int32, device=device)
+        if direction < 0:
+            values = torch.nextafter(powers, torch.zeros_like(powers))
+            expected = (expected - 1).clamp_min(0)
+        elif direction > 0:
+            values = torch.nextafter(powers, torch.full_like(powers, float("inf")))
+        else:
+            values = powers
+
+        tensor = MXScaleTensor(values)
+        torch.testing.assert_close(tensor.data, expected.to(torch.uint8), atol=0, rtol=0)
+
+    def test_scale_encoding_clamped_exponents(self, device):
+        values = torch.tensor(
+            [math.ldexp(1.0, -149),
+             math.ldexp(1.0, -128),
+             math.ldexp(1.0, -127),
+             torch.finfo(torch.float32).max], dtype=torch.float32, device=device)
+        expected = torch.tensor([0, 0, 0, 254], dtype=torch.uint8, device=device)
+        torch.testing.assert_close(MXScaleTensor(values).data, expected, atol=0, rtol=0)
+
     def test_positive_values(self, device):
         values = torch.tensor([1.0, 2.0, 4.0, 8.0], device=device)
         data = MXScaleTensor(values)
