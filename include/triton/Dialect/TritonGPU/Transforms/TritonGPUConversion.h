@@ -38,6 +38,10 @@ public:
 };
 
 namespace impl {
+// Determine whether the gather/scatter x offsets already have the index layout
+// that `convertGatherScatterOp` would assign.
+bool hasGatherScatterIndicesLayout(Operation *op, Value xOffsets);
+
 LogicalResult convertGatherScatterOp(Operation *op, ValueRange operands,
                                      OpOperand &xOffsetsMutable,
                                      const TypeConverter &typeConverter,
