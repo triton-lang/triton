@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 
 from triton_kernels.tensor import FP4, Tensor
-from triton_kernels.tensor_details.layout_details.strided import StridedLayout
+from triton_kernels.tensor_details.layout import SparseMetadataLayout, StridedLayout
 
 
 @triton.jit
@@ -17,7 +17,7 @@ def _load_tile(ptr, row, col, valid_rows, width, row_stride, col_stride, other=0
 def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceOffsets, M, N, K, X_STRIDE: tl.constexpr,
                    W_STRIDE: tl.constexpr, E_STRIDE: tl.constexpr, SX_STRIDE: tl.constexpr, SW_STRIDE: tl.constexpr,
                    OUT_STRIDE: tl.constexpr, BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha, BK: tl.constexpr,
-                   NVFP4: tl.constexpr, SCALE_K: tl.constexpr):
+                   NVFP4: tl.constexpr, SCALE_K: tl.constexpr, TILED_META: tl.constexpr):
     # The instruction compresses its left operand. Compute W.T @ X.T.
     batch = tl.program_id(2)
     expert = batch
@@ -56,14 +56,22 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         ek = tile * words + tl.arange(0, words)
         x = _load_tile(X, xm, xk, xmask, K // pack, X_STRIDE[1], X_STRIDE[2])
         w = _load_tile(W, n, wk, n < N, K // (2 * pack), W_STRIDE[2], W_STRIDE[1])
-        e = _load_tile(E, n, ek, n < N, tl.cdiv(K, BK // words), E_STRIDE[1], E_STRIDE[2], 0x44444444)
+        if TILED_META:
+            base = tl.program_id(0).to(tl.int64) * E_STRIDE[1] + tile.to(tl.int64) * E_STRIDE[2]
+            offsets = tl.arange(0, 128)[:, None] * E_STRIDE[3] + tl.arange(0, words)[None, :] * E_STRIDE[4]
+            e = tl.load(E + base + offsets)
+        else:
+            e = _load_tile(E, n, ek, n < N, tl.cdiv(K, BK // words), E_STRIDE[1], E_STRIDE[2], 0x44444444)
         if NVFP4:
             sk = tile * (BK // SCALE_K) + tl.arange(0, BK // SCALE_K)
             xs = _load_tile(SX, xm, sk, xmask, K // SCALE_K, SX_STRIDE[1], SX_STRIDE[2])
             ws = _load_tile(SW, n, sk, n < N, K // SCALE_K, SW_STRIDE[1], SW_STRIDE[2])
         else:
             ws, xs = None, None
-        acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
+        if TILED_META and BK == 32:
+            acc = tl.core._sparse_dot(w, tl.trans(x), e, acc, None, None)
+        else:
+            acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
     y = tl.trans(acc)
     if XScale is not None:
         y *= tl.load(XScale)
@@ -99,7 +107,13 @@ def _strides(tensor, rank):
 
 def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatter):
     a, b = _storage(a, -1), _storage(b, -2)
-    if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b, metadata)):
+    if not isinstance(metadata, (Tensor, torch.Tensor)):
+        raise ValueError("expected a sparse metadata tensor")
+    layout = metadata.storage.layout if isinstance(metadata, Tensor) else None
+    tiled = isinstance(layout, SparseMetadataLayout)
+    meta_shape = tuple(metadata.shape)
+    metadata = metadata.data if tiled else _storage(metadata)
+    if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b)):
         raise ValueError("sparse matmul expects strided matrices or batches of matrices")
     if ragged is None and a.shape[:-2] != b.shape[:-2]:
         raise ValueError("input and weight batch dimensions must match")
@@ -125,8 +139,11 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
     group = 8 if nvfp4 else 4
     if k % group or (nvfp4 and k % 16) or b.shape[-2] * 2 != stored_k:
         raise ValueError("compressed weights must store half the logical K values")
-    if metadata.dtype != torch.int32 or metadata.shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
+    if metadata.dtype != torch.int32 or meta_shape != (*b.shape[:-2], n, triton.cdiv(k, group * 8)):
         raise ValueError("expected one int32 metadata word per eight selector groups per output column")
+    if tiled and (layout.words_per_tile != (1 if a.dtype == torch.float16 else 2) or
+                  list(metadata.shape) != layout.storage_shape(list(meta_shape), False)):
+        raise ValueError("sparse metadata tile shape does not match the operands")
     xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
     scale_k = config.a_microblock_size or 16
     if nvfp4:
@@ -166,7 +183,7 @@ def sparse_matmul(a, b, metadata, bias, config, c, alpha, ragged, gather, scatte
         bk = 128 if nvfp4 else 32 if a.dtype == torch.float16 else 64
         grid = (triton.cdiv(n, 128), m_tiles, batch)
         _sparse_matmul[grid](a, b, metadata, xs, ws, bias, c, gather, scatter, schedule, offsets, rows, n, k,
-                             _strides(a, 3), _strides(b, 3), _strides(metadata, 3), _strides(xs, 3), _strides(ws, 3),
+                             _strides(a, 3), _strides(b, 3), _strides(metadata, 5 if tiled else 3), _strides(xs, 3), _strides(ws, 3),
                              _strides(c, 3), _strides(bias, 2), config.a_mx_tensor_scale, config.b_mx_tensor_scale,
-                             alpha, bk, nvfp4, scale_k, num_warps=4)
+                             alpha, bk, nvfp4, scale_k, tiled, num_warps=4)
     return c

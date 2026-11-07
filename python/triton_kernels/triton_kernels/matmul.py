@@ -274,7 +274,7 @@ def matmul(a, b, bias,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
     maxabs_permute_sequence: tuple[int, ...] | None = None,
-    b_sparse_metadata: torch.Tensor | None = None,
+    b_sparse_metadata: torch.Tensor | Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -286,6 +286,8 @@ def matmul(a, b, bias,
 
     With b_sparse_metadata, B is compressed along K. Metadata has shape
     [N, ceil(K/32)] for FP8/FP16 or [N, ceil(K/64)] for byte-packed NVFP4.
+    To prepack reusable metadata, convert its wrapped tensor to SparseMetadataLayout
+    with words_per_tile=1 for FP16 or 2 for FP8 and NVFP4.
     Each nibble selects two positions or two adjacent NVFP4 pairs in increasing
     order, starting with the low nibble. NVFP4 scales follow logical K in blocks
     of 16 (default) or 32 (set both microblock sizes to 32). The native sparse
