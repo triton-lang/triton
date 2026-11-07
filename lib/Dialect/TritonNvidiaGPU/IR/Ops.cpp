@@ -293,8 +293,11 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 }
 
 bool WarpGroupDotOp::verifyDims() {
-  return getA().getType().getShape().back() * (getMetadata() ? 2 : 1) ==
-         getB().getType().getDimSize(0);
+  int64_t storedK = getA().getType().getShape().back();
+  int64_t logicalK = getB().getType().getDimSize(0);
+  if (getMetadata())
+    return kFp8Sparse2To4.matches(storedK, logicalK);
+  return storedK == logicalK;
 }
 
 LogicalResult WarpGroupDotOp::verify() {
@@ -331,8 +334,7 @@ LogicalResult WarpGroupDotOp::verify() {
       return emitOpError(
           "sparse WGMMA requires FP8 inputs and FP32 accumulation");
     if (getNumCTAs(nvmmaEnc) != 1 || nvmmaEnc.getWarpsPerCTA()[1] != 1 ||
-        getB().getType().getDimSize(0) != 64 ||
-        nvmmaEnc.getInstrShape()[2] != 32 ||
+        nvmmaEnc.getInstrShape()[2] != kFp8Sparse2To4.storedA ||
         meta.getType().getShape() !=
             ArrayRef<int64_t>({resTy.getDimSize(0), 2}) ||
         !meta.getType().getElementType().isInteger(32))
@@ -1229,8 +1231,11 @@ static LogicalResult verifyMMAOperandPacking(Operation *op, MemDescType mem,
 }
 
 bool TCGen5MMAOp::verifyDims() {
-  return getA().getType().getDimSize(1) * (getMetadata() ? 2 : 1) ==
-         getB().getType().getDimSize(0);
+  int64_t storedK = getA().getType().getDimSize(1);
+  int64_t logicalK = getB().getType().getDimSize(0);
+  if (getMetadata())
+    return kFp8Sparse2To4.matches(storedK, logicalK);
+  return storedK == logicalK;
 }
 
 // Each instruction reads metadata from one 128-row tile, starting at selector
@@ -1292,7 +1297,7 @@ LogicalResult TCGen5MMAOp::verify() {
     if (!isa<Float8E4M3FNType, Float8E5M2Type>(atype))
       return emitOpError("sparse MMA requires FP8 operands");
     if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(),
-                                getB().getType().getDimSize(0), 64, 2)))
+                                getB().getType().getDimSize(0), kFp8Sparse2To4.logical, 2)))
       return failure();
   }
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
@@ -1628,7 +1633,7 @@ LogicalResult TCGen5MMAScaledOp::verify() {
       return emitOpError(
           "expected E4M3 tensor memory scales per 32 logical K values");
     if (failed(verifySparseTile(*this, metadata.getType(), getD().getType(), k,
-                                128, 2)))
+                                kNvfp4Sparse4To8.logical, 2)))
       return failure();
   }
   int64_t minK = 32;
@@ -1718,7 +1723,11 @@ void TCGen5MMAScaledOp::getEffects(
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
-  return getStoredAK() * (getMetadata() ? 2 : 1) == getBlockK();
+  int64_t storedK = getStoredAK();
+  int64_t logicalK = getBlockK();
+  if (getMetadata())
+    return kNvfp4Sparse4To8.matches(storedK, logicalK);
+  return storedK == logicalK;
 }
 
 bool TCGen5MMAScaledOp::verifyOutputDims() {
