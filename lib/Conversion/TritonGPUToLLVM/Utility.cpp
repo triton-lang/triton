@@ -1292,7 +1292,7 @@ static bool atomicResultHasOrderingBarrier(Operation *op) {
 }
 
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  RewriterBase &rewriter,
+                                  MemSyncScope memScope, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
   // The region's entry/exit barriers already provide this ordering.
   if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
@@ -1309,6 +1309,11 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
   OpBuilder::InsertionGuard guard(rewriter);
   if (stages.beforeMemoryEffects) {
     rewriter.setInsertionPoint(op);
+    // Every warp releases its own writes; the barrier then orders them all
+    // before the atomic, whichever thread issues it.
+    if (triton::gpu::lookupNumWarps(op) > 1 ||
+        triton::gpu::lookupNumCTAs(op) > 1)
+      targetInfo.releaseBeforeAtomicBarrier(op->getLoc(), rewriter, memScope);
     emitBarrier();
   }
   if (stages.afterMemoryEffects) {

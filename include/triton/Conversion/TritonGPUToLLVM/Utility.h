@@ -800,7 +800,7 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
 /// acquire/release semantics and any ordering already provided by result
 /// staging.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  RewriterBase &rewriter,
+                                  MemSyncScope memScope, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
 void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,
