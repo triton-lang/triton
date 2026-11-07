@@ -1366,6 +1366,8 @@ class CodeGenerator(ast.NodeVisitor):
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
             for_op = self.builder.create_for_op(lb, ub, step, init_handles)
+            if iv_type.is_int_unsigned():
+                for_op.set_attr("unsignedCmp", self.builder.get_unit_attr())
             if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
             if _unwrap_if_constexpr(loop_unroll_factor) is not None:

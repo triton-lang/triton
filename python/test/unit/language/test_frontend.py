@@ -1391,6 +1391,26 @@ def test_for_loop_operand_extension(jit, operand, src_dtype, iv_dtype):
     assert expected_op in extensions[0]
 
 
+@pytest.mark.parametrize("dtype", [tl.int32, tl.uint32, tl.int64, tl.uint64])
+@pytest.mark.parametrize("use_tl_range", [False, True])
+def test_for_loop_comparison_signedness(dtype, use_tl_range):
+
+    @triton.jit
+    def kernel(Bounds, USE_TL_RANGE: tl.constexpr):
+        lo = tl.load(Bounds)
+        hi = tl.load(Bounds + 1)
+        if USE_TL_RANGE:
+            for i in tl.range(lo, hi):
+                anchor(i)
+        else:
+            for i in range(lo, hi):
+                anchor(i)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), use_tl_range))
+    assert ("scf.for unsigned" in str(module)) == dtype.is_int_unsigned()
+    assert "scf.for" in str(module)
+
+
 @pytest.mark.interpreter
 def test_constexpr_return():
 
