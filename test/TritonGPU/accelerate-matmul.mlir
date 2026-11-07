@@ -1580,3 +1580,15 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num
     tt.return %d : tensor<128x32xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_fp8_on_ampere(%a: tensor<128x32xf8E4M3FN, #blocked>, %b: tensor<64x32xf8E4M3FN, #blocked>,
+                                %e: tensor<128x2xi32, #blocked>, %c: tensor<128x32xf32, #blocked>) {
+    // expected-error @below {{unsupported sparse MMA format or target}}
+    %d = tt.sparse_dot %a, %b, %e, %c : tensor<128x32xf8E4M3FN, #blocked>, tensor<64x32xf8E4M3FN, #blocked>, tensor<128x2xi32, #blocked>, tensor<128x32xf32, #blocked>
+    tt.return
+  }
+}

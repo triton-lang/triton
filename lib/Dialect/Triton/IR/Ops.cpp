@@ -352,13 +352,16 @@ LogicalResult SparseDotOp::verify() {
         "requires a 128-row tile and a matching FP32 accumulator");
   Type elem = a.getElementType();
   bool scaled = bool(getAScale());
+  bool is16Bit = elem.isF16() || elem.isBF16();
   if (scaled != bool(getBScale()) || b.getElementType() != elem ||
       (scaled ? !elem.isInteger(8)
-              : !isa<Float8E4M3FNType, Float8E5M2Type>(elem)))
-    return emitOpError("expected FP8 or packed NVFP4 with two scales");
-  if (a.getDimSize(1) != 32 || b.getDimSize(0) != 64 ||
+              : !is16Bit && !isa<Float8E4M3FNType, Float8E5M2Type>(elem)))
+    return emitOpError("expected matching unscaled FP16, BF16 or FP8 inputs, "
+                       "or packed NVFP4 inputs with two scales");
+  if (a.getDimSize(1) != (is16Bit ? 16 : 32) ||
+      b.getDimSize(0) != (is16Bit ? 32 : 64) ||
       !sparsityMetadata.getElementType().isInteger(32) ||
-      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, 2}))
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, is16Bit ? 1 : 2}))
     return emitOpError(
         "invalid compressed K dimension or sparsity metadata tile");
   if (scaled) {

@@ -602,10 +602,13 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
 @builtin
 def tcgen05_sparse_mma(a, b, acc, sparsity_metadata, *, use_acc=True, pred=True, multicast=False, mbarriers=None,
                        mbarrier_preds=None, a_type=None, b_type=None, _semantic=None):
-    """Emit 2:4 FP8 MMA with logical K=64.
+    """Emit native 2:4 MMA with logical K=32 for FP16/BF16 or K=64 for FP8.
 
-    A stores 32 FP8 values per row. Each sparsity metadata nibble selects two positions in a group of four.
-    Supply a [128, 2] int32 tensor-memory descriptor with eight selectors per word, low nibble first.
+    A stores half of K. Each four-bit selector identifies two positions in a group of four.
+    For FP8, supply [128, 2] int32 words in tensor memory, eight selectors per word, low nibble first.
+    For matching FP16 or BF16 inputs, supply [128, 1] int32 words in the selector-zero layout. For every
+    pair of rows r and r+8 with bit 3 of r clear, word r packs their first four selectors each.
+    Word r+8 packs their last four selectors each. In both words, row r occupies the low 16 bits.
     In tensor memory, A must start on a four-column boundary and the accumulator and sparsity metadata
     must each start on a two-column boundary. These alignments apply to descriptor subviews too.
     """

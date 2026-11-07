@@ -669,10 +669,11 @@ def unsqueeze(x, dim: core.constexpr):
 def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
 
+    FP16 and BF16 are supported on Ampere, Ada, Hopper, SM100 and SM103.
     FP8 is supported on SM89, SM90, SM100 and SM103. NVFP4 requires SM100 or SM103.
     Use a single CTA. On SM100 and SM103 the kernel requires at least four warps.
 
-    Use logical K=64 for FP8, or 128 for paired NVFP4.
+    Use logical K=32 for FP16/BF16, 64 for FP8, or 128 for paired NVFP4.
     Pack eight four-bit selectors per int32, least significant nibble first.
     Each selector contains two increasing two-bit positions. For NVFP4 the
     positions select adjacent pairs and both operands pack two values per byte.
@@ -683,6 +684,18 @@ def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
     if acc is None:
         acc = core.full((a.shape[0], b.shape[1]), 0, core.float32)
     core.static_assert((a_scale is None) == (b_scale is None), "sparse_dot requires both operand scales or neither")
+    if a.dtype == core.float16 or a.dtype == core.bfloat16:
+        core.static_assert(
+            len(sparsity_metadata.shape) == 2 and sparsity_metadata.shape[0] == 128 and sparsity_metadata.shape[1] == 1,
+            "expected one selector word per row")
+        core.static_assert(sparsity_metadata.dtype == core.int32 or sparsity_metadata.dtype == core.uint32,
+                           "expected 32-bit selector words")
+        # Selector zero pairs rows eight apart. Their low halves share one word and their high halves share another.
+        rows = core.reshape(sparsity_metadata.to(core.uint32), (8, 2, 8))
+        row0, row8 = core.split(core.permute(rows, (0, 2, 1)))
+        low = (row0 & 0xffff) | (row8 << 16)
+        high = (row0 >> 16) | (row8 & 0xffff0000)
+        sparsity_metadata = core.reshape(core.permute(core.join(low, high), (0, 2, 1)), (128, 1))
     if a_scale is not None:
         if a_scale.shape[1] == 8:
             core.static_assert(b_scale.shape[1] == 8)
