@@ -164,6 +164,78 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+// CHECK-LABEL: tt.func @dont_pipeline_volatile_load
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: scf.for
+// CHECK: tt.load {{.*}} {isVolatile = true}
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: tt.return
+  tt.func @dont_pipeline_volatile_load(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    %result = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      %value = tt.load %ptrs {isVolatile = true} : tensor<128x!tt.ptr<f32>, #blocked>
+      %next = arith.addf %acc, %value : tensor<128xf32, #blocked>
+      scf.yield %next : tensor<128xf32, #blocked>
+    } {tt.num_stages = 3 : i32}
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+// CHECK-LABEL: tt.func @dont_pipeline_cv_load
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: scf.for
+// CHECK: tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>}
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: tt.return
+  tt.func @dont_pipeline_cv_load(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    %result = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      %value = tt.load %ptrs {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>} : tensor<128x!tt.ptr<f32>, #blocked>
+      %next = arith.addf %acc, %value : tensor<128xf32, #blocked>
+      scf.yield %next : tensor<128xf32, #blocked>
+    } {tt.num_stages = 3 : i32}
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+// CHECK-LABEL: tt.func @dont_pipeline_detailed_cv_load
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: scf.for
+// CHECK: tt.load {{.*}} {cachePolicy = #ttng.cache_policy<cache_modifier = cv>}
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK: tt.return
+  tt.func @dont_pipeline_detailed_cv_load(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    %result = scf.for %i = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      %value = tt.load %ptrs {cachePolicy = #ttng.cache_policy<cache_modifier = cv>} : tensor<128x!tt.ptr<f32>, #blocked>
+      %next = arith.addf %acc, %value : tensor<128xf32, #blocked>
+      scf.yield %next : tensor<128xf32, #blocked>
+    } {tt.num_stages = 3 : i32}
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
