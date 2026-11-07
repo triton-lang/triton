@@ -1408,14 +1408,15 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
 
 @pytest.mark.parametrize("dtype,scale_k", [(torch.float8_e4m3fn, None),
                                           (torch.float8_e5m2, None), (torch.uint8, 16), (torch.uint8, 32)])
-def test_matmul_structured_sparse_weights(dtype, scale_k):
+@pytest.mark.parametrize("extra_k", [0, 1024])
+def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
     if not torch.cuda.is_available() or not torch.version.cuda:
         pytest.skip("requires NVIDIA GPU")
     cc = torch.cuda.get_device_capability()
     if cc < (8, 9) or cc >= (10, 0) and cc not in ((10, 0), (10, 3)):
         pytest.skip("unsupported sparse MMA target")
     nvfp4 = dtype == torch.uint8
-    m, n, k = 39, 143, 272 if scale_k is None else 288
+    m, n, k = 39, 143, (272 if scale_k is None else 288) + extra_k
     group = 8 if nvfp4 else 4
     rng = torch.Generator().manual_seed(17)
     pairs = torch.combinations(torch.arange(4), r=2)
@@ -1424,11 +1425,13 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
     selectors = torch.nn.functional.pad(selectors, (0, -selectors.shape[-1] % 8), value=0)
     sparsity_metadata = (selectors.reshape(n, -1, 8) << (torch.arange(8) * 4)).sum(-1).int().cuda()
 
-    x = torch.randint(4, (m, k), generator=rng)
-    w = torch.randint(4, (n, k // 2), generator=rng)
+    low, high = (0, 16) if nvfp4 else (-4, 4)
+    x = torch.randint(low, high, (m, k), generator=rng)
+    w = torch.randint(low, high, (n, k // 2), generator=rng)
     if nvfp4:
         positions = (indices[..., None] * 2 + torch.arange(2)).flatten(-2)
-        # E2M1 codes 0 through 3 represent 0, 0.5, 1, and 1.5.
+        e2m1 = torch.tensor([0., .5, 1., 1.5, 2., 3., 4., 6.])
+        e2m1 = torch.cat((e2m1, -e2m1))
         def pack(t):
             return (t[:, ::2] + 16 * t[:, 1::2]).to(torch.uint8)
 
@@ -1437,11 +1440,14 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
         ws = torch.randint(1, 4, (n, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
         config = PrecisionConfig(a_mx_scale=xs.cuda(), b_mx_scale=ws.cuda(), a_microblock_size=scale_k,
                                  b_microblock_size=scale_k, out_dtype=torch.float32)
-        x = x.float() * 0.5 * xs.float().repeat_interleave(scale_k, dim=1)
-        w = w.float() * 0.5 * ws.float().repeat_interleave(scale_k // 2, dim=1)
+        x = e2m1[x] * xs.float().repeat_interleave(scale_k, dim=1)
+        w = e2m1[w] * ws.float().repeat_interleave(scale_k // 2, dim=1)
     else:
         positions = indices
         a, b = x.to(dtype).cuda(), w.to(dtype).T.cuda()
+        if extra_k:
+            a = wrap_torch_tensor(a.view(torch.uint8), dtype=dtype)
+            b = wrap_torch_tensor(b.view(torch.uint8), dtype=dtype)
         config = PrecisionConfig(out_dtype=torch.float32)
     if nvfp4 and cc < (10, 0):
         with pytest.raises(ValueError, match="native paired NVFP4"):
@@ -1460,7 +1466,7 @@ def test_matmul_structured_sparse_weights(dtype, scale_k):
 def test_matmul_structured_sparse_experts(routed):
     if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in ((8, 9), (9, 0), (10, 0), (10, 3)):
         pytest.skip("requires native FP8 sparse MMA")
-    experts, m, k, n = 3, 37, 64, 17
+    experts, m, k, n = 3, 37, 64 if routed else 1216, 17
     a = torch.randint(4, (experts, m, k), device="cuda").to(torch.float8_e4m3fn)
     b = torch.randint(4, (experts, k // 2, n), device="cuda").to(torch.float8_e4m3fn)
     dense = torch.zeros((experts, k // 4, 4, n), device="cuda")
@@ -1482,16 +1488,19 @@ def test_matmul_structured_sparse_experts(routed):
         expected = torch.empty((m, n), device="cuda")
         for i, rows in enumerate(x.split(sizes)):
             start = sum(sizes[:i])
-            expected[scatter[start:start + sizes[i]]] = 2 * (rows @ dense[i] + bias[i])
+            expected[scatter[start:start + sizes[i]]] = 2 * (2 * (rows @ dense[i]) + bias[i])
     else:
-        expected = 2 * (a.float() @ dense + bias[:, None, :])
-    out = matmul(a, b, bias, precision_config=PrecisionConfig(out_dtype=torch.float32), b_sparsity_metadata=sparsity_metadata,
-                 out_alpha=2.0, **kwargs)
+        expected = 2 * (2 * (a.float() @ dense) + bias[:, None, :])
+    # The two outer scales multiply to 2. Applying the large one first would overflow.
+    out = torch.empty((*expected.shape[:-1], 2 * n), device="cuda")[..., ::2]
+    config = PrecisionConfig(out_dtype=torch.float32, a_mx_tensor_scale=torch.tensor(2.**125, device="cuda"),
+                             b_mx_tensor_scale=torch.tensor(2.**-124, device="cuda"))
+    matmul(a, b, bias, c=out, precision_config=config, b_sparsity_metadata=sparsity_metadata, out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("sizes,slice_map", [([2, 3, 1], [0, 1, 2]), ([2, 3, 1], [0, -1, 1]),
-                                             ([32768 * 128 + 1], [0])])
+                                             ([32768 * 128 + 1, 32768 * 128], [0, 1])])
 def test_matmul_structured_sparse_remapped_experts(sizes, slice_map):
     from triton_kernels.tensor_details.ragged_tensor import remap_ragged_tensor_metadata
     if not torch.cuda.is_available() or not torch.version.cuda or torch.cuda.get_device_capability() not in (
@@ -1509,6 +1518,14 @@ def test_matmul_structured_sparse_remapped_experts(sizes, slice_map):
     matmul(a, b, bias, c=out, a_ragged_metadata=ragged, b_sparsity_metadata=selectors)
     for chunk, expert in zip(out.split(sizes), slice_map):
         torch.testing.assert_close(chunk, torch.full_like(chunk, expert + 1 if expert >= 0 else -99))
+    if -1 in slice_map:
+        # The activation storage may be larger than the remapped schedule.
+        a = a[:1].expand(65536, -1)
+        result = matmul(a, b, bias, a_ragged_metadata=ragged, b_sparsity_metadata=selectors,
+                        precision_config=PrecisionConfig(out_dtype=torch.float32))
+        expected = torch.zeros_like(result)
+        expected[:rows] = torch.where(out == -99, 0, out)
+        torch.testing.assert_close(result, expected)
 
 
 @pytest.mark.parametrize("left", [False, True])
@@ -1524,6 +1541,7 @@ def test_sparse_dot_one_sided_scales(left):
     with pytest.raises(triton.CompilationError) as exc:
         kernel[(1,)](left)
     assert "requires both operand scales" in str(exc.value.__cause__)
+
 
 def test_sparse_matmul_partial_selector_word():
     from triton_kernels.matmul_details._sparse_matmul import _pad_selector_word

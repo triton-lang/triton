@@ -2,7 +2,8 @@ import torch
 import triton
 import triton.language as tl
 
-from triton_kernels.tensor import FP4, Tensor
+from triton_kernels.matmul_details.opt_flags_details.opt_flags_nvidia import compute_split_k
+from triton_kernels.tensor import FP4, Tensor, dtype_to_torch_dtype
 from triton_kernels.tensor_details.layout import StridedLayout
 
 
@@ -22,15 +23,18 @@ def _pad_selector_word(word, word_idx, last_word, groups: tl.constexpr):
 
 
 @triton.jit
-def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceOffsets, SliceSizes, M, N, K,
-                   PARTIAL_GROUPS: tl.constexpr, X_STRIDE: tl.constexpr, W_STRIDE: tl.constexpr, E_STRIDE: tl.constexpr,
-                   SX_STRIDE: tl.constexpr, SW_STRIDE: tl.constexpr, OUT_STRIDE: tl.constexpr,
-                   BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha, BK: tl.constexpr, NVFP4: tl.constexpr,
-                   SCALE_K: tl.constexpr):
+def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceOffsets, SliceSizes, M, N: tl.constexpr,
+                   K: tl.constexpr, M_TILES, PARTIAL_GROUPS: tl.constexpr, X_STRIDE: tl.constexpr,
+                   W_STRIDE: tl.constexpr, E_STRIDE: tl.constexpr, SX_STRIDE: tl.constexpr, SW_STRIDE: tl.constexpr,
+                   OUT_STRIDE: tl.constexpr, BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha, BK: tl.constexpr,
+                   NVFP4: tl.constexpr, SCALE_K: tl.constexpr, BLOCK_M: tl.constexpr, SPLIT_K: tl.constexpr):
     # The instruction compresses its left operand. Compute W.T @ X.T.
-    batch = tl.program_id(2)
+    pid = tl.program_id(0)
+    n_tiles = tl.cdiv(N, 128)
+    n_tile = pid % n_tiles
+    batch = pid // n_tiles // M_TILES
     expert = batch
-    m_tile = tl.program_id(1)
+    m_tile = pid // n_tiles % M_TILES
     start = 0
     if Schedule is not None:
         entry = tl.load(Schedule + m_tile)
@@ -40,8 +44,8 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
         m_tile = (entry.to(tl.uint32) >> 16).to(tl.int32)
         start = tl.load(SliceOffsets + expert)
         M = start + tl.load(SliceSizes + expert)
-    n = tl.program_id(0) * 128 + tl.arange(0, 128)
-    m = start + m_tile * 128 + tl.arange(0, 128)
+    n = n_tile * 128 + tl.arange(0, 128)
+    m = start + m_tile * BLOCK_M + tl.arange(0, BLOCK_M)
     xm = m
     ym = m
     if Gather is not None:
@@ -52,14 +56,15 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
     X += batch.to(tl.int64) * X_STRIDE[0]
     W += expert.to(tl.int64) * W_STRIDE[0]
     E += expert.to(tl.int64) * E_STRIDE[0]
-    Out += batch.to(tl.int64) * OUT_STRIDE[0]
+    split = tl.program_id(1)
+    Out += (batch.to(tl.int64) * SPLIT_K + split) * OUT_STRIDE[0]
     if NVFP4:
         SX += batch.to(tl.int64) * SX_STRIDE[0]
         SW += expert.to(tl.int64) * SW_STRIDE[0]
     pack: tl.constexpr = 2 if NVFP4 else 1
     words: tl.constexpr = 2
-    acc = tl.full((128, 128), 0, tl.float32)
-    for tile in range(tl.cdiv(K, BK)):
+    acc = tl.full((128, BLOCK_M), 0, tl.float32)
+    for tile in range(split, tl.cdiv(K, BK), SPLIT_K):
         xk = tile * (BK // pack) + tl.arange(0, BK // pack)
         wk = tile * (BK // (2 * pack)) + tl.arange(0, BK // (2 * pack))
         ek = tile * words + tl.arange(0, words)
@@ -76,15 +81,37 @@ def _sparse_matmul(X, W, E, SX, SW, Bias, Out, Gather, Scatter, Schedule, SliceO
             ws, xs = None, None
         acc = tl.sparse_dot(w, tl.trans(x), e, acc, ws, xs)
     y = tl.trans(acc)
-    if XScale is not None:
-        y *= tl.load(XScale)
-    if WScale is not None:
-        y *= tl.load(WScale)
-    if Bias is not None:
-        y += tl.load(Bias + expert.to(tl.int64) * BIAS_STRIDE[0] + n * BIAS_STRIDE[1], n < N, 0)[None, :]
-    y *= Alpha
+    if SPLIT_K == 1:
+        y = _epilogue(y, n[None, :], N, expert, Bias, BIAS_STRIDE, XScale, WScale, Alpha)
     out_offsets = ym[:, None].to(tl.int64) * OUT_STRIDE[1] + n[None, :].to(tl.int64) * OUT_STRIDE[2]
     tl.store(Out + out_offsets, y, ((ym >= 0) & (m < M))[:, None] & (n[None, :] < N))
+
+
+@triton.jit
+def _epilogue(y, n, N, expert, Bias, BIAS_STRIDE: tl.constexpr, XScale, WScale, Alpha):
+    x_scale = tl.load(XScale) if XScale is not None else 1.0
+    w_scale = tl.load(WScale) if WScale is not None else 1.0
+    y *= x_scale * w_scale
+    if Bias is not None:
+        y += tl.load(Bias + expert.to(tl.int64) * BIAS_STRIDE[0] + n.to(tl.int64) * BIAS_STRIDE[1], n < N, 0)
+    return y * Alpha
+
+
+@triton.jit
+def _reduce_partials(Partials, Out, Bias, XScale, WScale, Alpha, M: tl.constexpr, N: tl.constexpr,
+                     OUT_STRIDE: tl.constexpr, BIAS_STRIDE: tl.constexpr, SPLIT_K: tl.constexpr, BLOCK: tl.constexpr):
+    tiles = tl.cdiv(M * N, BLOCK)
+    pid = tl.program_id(0)
+    batch = pid // tiles
+    offset = (pid % tiles).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+    split = tl.arange(0, triton.next_power_of_2(SPLIT_K))
+    base = (batch.to(tl.int64) * SPLIT_K + split) * M * N
+    partial = tl.load(Partials + base[:, None] + offset[None, :],
+                      (split[:, None] < SPLIT_K) & (offset[None, :] < M * N), 0)
+    n = offset % N
+    y = _epilogue(tl.sum(partial, 0), n, N, batch, Bias, BIAS_STRIDE, XScale, WScale, Alpha)
+    out_offset = batch.to(tl.int64) * OUT_STRIDE[0] + (offset // N) * OUT_STRIDE[1] + n * OUT_STRIDE[2]
+    tl.store(Out + out_offset, y, offset < M * N)
 
 
 def _storage(tensor, packed_axis=None):
@@ -99,7 +126,10 @@ def _storage(tensor, packed_axis=None):
         expected[packed_axis] *= 2
     if tensor.shape != expected:
         raise ValueError("logical sparse operand shape does not match its storage")
-    return tensor.data
+    storage_dtype = dtype_to_torch_dtype(tensor.dtype)
+    if storage_dtype.itemsize != tensor.data.element_size():
+        raise ValueError("sparse operand dtype must match its storage width")
+    return tensor.data.view(storage_dtype)
 
 
 def _strides(tensor, rank):
@@ -162,7 +192,8 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
         raise ValueError("scatter must have one entry per routed row")
     output_shape = (*a.shape[:-2], rows, n)
     if c is None:
-        allocate = torch.zeros if scatter is not None else torch.empty
+        # Remapping can leave output rows with no scheduled expert.
+        allocate = torch.zeros if ragged is not None or scatter is not None else torch.empty
         c = allocate(output_shape, device=a.device, dtype=dtype)
     if c.shape != output_shape or c.dtype != dtype:
         raise ValueError("output shape or dtype does not match sparse matmul")
@@ -176,13 +207,30 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     sizes = ragged.slice_sizes if ragged is not None else None
     if offsets is not None and any(t.device != a.device for t in (offsets, schedule, sizes)):
         raise ValueError("routing metadata must be on the same device as the activations")
-    m_tiles = triton.cdiv(rows, 128) if ragged is None else ragged.n_blocks(ragged.n_slices, rows, 128)
+    block_m = 128 if ragged is not None else min(128, max(16, triton.next_power_of_2(max(rows, 1))))
+    m_tiles = triton.cdiv(rows, block_m) if ragged is None else min(schedule.numel(),
+                                                                    ragged.n_blocks(ragged.n_slices, rows, 128))
     if batch and m_tiles and n:
         bk = 128 if nvfp4 else 64
-        grid = (triton.cdiv(n, 128), m_tiles, batch)
-        _sparse_matmul[grid](a, b, sparsity_metadata, xs, ws, bias, c, gather, scatter, schedule, offsets,
-                             sizes, rows, n, k, k // group % 8, _strides(a, 3), _strides(b, 3),
-                             _strides(sparsity_metadata, 3), _strides(xs, 3), _strides(ws, 3), _strides(c, 3),
-                             _strides(bias, 2), config.a_mx_tensor_scale, config.b_mx_tensor_scale, alpha, bk, nvfp4,
-                             scale_k, num_warps=4)
+        tiles = triton.cdiv(n, 128) * m_tiles * batch
+        split_k = 1
+        if ragged is None and gather is None and scatter is None:
+            split_k = compute_split_k(bk, k, tiles, device=a.device)
+            # FP8 needs a substantially underfilled grid to amortize the FP32 scratch traffic.
+            if not nvfp4 and split_k < 4:
+                split_k = 1
+        # Each CTA writes an FP32 partial. Apply bias, scales and the output cast once after reduction.
+        dest = c if split_k == 1 else torch.empty((batch * split_k, rows, n), device=a.device, dtype=torch.float32)
+        with torch.cuda.device(a.device):
+            _sparse_matmul[(tiles, split_k)](a, b, sparsity_metadata, xs, ws, bias, dest, gather, scatter, schedule,
+                                             offsets, sizes, rows, n, k, m_tiles, k // group % 8, _strides(a, 3),
+                                             _strides(b, 3), _strides(sparsity_metadata, 3), _strides(xs, 3),
+                                             _strides(ws, 3), _strides(dest, 3), _strides(bias, 2),
+                                             config.a_mx_tensor_scale, config.b_mx_tensor_scale, alpha, bk, nvfp4,
+                                             scale_k, block_m, split_k, num_warps=4)
+            if split_k > 1:
+                _reduce_partials[(batch * triton.cdiv(rows * n, 64), )](dest, c, bias, config.a_mx_tensor_scale,
+                                                                        config.b_mx_tensor_scale, alpha, rows, n,
+                                                                        _strides(c, 3), _strides(bias, 2), split_k, 64,
+                                                                        num_warps=4)
     return c
