@@ -694,9 +694,10 @@ LogicalResult verifyCombinerBody(Operation *combiner, Region &body,
       // A threaded function pass can be rewriting the callee concurrently.
       if (op->getContext()->isMultithreadingEnabled())
         return WalkResult::advance();
-      if (auto fn = dyn_cast_or_null<FuncOp>(call.resolveCallable()))
-        return verifyCombinerBody(combiner, fn.getBody(), visited);
-      return WalkResult::advance(); // tt.call verifies its callee.
+      auto fn = dyn_cast_or_null<FuncOp>(call.resolveCallable());
+      if (!fn)
+        return WalkResult::advance(); // tt.call verifies its callee.
+      return verifyCombinerBody(combiner, fn.getBody(), visited);
     }
     if (!isa<AssertOp, PrintOp>(op)) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
