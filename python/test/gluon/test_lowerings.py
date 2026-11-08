@@ -260,6 +260,31 @@ def test_convert_1d_to_2d_slice_cga(num_ctas, device):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("src_cga_layout, dst_cga_layout", [
+    ([[1, 0]], [[0, 1]]),
+    ([[1, 0], [2, 0]], [[0, 1], [0, 2]]),
+])
+def test_convert_layout_cta_broadcast_src(src_cga_layout, dst_cga_layout, device):
+    num_ctas = 2**len(src_cga_layout)
+    skip_if_unsupported_cluster_size(num_ctas)
+    N = 1024
+    # The source layout splits dim 0 across the CTAs, but dim 0 has size 1, so every CTA holds all N elements.
+    src_layout = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], [1, 4], [1, 0], cga_layout=src_cga_layout)
+    dst_layout = ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0], cga_layout=dst_cga_layout)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, N: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr):
+        x = ttgl.load(x_ptr + ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :])
+        y = ttgl.convert_layout(x, layout=dst_layout)
+        ttgl.store(y_ptr + ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :], y)
+
+    x = torch.arange(N, dtype=torch.int32, device=device)
+    y = torch.zeros_like(x)
+    kernel[(1, )](x, y, N, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("warp_specialize", [False, True])
 def test_atomic_poll_two_ctas(warp_specialize, device):
 
