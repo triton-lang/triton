@@ -686,7 +686,6 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
 }
 
 LogicalResult verifyCombinerBody(Operation *combiner, Region &body,
-                                 SymbolTableCollection &symbols,
                                  llvm::SmallPtrSetImpl<Region *> &visited) {
   if (!visited.insert(&body).second)
     return success();
@@ -695,9 +694,8 @@ LogicalResult verifyCombinerBody(Operation *combiner, Region &body,
       // A threaded function pass can be rewriting the callee concurrently.
       if (op->getContext()->isMultithreadingEnabled())
         return WalkResult::advance();
-      auto fn =
-          symbols.lookupNearestSymbolFrom<FuncOp>(call, call.getCalleeAttr());
-      return verifyCombinerBody(combiner, fn.getBody(), symbols, visited);
+      auto fn = cast<FuncOp>(call.resolveCallable());
+      return verifyCombinerBody(combiner, fn.getBody(), visited);
     }
     if (!isa<AssertOp, PrintOp>(op)) {
       auto effects = dyn_cast<MemoryEffectOpInterface>(op);
@@ -712,9 +710,8 @@ LogicalResult verifyCombinerBody(Operation *combiner, Region &body,
 }
 
 LogicalResult verifyCombinerBody(Operation *combiner, Region &body) {
-  SymbolTableCollection symbols;
   llvm::SmallPtrSet<Region *, 4> visited;
-  return verifyCombinerBody(combiner, body, symbols, visited);
+  return verifyCombinerBody(combiner, body, visited);
 }
 
 template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
