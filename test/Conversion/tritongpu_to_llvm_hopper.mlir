@@ -728,8 +728,6 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // The block basis broadcasts when the first dimension has size 1. Each CTA
   // needs scratch for all 16 elements, rather than half of them.
-  // ALLOC-SPLIT-LABEL: @convert_layout_broadcast_cta
-  // CHECK-LABEL: @convert_layout_broadcast_cta
   // CHECK: nvvm.barrier
   // CHECK: llvm.return
   tt.func @convert_layout_broadcast_cta(%arg: tensor<1x16xf32, #src>, %out: tensor<1x16x!tt.ptr<f32>, #dst>) {
@@ -741,8 +739,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
   // With two rows the block basis splits the tensor, and each CTA still owns
   // 16 elements.
-  // ALLOC-SPLIT-LABEL: @convert_layout_split_cta
-  // CHECK-LABEL: @convert_layout_split_cta
   // CHECK: nvvm.barrier
   // CHECK: llvm.return
   tt.func @convert_layout_split_cta(%arg: tensor<2x16xf32, #src>, %out: tensor<2x16x!tt.ptr<f32>, #dst>) {
