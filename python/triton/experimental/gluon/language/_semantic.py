@@ -655,6 +655,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                 worker_num_regs
             ), f"warp specialize got {num_partitions} partitions but {len(worker_num_regs)} register counts"
 
+        if not workers:
+            return generator.call_JitFunction(default_partition, default_args, kwargs={})
+
         builder = self.builder
         insert_pt = builder.get_insertion_point()
 

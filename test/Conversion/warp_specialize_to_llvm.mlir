@@ -790,49 +790,9 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
     ttg.warp_return
   } : () -> ()
 
-  // CHECK: getelementptr
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[SMEM_BASE:%[0-9]+]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // CHECK-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: "ws2_default"
-
-  // AMD: getelementptr
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[SMEM_BASE:%[0-9]+]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
-  // AMD-NEXT: llvm.store [[Cn1_i8]], [[PTR]]
-  // AMD: rocdl.barrier
   // AMD: "ws2_default"
-
-  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32>}
-  default {
-    "ws2_default"() : () -> ()
-    ttg.warp_yield
-  } : () -> ()
+  "ws2_default"() : () -> ()
 
   // CHECK: getelementptr
   // CHECK-NEXT: llvm.store [[C5_i8]], [[SMEM_BASE:%[0-9]+]]
