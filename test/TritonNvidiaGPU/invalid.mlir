@@ -433,6 +433,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [2, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!mem = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "cuda:100"} {
+  tt.func @tmem_load_two_warps(%src: !mem) {
+    // expected-error @+1 {{result register layout must have at least 4 warps}}
+    %0 = ttng.tmem_load %src : !mem -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
