@@ -205,8 +205,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 !buffered_fp8 = !ttg.memdesc<128x128xf8E4M3FN, #buffered, #ttg.shared_memory>
 !scales = !ttg.memdesc<128x4xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 !d = !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>
+!bar = !ttg.memdesc<1xi64, #buffered, #ttg.shared_memory, mutable>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_missing_barrier_predicate(%a: !shared, %b: !transposed, %d: !d, %p: i1, %bar: !bar) {
+    // expected-error @below {{expected one predicate per completion barrier}}
+    "ttng.tc_gen5_mma"(%a, %b, %d, %p, %p, %bar)
+        <{is_async, operandSegmentSizes = array<i32: 1, 1, 1, 0, 1, 1, 1, 0>}>
+        : (!shared, !transposed, !d, i1, i1, !bar) -> ()
+    tt.return
+  }
+
   tt.func @mma_rejects_transposed_f32_lhs(%a: !transposed, %b: !transposed, %d: !d, %p: i1) {
     // expected-error @below {{transposed float32 shared-memory operands require unsupported 32-byte swizzle atomicity}}
     ttng.tc_gen5_mma %a, %b, %d, %p, %p : !transposed, !transposed, !d
