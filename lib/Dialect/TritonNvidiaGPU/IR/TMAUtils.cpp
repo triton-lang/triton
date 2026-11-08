@@ -9,7 +9,8 @@ static LinearLayout getMessageToPackedOffsetLayout(ttg::MemDescType type,
                                                    ttg::TMAMode mode) {
   auto *ctx = type.getContext();
   auto message = StringAttr::get(ctx, "msg");
-  auto shapePerCTA = ttg::getShapePerCTA(type);
+  auto shapePerCTA = ttg::getShapePerCTA(
+      ttg::getCGALayout(type.getEncoding()).getCTASplitNum(), type.getShape());
   auto blockShape = getTMABlockShape(type, /*packedSize=*/true, mode);
   auto dimensions = standardOutDimNames(ctx, shapePerCTA.size());
   LinearLayout layout;
@@ -58,7 +59,8 @@ getTMAGatherScatterLayouts(RankedTensorType xOffsetsType,
   assert(freeVars.lookup(lane) == xOffsets.getInDimSize(lane) - 1 &&
          "x offsets must be broadcasted across each warp");
 
-  auto shapePerCTA = ttg::getShapePerCTA(type);
+  auto shapePerCTA = ttg::getShapePerCTA(
+      ttg::getCGALayout(type.getEncoding()).getCTASplitNum(), type.getShape());
   auto blockShape =
       getTMABlockShape(type, /*packedSize=*/true, ttg::TMAMode::Tiled);
   unsigned messageSize = blockShape.back();

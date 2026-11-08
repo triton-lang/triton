@@ -731,7 +731,8 @@ getTMAAccessRegions(TMALoadLikeOpInterface load,
   auto *ctx = op->getContext();
   auto block = StringAttr::get(ctx, "block");
   auto dims = standardOutDimNames(ctx, type.getRank());
-  auto shapePerCTA = getShapePerCTA(type);
+  auto shapePerCTA = getShapePerCTA(
+      getCGALayout(type.getEncoding()).getCTASplitNum(), type.getShape());
   // origins: block -> (rowOrigin, columnOrigin)
   auto origins = LinearLayout(LinearLayout::BasesT{},
                               standardOutDimPairs(ctx, shapePerCTA),

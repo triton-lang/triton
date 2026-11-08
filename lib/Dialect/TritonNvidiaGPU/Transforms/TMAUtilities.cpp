@@ -155,7 +155,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = mmaEncoding && mmaEncoding.isPaddedFp4();
 
-  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getType().getShape());
+  auto shapePerCTA = gpu::getShapePerCTA(
+      gpu::getCGALayout(encoding).getCTASplitNum(), op.getType().getShape());
   // MakeTensorDescOp creates tiled descriptors (not im2col)
   auto blockShape = getTMABlockShape(encoding, shapePerCTA,
                                      /*packedSize=*/false, gpu::TMAMode::Tiled);

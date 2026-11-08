@@ -466,27 +466,29 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTAsPerCGA");
 }
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout,
-                                     ArrayRef<int64_t> shape) {
+SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape,
+                                     ArrayRef<int64_t> allocShape) {
   unsigned rank = cast<LayoutEncodingTrait>(layout).getRank();
   SmallVector<int64_t> layoutShape(
       shape.take_back(std::min<size_t>(rank, shape.size())));
   layoutShape.insert(layoutShape.begin(), rank - layoutShape.size(), 1);
+  if (allocShape.empty())
+    allocShape = shape;
+  SmallVector<int64_t> layoutAllocShape(
+      allocShape.take_back(std::min<size_t>(rank, allocShape.size())));
+  layoutAllocShape.insert(layoutAllocShape.begin(),
+                          rank - layoutAllocShape.size(), 1);
+  auto ll = toLinearLayoutIgnoringPadding(layoutAllocShape, layout);
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-
-  if (isa<DistributedEncodingTrait>(layout)) {
-    auto ll = toLinearLayout(layoutShape, layout);
-    return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
-  } else if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinear.basesPerDim(kBlock);
-  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    // Special encodings such as TensorMemoryScalesEncodingAttr
-    auto splitNum = ttgLayout.getCGALayout().getCTASplitNum();
-    for (auto [split, size] : llvm::zip_equal(splitNum, layoutShape))
-      split = std::min<int64_t>(split, size);
-    return splitNum;
-  }
-  llvm_unreachable("Unimplemented usage of getCTASplitNum");
+  auto bases = ll.getBases();
+  for (auto &basis : bases[kBlock])
+    for (auto [offset, size] : llvm::zip_equal(basis, layoutShape))
+      if (offset >= size)
+        offset = 0;
+  auto splitNum = basesPerDimImpl(bases, kBlock, rank);
+  for (auto [split, size] : llvm::zip_equal(splitNum, layoutShape))
+    split = std::min<int64_t>(split, size);
+  return splitNum;
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -506,13 +508,17 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   return shapePerCTA;
 }
 
-SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  return getShapePerCTA(getCTASplitNum(layout, shape), shape);
+SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape,
+                                    ArrayRef<int64_t> allocShape) {
+  return getShapePerCTA(getCTASplitNum(layout, shape, allocShape), shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
-  return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
+  auto memDesc = dyn_cast<MemDescType>(type);
+  return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape(),
+                        memDesc ? memDesc.getAllocShape()
+                                : ArrayRef<int64_t>{});
 }
 
 int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,

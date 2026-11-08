@@ -22,16 +22,21 @@ inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
 
 inline SmallVector<int64_t>
 getTMABlockShape(gpu::MemDescType ty, bool packedSize, gpu::TMAMode mode) {
-  return getTMABlockShape(ty.getEncoding(), gpu::getShapePerCTA(ty), packedSize,
-                          mode);
+  return getTMABlockShape(
+      ty.getEncoding(),
+      gpu::getShapePerCTA(gpu::getCGALayout(ty.getEncoding()).getCTASplitNum(),
+                          ty.getShape()),
+      packedSize, mode);
 }
 
 inline SmallVector<int64_t>
 getTMABlockShape(TensorDescInterface ty, bool packedSize, gpu::TMAMode mode) {
   return getTMABlockShape(
       ty.getSharedLayout(),
-      gpu::getShapePerCTA(ty.getSharedLayout(), ty.getShape()), packedSize,
-      mode);
+      gpu::getShapePerCTA(
+          gpu::getCGALayout(ty.getSharedLayout()).getCTASplitNum(),
+          ty.getShape()),
+      packedSize, mode);
 }
 
 // Maps message starts, before the descriptor's affine subview translation.
