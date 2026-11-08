@@ -65,27 +65,6 @@ getMfmaF8F6F4MatrixFormat(Type t) {
       .Default([](Type) { return std::nullopt; });
 }
 
-// Returns a bitmask of the register bits that move in K direction. The
-// registers of a lane hold the K of one operand tile before moving in the
-// non-K dimension.
-static int computeKRegBitsMask(DotOperandEncodingAttr dotEnc) {
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-  int opIdx = dotEnc.getOpIdx();
-  int nonKDim = mfmaLayout.getInstrShape()[opIdx];
-  auto tileShape =
-      mfmaLayout.getInstrShapeForOperand(dotEnc.getKWidth(), opIdx);
-  int kTile = opIdx == 0 ? tileShape[1] : tileShape[0];
-  return kTile * nonKDim / 64 - 1;
-}
-
-// Returns a bitmask of the lane bits that move in K direction. The first
-// nonKDim lanes walk the non-K dimension and then wrap around moving in K.
-static int computeKLaneBitsMask(DotOperandEncodingAttr dotEnc) {
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-  int nonKDim = mfmaLayout.getInstrShape()[dotEnc.getOpIdx()];
-  return ~(nonKDim - 1);
-}
-
 struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
 
@@ -522,7 +501,8 @@ struct DotOpMFMAConversionHelper {
     }
 
     // When the K dim of operand is smaller than the MFMA instruction's K dim,
-    // pad these elements with zero.
+    // they will hold duplicate values for the MFMA instruction. We need to
+    // ensure only unique registers and lanes are used.
     Value isCanonicalKLane;
     auto dotEnc = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
     if (dotEnc) {
@@ -531,14 +511,15 @@ struct DotOpMFMAConversionHelper {
       auto kReg = StringAttr::get(ctx, "register");
       auto kLane = StringAttr::get(ctx, "lane");
 
-      int32_t kRegFreeMask =
-          freeMasks.lookup(kReg) & computeKRegBitsMask(dotEnc);
+      // Set duplicate registers to zero
+      int32_t kRegFreeMask = freeMasks.lookup(kReg) & (dotEnc.getKWidth() - 1);
       for (size_t reg = 0; reg < elems.size(); ++reg)
         if (reg & kRegFreeMask)
           elems[reg] = tb.null(elems[reg].getType());
 
-      int32_t kLaneFreeMask =
-          freeMasks.lookup(kLane) & computeKLaneBitsMask(dotEnc);
+      // Select canonical lanes
+      int nonKDim = mfmaLayout.getInstrShape()[dotEnc.getOpIdx()];
+      int32_t kLaneFreeMask = freeMasks.lookup(kLane) & ~(nonKDim - 1);
       if (kLaneFreeMask) {
         Value freeBits =
             tb.and_(getLaneId(rewriter, loc), tb.i32_val(kLaneFreeMask));
