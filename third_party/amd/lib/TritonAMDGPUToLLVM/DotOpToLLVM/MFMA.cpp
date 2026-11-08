@@ -502,7 +502,7 @@ struct DotOpMFMAConversionHelper {
 
     // When the K dim of operand is smaller than the MFMA instruction's K dim,
     // they will hold duplicate values for the MFMA instruction. We need to
-    // ensure only unique registers and lanes are used.
+    // ensure only unique registers and lanes (canonical) are used.
     Value isCanonicalKLane;
     auto dotEnc = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
     if (dotEnc) {
