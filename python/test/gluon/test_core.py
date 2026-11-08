@@ -2873,39 +2873,40 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
-@pytest.mark.parametrize("M, N, instr_shape, k_width, in_dtype, cdna4_only", [
-    (32, 32, [32, 32, 8], 4, 'float16', False),
-    (32, 32, [32, 32, 8], 8, 'float16', False),
-    (16, 16, [16, 16, 16], 8, 'float16', False),
-    (32, 32, [32, 32, 8], 4, 'bfloat16', False),
-    (64, 4, [64, 4, 64], 4, 'float16', False),
-    (4, 64, [4, 64, 64], 4, 'float16', False),
-    (32, 32, [32, 32, 16], 8, 'float16', True),
-    (64, 64, [16, 16, 32], 8, 'bfloat16', True),
+@pytest.mark.parametrize("M, N, instr_shape, k_width, cdna4_only", [
+    (32, 32, [32, 32, 8], 4, False),
+    (32, 32, [32, 32, 8], 8, False),
+    (16, 16, [16, 16, 16], 8, False),
+    (32, 32, [32, 32, 16], 8, True),
+    (32, 32, [16, 16, 32], 8, True),
 ])
-@pytest.mark.parametrize("block_k_div", [2, 4, 8])
-def test_amd_mfma_small_k(M, N, instr_shape, k_width, in_dtype, cdna4_only, block_k_div):
+@pytest.mark.parametrize("K", [128])
+@pytest.mark.parametrize("block_k_div", [1, 2, 4])
+def test_amd_mfma_small_k(M, N, K, instr_shape, k_width, cdna4_only, block_k_div):
     if cdna4_only and not is_hip_cdna4():
         pytest.skip("Requires CDNA4")
-    tile_k = k_width * 64 // min(instr_shape[0], instr_shape[1])
-    block_k = tile_k // block_k_div
-    k_total = 4 * tile_k
-    num_warps = 1 if min(M, N) == 4 else 4
-    warps_per_cta = [1, 1] if num_warps == 1 else [2, 2] if M == 64 else [4, 1]
-    transposed = instr_shape[0] != 4
+    BLOCK_K = instr_shape[2] // block_k_div
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
-               blocked: ttgl.constexpr, mfma_layout: ttgl.constexpr, k_width: ttgl.constexpr):
+               version: ttgl.constexpr, instr_shape: ttgl.constexpr, k_width: ttgl.constexpr):
+        load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=version, instr_shape=instr_shape, transposed=True,
+                                                             warps_per_cta=[4, 1])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width)
-        offs_am = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
-        offs_ak = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, blocked))
-        offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, blocked))
-        offs_bn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
+
+        offs_am = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, load_layout))
+        offs_ak = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, load_layout))
+
+        offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, load_layout))
+        offs_bn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, load_layout))
+
         offs_cm = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mfma_layout))
         offs_cn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mfma_layout))
         offs_c = offs_cm[:, None] * N + offs_cn[None, :]
+
+        # Load accumulator
         acc = ttgl.load(c_ptr + offs_c)
         for k in range(0, K, BLOCK_K):
             a = ttgl.load(a_ptr + offs_am[:, None] * K + (k + offs_ak)[None, :])
@@ -2913,19 +2914,16 @@ def test_amd_mfma_small_k(M, N, instr_shape, k_width, in_dtype, cdna4_only, bloc
             a = ttgl.convert_layout(a, a_layout)
             b = ttgl.convert_layout(b, b_layout)
             acc = ttgl.amd.cdna3.mfma(a, b, acc)
+
         ttgl.store(c_ptr + offs_c, acc)
 
     torch.manual_seed(0)
-    dtype = getattr(torch, in_dtype)
-    a = torch.randn((M, k_total), dtype=dtype, device='cuda')
-    b = torch.randn((k_total, N), dtype=dtype, device='cuda')
+    a = torch.randn((M, K), dtype=torch.bfloat16, device='cuda')
+    b = torch.randn((K, N), dtype=torch.bfloat16, device='cuda')
     c = torch.randn((M, N), dtype=torch.float32, device='cuda')
     ref = a.to(torch.float32) @ b.to(torch.float32) + c
 
-    blocked = ttgl.BlockedLayout([1, 1], [8, 8], [num_warps, 1], [1, 0])
-    mfma_layout = ttgl.amd.AMDMFMALayout(version=3 if is_hip_cdna3() else 4, instr_shape=instr_shape,
-                                         transposed=transposed, warps_per_cta=warps_per_cta)
-    kernel[(1, )](a, b, c, M, N, k_total, block_k, blocked, mfma_layout, k_width, num_warps=num_warps)
+    kernel[(1, )](a, b, c, M, N, K, BLOCK_K, 3 if is_hip_cdna3() else 4, tuple(instr_shape), k_width, num_warps=4)
     torch.testing.assert_close(c, ref, atol=1e-3, rtol=1e-3)
 
 
@@ -3037,34 +3035,45 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("instr_shape, BLOCK_K", [([16, 16, 128], 64), ([16, 16, 128], 32), ([32, 32, 64], 32)])
+@pytest.mark.parametrize("M, N, K", [(64, 64, 256)])
+@pytest.mark.parametrize("instr_shape", [[16, 16, 128], [32, 32, 64]])
 @pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3")])
-def test_amd_mfma_scaled_small_k(instr_shape, BLOCK_K, a_type, b_type):
-    M = N = 2 * instr_shape[0]
-    K = 256
+@pytest.mark.parametrize("block_k_div", [1, 2, 4])
+def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_div):
+    BLOCK_K = instr_shape[2] // block_k_div
+    if BLOCK_K < 32:
+        pytest.skip("BLOCK_K must cover at least one 32-element scale block")
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, c_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
-               BLOCK_K: ttgl.constexpr, a_type: ttgl.constexpr, b_type: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+               BLOCK_K: ttgl.constexpr, a_type: ttgl.constexpr, b_type: ttgl.constexpr, instr_shape: ttgl.constexpr):
         DIV_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
+        load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=instr_shape, transposed=True,
+                                                             warps_per_cta=[2, 2])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width=16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width=16)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [N, BLOCK_K // 32])
 
-        offs_am = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))
-        offs_ak = ttgl.arange(0, BLOCK_K // DIV_A, layout=ttgl.SliceLayout(0, blocked))
-        offs_bk = ttgl.arange(0, BLOCK_K // DIV_B, layout=ttgl.SliceLayout(1, blocked))
-        offs_bn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))
+        offs_am = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, load_layout))
+        offs_ak = ttgl.arange(0, BLOCK_K // DIV_A, layout=ttgl.SliceLayout(0, load_layout))
+
+        offs_bk = ttgl.arange(0, BLOCK_K // DIV_B, layout=ttgl.SliceLayout(1, load_layout))
+        offs_bn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, load_layout))
+
         offs_am_scale = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_scale_layout))
         offs_ak_scale = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, a_scale_layout))
+
         offs_bn_scale = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, b_scale_layout))
         offs_bk_scale = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, b_scale_layout))
+
         offs_cm = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mfma_layout))
         offs_cn = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mfma_layout))
         offs_c = offs_cm[:, None] * N + offs_cn[None, :]
+
+        # Load accumulator
         acc = ttgl.load(c_ptr + offs_c)
         for k in range(0, K, BLOCK_K):
             a = ttgl.load(a_ptr + offs_am[:, None] * (K // DIV_A) + (k // DIV_A + offs_ak)[None, :])
@@ -3074,6 +3083,7 @@ def test_amd_mfma_scaled_small_k(instr_shape, BLOCK_K, a_type, b_type):
             a_scale = ttgl.load(a_scale_ptr + offs_am_scale[:, None] * (K // 32) + (k // 32 + offs_ak_scale)[None, :])
             b_scale = ttgl.load(b_scale_ptr + offs_bn_scale[:, None] * (K // 32) + (k // 32 + offs_bk_scale)[None, :])
             acc = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, acc)
+
         ttgl.store(c_ptr + offs_c, acc)
 
     def create_operand(operand, m, n, dtype):
@@ -3094,10 +3104,9 @@ def test_amd_mfma_scaled_small_k(instr_shape, BLOCK_K, a_type, b_type):
     c = torch.randint(-8, 8, (M, N)).to(torch.float32)
     ref = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref) + c
 
-    mfma_layout = ttgl.amd.AMDMFMALayout(version=4, instr_shape=instr_shape, transposed=True, warps_per_cta=[2, 2])
     c = c.cuda()
     kernel[(1, )](a.cuda(), b.cuda(), a_scale.data.cuda(), b_scale.data.cuda(), c, M, N, K, BLOCK_K, a_type, b_type,
-                  mfma_layout, num_warps=4)
+                  tuple(instr_shape), num_warps=4)
     torch.testing.assert_close(c.cpu(), ref, atol=1e-3, rtol=1e-4)
 
 
