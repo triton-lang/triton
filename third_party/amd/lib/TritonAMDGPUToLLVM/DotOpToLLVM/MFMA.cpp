@@ -521,24 +521,24 @@ struct DotOpMFMAConversionHelper {
       assert(nonKRep > 0 && "nonKrep too small");
     }
 
-    // When the operand tensor K is smaller than the MFMA instruction K, the
-    // layout has broadcast registers and lanes along K. They are set to zero
-    // so they don't contribute repeated K to the MFMA result.
+    // When the K dim of operand is smaller than the MFMA instruction's K dim,
+    // pad these elements with zero.
     Value isCanonicalKLane;
     auto dotEnc = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
     if (dotEnc) {
       auto ll = triton::gpu::toLinearLayout(tensorType);
       auto freeMasks = ll.getFreeVariableMasks();
+      auto kReg = StringAttr::get(ctx, "register");
+      auto kLane = StringAttr::get(ctx, "lane");
 
       int32_t kRegFreeMask =
-          freeMasks.lookup(StringAttr::get(ctx, "register")) &
-          computeKRegBitsMask(dotEnc);
+          freeMasks.lookup(kReg) & computeKRegBitsMask(dotEnc);
       for (size_t reg = 0; reg < elems.size(); ++reg)
         if (reg & kRegFreeMask)
           elems[reg] = tb.null(elems[reg].getType());
 
-      int32_t kLaneFreeMask = freeMasks.lookup(StringAttr::get(ctx, "lane")) &
-                              computeKLaneBitsMask(dotEnc);
+      int32_t kLaneFreeMask =
+          freeMasks.lookup(kLane) & computeKLaneBitsMask(dotEnc);
       if (kLaneFreeMask) {
         Value freeBits =
             tb.and_(getLaneId(rewriter, loc), tb.i32_val(kLaneFreeMask));
