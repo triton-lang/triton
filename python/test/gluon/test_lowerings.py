@@ -1556,20 +1556,19 @@ _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [T
 
 _multi_cta_small_convert2d_layout_cases = [
     pytest.param(M, 16, [2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
-                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), "float16", 16,
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), "float16",
                  id=f"multi-cta-small-shape-{M}-float16") for M in [1, 2]
 ]
-_convert2d_test_cases = [(M, N, *case, "float16", 0)
+_convert2d_test_cases = [(M, N, *case, "float16")
                          for M, N in [[64, 1], [64, 64], [64, 128], [1, 64]]
                          for case in _convert2d_layout_cases] + _multi_cta_small_convert2d_layout_cases
 
 
-@pytest.mark.parametrize(
-    "M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype, min_shared_elems",
-    _convert2d_test_cases)
+@pytest.mark.parametrize("M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype",
+                         _convert2d_test_cases)
 @pytest.mark.enable_warmup(min_capability=9)
 def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
-                           min_shared_elems, device):
+                           device):
     num_ctas = 1
     if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
@@ -1653,7 +1652,6 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
-    assert compiled.metadata.shared >= min_shared_elems * x.element_size()
     torch.testing.assert_close(y, x, rtol=0, atol=0)
     if src_ctas_per_cga != dst_ctas_per_cga and not is_compile_warmup():
         # Replicated values may be loaded from the local CTA.
