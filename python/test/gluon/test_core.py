@@ -8313,29 +8313,26 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
     fresh_knobs.compilation.disable_line_info = call_depth > 0
 
     @gluon.jit
-    def conditional_load(pointer, enabled):
-        if enabled:
-            value = ttgl.load(pointer)
-        else:
-            value = 0
-        return value
+    def select_value(value, enabled):
+        ttgl.assume(value >= 0)
+        return ttgl.where(enabled, value, 0)
 
     @gluon.jit(noinline=True)
-    def noinline_load(pointer, enabled):
-        return conditional_load(pointer, enabled)
+    def noinline_select(value, enabled):
+        return select_value(value, enabled)
 
     @gluon.jit(noinline=True)
-    def forward_load(pointer, enabled):
-        return noinline_load(pointer, enabled)
+    def forward_select(value, enabled):
+        return noinline_select(value, enabled)
 
-    callback = (conditional_load, noinline_load, forward_load)[call_depth]
+    callback = (select_value, noinline_select, forward_select)[call_depth]
 
     @gluon.jit
     def kernel(In, Out):
         value = ttgl.atomic_load(In, sem="relaxed")
         ttgl.store(Out + 128, value)
         offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
-        values = ttgl.map_elementwise(callback, In + offsets, offsets % 2 == 0)
+        values = ttgl.map_elementwise(callback, ttgl.load(In + offsets), offsets % 2 == 0)
         ttgl.store(Out + offsets, values)
 
     offsets = torch.arange(128, device=device, dtype=torch.int32)

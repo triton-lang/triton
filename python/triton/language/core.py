@@ -3054,7 +3054,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int | None
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
-        The function and its callees must be pure, except for :code:`device_print` and :code:`device_assert`.
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
@@ -3135,7 +3136,8 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :param axis: the dimension along which the reduction should be done
     :type axis: int
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
-        The function and its callees must be pure, except for :code:`device_print` and :code:`device_assert`.
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param reverse: whether to apply the associative scan in the reverse direction along axis
     :type reverse: bool
@@ -3238,6 +3240,8 @@ def map_elementwise(
                 return tl.map_elementwise(selu_scalar, x, alpha)
 
         :param scalar_fn: the function to map over.
+            The function and its callees must be pure, except for :code:`assume`,
+            :code:`device_assert`, and :code:`device_print`.
         :param pack: the number of elements to be processed by one function call.
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
