@@ -247,10 +247,26 @@ void TargetInfo::releaseBeforeAtomicBarrier(Location loc,
     ROCDL::SWaitcntOp::create(rewriter, loc, /*bitfield=*/0x0F70);
     return;
   case ISAFamily::CDNA5:
+  case ISAFamily::RDNA4:
     // Same as above with gfx12 counters: wait for this wave's stores, and let
     // the atomic's release write back L2 (global_wb) once for all waves.
     ROCDL::WaitStorecntOp::create(rewriter, loc, /*count=*/0);
     return;
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m: {
+    // gfx11 has no store-counter wait intrinsic. Its releases never write
+    // back L2, so an agent-scope release lowers to just the vmcnt/vscnt waits
+    // at every scope. Agent scope also keeps this fence distinct from the
+    // workgroup fences around the barrier: InstCombine merges adjacent fences
+    // of equal scope and ordering regardless of their MMRA tags, which would
+    // drop this one.
+    auto fence = LLVM::FenceOp::create(
+        rewriter, loc, LLVM::AtomicOrdering::release, /*syncscope=*/"agent");
+    Attribute globalMMRA =
+        rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "global");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), globalMMRA);
+    return;
+  }
   default: {
     auto fence =
         LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
