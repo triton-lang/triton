@@ -1362,6 +1362,26 @@ def test_mbarrier_dynamic_index_gsan(fresh_knobs, num_ctas, two_ctas, batch, sim
         torch.cuda.synchronize()
 
 
+def test_warp_specialize_without_workers(device):
+
+    @gluon.jit
+    def default(out):
+        value = ttgl.load(out)
+        ttgl.store(out, value + 1)
+        return value + 2, value + 3
+
+    @gluon.jit
+    def kernel(out):
+        a, b = ttgl.warp_specialize([(default, (out, ))], [])
+        ttgl.store(out + 1, a)
+        ttgl.store(out + 2, b)
+
+    out = torch.zeros(3, dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](out)
+    assert out.tolist() == [1, 2, 3]
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_warp_specialize_noinline_ids():
 
