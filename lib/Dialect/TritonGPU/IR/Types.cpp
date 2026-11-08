@@ -219,8 +219,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                             "partitionLayout";
     }
 
-    auto blockShape =
-        getShapePerCTA(enc.getCGALayout().getCTASplitNum(), layoutAllocShape);
+    auto blockShape = getShapePerCTA(enc, layoutAllocShape);
     unsigned partitionDim = enc.getPartitionDim();
     unsigned numLogicalPieces = enc.getNumLogicalPieces();
     if (blockShape[partitionDim] % numLogicalPieces != 0) {
@@ -234,7 +233,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     pieceShape[partitionDim] /= numLogicalPieces;
     auto verifyFixedShape = [&](const LinearLayout &layout) -> LogicalResult {
       auto shape = llvm::to_vector_of<int64_t>(layout.getOutDimSizes());
-      auto actual = getShapePerCTA(enc.getCGALayout().getCTASplitNum(), shape);
+      auto actual = getShapePerCTA(enc, shape);
       if (actual != pieceShape) {
         return emitError() << "partitionLayout does not match the per-CTA "
                               "logical piece shape; expected "
@@ -266,8 +265,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       }
     }
   } else if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
-    auto shapePerCTA =
-        getShapePerCTA(enc.getCGALayout().getCTASplitNum(), allocShape);
+    SmallVector<int64_t> shapePerCTA(getShapePerCTA(enc, allocShape));
     auto blockShape = dropPipeliningDim(ArrayRef(shapePerCTA), enc);
     if (failed(getTMABlockShape(blockShape, enc.getElementBitWidth(),
                                 enc.getSwizzlingByteWidth(), enc.isPaddedFp4(),

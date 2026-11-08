@@ -379,26 +379,6 @@ TEST_F(ShapePerCTATest, CTASplitNumUsesTensorShape) {
   EXPECT_EQ(getCTASplitNum(linear, {2, 16}), (SmallVector<unsigned>{1, 1}));
   EXPECT_EQ(getCTASplitNum(blocked, {3, 4, 16}), (SmallVector<unsigned>{2, 1}));
   EXPECT_EQ(getCTASplitNum(blocked, {16}), (SmallVector<unsigned>{1, 1}));
-
-  auto sharedLinear = parseAttribute(
-      "#ttg.shared_linear<{offset = [[1, 0], [0, 1], [0, 2], [0, 4], [0, 8]], "
-      "block = [[2, 0]]}, alignment = 16>",
-      &ctx);
-  for (auto encoding : SmallVector<Attribute>{shared, sharedLinear}) {
-    EXPECT_EQ(getCTASplitNum(encoding, {2, 16}, {4, 16}),
-              (SmallVector<unsigned>{1, 1}));
-    EXPECT_EQ(getCTASplitNum(encoding, {3, 16}, {4, 16}),
-              (SmallVector<unsigned>{2, 1}));
-    auto view = MemDescType::get({2, 16}, Float32Type::get(&ctx), encoding,
-                                 SharedMemorySpaceAttr::get(&ctx),
-                                 /*mutableMemory=*/true, {4, 16});
-    EXPECT_EQ(getShapePerCTA(view), (SmallVector<int64_t>{2, 16}));
-  }
-  auto nvmma = NVMMASharedEncodingAttr::get(&ctx, 128, false, 32, false, cga);
-  auto view = MemDescType::get({8, 32}, Float32Type::get(&ctx), nvmma,
-                               SharedMemorySpaceAttr::get(&ctx),
-                               /*mutableMemory=*/true, {16, 32});
-  EXPECT_EQ(getShapePerCTA(view), (SmallVector<int64_t>{8, 32}));
 }
 
 class JoinOpTest : public ::testing::Test {

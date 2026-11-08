@@ -212,11 +212,7 @@ public:
     }
     if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
       info->pred = loadOp.getPred();
-      auto type = cast<ttg::MemDescType>(loadOp.getResult().getType());
-      auto shapePerCTA = ttg::getShapePerCTA(
-          ttg::getCGALayout(type.getEncoding()).getCTASplitNum(),
-          type.getShape());
-      int txCount = product(shapePerCTA) * type.getElementTypeBitWidth() / 8;
+      int txCount = tti::getMemDescLength(loadOp.getResult());
       if (loadOp.getMulticast()) {
         uint32_t resultMask =
             getBlockBroadcastMask(loadOp.getResult().getType());
@@ -232,13 +228,11 @@ public:
            /*txCount=*/-txCount});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
-      auto type = storeOp.getSrc().getType();
       info->barriers.push_back(
           {storeOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/
-           -static_cast<int>(product(ttg::getShapePerCTA(type)) *
-                             type.getElementTypeBitWidth() / 8)});
+           -static_cast<int>(tti::getMemDescLength(storeOp.getDst()))});
     }
     if (auto tryCancelOp = dyn_cast<ttng::CLCTryCancelOp>(op)) {
       info->barriers.push_back(

@@ -307,8 +307,7 @@ inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape,
-                                     ArrayRef<int64_t> allocShape = {});
+SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape);
 
 // Returns the "logical" shape per CTA.
 // When shape and CTASplitNum have different number of dimensions, we assume
@@ -319,8 +318,7 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape,
 // It can be caused by memory slicing.
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
-SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape,
-                                    ArrayRef<int64_t> allocShape = {});
+SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
 
 // Returns the layout-ranked suffix, dropping a leading pipelining dimension.
