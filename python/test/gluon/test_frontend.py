@@ -2289,6 +2289,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("kind", ["reduce", "scan"])
+def test_combiner_rejects_indirect_load(kind, capfd):
+
+    @gluon.jit(noinline=True)
+    def enabled(ptr):
+        return ttgl.load(ptr) != 0
+
+    @gluon.jit
+    def choose(lhs, rhs):
+        return ttgl.where(enabled(lhs), lhs, rhs)
+
+    @gluon.jit
+    def kernel(ptr, KIND: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if KIND == "reduce":
+            ttgl.reduce(ptr + offsets, 0, choose)
+        else:
+            ttgl.associative_scan(ptr + offsets, 0, choose)
+
+    with pytest.raises(CompilationError):
+        run_parser(kernel, *make_args(MockTensor(ttgl.int32), kind))
+    assert f"'tt.load' op is not allowed in a tt.{kind} combiner" in capfd.readouterr().err
+
+
 @gluon.jit
 def pair_add(a0, a1, b0, b1):
     return a0 + b0, a1 + b1

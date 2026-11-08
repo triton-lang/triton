@@ -3053,7 +3053,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int | None
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`device_print` and :code:`device_assert`.
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
@@ -3133,7 +3134,8 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done
     :type axis: int
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`device_print` and :code:`device_assert`.
     :type combine_fn: Callable
     :param reverse: whether to apply the associative scan in the reverse direction along axis
     :type reverse: bool

@@ -16,6 +16,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -684,6 +685,38 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   return success();
 }
 
+LogicalResult verifyCombinerBody(Operation *combiner, Region &body,
+                                 SymbolTableCollection &symbols,
+                                 llvm::SmallPtrSetImpl<Region *> &visited) {
+  if (!visited.insert(&body).second)
+    return success();
+  WalkResult result = body.walk([&](Operation *op) -> WalkResult {
+    if (auto call = dyn_cast<CallOp>(op)) {
+      // A threaded function pass can be rewriting the callee concurrently.
+      if (op->getContext()->isMultithreadingEnabled())
+        return WalkResult::advance();
+      auto fn =
+          symbols.lookupNearestSymbolFrom<FuncOp>(call, call.getCalleeAttr());
+      return verifyCombinerBody(combiner, fn.getBody(), symbols, visited);
+    }
+    if (!isa<AssertOp, PrintOp>(op)) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+      if (hasUnknownEffects(op) || (effects && !effects.hasNoEffect()))
+        return op->emitOpError("is not allowed in a ")
+               << combiner->getName().getStringRef()
+               << " combiner. Expected a pure operation, tt.print or tt.assert";
+    }
+    return WalkResult::advance();
+  });
+  return success(!result.wasInterrupted());
+}
+
+LogicalResult verifyCombinerBody(Operation *combiner, Region &body) {
+  SymbolTableCollection symbols;
+  llvm::SmallPtrSet<Region *, 4> visited;
+  return verifyCombinerBody(combiner, body, symbols, visited);
+}
+
 template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
   const auto &operands = op.getOperands();
@@ -726,7 +759,7 @@ template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
              << " to have type " << argElemTy << " but got " << resultTy;
     }
   }
-  return success();
+  return verifyCombinerBody(op, op.getCombineOp());
 }
 
 llvm::SmallVector<RankedTensorType>
