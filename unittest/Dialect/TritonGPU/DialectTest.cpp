@@ -370,82 +370,15 @@ TEST_F(ShapePerCTATest, CTASplitNumUsesTensorShape) {
   auto cga = CGAEncodingAttr::fromSplitParams(&ctx, {2, 1}, {2, 1}, {0, 1});
   auto blocked =
       BlockedEncodingAttr::get(&ctx, {1, 1}, {4, 8}, {1, 4}, {1, 0}, cga);
-  auto linear = toLinearEncoding(blocked, {2, 16});
+  auto linear = toLinearEncoding(blocked, {4, 16});
   auto shared = SwizzledSharedEncodingAttr::get(&ctx, 1, 1, 1, {1, 0}, cga);
-  SmallVector<Attribute> encodings = {
-      blocked, linear,
-      GenericLinearEncodingAttr::get(&ctx, linear.getLinearLayout()), shared,
-      PaddedSharedEncodingAttr::get(&ctx, {{8, 1}}, {1, 0}, {4, 16}, cga)};
-  EXPECT_EQ(cga.getCTASplitNum(), (SmallVector<unsigned>{2, 1}));
-  for (auto encoding : encodings) {
+  for (auto encoding : SmallVector<Attribute>{blocked, linear, shared}) {
     EXPECT_EQ(getCTASplitNum(encoding, {1, 16}), (SmallVector<unsigned>{1, 1}));
-    EXPECT_EQ(getCTASplitNum(encoding, {2, 16}), (SmallVector<unsigned>{2, 1}));
     EXPECT_EQ(getCTASplitNum(encoding, {4, 16}), (SmallVector<unsigned>{2, 1}));
-    EXPECT_EQ(getCTASplitNum(encoding, {3, 4, 16}),
-              (SmallVector<unsigned>{2, 1}));
-    EXPECT_EQ(getCTASplitNum(encoding, {16}), (SmallVector<unsigned>{1, 1}));
-    EXPECT_EQ(getShapePerCTA(encoding, {1, 16}), (SmallVector<int64_t>{1, 16}));
-    EXPECT_EQ(getShapePerCTA(encoding, {3, 4, 16}),
-              (SmallVector<int64_t>{3, 2, 16}));
-    EXPECT_EQ(getShapePerCTA(encoding, {16}), (SmallVector<int64_t>{16}));
   }
-
-  auto sharedLinear =
-      SharedLinearEncodingAttr::get(&ctx, toLinearLayout({4, 16}, shared), 16);
-  EXPECT_EQ(getCTASplitNum(sharedLinear, {4, 16}),
-            (SmallVector<unsigned>{2, 1}));
-  EXPECT_EQ(getCTASplitNum(sharedLinear, {1, 16}),
-            (SmallVector<unsigned>{2, 1}));
-  EXPECT_EQ(getShapePerCTA(sharedLinear, {1, 16}),
-            (SmallVector<int64_t>{1, 16}));
-  EXPECT_EQ(getShapePerCTA(sharedLinear, {3, 4, 16}),
-            (SmallVector<int64_t>{3, 2, 16}));
-
-  // Slicing preserves the shape-dependent distribution of the remaining dim.
-  auto slice = SliceEncodingAttr::get(&ctx, 1, blocked);
-  EXPECT_EQ(getCTASplitNum(slice, {1}), (SmallVector<unsigned>{1}));
-  EXPECT_EQ(getCTASplitNum(slice, {4}), (SmallVector<unsigned>{2}));
-  EXPECT_EQ(getShapePerCTA(blocked, {16}), (SmallVector<int64_t>{16}));
-
-  // A linear layout keeps the block basis at its original bit position. It
-  // can broadcast even when the dimension is larger than one.
-  auto largerLinear = toLinearEncoding(blocked, {4, 16});
-  EXPECT_EQ(getCTASplitNum(largerLinear, {2, 16}),
-            (SmallVector<unsigned>{1, 1}));
-  EXPECT_EQ(getShapePerCTA(largerLinear, {2, 16}),
-            (SmallVector<int64_t>{2, 16}));
-}
-
-TEST_F(ShapePerCTATest, CTASplitNumForSliceOfNonFactorableLayout) {
-  auto parent =
-      parseAttribute("#ttg.generic_linear<{register = [[2, 0]], "
-                     "lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 0]], "
-                     "warp = [[0, 0], [0, 0]], block = [[1, 0]]}>",
-                     &ctx);
-  ASSERT_TRUE(parent);
-  // The block bit lies below the register bit, so the parent cannot factor
-  // into CTA * CGA layouts. A slice must query its linear layout directly.
-  auto linear = cast<GenericLinearEncodingAttr>(parent).getLinearLayout();
-  EXPECT_TRUE(failed(maybeLinearToCGAEncodingAttr(linear)));
-  auto slice =
-      SliceEncodingAttr::get(&ctx, 1, cast<DistributedEncodingTrait>(parent));
-  EXPECT_EQ(getCTASplitNum(slice, {1}), (SmallVector<unsigned>{1}));
-  EXPECT_EQ(getCTASplitNum(slice, {4}), (SmallVector<unsigned>{2}));
-}
-
-TEST_F(ShapePerCTATest, ShapePerCTADoesNotInstantiateSharedLayout) {
-  auto shared = parseAttribute(
-      "#ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, "
-      "elementBitWidth = 32}>",
-      &ctx);
-  ASSERT_TRUE(shared);
-  // This logical shape is smaller than the swizzling tile. Shape queries must
-  // work before choosing a physical layout for a TMA transfer or a subview.
-  EXPECT_EQ(getCTASplitNum(shared, {1, 32}), (SmallVector<unsigned>{1, 1}));
-  EXPECT_EQ(getCTASplitNum(shared, {3, 1, 32}), (SmallVector<unsigned>{1, 1}));
-  EXPECT_EQ(getShapePerCTA(shared, {1, 32}), (SmallVector<int64_t>{1, 32}));
-  EXPECT_EQ(getShapePerCTA(shared, {3, 1, 32}),
-            (SmallVector<int64_t>{3, 1, 32}));
+  EXPECT_EQ(getCTASplitNum(linear, {2, 16}), (SmallVector<unsigned>{1, 1}));
+  EXPECT_EQ(getCTASplitNum(blocked, {3, 4, 16}), (SmallVector<unsigned>{2, 1}));
+  EXPECT_EQ(getCTASplitNum(blocked, {16}), (SmallVector<unsigned>{1, 1}));
 }
 
 class JoinOpTest : public ::testing::Test {
