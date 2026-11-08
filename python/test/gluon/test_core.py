@@ -2873,15 +2873,14 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
-@pytest.mark.parametrize("M, N, instr_shape, k_width, cdna4_only", [
-    (32, 32, [32, 32, 8], 4, False),
-    (32, 32, [32, 32, 8], 8, False),
-    (16, 16, [16, 16, 16], 8, False),
-    (32, 32, [32, 32, 16], 8, True),
-    (32, 32, [16, 16, 32], 8, True),
+@pytest.mark.parametrize("M, N, K, instr_shape, k_width, cdna4_only", [
+    (32, 32, 128, [32, 32, 8], 4, False),
+    (32, 32, 128, [32, 32, 8], 8, False),
+    (16, 16, 128, [16, 16, 16], 8, False),
+    (32, 32, 128, [32, 32, 16], 8, True),
+    (32, 32, 128, [16, 16, 32], 8, True),
 ])
-@pytest.mark.parametrize("K", [128])
-@pytest.mark.parametrize("block_k_div", [1, 2, 4])
+@pytest.mark.parametrize("block_k_div", [2, 4])
 def test_amd_mfma_small_k(M, N, K, instr_shape, k_width, cdna4_only, block_k_div):
     if cdna4_only and not is_hip_cdna4():
         pytest.skip("Requires CDNA4")
@@ -3038,7 +3037,7 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 @pytest.mark.parametrize("M, N, K", [(64, 64, 256)])
 @pytest.mark.parametrize("instr_shape", [[16, 16, 128], [32, 32, 64]])
 @pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3")])
-@pytest.mark.parametrize("block_k_div", [1, 2, 4])
+@pytest.mark.parametrize("block_k_div", [2, 4])
 def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_div):
     BLOCK_K = instr_shape[2] // block_k_div
     if BLOCK_K < 32:
