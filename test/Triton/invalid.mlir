@@ -272,6 +272,19 @@ tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tenso
 
 // -----
 
+tt.func @reduce_with_release(%addresses: tensor<32xi64>) {
+  %0 = "tt.reduce" (%addresses) ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %ptr = tt.int_to_ptr %lhs : i64 -> !tt.ptr<i64>
+    // expected-error @+1 {{'tt.atomic_store' op is not allowed in a tt.reduce callback}}
+    tt.atomic_store release, gpu, %ptr, %rhs : !tt.ptr<i64>
+    tt.reduce.return %lhs : i64
+  }) {axis = 0 : i32} : (tensor<32xi64>) -> i64
+  tt.return
+}
+
+// -----
+
 tt.func public @fn(%v: tensor<4x128xf32>) {
     // expected-error @+1 {{requires the same shape}}
     %a = "tt.scan" (%v) ({
@@ -768,7 +781,7 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
   %cst = arith.constant dense<0> : tensor<256xi32>
   "tt.map_elementwise" (%ptr, %cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: !tt.ptr<i32>, %arg1: i32):
-     // expected-error @below {{Stores are not supported inside map_elementwise}}
+     // expected-error @below {{'tt.store' op is not allowed in a tt.map_elementwise callback}}
      tt.store %arg0, %arg1 : !tt.ptr<i32>
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)

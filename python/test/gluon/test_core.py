@@ -8313,29 +8313,26 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
     fresh_knobs.compilation.disable_line_info = call_depth > 0
 
     @gluon.jit
-    def conditional_load(pointer, enabled):
-        if enabled:
-            value = ttgl.load(pointer)
-        else:
-            value = 0
-        return value
+    def select_value(value, enabled):
+        ttgl.assume(value >= 0)
+        return ttgl.where(enabled, value, 0)
 
     @gluon.jit(noinline=True)
-    def noinline_load(pointer, enabled):
-        return conditional_load(pointer, enabled)
+    def noinline_select(value, enabled):
+        return select_value(value, enabled)
 
     @gluon.jit(noinline=True)
-    def forward_load(pointer, enabled):
-        return noinline_load(pointer, enabled)
+    def forward_select(value, enabled):
+        return noinline_select(value, enabled)
 
-    callback = (conditional_load, noinline_load, forward_load)[call_depth]
+    callback = (select_value, noinline_select, forward_select)[call_depth]
 
     @gluon.jit
     def kernel(In, Out):
         value = ttgl.atomic_load(In, sem="relaxed")
         ttgl.store(Out + 128, value)
         offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
-        values = ttgl.map_elementwise(callback, In + offsets, offsets % 2 == 0)
+        values = ttgl.map_elementwise(callback, ttgl.load(In + offsets), offsets % 2 == 0)
         ttgl.store(Out + offsets, values)
 
     offsets = torch.arange(128, device=device, dtype=torch.int32)
@@ -8348,55 +8345,6 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
     assert compiled.asm["ttgir"].count("noinline = true") >= call_depth
     # The scalar atomic/store outside the map should still avoid a broadcast.
     assert compiled.metadata.shared == 0
-
-
-@pytest.mark.parametrize("kind", ["reduce", "scan"])
-@pytest.mark.parametrize("indirect", [False, True])
-def test_thread_regions_combiner_callees(kind, indirect, device, fresh_knobs):
-    if not is_cuda():
-        pytest.skip("requires NVIDIA thread region lowering")
-    fresh_knobs.compilation.instrumentation_mode = ""
-
-    # Immutable loads make address selection an associative combiner.
-    @gluon.jit
-    def choose_max(a, b):
-        av = ttgl.load(a.to(ttgl.pointer_type(ttgl.int32)))
-        bv = ttgl.load(b.to(ttgl.pointer_type(ttgl.int32)))
-        return ttgl.where(av >= bv, a, b)
-
-    @gluon.jit(noinline=True)
-    def noinline_choose(a, b):
-        # Keep control flow outside the single-block combiner region.
-        if a == b:
-            selected = a
-        else:
-            selected = choose_max(a, b)
-        return selected
-
-    @gluon.jit(noinline=True)
-    def forward_choose(a, b):
-        return noinline_choose(a, b)
-
-    callback = forward_choose if indirect else choose_max
-
-    @gluon.jit
-    def kernel(In, Out, KIND: ttgl.constexpr):
-        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
-        addresses = (In + offsets).to(ttgl.uint64)
-        if KIND == "reduce":
-            selected = ttgl.reduce(addresses, 0, callback)
-            ttgl.store(Out, ttgl.load(selected.to(ttgl.pointer_type(ttgl.int32))))
-        else:
-            selected = ttgl.associative_scan(addresses, 0, callback)
-            ttgl.store(Out + offsets, ttgl.load(selected.to(ttgl.pointer_type(ttgl.int32))))
-
-    values = torch.arange(32, device=device, dtype=torch.int32) * 7 % 32
-    output = torch.empty(1 if kind == "reduce" else 32, device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](values, output, kind, num_warps=4)
-    expected = values.max().reshape(1) if kind == "reduce" else values.cummax(0).values
-    torch.testing.assert_close(output, expected)
-    if indirect:
-        assert compiled.asm["ttgir"].count("noinline = true") >= 2
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires warp specialization and CTA clusters")
