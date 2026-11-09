@@ -72,6 +72,9 @@ class BaseBackend(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def get_load_binary_args(self, name, kernel, shared, device, metadata):
+        return (name, kernel, shared, device)
+
     @staticmethod
     def parse_attr(desc):
         assert isinstance(desc, str)
