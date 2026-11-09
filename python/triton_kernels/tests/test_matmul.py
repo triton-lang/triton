@@ -779,7 +779,7 @@ def test_matmul_rejects_non_nvfp4_tensor_scale(implementation, operand, dtype, s
     (a, sa), (b, sb) = (invalid, valid) if operand == "a" else (valid, invalid)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb.T if sb is not None else None,
                              a_mx_tensor_scale=torch.ones(()), b_mx_tensor_scale=torch.ones(()))
-    with pytest.raises(ValueError, match=f"{operand}_mx_tensor_scale requires NVFP4"):
+    with pytest.raises(ValueError, match="Tensor scales require NVFP4"):
         if implementation == "reference":
             matmul_torch(a, b.T, None, precision_config=config)
         else:
