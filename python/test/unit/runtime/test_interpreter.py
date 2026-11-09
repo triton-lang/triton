@@ -105,6 +105,35 @@ def test_fp8_upcast_special_codes(src_dtype, codes, expected):
         assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
+@pytest.mark.parametrize("dst_dtype, expected", [
+    # float8e4nv: NaN is 0x7f; Inf has no encoding → max finite 0x7e.
+    (tl.float8e4nv, [0x7E, 0xFE, 0x7F, 0xFF]),
+    # float8e5: Inf/NaN use the reserved exponent.
+    (tl.float8e5, [0x7C, 0xFC, 0x7E, 0xFE]),
+    # float8e4b15: no Inf/NaN → both map to max finite.
+    (tl.float8e4b15, [0x7F, 0xFF, 0x7F, 0xFF]),
+    # FNUZ: Inf → signed max finite; NaN → 0x80.
+    (tl.float8e4b8, [0x7F, 0xFF, 0x80, 0x80]),
+    (tl.float8e5b16, [0x7F, 0xFF, 0x80, 0x80]),
+])
+@pytest.mark.parametrize("rounding", [ir.ROUNDING_MODE.RTNE, ir.ROUNDING_MODE.RTZ])
+def test_fp8_downcast_nan_inf(dst_dtype, expected, rounding):
+    # Wider Inf/NaN must not become unrelated finite FP8 codes (#12467).
+    data = np.array([np.inf, -np.inf, np.nan, -np.nan], dtype=np.float32)
+    result = interpreter._convert_float(data, tl.float32, dst_dtype, rounding)
+    np.testing.assert_array_equal(result, np.array(expected, dtype=np.uint8))
+
+
+@pytest.mark.parametrize("dst_dtype", [tl.float8e4b8, tl.float8e5b16])
+@pytest.mark.parametrize("rounding", [ir.ROUNDING_MODE.RTNE, ir.ROUNDING_MODE.RTZ])
+def test_fp8_downcast_negative_zero(dst_dtype, rounding):
+    # FNUZ has no negative zero, so -0.0 and negative values that round to zero
+    # must encode as +0.0 rather than the NaN code 0x80 (#12467).
+    data = np.array([-0.0, -1e-30, -1e-45, 0.0, 1e-30], dtype=np.float32)
+    result = interpreter._convert_float(data, tl.float32, dst_dtype, rounding)
+    np.testing.assert_array_equal(result, np.zeros_like(result))
+
+
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
     builder = interpreter.InterpreterBuilder()
     data = np.array([0, 0, 1], dtype=np.int32)
