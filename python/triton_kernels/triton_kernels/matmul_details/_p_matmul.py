@@ -152,6 +152,7 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
+             A_SCALE_PER_EXPERT: tl.constexpr = False, stride_y_tensor_scale=None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -362,7 +363,8 @@ def _p_matmul(
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
         if XTensorScale is not None:
-            XTensorScalePtrs = XTensorScale + off_x_z.to(index_type) * stride_x_tensor_scale_z
+            scale_group = off_w_z if A_SCALE_PER_EXPERT else off_x_z
+            XTensorScalePtrs = XTensorScale + scale_group.to(index_type) * stride_x_tensor_scale_z
             if USE_GATHER_TMA:
                 scale_offs_m = offs_x_m
             elif X_TMA_MODE is None:
@@ -680,6 +682,15 @@ def _p_matmul(
 
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+            if stride_y_tensor_scale is not None:
+                scale_group = expt_id1 if RAGGED_DIMENSION == "M" else start_z1
+                ExpectedScale = YExpectedScale + scale_group.to(index_type) * stride_y_tensor_scale
+            elif PER_BATCH_OUT_SCALE:
+                ExpectedScale = YExpectedScale + start_z1
+            else:
+                ExpectedScale = YExpectedScale
+            if YExpectedScale is not None:
+                ExpectedScale = tl.load(ExpectedScale)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -744,10 +755,6 @@ def _p_matmul(
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
                 out_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
-                if PER_BATCH_OUT_SCALE:
-                    ExpectedScale = YExpectedScale + start_z1
-                else:
-                    ExpectedScale = YExpectedScale
                 # OCP MX outputs leave YExpectedScale unset, so this is an
                 # identity there. NVFP4 uses YExpectedScale to precondition the
                 # dense output before the microscaling epilogue writes direct

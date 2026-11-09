@@ -808,6 +808,73 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
         matmul(a, b, None, precision_config=config, epilogue=epilogue)
 
 
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("mode,a_per_group,b_per_group,c_per_group", [
+    ("plain", False, False, False), ("batched", True, True, True),
+    ("routed", False, True, True), ("routed", True, False, False), ("routed", True, True, True),
+])
+def test_nvfp4_compact_tensor_scales(mode, a_per_group, b_per_group, c_per_group, persistent, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    m, n, k = 64, 160, 128
+    e = 1 if mode == "plain" else 3
+    batched = mode == "batched"
+    a_groups = (e,) if batched else ()
+    b_groups = () if mode == "plain" else (e,)
+    # Every packed E2M1 pair is [1, 1], so the unscaled dot is exactly K.
+    a = wrap_torch_tensor(torch.full((*a_groups, m, k // 2), 0x22, device=device, dtype=torch.uint8), dtype=FP4)
+    b = wrap_torch_tensor(torch.full((*b_groups, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT, dtype=FP4)
+    sa = wrap_torch_tensor(torch.ones((*a_groups, m, k // 16), device=device, dtype=torch.float8_e4m3fn))
+    sb = wrap_torch_tensor(torch.ones((*b_groups, k // 16, n), device=device, dtype=torch.float8_e4m3fn))
+    # Include a storage offset and a non-unit expert stride.
+    by_group = torch.tensor([0., 0.5, 0., 2., 0., 4.], device=device)[1::2][:e]
+    a_scale = by_group[:, None] if a_per_group else by_group[0]
+    b_scale = by_group[:, None].expand(e, n) if b_per_group else by_group[:1]
+    if mode == "plain":
+        a_scale = a_scale.expand(m)
+    if c_per_group:
+        c_scale = by_group[:, None] if a_per_group else by_group
+    else:
+        c_scale = by_group[0] if mode == "plain" else by_group[0].expand(e)
+    meta = gather = scatter = None
+    if mode == "routed":
+        sizes = torch.tensor([47, 0, 84], device=device, dtype=torch.int32)
+        meta = make_ragged_tensor_metadata(sizes, 131)
+        groups = torch.repeat_interleave(torch.arange(e, device=device), sizes.long(), output_size=131)
+        gather = torch.arange(131, device=device, dtype=torch.int32) % m
+        gather[::11] = -1
+        scatter = torch.arange(130, -1, -1, device=device, dtype=torch.int32)
+    elif batched:
+        groups = torch.arange(e, device=device)[:, None].expand(e, m)
+    else:
+        groups = torch.zeros(m, device=device, dtype=torch.long)
+    blocks = torch.empty((*groups.shape, n // 16), device=device, dtype=torch.float8_e4m3fn)
+    config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
+                             a_mx_tensor_scale=a_scale, b_mx_tensor_scale=b_scale, out_dtype=torch.uint8,
+                             c_mx_scale=blocks, c_microblock_size=16,
+                             flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=c_scale)))
+    epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.)
+    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=persistent, block_m=128, block_n=128, block_k=128)):
+        packed = matmul(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter,
+                        precision_config=config, epilogue=epilogue)
+
+    expected = k * (by_group[groups] if a_per_group else by_group[0])
+    expected = expected * (by_group[groups] if b_per_group else by_group[0])
+    output_scale = by_group[groups] if c_per_group else by_group[0]
+    if gather is not None:
+        expected = torch.where(gather >= 0, expected, 0.).flip([0])
+        output_scale = output_scale.flip([0]) if output_scale.ndim else output_scale
+    expected = expected[..., None].expand(*groups.shape, n)
+    scaled = expected / output_scale[..., None]
+    ref = matmul_torch(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter, precision_config=config)
+    torch.testing.assert_close(ref, scaled, rtol=0, atol=0)
+    ref_packed, ref_blocks = downcast_to_mxfp_torch(expected if batched else scaled, torch.uint8, -1,
+                                                    scale_dtype=torch.float8_e4m3fn, microblock_size=16,
+                                                    expected_scale=c_scale if batched else None)
+    assert torch.equal(packed, ref_packed)
+    assert torch.equal(blocks.view(torch.uint8), ref_blocks.view(torch.uint8))
+
+
 @pytest.mark.parametrize("swizzled", [False, True])
 @pytest.mark.parametrize("weights_swizzled", [False, True])
 @pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])

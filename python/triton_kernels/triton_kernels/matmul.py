@@ -1,7 +1,6 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, replace
-import itertools
 import torch
 import triton
 from enum import Enum, auto
@@ -16,7 +15,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale, is_scalar_tensor_scale, output_tensor_scale_stride
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
@@ -156,6 +155,21 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
 # Allocation
 # ---------------------
 
+def _tensor_scale_strides(scale, n_groups, n_fibers):
+    """Strides along groups (experts or batches) and rows/columns."""
+    if scale is None:
+        return None, None
+    if is_scalar_tensor_scale(scale):
+        return 0, 0
+    if scale.ndim not in (1, 2) or (scale.ndim == 2 and scale.shape[0] not in (1, n_groups)):
+        raise ValueError("Expected a scalar, a row/column scale, or one tensor scale per group")
+    group_stride = scale.stride(0) if scale.ndim == 2 and scale.shape[0] != 1 else 0
+    fiber_stride = scale.stride(-1) if scale.shape[-1] != 1 else 0
+    if fiber_stride and isinstance(n_fibers, int) and scale.shape[-1] < n_fibers:
+        raise ValueError("Tensor scale is too short for the row/column dimension; use (E, 1) for per-group scales")
+    return group_stride, fiber_stride
+
+
 @dataclass
 class MatmulAllocation:
     device: str
@@ -268,7 +282,11 @@ def matmul(a, b, bias,
 
     NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
     Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
-    is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
+    is NVFP4 (packed FP4 values with E4M3 block scales). A scalar broadcasts globally.
+    For batched or ragged-M matmul, a scale of shape (E, 1) supplies one value per
+    batch or expert. Ragged-M selects the activation scale by the scheduled expert
+    even when it gathers a token shared by several experts. The NVFP4 output tensor
+    scale (flex_ctx.out_data.expected_scale) accepts a scalar, (E,), or (E, 1).
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
@@ -685,11 +703,21 @@ def matmul(a, b, bias,
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Row and column scales keep their strides. A zero-dimensional scale broadcasts with two zero strides.
-    a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
-    a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
-    b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
-    b_tensor_scale_strides = pad_strides(b_tensor_scale_strides, 2)
+    n_input_groups = b.shape[0] if b.ndim == 3 else 1
+    a_group_stride, a_fiber_stride = _tensor_scale_strides(a_tensor_scale, n_input_groups, a.shape[-2])
+    b_group_stride, b_fiber_stride = _tensor_scale_strides(b_tensor_scale, n_input_groups, b.shape[-1])
+    a_scale_per_expert = ragged_dimension == "M" and a_group_stride != 0 and a_fiber_stride == 0
+    # None specializes a scalar load in the regular kernel. The persistent kernel
+    # uses its masked vector load with a runtime zero stride.
+    if not opt_flags.is_persistent:
+        a_group_stride = a_group_stride or None
+        b_group_stride = b_group_stride or None
+        a_fiber_stride = a_fiber_stride or None
+        b_fiber_stride = b_fiber_stride or None
+    y_tensor_scale_stride = None
+    if epilogue.specs.name == FnName.QUANTIZE_NVFP4.name:
+        y_tensor_scale_stride = output_tensor_scale_stride(out_matmul_flex.expected_scale,
+                                                         n_input_groups if is_c_ragged else batch_size)
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
@@ -731,11 +759,11 @@ def matmul(a, b, bias,
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
-                   a_tensor_scale, *a_tensor_scale_strides,
+                   a_tensor_scale, a_group_stride, a_fiber_stride,
                    b_tensor_or_tma, b.storage.data, *b_strides, b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
-                   b_tensor_scale, *b_tensor_scale_strides,
+                   b_tensor_scale, b_group_stride, b_fiber_stride,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
@@ -758,7 +786,7 @@ def matmul(a, b, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
-                   out_matmul_flex.is_per_batch,
+                   out_matmul_flex.is_per_batch if y_tensor_scale_stride is None else False,
                    flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
@@ -789,6 +817,8 @@ def matmul(a, b, bias,
                        FnName.QUANTIZE_NVFP4.name,
                    ),
                    Y_VALUE_PACK_FACTOR=precision_config.c_value_pack_factor,
+                   A_SCALE_PER_EXPERT=a_scale_per_expert,
+                   stride_y_tensor_scale=y_tensor_scale_stride or None,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs,
@@ -918,7 +948,30 @@ def matmul_torch(a, b, bias,
                  gammas = None,
                  round_x = None, round_y = None,
                  ):
+    a_expert_scale = None
+    routed_m = a_ragged_metadata is not None and b_ragged_metadata is None
+    n_groups = b.shape[0] if b.ndim == 3 else 1
+    a_scale = precision_config.a_mx_tensor_scale
+    if routed_m and a_scale is not None and a_scale.ndim == 2:
+        group_stride, row_stride = _tensor_scale_strides(a_scale, n_groups, a.shape[-2])
+        if row_stride == 0:
+            # A token can be routed to several experts. Apply its expert's scale after gathering.
+            if group_stride:
+                a_expert_scale = a_scale[:, 0]
+                a_scale = a_scale.new_ones(())
+            else:
+                a_scale = a_scale.as_strided((), ())
+            precision_config = replace(precision_config, a_mx_tensor_scale=a_scale)
     a, b = apply_precision(a, b, precision_config)
+    expected_scale = precision_config.flex_ctx.out_data.expected_scale
+    expert_out_scale = None
+    if (expected_scale is not None and precision_config.c_mx_scale is not None
+            and precision_config.c_mx_scale.data.dtype == torch.float8_e4m3fn):
+        n_outputs = b_ragged_metadata.n_slices if b_ragged_metadata is not None else n_groups
+        stride = output_tensor_scale_stride(expected_scale, n_outputs)
+        expected_scale = expected_scale.as_strided((n_outputs if stride else 1,), (stride,))
+        if stride and routed_m:
+            expert_out_scale, expected_scale = expected_scale, None
 
     if b_ragged_metadata is not None:
         n_expts_tot = b_ragged_metadata.slice_sizes.shape[0]
@@ -944,7 +997,7 @@ def matmul_torch(a, b, bias,
         actual_scale = precision_config.flex_ctx.out_data.actual_scale
         if actual_scale is not None:
             actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-        return scale(out, precision_config.flex_ctx.out_data.expected_scale)
+        return scale(out, expected_scale)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -965,16 +1018,16 @@ def matmul_torch(a, b, bias,
         a = a.view(1, *a.shape)
     # memory offsets
     if a_ragged_metadata is not None and not is_input_batched:
-        sizes = a_ragged_metadata.slice_sizes
-        off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
-        off[1:] = torch.cumsum(sizes, 0)
-        offs = list(itertools.pairwise(off))
+        sizes = a_ragged_metadata.slice_sizes[:b.shape[0]]
+        starts = a_ragged_metadata.slice_offs[:len(sizes)]
+        offs = zip(starts.tolist(), (starts + sizes).tolist())
     else:
         offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
     compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
     n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
-    y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
+    y_dtype = a.dtype if expert_out_scale is None else torch.promote_types(a.dtype, expert_out_scale.dtype)
+    y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=y_dtype)
     for i, (lo, hi) in enumerate(offs):
         if gather_indx is None:
             idx = torch.arange(lo, hi, device=a.device)
@@ -988,13 +1041,21 @@ def matmul_torch(a, b, bias,
             x = a.new_zeros((idx.numel(), a.shape[-1]))
             active = idx >= 0
             x[active] = a[batch, idx[active], :]
+        if a_expert_scale is not None:
+            if gather_indx is None:
+                x = x * a_expert_scale[i]
+            else:
+                x[active] *= a_expert_scale[i]
         out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:
             out *= gammas[lo:hi, None]
-        y[batch, lo:hi, :] = round_y(out)
+        out = round_y(out).to(a.dtype)
+        if expert_out_scale is not None:
+            out = out / expert_out_scale[i:i + 1]
+        y[batch, lo:hi, :] = out
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
@@ -1006,7 +1067,7 @@ def matmul_torch(a, b, bias,
     actual_scale = precision_config.flex_ctx.out_data.actual_scale
     if actual_scale is not None:
         actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-    return scale(out, precision_config.flex_ctx.out_data.expected_scale)
+    return scale(out, expected_scale)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,

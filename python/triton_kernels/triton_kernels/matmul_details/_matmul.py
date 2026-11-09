@@ -26,6 +26,14 @@ from ._common import (
 
 
 @triton.jit
+def _load_tensor_scale(Scale, offsets, stride, mask, other: tl.constexpr):
+    if stride is None:
+        return tl.where(mask, tl.broadcast_to(tl.load(Scale), offsets.shape), other)
+    else:
+        return tl.load(Scale + offsets * stride, mask=mask, other=other)
+
+
+@triton.jit
 def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.constexpr):
     packed_n_w = tl.cdiv(N, W_N_DIVISOR)
     if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
@@ -103,6 +111,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
+             A_SCALE_PER_EXPERT: tl.constexpr = False, stride_y_tensor_scale=None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -360,16 +369,15 @@ def _matmul(
     else:
         XMxScalePtrs = None
     if has_x_tensor_scale:
-        XTensorScale += start_z.to(index_type) * stride_x_tensor_scale_z
-        if GatherIndx is None:
+        if stride_x_tensor_scale_z is not None:
+            XTensorScale += (expt_id if A_SCALE_PER_EXPERT else start_z) * stride_x_tensor_scale_z
+        if GatherIndx is None and stride_x_tensor_scale_m is not None:
             XTensorScale += start_m * stride_x_tensor_scale_m
-        XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m
-    else:
-        XTensorScalePtrs = None
 
     # Inactive rows have no source scales; neutral scales preserve their zero values.
     if REQUANTIZE_X and has_x_tensor_scale:
-        x_conversion_scale = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
+        x_conversion_scale = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
+                                                offs_x_m >= 0 if GatherIndx is not None else True, 1.0)
     else:
         x_conversion_scale: tl.constexpr = None
 
@@ -378,13 +386,8 @@ def _matmul(
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     if has_w_tensor_scale:
         offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        WTensorScalePtrs = (
-            WTensorScale
-            + expt_id * stride_w_tensor_scale_e
-            + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n
-        )
-    else:
-        WTensorScalePtrs = None
+        if stride_w_tensor_scale_e is not None:
+            WTensorScale += expt_id * stride_w_tensor_scale_e
     # compute output
     acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
@@ -523,9 +526,11 @@ def _matmul(
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
         if has_x_epilogue_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
+            x_tensor_scales = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
+                                                 offs_x_m >= 0 if GatherIndx is not None else True, 1.0)
         if has_w_tensor_scale:
-            w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
+            w_tensor_scales = _load_tensor_scale(WTensorScale, offs_w_tensor_scale_n.to(index_type),
+                                                 stride_w_tensor_scale_n, offs_w_tensor_scale_n < N, 0.0)
         if SWAP_XW:
             acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
         else:
@@ -609,7 +614,10 @@ def _matmul(
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
-        if PER_BATCH_OUT_SCALE:
+        if stride_y_tensor_scale is not None:
+            scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
+            YExpectedScale += scale_group.to(index_type) * stride_y_tensor_scale
+        elif PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
         # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
         # NVFP4 uses YExpectedScale to precondition the dense output before the
