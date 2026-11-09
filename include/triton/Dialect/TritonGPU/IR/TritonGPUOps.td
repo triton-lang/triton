@@ -702,7 +702,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
     The "default" region of the op represents the code executed by the currently
     executing warp group. This region is allowed to implicitly capture. The op
-    contains a number of "partition" regions that are isolated from above. They
+    contains one or more "partition" regions that are isolated from above. They
     must be isolated because these regions represent different layout domains,
     as the number of warps is different.
 

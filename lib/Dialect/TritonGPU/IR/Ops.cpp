@@ -1429,6 +1429,8 @@ LogicalResult WarpSpecializeOp::verify() {
                                << " partitions but `partitionNumWarps` has "
                                << getPartitionNumWarps().size() << " elements";
   }
+  if (getPartitionNumWarps().empty())
+    return emitOpError("requires at least one worker partition");
   for (auto [i, numWarps] : llvm::enumerate(getPartitionNumWarps())) {
     if (llvm::isPowerOf2_32(numWarps))
       continue;

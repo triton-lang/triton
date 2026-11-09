@@ -55,7 +55,8 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
   auto nBlocks = product(triton::gpu::getCTASplitNum(
-      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout)));
+      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout),
+      convertType<int64_t>(llvm::to_vector(srcLayout.getOutDimSizes()))));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
@@ -153,6 +154,14 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   }
   if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
     return ws.getCaptureSize();
+  }
+  if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+    // The default dispatcher stores one command byte per worker warp.
+    unsigned numWorkers = 0;
+    func.walk([&](gpu::WarpSpecializeOp ws) {
+      numWorkers = std::max(numWorkers, ws.getTotalPartitionWarps());
+    });
+    return numWorkers;
   }
   return 0;
 }
@@ -317,17 +326,11 @@ private:
                                                           captureAlign);
       return;
     }
-    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
-      unsigned numWarpIndices = 0;
-      // Warp specialization communicates states over shared memory to each
-      // warp. Add space for an i8 for each warpgroup warp.
-      func.walk([&](gpu::WarpSpecializeOp op) {
-        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
-      });
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
+    unsigned bytes = scratchSizeGetter(op);
+    if (isa<FunctionOpInterface>(op)) {
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       return;
     }
-    unsigned bytes = scratchSizeGetter(op);
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
   }

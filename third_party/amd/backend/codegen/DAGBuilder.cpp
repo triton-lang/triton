@@ -256,7 +256,7 @@ void DAGBuilder::setupAliasAnalysis() {
   // Keep in sync with createScopedNoAliasAAWrapperPass() in the MIR-to-ASM
   // pipeline, which documents why: without it the emitted DAG carries memory
   // edges the scheduler that compiles this MIR does not believe in.
-  ScopedAA = std::make_unique<ScopedNoAliasAAResult>();
+  ScopedAA = std::make_unique<ScopedNoAliasAAResult>(Func.getContext());
   AA->addAAResult(*ScopedAA);
 }
 

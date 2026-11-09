@@ -908,16 +908,15 @@ void init_gluon_ir(py::module_ &m) {
                                                 bitwidth);
              tt::AMD::TargetInfo targetInfo(arch->str());
              int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
+             auto cvt = regLayout.invertAndCompose(smemLayout);
+             auto [elemsPerVec, perm] =
+                 tt::largestVectorisation(mod.getContext(), cvt, bitwidth);
+             auto vecBitwidth = std::max(32, elemsPerVec * bitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              (void)srcTile;
-             assert(srcTile.laneAddr.empty() &&
-                    "srcTile.laneAddr should be empty");
+             assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
+                    "srcTile should be empty");
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks, dstTile);
            })

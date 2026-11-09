@@ -34,6 +34,8 @@ namespace LLVM {
 namespace NVIDIA {
 class TargetInfo;
 
+constexpr unsigned kWarpSpecializeCTABarrierId = 1;
+
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
                                   Value val, int delta);
