@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import triton
 from triton_kernels import target_info
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
 from triton_kernels.tensor import FP4, FP8_E4M3FN, FP32, Tensor, torch_dtype_to_dtype
 import torch
@@ -228,15 +229,15 @@ def make_default_opt_flags_nvidia(
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     is_mixed_fp8 = opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
-    is_large_ragged_nvfp4 = (
+    is_ragged_nvfp4 = (
         routing_data is not None
-        and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
         and lhs_dtype == FP4
         and rhs_dtype == FP4
         and precision_config.a_mx_tensor_scale is not None
         and precision_config.b_mx_tensor_scale is not None
         and cuda_capability_geq(10, 3)
     )
+    is_large_ragged_nvfp4 = is_ragged_nvfp4 and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
     # tokens per expert
     if routing_data is None or batch_size > 1:
         slice_size = m
@@ -275,6 +276,14 @@ def make_default_opt_flags_nvidia(
                 block_m = 128
         else:
             block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
+    a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
+
+    def _is_layout_strided(layout: Layout | None) -> bool:
+        return layout is None or isinstance(layout, StridedLayout)
+
+    requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
+
     # block n
     arch = None
     if constraints.get("block_n", None) is not None:
@@ -286,6 +295,11 @@ def make_default_opt_flags_nvidia(
         block_n, block_n_tma = 256, 256
     else:
         block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
+        if (is_ragged_nvfp4 and batch_size == 1 and block_m == 128 and not requires_persistent
+                and out_dtype == FP4 and precision_config.c_microblock_size == int(NVFP_BLOCK_SIZE)
+                and epilogue_reduction_n == 1):
+            # Narrower persistent tiles improve throughput for routed NVFP4 input and output with strided scales.
+            block_n_tma = min(block_n_tma, 128)
     # is_persistent
     grid_size_tma = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n_tma)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
@@ -299,13 +313,6 @@ def make_default_opt_flags_nvidia(
             raise InapplicableConstraint("cannot enforce `clc=True` constraint without persistent TMA support")
         if constraints.get("is_persistent", True) is False:
             raise InapplicableConstraint("`clc=True` requires `is_persistent=True`")
-    a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
-    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
-
-    def _is_layout_strided(layout: Layout | None) -> bool:
-        return layout is None or isinstance(layout, StridedLayout)
-
-    requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
     if clc:
         is_persistent = True
     elif constraints.get("is_persistent", None) is not None:
