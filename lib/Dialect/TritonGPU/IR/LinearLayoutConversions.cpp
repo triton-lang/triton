@@ -285,6 +285,21 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
                 maybeTransposedTmaShape.begin() + 1,
                 maybeTransposedTmaShape.end());
   }
+  // A transposed layout views the same memory as the plain one, so the
+  // transpose has to be the last step: the offset bits above the TMA block
+  // must be added in the order the plain layout gets them.
+  auto transposeLayout = [&](LinearLayout layout) {
+    auto plainShapePerCTA = getShapePerCTA(shared, shape);
+    std::rotate(plainShapePerCTA.begin(), plainShapePerCTA.begin() + 1,
+                plainShapePerCTA.end());
+    layout = ensureLayoutNotSmallerThan(layout, standardOutDimNames(ctx, rank),
+                                        plainShapePerCTA, kOffset);
+    SmallVector<int> order = {rank - 1};
+    for (int i = 0; i < rank - 1; i++) {
+      order.push_back(i);
+    }
+    return transposeLinearLayout(layout, order);
+  };
   if (shared.getSwizzlingByteWidth() == 0) {
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(
@@ -293,13 +308,8 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       layout *= LinearLayout::identity1D(maybeTransposedTmaShape[i], kOffset,
                                          outDimNames[i]);
     }
-    if (shared.getTransposed()) {
-      SmallVector<int> order = {rank - 1};
-      for (int i = 0; i < rank - 1; i++) {
-        order.push_back(i);
-      }
-      layout = transposeLinearLayout(layout, order);
-    }
+    if (shared.getTransposed())
+      layout = transposeLayout(layout);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);
@@ -344,13 +354,8 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     return failure();
   auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
 
-  if (shared.getTransposed()) {
-    SmallVector<int> order = {rank - 1};
-    for (int i = 0; i < rank - 1; i++) {
-      order.push_back(i);
-    }
-    reshapedLayout = transposeLinearLayout(reshapedLayout, order);
-  }
+  if (shared.getTransposed())
+    reshapedLayout = transposeLayout(reshapedLayout);
 
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
 }
