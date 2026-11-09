@@ -62,7 +62,7 @@ void tensormap_replace_attr(Location loc, MLIRContext *ctx,
                             ConversionPatternRewriter &rewriter,
                             NVVM::TensormapField field, Value descPtr,
                             Attr newVal) {
-  // The descriptor is zero-initialized before its fields are populated.
+  // These attributes are zero in the template and the zero-fill path.
   if (static_cast<int32_t>(newVal.getValue()) == 0)
     return;
   NVVM::TensormapReplaceOp::create(rewriter, loc,
@@ -108,16 +108,60 @@ struct TensormapFenceproxyAcquireOpConversion
   }
 };
 
-void zero_fill_tma(Location loc, MLIRContext *ctx,
-                   ConversionPatternRewriter &rewriter,
-                   const NVIDIA::TargetInfo &targetInfo, Value descPtr) {
+// cuTensorMapEncodeTiled output on SM90/SM100/SM103 for a null-address UINT8
+// tensor of shape [1, 16] with a [1, 16] box, unit element strides, and default
+// layout, swizzle, L2 promotion and OOB fill. Captured with libcuda 580.126.20.
+constexpr int32_t tensorMapTemplate[TMA_SIZE_BYTES / sizeof(int32_t)] = {
+    0, 0,          0x10, 1, 0,    0, 0,    0, 0xf, 0, 0, 0,
+    0, 0x0f000000, 0,    0, 0x10, 0, 0x10, 0, 0,   0, 0, 0,
+};
+constexpr int templateRank = 2;
+
+Value useLargeAllocClass(Location loc, ConversionPatternRewriter &rewriter,
+                         ttng::TensormapCreateOp op,
+                         ttng::TensormapCreateOp::Adaptor adaptor) {
+  // Byte widths in NVVM tensormap elemtype order, up to and excluding the
+  // packed types. Keep the small allocation class for packed and interleaved
+  // layouts.
+  constexpr int elementBytes[] = {1, 2, 4, 4, 8, 8, 2, 4, 4, 8, 2, 4, 4};
+  unsigned elemType = op.getElemType();
+  if (op.getInterleaveLayout() || elemType >= std::size(elementBytes))
+    return {};
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Write out zeros
+  Value limit = b.i64_val(128 * 1024 - 1);
+  Value lastByteIndex = b.i64_val(0);
+  Value nonempty = b.i1_val(1);
+  for (auto [i, dim] : llvm::enumerate(adaptor.getGlobalDim())) {
+    nonempty = b.and_(nonempty, b.icmp_ne(dim, b.i32_val(0)));
+    Value last = b.zext(i64_ty, b.sub(dim, b.i32_val(1)));
+    Value stride = i == 0 ? b.i64_val(elementBytes[elemType])
+                          : adaptor.getGlobalStride()[i - 1];
+    // The host descriptor workaround also uses the last element's starting
+    // byte. Capping each stride at the limit preserves the comparison and
+    // keeps the sum of products of 32-bit dimensions from overflowing.
+    lastByteIndex = b.add(lastByteIndex, b.mul(last, b.umin(stride, limit)));
+  }
+  return b.and_(nonempty, b.icmp_uge(lastByteIndex, limit));
+}
+
+void initialize_tma(Location loc, ConversionPatternRewriter &rewriter,
+                    const NVIDIA::TargetInfo &targetInfo, Value descPtr,
+                    bool useTemplate) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   constexpr int kWarpSize = 32;
+  static_assert(std::size(tensorMapTemplate) == kWarpSize);
   Value threadId = getThreadId(rewriter, loc);
   Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
 
-  auto fillVal = b.i32_val(0);
+  Value fillVal = b.i32_val(0);
+  if (useTemplate) {
+    for (auto [i, word] : llvm::enumerate(tensorMapTemplate)) {
+      if (word)
+        fillVal = b.select(b.icmp_eq(threadId, b.i32_val(i)), b.i32_val(word),
+                           fillVal);
+    }
+  }
   auto writeAddr =
       b.gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
   targetInfo.storeShared(rewriter, loc, writeAddr, fillVal, pred);
@@ -140,10 +184,14 @@ struct TensormapCreateOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = getContext();
 
-    bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
+    int ptxVersion = targetInfo.getPtxVersion();
+    bool needsStrideWorkaround = ptxVersion <= 85;
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
-    zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
+    int capability = targetInfo.getComputeCapability();
+    bool isBlackwell = capability == 100 || capability == 103;
+    bool useTemplate = capability == 90 || isBlackwell;
+    initialize_tma(loc, rewriter, targetInfo, smemBase, useTemplate);
     Value isLeader = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     auto [previousBlock, updateBlock, continuationBlock] =
         createIfBlock(rewriter, loc, isLeader);
@@ -152,21 +200,32 @@ struct TensormapCreateOpConversion
     tensormap_replace_generic(loc, ctx, rewriter,
                               NVVM::TensormapField::GLOBAL_ADDRESS, smemBase,
                               adaptor.getGlobalAddress());
-    if (op.getRank() > 1)
+    Value useLarge;
+    if (isBlackwell && ptxVersion >= 95)
+      useLarge = useLargeAllocClass(loc, rewriter, op, adaptor);
+    if (useLarge) {
+      // PTX 9.5 sets the small allocation class when replacing the address.
+      // Set the large class explicitly for tensors that meet the size cutoff.
+      PTXBuilder ptxBuilder;
+      auto *desc = ptxBuilder.newAddrOperand(smemBase, "r");
+      auto &replace = *ptxBuilder.create(
+          "tensormap.replace.tile.alloc_large.shared::cta.b1024");
+      replace(desc).predicate(useLarge, "b");
+      ptxBuilder.launch(rewriter, loc, void_ty(ctx));
+    }
+    if (op.getRank() != (useTemplate ? templateRank : 1))
       tensormap_replace_generic(loc, ctx, rewriter, NVVM::TensormapField::RANK,
                                 smemBase, b.i32_val(op.getRank() - 1));
-    for (int i = 0; i < op.getRank(); ++i) {
-      tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::BOX_DIM, smemBase,
-                                op.getBoxDim()[i], i);
+    for (auto [i, dim] : llvm::enumerate(adaptor.getBoxDim())) {
+      tensormap_replace_generic(
+          loc, ctx, rewriter, NVVM::TensormapField::BOX_DIM, smemBase, dim, i);
     }
-    for (int i = 0; i < op.getRank(); ++i) {
+    for (auto [i, dim] : llvm::enumerate(adaptor.getGlobalDim())) {
       tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::GLOBAL_DIM, smemBase,
-                                op.getGlobalDim()[i], i);
+                                NVVM::TensormapField::GLOBAL_DIM, smemBase, dim,
+                                i);
     }
-    for (int i = 0; i + 1 < op.getRank(); ++i) {
-      auto strideVal = op.getGlobalStride()[i];
+    for (auto [i, strideVal] : llvm::enumerate(adaptor.getGlobalStride())) {
       if (needsStrideWorkaround) {
         // Workaround for a ptxas bug
         strideVal = b.ashr(strideVal, b.i64_val(4));
@@ -175,10 +234,10 @@ struct TensormapCreateOpConversion
                                 NVVM::TensormapField::GLOBAL_STRIDE, smemBase,
                                 strideVal, i);
     }
-    for (int i = 0; i < op.getRank(); ++i) {
+    for (auto [i, stride] : llvm::enumerate(adaptor.getElementStride())) {
       tensormap_replace_generic(loc, ctx, rewriter,
                                 NVVM::TensormapField::ELEMENT_STRIDE, smemBase,
-                                op.getElementStride()[i], i);
+                                stride, i);
     }
     tensormap_replace_attr(
         loc, ctx, rewriter, NVVM::TensormapField::ELEMTYPE, smemBase,
