@@ -88,7 +88,11 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
         captureSize += extra.getInt();
       return captureSize;
     }
-    return defaultAllocationAnalysisScratchSizeFn(op);
+    unsigned bytes = defaultAllocationAnalysisScratchSizeFn(op);
+    // Warp allocation pads workers to full warpgroups, one command byte each.
+    if (isa<FunctionOpInterface>(op))
+      return bytes / 4;
+    return bytes;
   };
   return allocation;
 }
