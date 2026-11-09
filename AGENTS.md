@@ -25,4 +25,4 @@
 
 ## Lowering Guidelines
 - Triton IR uses fixed-width integer types, not MLIR's `index` type. Do not report missing `index` support as a Triton bug.
-- Lowerings must inspect only the operation they lower. Do not inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.
+- Lowerings must inspect only the operation they lower, except that they may match constant-valued operands through their defining constant operations. Do not otherwise inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.
