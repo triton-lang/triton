@@ -7,10 +7,13 @@ from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_b
 from triton_kernels.tensor_details.layout_details import hopper_scale
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.target_info import cuda_capability_geq
+from triton._internal_testing import is_hopper
 import triton.language as tl
 import triton
 import torch
 from torch._subclasses.fake_tensor import FakeTensorMode
+
+pytestmark = pytest.mark.skipif(not is_hopper(), reason="requires Hopper")
 
 # ------------------------------------------------------------
 # Torch tests
