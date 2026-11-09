@@ -206,6 +206,40 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dtype_src_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS",
+                         [("int8", 64, 8, 32, 4, 1), ("float8e5", 64, 8, 32, 4, 1), ("int8", 128, 8, 32, 8, 1),
+                          ("int8", 64, 16, 32, 4, 2), ("float8e5", 64, 16, 32, 4, 2), ("float8e5", 128, 16, 64, 4, 4),
+                          ("int8", 64, 32, 32, 4, 4)])
+def test_matmul_8bit_narrow_rows(dtype_src_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_CTAS, device):
+    # tcgen05 reads B in rows of at least 128 bits, so 8 columns of 8-bit elements
+    # per CTA have to fall back to MMAv2.
+    M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
+    torch.manual_seed(42)
+    if dtype_src_str == "int8":
+        a = torch.randint(-128, 128, (M, K), dtype=torch.int8, device=device)
+        b = torch.randint(-128, 128, (K, N), dtype=torch.int8, device=device)
+        # torch.matmul has no integer path on CUDA, and float32 holds these sums exactly.
+        A = a.to(torch.float32)
+        B = b.to(torch.float32)
+        output = torch.empty((M, N), dtype=torch.int32, device=device)
+        tolerance = 0
+    else:
+        a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+        b = torch.randint(20, 40, (K, N), dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+        A = f8_to_f16(a, dtype_src_str)
+        B = f8_to_f16(b, dtype_src_str)
+        output = torch.empty((M, N), dtype=torch.float32, device=device)
+        tolerance = 0.001
+    matmul_kernel[(1, 1)](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                          output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=1, num_warps=NUM_WARPS,
+                          num_ctas=NUM_CTAS)
+    if is_compile_warmup():
+        return
+    ref_out = torch.matmul(A, B).to(torch.float32)
+    torch.testing.assert_close(ref_out, output.to(torch.float32), atol=tolerance, rtol=tolerance)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas, num_stages, K, warp_specialize", [
     (2, 3, 1024, False),
     (2, 3, 1024, True),
