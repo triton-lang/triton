@@ -115,10 +115,30 @@ def per_lane_layouts(scale_factor):
     return layout, scale_layout
 
 
+def repeated_register_layouts(scale_factor):
+    # Register 1 repeats the element of register 0, so each thread holds the
+    # unique columns 0, 1, 8 and 9 of its rows. Columns 8 and 9 are in a
+    # different scale block from columns 0 and 1, and the lowering must look up
+    # their scale by unique value rather than by register.
+    reg_bases = [[0, 1], [0, 0], [0, 8], [8, 0], [16, 0]]
+    lane_bases = [[0, 2], [0, 4], [0, 16], [0, 32], [0, 64], [1, 0]]
+    warp_bases = [[2, 0], [4, 0]]
+
+    # Scale column c // scale_factor serves input column c.
+    def to_scale(bases):
+        return [[row, col // scale_factor] for row, col in bases]
+
+    layout = ttgl.DistributedLinearLayout(reg_bases, lane_bases, warp_bases, [], [32, 128])
+    scale_layout = ttgl.DistributedLinearLayout(to_scale(reg_bases), to_scale(lane_bases), to_scale(warp_bases), [],
+                                                [32, 128 // scale_factor])
+    return layout, scale_layout
+
+
 # Each entry maps a scale factor to the input and scale layouts of a 32x128
 # tile with 4 warps.
 SCALED_DOWNCAST_LAYOUTS = {
     "per_lane": per_lane_layouts,
+    "repeated_register": repeated_register_layouts,
 }
 
 
