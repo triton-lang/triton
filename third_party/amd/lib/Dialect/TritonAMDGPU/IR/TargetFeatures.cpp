@@ -67,6 +67,15 @@ TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
   return TargetFeatures(targetName.drop_front(sizeof(kTargetPrefix) - 1));
 }
 
+std::optional<TargetFeatures>
+TargetFeatures::tryFromModuleOp(ModuleOp moduleOp) {
+  auto targetAttr =
+      moduleOp->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  if (!targetAttr || !targetAttr.getValue().starts_with(kTargetPrefix))
+    return std::nullopt;
+  return fromModuleOp(moduleOp);
+}
+
 StringRef TargetFeatures::getArch() const { return arch; }
 
 StringRef TargetFeatures::getBaseArch() const { return baseArch; }
@@ -335,6 +344,8 @@ bool TargetFeatures::supportsPermlaneSwap() const {
          getISAFamily() == ISAFamily::CDNA5;
 }
 
+bool TargetFeatures::supportsCvtPkScalePk2() const { return isCDNA4(); }
+
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isCDNA5(); }
 
 bool TargetFeatures::supportsCvtPkScalePk8Upcast() const {
@@ -358,6 +369,17 @@ bool TargetFeatures::supportsHwScaledUpcast() const {
 
 bool TargetFeatures::supportsHwScaledDowncast() const {
   return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
+}
+
+std::optional<int64_t>
+TargetFeatures::getScaledDowncastGroupSize(int64_t packFactor) const {
+  assert((packFactor == 1 || packFactor == 2) &&
+         "expected fp8 or packed fp4 output elements");
+  if (supportsCvtPkScalePk8())
+    return 8 / packFactor;
+  if (supportsCvtPkScalePk2())
+    return 2 / packFactor;
+  return std::nullopt;
 }
 
 bool TargetFeatures::supportBitwidth16Elementwise() const { return true; }

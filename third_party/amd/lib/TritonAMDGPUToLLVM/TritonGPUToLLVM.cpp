@@ -60,6 +60,8 @@ public:
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
     addIllegalOp<triton::amdgpu::BufferLoadToLocalOp>();
+    addIllegalOp<triton::amdgpu::ScaledDowncastFp4Op,
+                 triton::amdgpu::ScaledDowncastFp8Op>();
     // Warp specialization is lowered later.
     addLegalOp<triton::gpu::WarpSpecializeOp>();
     addLegalOp<triton::gpu::WarpYieldOp>();

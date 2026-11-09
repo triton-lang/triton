@@ -45,6 +45,9 @@ public:
   explicit TargetFeatures(StringRef arch);
 
   static TargetFeatures fromModuleOp(ModuleOp moduleOp);
+  // Returns the features of the module's AMD target, or std::nullopt if the
+  // module has no target or targets another backend.
+  static std::optional<TargetFeatures> tryFromModuleOp(ModuleOp moduleOp);
 
   StringRef getArch() const;
   StringRef getBaseArch() const;
@@ -87,12 +90,18 @@ public:
   bool supportMaximumMinimum() const;
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
+  bool supportsCvtPkScalePk2() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsCvtPkScalePk8Upcast() const;
   bool supportsCvtPkScalePk8Block16() const;
   ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
+  // Returns the number of elements, in units of fp8/v2fp4, that one
+  // scaled-downcast conversion instruction converts with a single scale, or
+  // std::nullopt if the target has no such instruction. `packFactor` is 2 for
+  // v2fp4 and 1 for fp8.
+  std::optional<int64_t> getScaledDowncastGroupSize(int64_t packFactor) const;
 
   bool supportBitwidth16Elementwise() const;
   bool supportBitwidth32Elementwise() const;
