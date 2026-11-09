@@ -164,6 +164,8 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
+  // Whether to use three interleaved register chains for a Boolean reduction.
+  virtual bool preferThreePredicateChains() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means

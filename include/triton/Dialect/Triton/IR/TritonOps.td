@@ -866,6 +866,10 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -875,8 +879,8 @@ def TT_ReduceOp: TT_Op<"reduce",
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
-      // Returns the CombineOp iff this ReduceOp's region contains only
-      // one CombineOp other than the return, or nullptr if not applicable.
+      // Returns the binary op on the block arguments whose result is returned
+      // directly, or nullptr. The region may contain other operations.
       ::mlir::Operation *getSingleCombiner();
 
       // Proves that exchanging the two input tuples preserves every result,
@@ -903,6 +907,10 @@ def TT_ScanOp: TT_Op<"scan",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Associative scan using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -931,6 +939,10 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
                                                    SameOperandsAndResultShape,
                                                    RecursiveMemoryEffects]> {
     let summary = "Map a scalar subregion over a tensor";
+    let description = [{
+      The scalar function and its callees may contain memory-effect-free
+      operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region AnyRegion:$scalarOp);

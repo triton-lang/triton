@@ -366,6 +366,27 @@ int getOpNumberOfAsyncCopyInstructions(Operation *op,
 // TODO: walk static loops correctly to avoid conservative loops. (static loops
 // from Gluon are unrolled right now)
 using MemoCache = llvm::DenseSet<std::tuple<Operation *, int, int>>;
+
+// Whether any op nested in `op`'s regions is counted by `countFunc` or, when
+// counting commit groups, is an async commit group, i.e. whether `op` can
+// change the outstanding count. Commit groups do not affect TDM waits.
+template <bool countCommitGroups>
+static bool
+regionsContainAsyncOps(Operation *op,
+                       llvm::function_ref<int(Operation *)> countFunc) {
+  for (Region &region : op->getRegions()) {
+    WalkResult result = region.walk([&](Operation *inner) {
+      if (countFunc(inner) > 0 ||
+          (countCommitGroups && isa<ttg::AsyncCommitGroupOp>(inner)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      return true;
+  }
+  return false;
+}
+
 template <bool countCommitGroups>
 int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
                             int numOutstanding, int pathSum, int bestPath,
@@ -480,9 +501,11 @@ int computeMinCountBackward(Operation *cursor, Operation *cameFrom,
     } else if (isa<triton::FuncOp>(cursor)) {
       // Reached function boundary; return current sum (conservative)
       return std::min(bestPath, pathSum);
-    } else if (cursor->getNumRegions() > 0 && !isa<triton::ReduceOp>(cursor)) {
-      // For unhandled ops with subregions we conservatively bail out.
-      // We ignore triton.reduce because it cannot contain async ops
+    } else if (cursor->getNumRegions() > 0 &&
+               regionsContainAsyncOps<countCommitGroups>(cursor, countFunc)) {
+      // For unhandled ops with subregions that issue async ops we
+      // conservatively bail out. Ops whose regions issue none (tt.reduce,
+      // tt.map_elementwise, ...) are walked past like any other op.
       cursor->emitRemark(
           "has subregions but is not analyzed when determining async "
           "wait count; this yields conservative waits");

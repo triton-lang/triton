@@ -583,8 +583,16 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, std::string exclusive,
     auto loc = ret.getLoc();
     // Multi-CTA kernels already synchronize the cluster before every return.
     if (!twoCTAs) {
-      // Warp-specialized groups may reach different copies of this barrier.
-      NVVM::BarrierOp::create(b, loc, Value{}, Value{}, /*aligned=*/false);
+      auto threads = func->getAttrOfType<DenseI32ArrayAttr>(
+          NVVM::NVVMDialect::getReqntidAttrName());
+      Value barrierId;
+      // After WS, the default warps may still be using barrier 0 when workers
+      // reach teardown. Use CTA barrier channel 1 to differentiate teardown.
+      if (threads[0] > 32 * gpu::lookupNumWarps(func))
+        barrierId = TritonLLVMOpBuilder(loc, b).i32_val(
+            LLVM::NVIDIA::kWarpSpecializeCTABarrierId);
+      // Warp groups can join at different return sites, so omit .aligned.
+      NVVM::BarrierOp::create(b, loc, barrierId, Value{}, /*aligned=*/false);
     }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
