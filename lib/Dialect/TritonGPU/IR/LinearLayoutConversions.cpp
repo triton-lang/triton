@@ -1,3 +1,4 @@
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include <vector>
 
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -1856,6 +1857,55 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
   return (identityStandardND(S("message"), messageShape, order) * warpLayout *
           cgaLayout)
       .transposeOuts(standardOutDimNames(ctx, numDims));
+}
+
+std::array<Attribute, 4> getWarpSparseMmaLayouts(MLIRContext *ctx,
+                                                 unsigned elementBitWidth,
+                                                 ArrayRef<int64_t> shape,
+                                                 int numWarps) {
+  const unsigned pack = 32 / elementBitWidth;
+  auto dims = standardOutDimNames(ctx, 2);
+  auto cga = CGAEncodingAttr::get1CTALayout(ctx, 2);
+  auto warpM = LinearLayout::identity1D(numWarps, S("warp"), dims[0]);
+  auto broadcastWarp = LinearLayout::zeros1D(numWarps, S("warp"), dims[0]);
+  auto tile = [&](LinearLayout fragment, const LinearLayout &warps,
+                  ArrayRef<int64_t> operandShape) -> Attribute {
+    return LinearEncodingAttr::get(
+        ctx, combineCtaCgaWithShape(fragment * warps, cga, operandShape));
+  };
+
+  auto a = nvidiaMmaTile(ctx, {16, 8 * pack}, pack, {1, 0}, {1, 0});
+  auto b = nvidiaMmaTile(ctx, {16 * pack, 8}, pack, {0, 1}, {0, 1});
+  auto d = nvidiaMmaTile(ctx, {16, 8}, 2, {1, 0}, {1, 0});
+  // Selector zero takes the first two lanes per quad for FP16/BF16,
+  // and all four lanes for FP8.
+  int words = 16 / elementBitWidth;
+  LinearLayout sparsityMetadata(
+      {{S("register"), {}},
+       {S("lane"), {{8, 0}, {0, words - 1}, {1, 0}, {2, 0}, {4, 0}}}},
+      dims);
+  return {tile(a, warpM, {shape[0], 8 * pack}),
+          tile(b, broadcastWarp, {16 * pack, shape[1]}),
+          tile(sparsityMetadata, warpM, {shape[0], words}),
+          tile(d, warpM, shape)};
+}
+
+Value buildWarpSparseDot(OpBuilder &builder, Location loc, Value a, Value b,
+                         Value sparsityMetadata, Value acc, int numWarps) {
+  auto resultTy = cast<RankedTensorType>(acc.getType());
+  auto layouts = getWarpSparseMmaLayouts(
+      builder.getContext(),
+      cast<RankedTensorType>(a.getType()).getElementTypeBitWidth(),
+      resultTy.getShape(), numWarps);
+  auto cvt = [&](Value v, Attribute layout) -> Value {
+    auto ty = cast<RankedTensorType>(v.getType()).cloneWithEncoding(layout);
+    return ConvertLayoutOp::create(builder, loc, ty, v);
+  };
+  Value c = cvt(acc, layouts[3]);
+  auto mma = SparseDotOp::create(
+      builder, loc, c.getType(), cvt(a, layouts[0]), cvt(b, layouts[1]),
+      cvt(sparsityMetadata, layouts[2]), c, Value(), Value());
+  return ConvertLayoutOp::create(builder, loc, resultTy, mma.getResult());
 }
 
 } // namespace mlir::triton::gpu

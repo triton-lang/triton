@@ -2308,3 +2308,175 @@ module attributes {ttg.target = "cuda:103"} {
     tt.return
   }
 }
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x32xf8E4M3FN, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xf8E4M3FN, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x1xi32, #t, #ttng.tensor_memory, 128x2>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @short_sparsity_metadata_subview(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{sparsity metadata must be a packed 128x2 i32 TMEM tile}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!full_a = !ttg.memdesc<128x64xf8E4M3FN, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xf8E4M3FN, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_mma_requires_compressed_a(%a: !full_a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{expected the last dimension of the first operand}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !full_a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x16xf16, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<32x128xf16, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @compressed_mma_requires_sparsity_metadata(%a: !a, %b: !b, %d: !d, %pred: i1) {
+    // expected-error @below {{expected the last dimension of the first operand}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred {is_async} : !a, !b, !d
+    tt.return
+  }
+}
+
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x32xf16, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xf16, #s, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x1xi32, #t, #ttng.tensor_memory>
+!abf16 = !ttg.memdesc<128x16xbf16, #s, #ttg.shared_memory>
+!bbf16 = !ttg.memdesc<32x128xbf16, #s, #ttg.shared_memory>
+!e2 = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+!af16 = !ttg.memdesc<128x16xf16, #s, #ttg.shared_memory>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_fp16_wrong_k(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{expected the last dimension of the first operand}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !a, !b, !d
+    tt.return
+  }
+  tt.func @sparse_mixed_f16_bf16(%a: !af16, %b: !bbf16, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {is_async} : !af16, !bbf16, !d
+    tt.return
+  }
+  tt.func @sparse_bf16_wrong_metadata(%a: !abf16, %b: !bbf16, %d: !d, %e: !e2, %pred: i1) {
+    // expected-error @below {{sparsity metadata must be a packed 128x1 i32 TMEM tile}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e2 {is_async} : !abf16, !bbf16, !d
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#meta = #ttg.linear<{register = [], lane = [[8, 0], [0, 1], [1, 0], [2, 0], [4, 0]], warp = [[16, 0], [32, 0]], block = []}>
+!a = !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory>
+!b = !ttg.memdesc<64x32xf8E4M3FN, #shared, #ttg.shared_memory>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_wgmma_n_major_b(%a: !a, %b: !b, %c: tensor<64x32xf32, #mma>, %e: tensor<64x2xi32, #meta>) {
+    // expected-error @below {{sparse FP8 WGMMA requires K-major shared operands}}
+    %0 = ttng.warp_group_dot %a, %b, %c sparsity_metadata %e : tensor<64x2xi32, #meta> : !a * !b -> tensor<64x32xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8, padding = "b6x16_p32"}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<128x32xf8E4M3FN, #s, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xi8, #fp6, #ttg.shared_memory>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @unsupported_sparse_fp6_rhs(%a: !a, %b: !b, %d: !d, %e: !e, %pred: i1) {
+    // expected-error @below {{sparse MMA requires matching FP16 or BF16 inputs, or FP8 inputs}}
+    ttng.tc_gen5_mma %a, %b, %d, %pred, %pred sparsity_metadata %e : !e {b_type = 2 : i32, is_async} : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#padded = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#kb = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#t = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#sf = #ttng.tensor_memory_scales_encoding<>
+!a = !ttg.memdesc<128x32xi8, #a, #ttg.shared_memory>
+!b = !ttg.memdesc<64x128xi16, #b, #ttg.shared_memory>
+!padded = !ttg.memdesc<128x32xi8, #padded, #ttg.shared_memory>
+!kb = !ttg.memdesc<64x128xi8, #kb, #ttg.shared_memory>
+#m64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
+#stride4 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 4>
+!m64 = !ttg.memdesc<128x32xi8, #m64, #ttng.tensor_memory>
+!stride4 = !ttg.memdesc<128x32xi8, #stride4, #ttng.tensor_memory>
+#n4 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>
+!subview = !ttg.memdesc<128x32xi8, #n4, #ttng.tensor_memory, 256x32>
+!d = !ttg.memdesc<128x128xf32, #t, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x2xi32, #t, #ttng.tensor_memory>
+!d16 = !ttg.memdesc<128x128xf16, #t, #ttng.tensor_memory, mutable>
+#n32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+!d32 = !ttg.memdesc<128x128xf32, #n32, #ttng.tensor_memory, mutable, 256x128>
+!scale = !ttg.memdesc<128x4xf8E4M3FN, #sf, #ttng.tensor_memory>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @sparse_nvfp4_repeated_n32_scale_tiles(%a: !a, %b: !kb, %d: !d32, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{repeated sparse NVFP4 instructions require N >= 64 for B scales}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !kb, !d32, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_f16_accumulator(%a: !a, %b: !kb, %d: !d16, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse NVFP4 requires an f32 accumulator}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !kb, !d16, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_wide_storage(%a: !a, %b: !b, %d: !d, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse NVFP4 requires packed byte operands}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !b, !d, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_padded_shared_operand(%a: !padded, %b: !kb, %d: !d, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse NVFP4 requires unpadded shared operands}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !padded, !kb, !d, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_interleaved_tmem_a(%a: !m64, %b: !kb, %d: !d, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse MMA requires packed 128-row TMEM storage for A}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !m64, !kb, !d, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_noncontiguous_tmem_subview(%a: !subview, %b: !kb, %d: !d, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse MMA requires packed 128-row TMEM storage for A}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !subview, !kb, !d, !scale, !scale
+    tt.return
+  }
+  tt.func @sparse_nvfp4_strided_tmem_a(%a: !stride4, %b: !kb, %d: !d, %s: !scale, %e: !e, %p: i1) {
+    // expected-error @below {{sparse MMA requires packed 128-row TMEM storage for A}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s, %p, %p lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !stride4, !kb, !d, !scale, !scale
+    tt.return
+  }
+}

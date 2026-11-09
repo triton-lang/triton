@@ -35,7 +35,7 @@ from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
+from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2, mma_v2_sparse
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
@@ -4820,6 +4820,65 @@ def test_mma_v2(dtype):
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=0.05, rtol=1e-2)
 
 
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_acc", [False, True])
+@pytest.mark.parametrize("use_wgmma", [False, True], ids=["warp", "warpgroup"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e4m3fn])
+def test_sparse_mma_2to4(num_warps, use_acc, use_wgmma, dtype):
+    fp8 = dtype == torch.float8_e4m3fn
+    targets = ((9, 0), ) if fp8 else ((8, 0), (8, 6), (8, 7), (9, 0))
+    if not is_cuda() or torch.cuda.get_device_capability() not in targets:
+        pytest.skip("requires Ampere or Hopper for FP16/BF16, or Hopper for FP8")
+    if use_wgmma and not is_hopper():
+        pytest.skip("requires Hopper WGMMA")
+
+    @gluon.jit
+    def kernel(A, B, E, D, UseAcc, M: ttgl.constexpr, K: ttgl.constexpr, WGMMA: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [ttgl.num_warps(), 1], [1, 0])
+        row = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))
+        ak = ttgl.arange(0, K // 2, layout=ttgl.SliceLayout(0, layout))
+        bk = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, layout))
+        col = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        a = ttgl.load(A + row[:, None] * (K // 2) + ak[None, :])
+        b = ttgl.load(B + bk[:, None] * 32 + col[None, :])
+        words = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, layout))
+        e = ttgl.load(E + row[:, None] * (K // 32) + words[None, :])
+        if WGMMA:
+            # Exercise the optional transpose immediates on a 16-bit operand.
+            trans: ttgl.constexpr = a.dtype == ttgl.bfloat16
+            bits: ttgl.constexpr = a.dtype.primitive_bitwidth
+            sa = ttgl.allocate_shared_memory(a.dtype, [M, K // 2], ttgl.NVMMASharedLayout(32, bits, transposed=trans),
+                                             a)
+            sb = ttgl.allocate_shared_memory(b.dtype, [K, 32], ttgl.NVMMASharedLayout(64, bits, transposed=not trans),
+                                             b)
+            acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [ttgl.num_warps(), 1], [16, 32, K // 2])
+            acc = ttgl.full([M, 32], 1, ttgl.float32, acc_layout)
+            result = hopper.warpgroup_sparse_mma(sa, sb, acc, sparsity_metadata=e, use_acc=ttgl.load(UseAcc),
+                                                 max_num_imprecise_acc=K, is_async=True)
+            result = hopper.warpgroup_mma_wait(deps=[result])
+        else:
+            acc = ttgl.full([M, 32], 1, ttgl.float32, layout) * ttgl.load(UseAcc)
+            result = mma_v2_sparse(a, b, e, acc)
+        ttgl.store(D + row[:, None] * 32 + col[None, :], ttgl.convert_layout(result, layout))
+
+    m = 16 * num_warps if use_wgmma else 128
+    k = 64 if fp8 else 32
+    a = torch.randint(-3, 4, (m, k // 2), device="cuda").to(dtype)
+    b = torch.randint(-3, 4, (k, 32), device="cuda").to(dtype)
+    pairs = torch.combinations(torch.arange(4, device="cuda"))[torch.randint(6, (m, k // 4), device="cuda")]
+    nibbles = pairs[..., 0] | (pairs[..., 1] << 2)
+    e = (nibbles.reshape(m, -1, 8) << (4 * torch.arange(8, device="cuda"))).sum(-1).int()
+    if not fp8:
+        # Swap the row-8 and K-16 dimensions of the selector half-words.
+        e = e.contiguous().view(torch.int16).reshape(m // 16, 2, 8, 2).transpose(1, 3).contiguous().view(torch.int32)
+    out = torch.empty((m, 32), dtype=torch.float32, device="cuda")
+    compiled = kernel[(1, )](a, b, e, out, torch.tensor(use_acc, device="cuda"), m, k, use_wgmma, num_warps=num_warps)
+    dense = torch.zeros((m, k // 4, 4), device="cuda").scatter_(2, pairs, a.float().reshape(m, -1, 2))
+    torch.testing.assert_close(out, dense.reshape(m, k) @ b.float() + int(use_acc), atol=0, rtol=0)
+    opcode = "wgmma.mma_async.sp.sync.aligned.m64n32" if use_wgmma else "mma.sp.sync.aligned.m16n8"
+    assert f"{opcode}k{k}" in compiled.asm["ptx"]
+
+
 def test_dot_fma():
     torch.manual_seed(42)
     B = ttgl.constexpr(32)
@@ -8330,3 +8389,146 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     if not atomic:
         assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
+
+
+@gluon.jit
+def _sparse_mma_load_rows(ptr, width: ttgl.constexpr, layout: ttgl.constexpr, rows: ttgl.constexpr = 128):
+    r = ttgl.arange(0, rows, layout=ttgl.SliceLayout(1, layout))
+    c = ttgl.arange(0, width, layout=ttgl.SliceLayout(0, layout))
+    return ttgl.load(ptr + r[:, None] * width + c[None, :])
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="requires sparse MMA on SM100 or SM103")
+@pytest.mark.parametrize("tmem_a,n", [(False, 128), (True, 128), (False, 16)],
+                         ids=["shared_a", "tmem_a_subview", "n16"])
+def test_tcgen05_sparse_mma_scaled_pair_selectors(tmem_a, n):
+
+    @gluon.jit
+    def kernel(A, B, E, SA, SB, D, TMEM_A: ttgl.constexpr, N: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        if TMEM_A:
+            a_full = allocate_tensor_memory(ttgl.uint8, [256, 32], TensorMemoryLayout([128, 32], 1))
+            a = a_full.slice(128, 128, dim=0)
+            a.store(_sparse_mma_load_rows(A, 32, a.get_reg_layout()))
+        else:
+            a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 32], ttgl.NVMMASharedLayout(32, 8),
+                                            _sparse_mma_load_rows(A, 32, layout))
+        b = ttgl.allocate_shared_memory(ttgl.uint8, [64, N], ttgl.NVMMASharedLayout(64, 8, transposed=True),
+                                        ttgl.permute(_sparse_mma_load_rows(B, 64, layout, N), (1, 0)))
+        e = allocate_tensor_memory(ttgl.int32, [128, 2], TensorMemoryLayout([128, 2], 1))
+        sa = allocate_tensor_memory(ttgl.float8e4nv, [128, 4], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.float8e4nv, [N, 4], TensorMemoryScalesLayout())
+        e.store(_sparse_mma_load_rows(E, 2, e.get_reg_layout()))
+        sa.store(_sparse_mma_load_rows(SA, 4, sa.get_reg_layout()))
+        sb.store(_sparse_mma_load_rows(SB, 4, sb.get_reg_layout(), N))
+        acc = allocate_tensor_memory(ttgl.float32, [128, N], TensorMemoryLayout([128, N], 1))
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        blackwell.tcgen05_sparse_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", e, use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0)
+        r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        c = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))
+        ttgl.store(D + r[:, None] * N + c[None, :], ttgl.convert_layout(acc.load(), layout))
+
+    device = "cuda"
+    pairs = torch.combinations(torch.arange(4, device=device))[torch.randint(6, (128, 16), device=device)]
+    nibbles = pairs[..., 0] | (pairs[..., 1] << 2)
+    selectors = (nibbles.reshape(128, 2, 8) << (4 * torch.arange(8, device=device))).sum(-1).int()
+    a = torch.randint(4, (128, 64), device=device)
+    b = torch.randint(4, (n, 128), device=device)
+    sa, sb = [torch.randint(1, 5, (rows, 4), device=device).to(torch.float8_e4m3fn) for rows in (128, n)]
+
+    def pack(x):
+        return (x[:, ::2] | (x[:, 1::2] << 4)).byte()
+
+    out = torch.empty((128, n), device=device)
+    kernel[(1, )](pack(a), pack(b), selectors, sa, sb, out, tmem_a, n)
+    pos = (2 * pairs[..., None] + torch.arange(2, device=device)).flatten(-2)
+    dense = torch.zeros(128, 16, 8, device=device).scatter_(2, pos, a.reshape(128, 16, 4).float() * 0.5)
+    expected = (dense.reshape(128, 128) * sa.float().repeat_interleave(32, 1)) @ (b.float() * 0.5 *
+                                                                                  sb.float().repeat_interleave(32, 1)).T
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="requires sparse MMA on SM100 or SM103")
+@pytest.mark.parametrize("dtype,acc_dtype,tmem_a", [(torch.float16, torch.float32, False),
+                                                    (torch.float16, torch.float16, True),
+                                                    (torch.bfloat16, torch.float32, True)])
+def test_tcgen05_sparse_mma_16bit_selectors(dtype, acc_dtype, tmem_a):
+
+    @gluon.jit
+    def kernel(A, B, E, D, TMEM_A: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        dtype: ttgl.constexpr = A.dtype.element_ty
+        if TMEM_A:
+            a = allocate_tensor_memory(dtype, [128, 16], TensorMemoryLayout([128, 16], 1))
+            a.store(_sparse_mma_load_rows(A, 16, a.get_reg_layout()))
+        else:
+            a = ttgl.allocate_shared_memory(dtype, [128, 16], ttgl.NVMMASharedLayout(32, 16),
+                                            _sparse_mma_load_rows(A, 16, layout))
+        b = ttgl.allocate_shared_memory(dtype, [32, 32], ttgl.NVMMASharedLayout(64, 16, transposed=True),
+                                        ttgl.permute(_sparse_mma_load_rows(B, 32, layout, 32), (1, 0)))
+        e = allocate_tensor_memory(ttgl.int32, [128, 1], TensorMemoryLayout([128, 1], 1))
+        e.store(_sparse_mma_load_rows(E, 1, e.get_reg_layout()))
+        acc_dtype: ttgl.constexpr = D.dtype.element_ty
+        acc = allocate_tensor_memory(acc_dtype, [128, 32],
+                                     TensorMemoryLayout([128, 32], 32 // acc_dtype.primitive_bitwidth))
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+        blackwell.tcgen05_sparse_mma(a, b, acc, e, use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0)
+        row = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        col = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        ttgl.store(D + row[:, None] * 32 + col[None, :], ttgl.convert_layout(acc.load(), layout))
+
+    device = "cuda"
+    pairs = torch.combinations(torch.arange(4, device=device))[torch.randint(6, (128, 8), device=device)]
+    selectors = pairs[..., 0] | (pairs[..., 1] << 2)
+    # PTX selector zero transposes the row-pair and half-word dimensions.
+    packed = selectors.reshape(8, 2, 8, 2, 4).transpose(1, 3).reshape(128, 8)
+    words = (packed << (4 * torch.arange(8, device=device))).sum(-1).int()
+    a = torch.randint(-3, 4, (128, 16), device=device).to(dtype)
+    b = torch.randint(-3, 4, (32, 32), device=device).to(dtype)
+    out = torch.empty((128, 32), dtype=acc_dtype, device=device)
+    compiled = kernel[(1, )](a, b, words, out, tmem_a)
+    dense = torch.zeros((128, 8, 4), device=device).scatter_(2, pairs, a.float().reshape(128, 8, 2))
+    torch.testing.assert_close(out.float(), dense.reshape(128, 32) @ b.float().T, rtol=0, atol=0)
+    assert "tcgen05.mma.sp.cta_group::1.kind::f16" in compiled.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
+                    reason="requires sparse MMA on SM100 or SM103")
+@pytest.mark.parametrize("operand,alignment", [("A", 4), ("accumulator", 2), ("sparsity metadata", 2), ("A scales", 2),
+                                               ("B scales", 2), ("B scale rows", 0)])
+def test_tcgen05_sparse_mma_misaligned_subview(operand, alignment, capfd):
+
+    @gluon.jit
+    def kernel(OPERAND: ttgl.constexpr):
+        scaled: ttgl.constexpr = OPERAND == "A scales" or OPERAND == "B scales" or OPERAND == "B scale rows"
+        N: ttgl.constexpr = 16 if OPERAND == "B scale rows" else 128
+        dtype: ttgl.constexpr = ttgl.uint8 if scaled else ttgl.float8e4nv
+        a = allocate_tensor_memory(dtype, [128, 64], TensorMemoryLayout([128, 64], 1))
+        a = a.slice(8 if OPERAND == "A" else 0, 32)
+        b = ttgl.allocate_shared_memory(dtype, [64, N], ttgl.NVMMASharedLayout(64, 8, transposed=True))
+        d = allocate_tensor_memory(ttgl.float32, [128, 256], TensorMemoryLayout([128, N], 1))
+        d = d.slice(1 if OPERAND == "accumulator" else 0, N)
+        e = allocate_tensor_memory(ttgl.int32, [128, 4], TensorMemoryLayout([128, 4], 1))
+        selectors = e.slice(0, 2)
+        if OPERAND == "sparsity metadata" and ttgl.program_id(0) == 0:
+            selectors = e.slice(1, 2)
+        if scaled:
+            scales = allocate_tensor_memory(ttgl.float8e4nv, [256, 4], TensorMemoryScalesLayout())
+            sa = scales.slice(32 if OPERAND == "A scales" else 0, 128, dim=0)
+            b_offset: ttgl.constexpr = 32 if OPERAND == "B scales" else (16 if OPERAND == "B scale rows" else 0)
+            sb = scales.slice(b_offset, N, dim=0)
+            blackwell.tcgen05_sparse_mma_scaled(a, b, d, sa, sb, "e2m1", "e2m1", selectors, use_acc=False)
+        else:
+            blackwell.tcgen05_sparse_mma(a, b, d, selectors, use_acc=False)
+
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        kernel.warmup(operand, grid=(2, ))
+    message = (f"sparse MMA {operand} must start at a {alignment}-column aligned TMEM address"
+               if alignment else "sparse MMA B scales must start at TMEM row zero")
+    assert message in capfd.readouterr().err

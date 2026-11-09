@@ -21,4 +21,5 @@ NVIDIA Hopper
     fence_async_shared
     mma_v2
     warpgroup_mma
+    warpgroup_sparse_mma
     warpgroup_mma_wait

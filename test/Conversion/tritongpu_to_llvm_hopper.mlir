@@ -67,17 +67,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: @dot_mix_precision_acc
-  tt.func @dot_mix_precision_acc(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #smem>, %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #smem>, %c: tensor<128x256xf32, #mma>) {
+  tt.func @dot_mix_precision_acc(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #smem>, %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #smem>, %c: tensor<128x256xf32, #mma>, %useC: i1) {
     // CHECK: nvg.wgmma
     // CHECK-NOT: llvm.fadd
     // CHECK: nvg.wgmma
-    // CHECK-COUNT-128: llvm.fadd
+    // CHECK: nvvm.wgmma.commit.group.sync.aligned
+    // CHECK: nvg.wgmma_wait_group
+    // CHECK: llvm.fadd
+    // CHECK: llvm.select
+    // CHECK-COUNT-127: llvm.fadd
     // CHECK: nvg.wgmma
     // CHECK-NOT: llvm.fadd
     // CHECK: nvg.wgmma
+    // CHECK: nvvm.wgmma.commit.group.sync.aligned
+    // CHECK: nvg.wgmma_wait_group
     // CHECK-COUNT-128: llvm.fadd
     // CHECK: llvm.return
-    %m = ttng.warp_group_dot %a, %b, %c
+    %m = ttng.warp_group_dot %a, %b, %c, %useC
       {maxNumImpreciseAcc = 64 : i32, inputPrecision = 0 : i32} :
       !ttg.memdesc<128x128xf8E5M2, #shared, #smem> * !ttg.memdesc<128x256xf8E5M2, #shared1, #smem> -> tensor<128x256xf32, #mma>
     tt.return

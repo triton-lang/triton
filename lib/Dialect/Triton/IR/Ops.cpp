@@ -341,6 +341,39 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   return success();
 }
 
+LogicalResult SparseDotOp::verify() {
+  auto a = getA().getType(), b = getB().getType(), acc = getAcc().getType();
+  auto sparsityMetadata = getSparsityMetadata().getType();
+  if (a.getRank() != 2 || b.getRank() != 2 || acc.getRank() != 2 ||
+      a.getDimSize(0) != 128 || b.getDimSize(1) < 16 || b.getDimSize(1) > 256 ||
+      acc.getDimSize(0) != 128 || acc.getDimSize(1) != b.getDimSize(1) ||
+      !acc.getElementType().isF32())
+    return emitOpError(
+        "requires a 128-row tile and a matching FP32 accumulator");
+  Type elem = a.getElementType();
+  bool scaled = bool(getAScale());
+  bool is16Bit = elem.isF16() || elem.isBF16();
+  if (scaled != bool(getBScale()) || b.getElementType() != elem ||
+      (scaled ? !elem.isInteger(8)
+              : !is16Bit && !isa<Float8E4M3FNType, Float8E5M2Type>(elem)))
+    return emitOpError("expected matching unscaled FP16, BF16 or FP8 inputs, "
+                       "or packed NVFP4 inputs with two scales");
+  if (a.getDimSize(1) != (is16Bit ? 16 : 32) ||
+      b.getDimSize(0) != (is16Bit ? 32 : 64) ||
+      !sparsityMetadata.getElementType().isInteger(32) ||
+      sparsityMetadata.getShape() != ArrayRef<int64_t>({128, is16Bit ? 1 : 2}))
+    return emitOpError(
+        "invalid compressed K dimension or sparsity metadata tile");
+  if (scaled) {
+    for (auto [scale, rows] : {std::pair{getAScale(), int64_t(128)},
+                               std::pair{getBScale(), b.getDimSize(1)}})
+      if (!isa<Float8E4M3FNType>(scale.getType().getElementType()) ||
+          scale.getType().getShape() != ArrayRef<int64_t>({rows, 4}))
+        return emitOpError("expected one E4M3 scale per 32 logical K elements");
+  }
+  return success();
+}
+
 LogicalResult DotOp::verify() {
   auto aTy = getA().getType();
   auto bTy = getB().getType();

@@ -10,7 +10,7 @@ from triton.experimental.gluon.language._layouts import DotOperandLayout, NVMMAD
 from ..._core import builtin, _unwrap_if_constexpr
 from . import async_copy, mbarrier
 
-__all__ = ["CachePolicy", "FractionalEvictionPolicy", "async_copy", "mbarrier", "mma_v2"]
+__all__ = ["CachePolicy", "FractionalEvictionPolicy", "async_copy", "mbarrier", "mma_v2", "mma_v2_sparse"]
 
 _EVICTION_PRIORITIES = {
     "evict_normal",
@@ -125,4 +125,32 @@ def mma_v2(a, b, acc, input_precision=None, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=input_precision, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
+    return ttgl.tensor(handle, acc.type)
+
+
+@builtin
+def mma_v2_sparse(a, b, sparsity_metadata, acc, _semantic=None, _generator=None):
+    """Perform warp-level 2:4 sparse MMA with matching inputs.
+
+    Ampere supports FP16 and BF16. SM90 and later also support FP8.
+
+    FP8 uses logical K=64 and two packed selector words per row of A.
+    FP16/BF16 use logical K=32 and one word per row in selector-zero order:
+    word r holds selectors from rows r & ~8 and r | 8 in its low and high
+    halves, respectively. Bit 3 of r selects the first or second half of K.
+    """
+    if acc.dtype != ttgl.float32 or a.dtype != b.dtype or a.dtype not in (ttgl.float16, ttgl.bfloat16, ttgl.float8e4nv,
+                                                                          ttgl.float8e5):
+        raise ValueError("mma_v2_sparse requires matching FP16, BF16 or FP8 operands and an FP32 accumulator")
+    k = 64 if a.dtype.is_fp8() else 32
+    if len(acc.type.shape) != 2:
+        raise ValueError("expected a rank-2 sparse MMA accumulator")
+    if list(a.type.shape) != [128, k // 2] or list(b.type.shape) != [k, acc.type.shape[1]]:
+        raise ValueError("invalid warp sparse MMA operand shapes")
+    if list(sparsity_metadata.type.shape) != [128, k // 32] or sparsity_metadata.dtype not in (ttgl.int32, ttgl.uint32):
+        raise ValueError("invalid sparsity metadata tile")
+    if acc.type.shape[0] != 128 or not 16 <= acc.type.shape[1] <= 256:
+        raise ValueError("invalid sparse accumulator tile")
+    handle = _semantic.builder.create_warp_sparse_mma(a.handle, b.handle, sparsity_metadata.handle, acc.handle,
+                                                      _semantic.num_warps(_generator).value)
     return ttgl.tensor(handle, acc.type)

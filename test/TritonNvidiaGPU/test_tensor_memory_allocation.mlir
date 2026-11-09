@@ -560,3 +560,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#sa = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#sb = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
+#sparsity_metadata = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, colStride = 1>
+#scales = #ttng.tensor_memory_scales_encoding<>
+!a = !ttg.memdesc<128x32xi8, #sa, #ttg.shared_memory>
+!b = !ttg.memdesc<64x16xi8, #sb, #ttg.shared_memory>
+!d = !ttg.memdesc<128x16xf32, #acc, #ttng.tensor_memory, mutable>
+!e = !ttg.memdesc<128x2xi32, #sparsity_metadata, #ttng.tensor_memory>
+!scale_a = !ttg.memdesc<128x4xf8E4M3FN, #scales, #ttng.tensor_memory>
+!scale_b = !ttg.memdesc<16x4xf8E4M3FN, #scales, #ttng.tensor_memory, mutable>
+module attributes {ttg.target = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @sparse_n16_b_scales_row_zero
+  tt.func @sparse_n16_b_scales_row_zero(%a: !a, %b: !b, %d: !d, %s: !scale_a, %e: !e, %pred: i1) {
+    // Keep the lower half of column zero occupied while allocating B scales.
+    // CHECK: ttng.tmem_alloc {{.*}}tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32
+    %live = ttng.tmem_alloc : () -> !scale_b
+    // CHECK: ttng.tmem_alloc {{.*}}tensor_memory_col_offset = 4 : i32, tensor_memory_row_offset = 0 : i32
+    %s_b = ttng.tmem_alloc : () -> !scale_b
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %s, %s_b, %pred, %pred lhs = e2m1 rhs = e2m1 sparsity_metadata %e : !e {is_async} : !a, !b, !d, !scale_a, !scale_b
+    "test.use"(%live) : (!scale_b) -> ()
+    tt.return
+  }
+}

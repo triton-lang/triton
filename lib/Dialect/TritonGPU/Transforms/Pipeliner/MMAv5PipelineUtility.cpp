@@ -111,6 +111,15 @@ void ttng::MMAv5PipelineableOperandsHelper::run() {
       }
     }
   }
+  if (Value sparsityMetadata = mmaOp.getSparsityMetadata()) {
+    Operation *foundDef = nullptr;
+    if (!isOperandPipelineable(sparsityMetadata, foundDef)) {
+      if (foundDef)
+        unpipelineableOperandDefs.push_back(foundDef);
+      else
+        isOperandsStateDetermined = false;
+    }
+  }
   // For scaled MMA check if the scales are passed through shared memory, and
   // also coming from load or outside the loop.
   if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {

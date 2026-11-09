@@ -1784,3 +1784,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#e = #ttng.tensor_memory_encoding<blockM = 128, blockN = 2, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @sparse_fp8
+  // CHECK: tcgen05.mma.sp.cta_group::1.kind::f8f6f4
+  tt.func @sparse_fp8(%a: !ttg.memdesc<128x32xf8E4M3FN, #a, #ttg.shared_memory>,
+                      %b: !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
+                      %d: !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>,
+                      %e: !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory>, %use: i1, %pred: i1) {
+    ttng.tc_gen5_mma %a, %b, %d, %use, %pred sparsity_metadata %e : !ttg.memdesc<128x2xi32, #e, #ttng.tensor_memory> {is_async} :
+      !ttg.memdesc<128x32xf8E4M3FN, #a, #ttg.shared_memory>,
+      !ttg.memdesc<64x128xf8E4M3FN, #b, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}

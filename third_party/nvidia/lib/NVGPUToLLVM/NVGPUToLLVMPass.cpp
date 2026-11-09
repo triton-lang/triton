@@ -7,6 +7,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/IR/SparseMma.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
@@ -357,6 +358,27 @@ public:
 
   LogicalResult matchAndRewrite(ttn::WGMMAOp op,
                                 PatternRewriter &rewriter) const override {
+    // Validate the explicit instruction K against the opcode form.
+    // The operand shapes have already determined K before this lowering.
+    auto fp8 = [](ttn::WGMMAEltType type) {
+      return type == ttn::WGMMAEltType::e4m3 || type == ttn::WGMMAEltType::e5m2;
+    };
+    auto a = op.getEltTypeA();
+    auto b = op.getEltTypeB();
+    bool f16 =
+        a == b && (a == ttn::WGMMAEltType::f16 || a == ttn::WGMMAEltType::bf16);
+    if (op.getSparsityMetadata()) {
+      bool supported =
+          (f16 && op.getK() == gpu::kF16Sparse2To4.logical) ||
+          (fp8(a) && fp8(b) && op.getK() == gpu::kFp8Sparse2To4.logical);
+      if (!supported)
+        return op.emitOpError(
+            "unsupported sparse WGMMA instruction shape or operand type");
+    } else if (fp8(a) && op.getK() != 32) {
+      return op.emitOpError("dense FP8 WGMMA requires instruction K=32");
+    } else if (f16 && op.getK() != 16) {
+      return op.emitOpError("dense FP16/BF16 WGMMA requires instruction K=16");
+    }
     return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
                            getOperandsAndConstraints(op),
                            getOutputConstraints(op));
@@ -397,6 +419,9 @@ public:
 
     // Operand B (must be `desc`)
     operandsAndConstraints.push_back({opB, "l"});
+
+    if (op.getSparsityMetadata())
+      operandsAndConstraints.push_back({op.getSparsityMetadata(), "r"});
 
     // `scale-d`
     if (op.getOpC())
@@ -439,11 +464,10 @@ public:
     supported |=
         (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
         (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-        (m == 64 && 8 <= n && n <= 256 && k == 16);
-    supported |= (eltTypeA == WGMMAEltType::bf16) &&
-                 (eltTypeB == WGMMAEltType::bf16) &&
-                 (eltTypeC == WGMMAEltType::f32) &&
-                 (m == 64 && 8 <= n && n <= 256 && k == 16);
+        (m == 64 && 8 <= n && n <= 256);
+    supported |=
+        (eltTypeA == WGMMAEltType::bf16) && (eltTypeB == WGMMAEltType::bf16) &&
+        (eltTypeC == WGMMAEltType::f32) && (m == 64 && 8 <= n && n <= 256);
     needTransArgs = supported;
     floatTypeWGMMA = supported;
     // Below instructions do not support transposing
@@ -456,7 +480,7 @@ public:
           (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
           (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
           (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-          (m == 64 && 8 <= n && n <= 256 && k == 32);
+          (m == 64 && 8 <= n && n <= 256);
       floatTypeWGMMA = supported;
       // Below instructions are integer-based
       supported |= (eltTypeA == WGMMAEltType::s8) &&
@@ -498,6 +522,9 @@ public:
     // Operand B (must be `desc`)
     args += "$" + std::to_string(asmOpIdx++) + ", ";
 
+    if (op.getSparsityMetadata())
+      args += "$" + std::to_string(asmOpIdx++) + ", 0, ";
+
     // `scale-d`
     if (op.getOpC())
       args += "$" + std::to_string(asmOpIdx++);
@@ -516,7 +543,9 @@ public:
       args += ", " + std::to_string(transB);
     }
 
-    auto ptxAsm = "wgmma.mma_async.sync.aligned"
+    auto ptxAsm = std::string(op.getSparsityMetadata() ? "wgmma.mma_async.sp"
+                                                       : "wgmma.mma_async") +
+                  ".sync.aligned"
                   ".m" +
                   std::to_string(m) + "n" + std::to_string(n) + "k" +
                   std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +

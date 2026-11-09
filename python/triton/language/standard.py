@@ -663,3 +663,51 @@ def unsqueeze(x, dim: core.constexpr):
     core.static_assert(-ndim <= dim and dim < ndim)
     _dim: core.constexpr = dim + ndim if dim < 0 else dim
     return x.reshape(x.shape[:_dim] + (1, ) + x.shape[_dim:])
+
+
+@jit
+def sparse_dot(a, b, sparsity_metadata, acc=None, a_scale=None, b_scale=None):
+    """Multiply a compressed 128-row A tile by B using native sparse tensor cores.
+
+    FP16 and BF16 are supported on Ampere, Hopper, SM100 and SM103.
+    FP8 is supported on SM90, SM100 and SM103. NVFP4 requires SM100 or SM103.
+    Use a single CTA. On SM100 and SM103 the kernel requires at least four warps.
+
+    Use logical K=32 for FP16/BF16, 64 for FP8, or 128 for paired NVFP4.
+    Pack eight four-bit selectors per int32, least significant nibble first.
+    Each selector contains two increasing two-bit positions. For NVFP4 the
+    positions select adjacent pairs and both operands pack two values per byte.
+    Supply E4M3 scales with the sign bit clear (UE4M3). Use one scale per 32
+    logical K values for one native sparse MMA, or per 16 logical K values
+    for two independently scaled contributions.
+    """
+    if acc is None:
+        acc = core.full((a.shape[0], b.shape[1]), 0, core.float32)
+    core.static_assert((a_scale is None) == (b_scale is None), "sparse_dot requires both operand scales or neither")
+    if a.dtype == core.float16 or a.dtype == core.bfloat16:
+        core.static_assert(
+            len(sparsity_metadata.shape) == 2 and sparsity_metadata.shape[0] == 128 and sparsity_metadata.shape[1] == 1,
+            "expected one selector word per row")
+        core.static_assert(sparsity_metadata.dtype == core.int32 or sparsity_metadata.dtype == core.uint32,
+                           "expected 32-bit selector words")
+        # Selector zero pairs rows eight apart. Their low halves share one word and their high halves share another.
+        rows = core.reshape(sparsity_metadata.to(core.uint32), (8, 2, 8))
+        row0, row8 = core.split(core.permute(rows, (0, 2, 1)))
+        low = (row0 & 0xffff) | (row8 << 16)
+        high = (row0 >> 16) | (row8 & 0xffff0000)
+        sparsity_metadata = core.reshape(core.permute(core.join(low, high), (0, 2, 1)), (128, 1))
+    if a_scale is not None:
+        if a_scale.shape[1] == 8:
+            core.static_assert(b_scale.shape[1] == 8)
+            # A compressed byte holds two FP4 values. Four bytes represent a
+            # logical K=16 scale block. Accumulate the two halves independently.
+            byte = core.arange(0, 32)
+            sa0, sa1 = core.split(core.reshape(a_scale, (128, 4, 2)))
+            sb0, sb1 = core.split(core.reshape(b_scale, (b.shape[1], 4, 2)))
+            even = (byte[None, :] & 4) == 0
+            acc = core._sparse_dot(core.where(even, a, 0).to(a.dtype), b, sparsity_metadata, acc, sa0, sb0)
+            return core._sparse_dot(core.where(even, 0, a).to(a.dtype), b, sparsity_metadata, acc, sa1, sb1)
+        else:
+            return core._sparse_dot(a, b, sparsity_metadata, acc, a_scale, b_scale)
+    else:
+        return core._sparse_dot(a, b, sparsity_metadata, acc, None, None)

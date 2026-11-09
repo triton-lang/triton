@@ -21,6 +21,11 @@ LogicalResult convertMMA(triton::instrument::DotI8Op op,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter);
 
+LogicalResult convertSparseMMA(SparseDotOp op, SparseDotOp::Adaptor adaptor,
+                               int capability,
+                               const LLVMTypeConverter *typeConverter,
+                               ConversionPatternRewriter &rewriter);
+
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                                   triton::DotScaledOp::Adaptor adaptor,
                                   const LLVMTypeConverter *typeConverter,
@@ -32,6 +37,20 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread);
 
 namespace {
+struct WarpSparseDotConversion : public ConvertOpToLLVMPattern<SparseDotOp> {
+  int capability;
+  WarpSparseDotConversion(LLVMTypeConverter &converter, int capability,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), capability(capability) {}
+
+  LogicalResult
+  matchAndRewrite(SparseDotOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return convertSparseMMA(op, adaptor, capability, getTypeConverter(),
+                            rewriter);
+  }
+};
+
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
   using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
@@ -210,6 +229,8 @@ struct WarpGroupDotWaitOpConversion
 void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     int computeCapability, PatternBenefit benefit) {
+  patterns.add<WarpSparseDotConversion>(typeConverter, computeCapability,
+                                        benefit);
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<DotI8OpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
