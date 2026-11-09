@@ -6,7 +6,9 @@ import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton._C.libtriton import ir
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser, stub_target
+from triton.compiler import ASTSource, make_backend
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
@@ -2149,3 +2151,37 @@ def test_cache_policy_ir_attrs():
         tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))
+
+
+@pytest.mark.parametrize("other_dtype", [tl.int32, tl.uint32])
+def test_cat_codegen_hook(other_dtype):
+
+    @triton.jit
+    def kernel(OTHER_DTYPE: tl.constexpr):
+        a = tl.full((2, 4), 1, tl.int32)
+        b = tl.full((2, 4), 2, OTHER_DTYPE)
+        anchor(tl.cat(a, b, dim=-1))
+
+    dims = []
+
+    def cat(input, other, dim, _semantic):
+        dims.append(dim)
+        return _semantic.full([2, 8], 0, input.dtype)
+
+    backend = make_backend(stub_target)
+    options = backend.parse_options({})
+    codegen_fns = {**backend.get_codegen_implementation(options), "cat": cat}
+    source = ASTSource(kernel, signature={"OTHER_DTYPE": "constexpr"}, constexprs={"OTHER_DTYPE": other_dtype})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(stub_target, options, codegen_fns, backend.get_module_map(), context)
+    assert module.verify()
+    text = module.str_nodebug()
+    if other_dtype == tl.int32:
+        assert dims == [1]
+        assert "tt.join" not in text
+    else:
+        # int32 and uint32 share an IR type, so join/permute/reshape still accepts this pair.
+        assert dims == []
+        assert "tt.join" in text

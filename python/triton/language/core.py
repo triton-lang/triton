@@ -2051,6 +2051,11 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
         f"tl.cat requires tensors of the same shape, got "
         f"{[_unwrap_if_constexpr(s) for s in input.shape]} and {[_unwrap_if_constexpr(s) for s in other.shape]}")
 
+    # A backend may lower same-dtype concatenation itself; mixed pairs such as int32 and uint32 keep using join.
+    cat_impl = _semantic.builder.codegen_fns.get("cat")
+    if cat_impl is not None and input.dtype == other.dtype:
+        return cat_impl(input, other, dim, _semantic=_semantic)
+
     # Join introduces a new minor dim; move it before the concat dim and merge.
     c = join(input, other, _semantic=_semantic)
     order = list(builtins.range(rank))
