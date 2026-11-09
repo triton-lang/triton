@@ -23,7 +23,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
+from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -359,9 +359,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
     device_capability = torch.cuda.get_device_capability()[0]
+    if (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4) and not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 matmul requires NVIDIA Blackwell or newer")
     if is_cuda():
-        if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
-            pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("FP8 E4M3FN tests require Hopper or newer")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
@@ -370,8 +370,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("float8 x mx not supported with cuda capability < 10")
 
     elif is_hip():
-        if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
-            pytest.skip("NVFP4 matmul not tested on AMD GPU")
         if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_cdna5()):
             pytest.skip("float8 x mx only supported on CDNA4 and CDNA5")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
@@ -785,6 +783,29 @@ def test_matmul_rejects_invalid_tensor_scale(matmul_fn, operand, dtype, scale_dt
                              a_mx_tensor_scale=a_tensor_scale, b_mx_tensor_scale=b_tensor_scale)
     with pytest.raises(ValueError, match="tensor scale must be set if and only if the operand is NVFP4"):
         matmul_fn(a, b.T, None, precision_config=config)
+
+
+@pytest.mark.parametrize("nvfp4_operand", ["a", "b", "output"])
+def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
+    if cuda_capability_geq(10, 0):
+        pytest.skip("requires a target without native NVFP4 support")
+
+    a = b = torch.empty((128, 128), device=device, dtype=torch.bfloat16)
+    packed = torch.empty((128, 64), device=device, dtype=torch.uint8)
+    blocks = torch.empty((128, 8), device=device, dtype=torch.float8_e4m3fn)
+    unit = torch.ones((), device=device)
+    epilogue = None
+    if nvfp4_operand == "a":
+        a = packed
+        config = PrecisionConfig(a_mx_scale=blocks, a_mx_tensor_scale=unit, a_microblock_size=16, out_dtype=torch.float32)
+    elif nvfp4_operand == "b":
+        b = packed.T
+        config = PrecisionConfig(b_mx_scale=blocks.T, b_mx_tensor_scale=unit, b_microblock_size=16, out_dtype=torch.float32)
+    else:
+        config = PrecisionConfig(c_mx_scale=blocks, c_microblock_size=16, out_dtype=torch.uint8)
+        epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.0)
+    with pytest.raises(ValueError, match="NVFP4 matmul requires NVIDIA Blackwell or newer"):
+        matmul(a, b, None, precision_config=config, epilogue=epilogue)
 
 
 @pytest.mark.parametrize("swizzled", [False, True])

@@ -266,6 +266,7 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
     Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
     is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
 
@@ -348,6 +349,10 @@ def matmul(a, b, bias,
         a = wrap_torch_tensor(a, dtype=dtype)
     check_tensor_scale(a, a_scale, a_tensor_scale)
     check_tensor_scale(b, b_scale, b_tensor_scale)
+    uses_nvfp4 = (a_tensor_scale is not None or b_tensor_scale is not None
+                  or epilogue.specs.name == FnName.QUANTIZE_NVFP4.name)
+    if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
+        raise ValueError("NVFP4 matmul requires NVIDIA Blackwell or newer (compute capability 10.0+)")
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
