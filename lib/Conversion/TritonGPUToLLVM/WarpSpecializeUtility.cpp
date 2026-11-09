@@ -10,6 +10,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -398,13 +399,8 @@ static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,
                                    Block *resume,
                                    const TargetInfoBase &targetInfo,
                                    const WarpSpecializeCallbacks &callbacks,
-                                   unsigned barrierId, bool direct) {
+                                   Block *workerLoop) {
   TritonLLVMIRRewriter b(ws.getLoc(), &partition.front().front());
-  if (!direct)
-    callbacks.reallocRegisters(b, ws,
-                               RegisterReallocPhase::WorkerPartitionStart,
-                               partition.getRegionNumber());
-
   forEachCapture(
       b, ws, partition.getArguments(), targetInfo, [&](Value arg, Value ptr) {
         b.replaceAllUsesWith(arg, b.load(arg.getType(), ptr, /*align=*/1));
@@ -412,8 +408,8 @@ static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,
   partition.front().eraseArguments(0, partition.getNumArguments());
 
   // Capture storage can be reused as soon as all workers have read it.
-  if (!direct || ws.getPartitionOp().getNumOperands())
-    callbacks.createAllBarrier(b, barrierId);
+  if (workerLoop || ws.getPartitionOp().getNumOperands())
+    callbacks.createAllBarrier(b);
 
   for (Block &block : partition) {
     auto ret = dyn_cast<WarpReturnOp>(block.getTerminator());
@@ -421,12 +417,9 @@ static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,
       continue;
     b.setInsertionPoint(ret);
     auto br = b.replaceOpWithNewOp<LLVM::BrOp>(ret, resume);
-    if (!direct) {
+    if (resume == workerLoop) {
       b.setInsertionPoint(br);
-      callbacks.createAllBarrier(b, barrierId);
-      callbacks.reallocRegisters(b, ws,
-                                 RegisterReallocPhase::WorkerPartitionEnd,
-                                 partition.getRegionNumber());
+      callbacks.createAllBarrier(b);
       disableLICM(br);
     }
   }
@@ -435,7 +428,7 @@ static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,
 static void rewriteDefaultRegion(WarpSpecializeOp ws,
                                  const TargetInfoBase &targetInfo,
                                  const WarpSpecializeCallbacks &callbacks,
-                                 unsigned barrierId, bool direct) {
+                                 bool direct) {
   Block *before = ws->getBlock();
   TritonLLVMIRRewriter b(ws.getLoc(), ws);
   Block *after = b.splitBlock(before, ws->getIterator());
@@ -444,11 +437,10 @@ static void rewriteDefaultRegion(WarpSpecializeOp ws,
   forEachCapture(
       b, ws, partOp.getOperands(), targetInfo,
       [&](Value value, Value ptr) { b.store(value, ptr, /*align=*/1); });
-  callbacks.createAllBarrier(b, barrierId);
-  callbacks.reallocRegisters(b, ws, RegisterReallocPhase::DefaultPartitionStart,
-                             0);
+  callbacks.createAllBarrier(b);
+  callbacks.reallocDefaultRegisters(b, ws, /*acquire=*/true);
   if (!direct || partOp.getNumOperands())
-    callbacks.createAllBarrier(b, barrierId);
+    callbacks.createAllBarrier(b);
   for (Type type : ws.getResultTypes())
     after->addArgument(type, ws.getLoc());
   for (Block &block : ws.getDefaultRegion())
@@ -459,9 +451,8 @@ static void rewriteDefaultRegion(WarpSpecializeOp ws,
   b.mergeBlocks(&ws.getDefaultRegion().front(), before);
   b.inlineRegionBefore(ws.getDefaultRegion(), after);
   b.setInsertionPointToStart(after);
-  callbacks.createAllBarrier(b, barrierId);
-  callbacks.reallocRegisters(b, ws, RegisterReallocPhase::DefaultPartitionEnd,
-                             0);
+  callbacks.createAllBarrier(b);
+  callbacks.reallocDefaultRegisters(b, ws, /*acquire=*/false);
   b.replaceOp(ws, after->getArguments());
 }
 
@@ -477,19 +468,30 @@ bool mlir::triton::canDirectDispatch(ArrayRef<WarpSpecializeOp> sites) {
                       });
 }
 
-using WarpRoute = std::pair<unsigned, Block *>;
+static SmallVector<unsigned> getPartitionOrder(ArrayRef<int32_t> starts,
+                                               bool byWarpId) {
+  auto order = llvm::to_vector(llvm::seq<unsigned>(starts.size()));
+  if (byWarpId)
+    llvm::sort(order,
+               [&](unsigned a, unsigned b) { return starts[a] < starts[b]; });
+  return order;
+}
 
-// Every possible warp reaching this dispatch has a destination in routes.
-static void dispatchByWarpId(TritonLLVMIRRewriter &b, Value wid,
-                             ArrayRef<WarpRoute> routes) {
-  Block *otherwise = routes.front().second;
+static void
+dispatchByWarpId(TritonLLVMIRRewriter &b, WarpSpecializeOp ws, Value wid,
+                 ArrayRef<unsigned> partitions,
+                 llvm::function_ref<Block *(unsigned)> destination) {
+  auto starts = *ws.getWarpGroupStartIds();
+  auto sizes = ws.getPartitionNumWarps();
+  Block *otherwise = destination(partitions.front());
   SmallVector<int32_t> values;
   SmallVector<Block *> destinations;
-  for (auto [warp, dest] : routes.drop_front()) {
-    if (dest != otherwise) {
-      values.push_back(warp);
-      destinations.push_back(dest);
-    }
+  for (unsigned p : partitions.drop_front()) {
+    Block *dest = destination(p);
+    if (dest == otherwise)
+      continue;
+    llvm::append_range(values, llvm::seq(starts[p], starts[p] + sizes[p]));
+    destinations.append(sizes[p], dest);
   }
   if (values.empty())
     LLVM::BrOp::create(b, b.getLoc(), otherwise);
@@ -499,89 +501,106 @@ static void dispatchByWarpId(TritonLLVMIRRewriter &b, Value wid,
                            SmallVector<ValueRange>(values.size()));
 }
 
-static void lowerDirectWarpSpecialize(WarpSpecializeOp ws, Block *workers,
-                                      Value wid, unsigned defaultNumWarps,
-                                      unsigned numWorkers,
-                                      const TargetInfoBase &targetInfo,
-                                      const WarpSpecializeCallbacks &callbacks,
-                                      unsigned barrierId) {
+// A shared entry acquires its register cap before dispatching by warp ID.
+static Block *lowerWorkerGroup(WarpSpecializeOp ws,
+                               ArrayRef<unsigned> partitions, int32_t cap,
+                               Value wid, Block *before, Block *workerLoop,
+                               const TargetInfoBase &targetInfo,
+                               const WarpSpecializeCallbacks &callbacks,
+                               bool commonCap = false) {
+  TritonLLVMIRRewriter b(ws.getLoc(), ws);
+  auto regions = ws.getPartitionRegions();
+  auto body = [&](unsigned p) { return &regions[p]->front(); };
+  bool commandToBody = workerLoop && partitions.size() == 1;
+  Block *start =
+      commandToBody ? body(partitions.front()) : b.createBlock(before);
+  Block *finish = commandToBody && cap < 0 ? workerLoop : b.createBlock(before);
+  for (unsigned p : partitions)
+    rewritePartitionRegion(ws, *regions[p], finish, targetInfo, callbacks,
+                           workerLoop);
+  if (finish == workerLoop)
+    return start;
+  b.setInsertionPointToStart(start);
+  if (!commonCap && cap >= 0)
+    callbacks.reallocWorkerRegisters(b, cap, /*acquire=*/true);
+  if (!commandToBody)
+    dispatchByWarpId(b, ws, wid, partitions, body);
+  b.setInsertionPointToStart(finish);
+  callbacks.createAllBarrier(b);
+  if (cap >= 0)
+    callbacks.reallocWorkerRegisters(b, cap, /*acquire=*/false);
+  auto br = LLVM::BrOp::create(b, b.getLoc(), workerLoop ? workerLoop : before);
+  if (workerLoop)
+    disableLICM(br);
+  return start;
+}
+
+static void
+lowerDirectWarpSpecialize(WarpSpecializeOp ws, Block *workers, Value wid,
+                          unsigned numWorkers, const TargetInfoBase &targetInfo,
+                          const WarpSpecializeCallbacks &callbacks) {
   TritonLLVMIRRewriter b(ws.getLoc(), ws.getContext());
   Block *exit =
       b.createBlock(workers->getParent(), std::next(workers->getIterator()));
 
-  // Warp allocation assigns every worker to a partition, including padding.
-  SmallVector<unsigned> partitionForWarp(numWorkers);
-  for (auto [i, count, start] :
-       llvm::enumerate(ws.getPartitionNumWarps(), *ws.getWarpGroupStartIds()))
-    llvm::fill(
-        MutableArrayRef(partitionForWarp).slice(start - defaultNumWarps, count),
-        i);
+  auto order = getPartitionOrder(*ws.getWarpGroupStartIds(), /*byWarpId=*/true);
+  // Explicit layouts with gaps route unassigned warps to partition zero.
+  if (ws.getTotalPartitionWarps() < numWorkers) {
+    auto zero = llvm::find(order, 0u);
+    std::rotate(order.begin(), zero, std::next(zero));
+  }
 
   // Keep different register limits on separate CFG paths through the payload.
   // Subpartitions sharing a hardware warpgroup adjust at the same instruction.
   llvm::MapVector<int32_t, SmallVector<unsigned>> groups;
-  const auto &registerPartitions = callbacks.workerRegisterPartitions;
-  for (auto [i, partition] : llvm::enumerate(partitionForWarp)) {
-    int32_t representative =
-        registerPartitions.empty() ? -1 : registerPartitions[partition];
-    groups[representative].push_back(i);
+  for (unsigned p : order)
+    groups[callbacks.getWorkerRegisterCap(ws, p)].push_back(p);
+
+  SmallVector<Block *> entries(order.size());
+  for (const auto &[cap, partitions] : groups) {
+    Block *entry =
+        lowerWorkerGroup(ws, partitions, cap, wid, exit,
+                         /*workerLoop=*/nullptr, targetInfo, callbacks);
+    for (unsigned p : partitions)
+      entries[p] = entry;
   }
 
-  SmallVector<WarpRoute> starts(numWorkers);
-  auto regions = ws.getPartitionRegions();
-  SmallVector<Block *> finishes(regions.size());
-  for (const auto &[representative, members] : groups) {
-    Block *start = b.createBlock(exit);
-    Block *finish = b.createBlock(exit);
-    SmallVector<WarpRoute> routes;
-    for (unsigned i : members) {
-      unsigned warp = defaultNumWarps + i;
-      unsigned partition = partitionForWarp[i];
-      starts[i] = {warp, start};
-      finishes[partition] = finish;
-      routes.emplace_back(warp, &regions[partition]->front());
-    }
-    b.setInsertionPointToStart(start);
-    if (representative >= 0)
-      callbacks.reallocRegisters(
-          b, ws, RegisterReallocPhase::WorkerPartitionStart, representative);
-    dispatchByWarpId(b, wid, routes);
-    b.setInsertionPointToStart(finish);
-    callbacks.createAllBarrier(b, barrierId);
-    if (representative >= 0)
-      callbacks.reallocRegisters(
-          b, ws, RegisterReallocPhase::WorkerPartitionEnd, representative);
-    LLVM::BrOp::create(b, b.getLoc(), exit);
-  }
+  b.setInsertionPointToEnd(workers);
+  callbacks.createAllBarrier(b);
+  dispatchByWarpId(b, ws, wid, order, [&](unsigned p) { return entries[p]; });
 
-  b.setInsertionPointToStart(workers);
-  callbacks.reallocRegisters(b, ws, RegisterReallocPhase::SwitchLoopStart, 0);
-  callbacks.createAllBarrier(b, barrierId);
-  dispatchByWarpId(b, wid, starts);
-
-  for (auto [region, finish] : llvm::zip_equal(regions, finishes)) {
-    rewritePartitionRegion(ws, *region, finish, targetInfo, callbacks,
-                           barrierId,
-                           /*direct=*/true);
+  for (Region *region : ws.getPartitionRegions())
     b.inlineRegionBefore(*region, exit);
-  }
 
-  rewriteDefaultRegion(ws, targetInfo, callbacks, barrierId, /*direct=*/true);
+  rewriteDefaultRegion(ws, targetInfo, callbacks, /*direct=*/true);
   b.setInsertionPointToStart(exit);
   LLVM::ReturnOp::create(b, b.getLoc(), ValueRange());
+}
+
+// A partition crossing a warpgroup boundary carries its command into the next
+// warpgroup. Per-warp command IDs follow partition order.
+static SmallVector<SmallVector<unsigned>>
+groupWorkerPartitions(ArrayRef<int32_t> starts, unsigned defaultNumWarps,
+                      unsigned warpsPerSlot) {
+  SmallVector<SmallVector<unsigned>> groups;
+  for (unsigned p : getPartitionOrder(starts, warpsPerSlot > 1)) {
+    if (groups.empty() || (starts[p] - defaultNumWarps) % warpsPerSlot == 0)
+      groups.emplace_back();
+    groups.back().push_back(p);
+  }
+  return groups;
 }
 
 LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     LLVM::LLVMFuncOp func, ArrayRef<WarpSpecializeOp> wsOps, bool direct,
     Block *switchLoop, Value wid, unsigned defaultNumWarps,
     unsigned totalNumWarps, const TargetInfoBase &targetInfo,
-    const WarpSpecializeCallbacks &callbacks, unsigned switchLoopBarrierIdx) {
+    const WarpSpecializeCallbacks &callbacks) {
 
   int32_t numWorkers = totalNumWarps - defaultNumWarps;
   if (direct) {
-    lowerDirectWarpSpecialize(wsOps.front(), switchLoop, wid, defaultNumWarps,
-                              numWorkers, targetInfo, callbacks,
-                              switchLoopBarrierIdx);
+    lowerDirectWarpSpecialize(wsOps.front(), switchLoop, wid, numWorkers,
+                              targetInfo, callbacks);
     return success();
   }
   TritonLLVMIRRewriter b(func.getLoc(), func.getContext());
@@ -589,58 +608,77 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   auto ptrTy = ptr_ty(b.getContext(), targetInfo.getSharedAddressSpace());
 
   b.setInsertionPointToStart(switchLoop);
-  callbacks.reallocRegisters(b, wsOps[0], RegisterReallocPhase::SwitchLoopStart,
-                             0);
-  callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+  callbacks.createAllBarrier(b);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
-  Value relWid = b.sub(wid, b.i32_val(defaultNumWarps));
-
-  // The default warp group will populate the state pointer with the state ID
-  // for all warps.
-  // %warp_state_ptr = getelementptr ptr %state_tr[%rel_wid]
-  // %warp_state = load i8 %warp_state_ptr
-  Value warpStatePtr = b.gep(ptrTy, int8Type, statePtr, relWid);
+  unsigned warpsPerSlot = callbacks.warpsPerCommand;
+  unsigned numSlots = llvm::divideCeil(numWorkers, warpsPerSlot);
+  Value warpStatePtr = statePtr;
+  if (numSlots > 1 || warpsPerSlot == 1) {
+    Value group =
+        warpsPerSlot == 1 ? wid : b.udiv(wid, b.i32_val(warpsPerSlot));
+    Value slot = b.sub(group, b.i32_val(defaultNumWarps / warpsPerSlot));
+    warpStatePtr = b.gep(ptrTy, int8Type, statePtr, slot);
+  }
   // All threads in a warp reading from the same smem address will not create
   // bank conflicts and is better than predicated load.
   Value warpState = b.load(int8Type, warpStatePtr);
 
-  // Pull the partition regions out. Switch based on the state ID to the right
-  // partition.
   SmallVector<Block *> partitionBlocks;
-  // This represents the data that the default warp group will fill into the
-  // state pointer before entering each `warp_specialize` region, which maps
-  // a warp ID to a state ID in the switch.
-  SmallVector<SmallVector<int32_t>> warpToState(
-      wsOps.size(), SmallVector<int32_t>(numWorkers));
-
+  SmallVector<SmallVector<int32_t>> slotToState(wsOps.size(),
+                                                SmallVector<int32_t>(numSlots));
+  Block *before = switchLoop->getNextNode();
   for (size_t i = 0; i < wsOps.size(); ++i) {
     WarpSpecializeOp op = wsOps[i];
-    auto &stateMap = warpToState[i];
-    for (auto [partition, partitionNumWarps, startId] :
-         llvm::zip(op.getPartitionRegions(), op.getPartitionNumWarps(),
-                   *op.getWarpGroupStartIds())) {
-      rewritePartitionRegion(op, *partition, switchLoop, targetInfo, callbacks,
-                             switchLoopBarrierIdx, /*direct=*/false);
+    auto &stateMap = slotToState[i];
+    TritonLLVMIRRewriter b(op.getLoc(), op);
+    auto starts = *op.getWarpGroupStartIds();
+    auto sizes = op.getPartitionNumWarps();
+    auto groups = groupWorkerPartitions(starts, defaultNumWarps, warpsPerSlot);
+    unsigned firstState = partitionBlocks.size();
+    if (firstState + groups.size() > std::numeric_limits<uint8_t>::max())
+      return op.emitError("too many warp specialization dispatcher states");
+
+    auto regions = op.getPartitionRegions();
+    SmallVector<int32_t> caps;
+    for (unsigned p : llvm::seq<unsigned>(regions.size()))
+      caps.push_back(callbacks.getWorkerRegisterCap(op, p));
+    // Acquire a site-wide cap before the command selects its body.
+    Block *commonEntry = nullptr;
+    if (groups.size() > 1 && caps.front() >= 0 && llvm::all_equal(caps))
+      commonEntry = b.createBlock(before);
+    for (const auto &partitions : groups) {
       int32_t state = partitionBlocks.size();
-      partitionBlocks.push_back(&partition->front());
-      llvm::fill(MutableArrayRef(stateMap).slice(startId - defaultNumWarps,
-                                                 partitionNumWarps),
-                 state);
+      unsigned nextSlot = 0;
+      for (unsigned p : partitions) {
+        unsigned firstWarp = starts[p] - defaultNumWarps;
+        unsigned endSlot = llvm::divideCeil(firstWarp + sizes[p], warpsPerSlot);
+        nextSlot = std::max(nextSlot, firstWarp / warpsPerSlot);
+        for (; nextSlot < endSlot; ++nextSlot)
+          stateMap[nextSlot] = state;
+      }
+      partitionBlocks.push_back(lowerWorkerGroup(
+          op, partitions, caps[partitions.front()], wid, before, switchLoop,
+          targetInfo, callbacks, commonEntry != nullptr));
     }
+    if (commonEntry) {
+      b.setInsertionPointToStart(commonEntry);
+      callbacks.reallocWorkerRegisters(b, caps.front(), /*acquire=*/true);
+      auto cases = MutableArrayRef(partitionBlocks).drop_front(firstState);
+      SmallVector<APInt> values;
+      for (unsigned state :
+           llvm::seq<unsigned>(firstState, partitionBlocks.size() - 1))
+        values.emplace_back(8, state);
+      LLVM::SwitchOp::create(b, b.getLoc(), warpState, cases.back(),
+                             ValueRange(), values, cases.drop_back(),
+                             SmallVector<ValueRange>(values.size()));
+      llvm::fill(cases, commonEntry);
+    }
+    for (Region *region : regions)
+      b.inlineRegionBefore(*region, before);
   }
 
   int32_t exitState = partitionBlocks.size();
-  if (exitState > std::numeric_limits<uint8_t>::max()) {
-    return mlir::emitError(func.getLoc(),
-                           "FIXME: too many warp group partitions");
-  }
-
-  // Splice them in reverse order so the IR is easier to read.
-  for (Block *block : llvm::reverse(partitionBlocks))
-    b.inlineRegionBefore(*block->getParent(), func.getBody(),
-                         std::next(switchLoop->getIterator()));
-
-  // Every worker has a partition at each site. The only other command is exit.
+  // Every worker has a case at each site. The only other command is exit.
   Block *switchExit =
       b.createBlock(&func.getBody(), std::next(switchLoop->getIterator()));
 
@@ -656,7 +694,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   // Now add synchronization around the default regions.
   for (size_t i = 0; i < wsOps.size(); ++i) {
     WarpSpecializeOp ws = wsOps[i];
-    auto &stateMap = warpToState[i];
+    auto &stateMap = slotToState[i];
     TritonLLVMIRRewriter b(ws.getLoc(), ws);
     Type int8Type = b.getIntegerType(8);
     Value statePtrWs =
@@ -666,8 +704,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
       b.store(stateVal, b.gep(ptrTy, int8Type, statePtrWs, LLVM::GEPArg(j)));
     }
 
-    rewriteDefaultRegion(ws, targetInfo, callbacks, switchLoopBarrierIdx,
-                         /*direct=*/false);
+    rewriteDefaultRegion(ws, targetInfo, callbacks, /*direct=*/false);
   }
 
   // Signal all warp groups to exit.
@@ -677,9 +714,9 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     Value statePtrExit =
         LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
     Value cst = b.i8_val(exitState);
-    for (int32_t i : llvm::seq(numWorkers))
+    for (int32_t i : llvm::seq(numSlots))
       b.store(cst, b.gep(ptrTy, int8Type, statePtrExit, LLVM::GEPArg(i)));
-    callbacks.createAllBarrier(b, switchLoopBarrierIdx);
+    callbacks.createAllBarrier(b);
   });
   b.setInsertionPointToStart(switchExit);
   LLVM::ReturnOp::create(b, b.getLoc(), ValueRange());
