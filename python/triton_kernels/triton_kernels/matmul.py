@@ -346,8 +346,8 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
-    check_tensor_scale("a", a, a_scale, a_tensor_scale)
-    check_tensor_scale("b", b, b_scale, b_tensor_scale)
+    check_tensor_scale(a, a_scale, a_tensor_scale)
+    check_tensor_scale(b, b_scale, b_tensor_scale)
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
@@ -839,8 +839,8 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
-    check_tensor_scale("a", x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
-    check_tensor_scale("b", w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
+    check_tensor_scale(x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
+    check_tensor_scale(w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
