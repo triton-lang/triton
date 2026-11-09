@@ -231,6 +231,8 @@ def make_default_opt_flags_nvidia(
     is_large_ragged_nvfp4 = (
         routing_data is not None
         and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
+        and lhs_dtype == FP4
+        and rhs_dtype == FP4
         and precision_config.a_mx_tensor_scale is not None
         and precision_config.b_mx_tensor_scale is not None
         and cuda_capability_geq(10, 3)

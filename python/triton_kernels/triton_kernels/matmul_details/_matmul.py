@@ -134,6 +134,7 @@ def _matmul(
     has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    has_x_epilogue_scale: tl.constexpr = has_x_tensor_scale and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -518,10 +519,10 @@ def _matmul(
         else:
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
-    if not REQUANTIZE_X and (has_x_tensor_scale or has_w_tensor_scale):
+    if has_x_epilogue_scale or has_w_tensor_scale:
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-        if has_x_tensor_scale:
+        if has_x_epilogue_scale:
             x_tensor_scales = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
         if has_w_tensor_scale:
             w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
