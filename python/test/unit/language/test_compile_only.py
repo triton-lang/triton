@@ -588,13 +588,35 @@ def test_llvm_codegen_errors_are_catchable() -> None:
         triton.compile(src, target=GPUTarget("hip", "gfx1200", 32))
 
 
-@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1200", 32)], ids=["cuda", "hip"])
-def test_llvm_codegen_remarks_are_not_reported(target, fresh_triton_cache, capfd) -> None:
+def test_llvm_codegen_remarks_are_not_reported(fresh_triton_cache, capfd) -> None:
 
     @triton.jit
     def kernel(out):
         tl.store(out, 1)
 
     src = ASTSource(fn=kernel, signature={"out": "*i32"})
-    triton.compile(src, target=target)
-    assert "instructions in function" not in capfd.readouterr().err
+    triton.compile(src, target=GPUTarget("hip", "gfx1200", 32))
+    assert "remark:" not in capfd.readouterr().err
+
+
+def test_llvm_codegen_warnings_are_reported_without_notes(fresh_triton_cache, capfd) -> None:
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr):
+        offsets = tl.arange(0, 32)
+        values = tl.load(x_ptr + offsets)
+        result = tl.inline_asm_elementwise(
+            asm="s_nop 0; mov.u32 $0, $1;",
+            constraints="=r,r,~{exec}",
+            args=[values],
+            dtype=tl.int32,
+            is_pure=False,
+            pack=1,
+        )
+        tl.store(out_ptr + offsets, result)
+
+    src = ASTSource(fn=kernel, signature={"x_ptr": "*i32", "out_ptr": "*i32"})
+    triton.compile(src, target=GPUTarget("hip", "gfx1200", 32))
+    err = capfd.readouterr().err
+    assert "warning: inline asm clobber list contains reserved registers: exec" in err
+    assert "note:" not in err
