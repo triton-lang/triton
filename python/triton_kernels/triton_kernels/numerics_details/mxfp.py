@@ -23,17 +23,20 @@ def check_tensor_scale(operand, block_scale, tensor_scale):
         raise ValueError("A tensor scale must be set if and only if the operand is NVFP4 (packed FP4 with E4M3 block scales)")
 
 
-def is_scalar_tensor_scale(scale):
-    return all(size == 1 or stride == 0 for size, stride in zip(scale.shape, scale.stride()))
+def compact_tensor_scale(scale):
+    """Return a view with singleton broadcast axes, or a scalar for one global value."""
+    for dim, stride in enumerate(scale.stride()):
+        if stride == 0 and scale.size(dim) > 1:
+            scale = scale.narrow(dim, 0, 1)
+    return scale.reshape(()) if scale.numel() == 1 else scale
 
 
-def output_tensor_scale_stride(scale, n_groups):
-    if scale is None or is_scalar_tensor_scale(scale):
-        return 0
-    per_group = scale.ndim == 1 or (scale.ndim == 2 and (scale.shape[1] == 1 or scale.stride(1) == 0))
-    if per_group and scale.shape[0] == n_groups:
-        return scale.stride(0)
-    raise ValueError("Output tensor scale must be global or have one value per group")
+def output_scale_vector(scale, n_groups):
+    """Return a 1D view with one global value or one value per batch or expert."""
+    scale = compact_tensor_scale(scale)
+    if scale.shape not in ((), (n_groups,), (n_groups, 1)):
+        raise ValueError("Output tensor scale must be global or have one value per group")
+    return scale.view(-1)
 
 
 class DequantScaleRoundingMode(Enum):
@@ -132,14 +135,9 @@ def upcast_from_mxfp(
     axis = axis if axis >= 0 else axis + ndim
     assert tensor.ndim == scale.ndim, (f"Weight and scale must have the same number of dimensions. "
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
-    if tensor_scale is not None and tensor_scale.numel() != 1:
-        expected_tensor_scale_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
-        if is_scalar_tensor_scale(tensor_scale):
-            tensor_scale = tensor_scale.as_strided((), ()).expand(expected_tensor_scale_shape)
-        elif len(expected_tensor_scale_shape) == 2 and tensor_scale.shape == (expected_tensor_scale_shape[0], 1):
-            tensor_scale = tensor_scale.expand(expected_tensor_scale_shape)
-        assert tensor_scale.shape == expected_tensor_scale_shape, \
-            f"Invalid tensor scale shape: expected {expected_tensor_scale_shape}, got {tensor_scale.shape}"
+    if tensor_scale is not None:
+        fiber_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
+        tensor_scale = compact_tensor_scale(tensor_scale).expand(fiber_shape).unsqueeze(axis)
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -201,8 +199,7 @@ def upcast_from_mxfp(
         out = torch.empty(original_out_shape, dtype=target_dtype, device=tensor.device)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     if tensor_scale is not None:
-        tensor_scale_shape = (1,) * out.ndim if tensor_scale.numel() == 1 else (*tensor_scale.shape[:axis], 1, *tensor_scale.shape[axis:])
-        out = out * tensor_scale.to(device=out.device).reshape(tensor_scale_shape)
+        out = out * tensor_scale.to(device=out.device)
     return out
 
 
@@ -267,11 +264,9 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     if expected_scale is not None:
         n_groups = src.shape[0] if src.ndim == 3 else 1
-        stride = output_tensor_scale_stride(expected_scale, n_groups)
-        if stride:
-            expected_scale = expected_scale.as_strided((n_groups, 1, 1), (stride, 0, 0))
-        else:
-            expected_scale = expected_scale.as_strided((), ())
+        expected_scale = output_scale_vector(expected_scale, n_groups)
+        if src.ndim == 3:
+            expected_scale = expected_scale[:, None, None]
         src = src / expected_scale.to(device=device, dtype=src.dtype)
     axis_shape = src.shape[-1]
 

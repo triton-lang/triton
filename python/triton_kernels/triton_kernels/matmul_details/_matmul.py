@@ -111,7 +111,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
-             A_SCALE_PER_EXPERT: tl.constexpr = False, stride_y_tensor_scale=None,
+             stride_y_tensor_scale=None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -370,7 +370,7 @@ def _matmul(
         XMxScalePtrs = None
     if has_x_tensor_scale:
         if stride_x_tensor_scale_z is not None:
-            XTensorScale += (expt_id if A_SCALE_PER_EXPERT else start_z) * stride_x_tensor_scale_z
+            XTensorScale += expt_id * stride_x_tensor_scale_z
         if GatherIndx is None and stride_x_tensor_scale_m is not None:
             XTensorScale += start_m * stride_x_tensor_scale_m
 
@@ -610,6 +610,8 @@ def _matmul(
             AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
         out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
 
+    if PER_BATCH_OUT_SCALE:
+        YExpectedScale += start_z_out
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
@@ -617,8 +619,6 @@ def _matmul(
         if stride_y_tensor_scale is not None:
             scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
             YExpectedScale += scale_group.to(index_type) * stride_y_tensor_scale
-        elif PER_BATCH_OUT_SCALE:
-            YExpectedScale = YExpectedScale + start_z_out
         # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
         # NVFP4 uses YExpectedScale to precondition the dense output before the
         # microscaling epilogue writes direct e4m3 block scales.
@@ -660,7 +660,6 @@ def _matmul(
         tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
     else:
         if PER_BATCH_OUT_SCALE:
-            YExpectedScale = YExpectedScale + start_z_out
             YActualScale = YActualScale + start_z_out
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:

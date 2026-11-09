@@ -858,14 +858,15 @@ def test_nvfp4_compact_tensor_scales(mode, a_per_group, b_per_group, c_per_group
         packed = matmul(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter,
                         precision_config=config, epilogue=epilogue)
 
-    expected = k * (by_group[groups] if a_per_group else by_group[0])
-    expected = expected * (by_group[groups] if b_per_group else by_group[0])
-    output_scale = by_group[groups] if c_per_group else by_group[0]
+    def values(per_group):
+        return by_group[groups] if per_group else by_group[0]
+
+    expected = (k * values(a_per_group) * values(b_per_group)).expand(groups.shape)
+    scaled = expected / values(c_per_group)
     if gather is not None:
-        expected = torch.where(gather >= 0, expected, 0.).flip([0])
-        output_scale = output_scale.flip([0]) if output_scale.ndim else output_scale
+        scaled = torch.where(gather >= 0, scaled, 0.).flip([0])
     expected = expected[..., None].expand(*groups.shape, n)
-    scaled = expected / output_scale[..., None]
+    scaled = scaled[..., None].expand(*groups.shape, n)
     ref = matmul_torch(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter, precision_config=config)
     torch.testing.assert_close(ref, scaled, rtol=0, atol=0)
     ref_packed, ref_blocks = downcast_to_mxfp_torch(expected if batched else scaled, torch.uint8, -1,

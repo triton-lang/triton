@@ -15,7 +15,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale, is_scalar_tensor_scale, output_tensor_scale_stride
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale, compact_tensor_scale, output_scale_vector
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
@@ -155,21 +155,6 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
 # Allocation
 # ---------------------
 
-def _tensor_scale_strides(scale, n_groups, n_fibers):
-    """Strides along groups (experts or batches) and rows/columns."""
-    if scale is None:
-        return None, None
-    if is_scalar_tensor_scale(scale):
-        return 0, 0
-    if scale.ndim not in (1, 2) or (scale.ndim == 2 and scale.shape[0] not in (1, n_groups)):
-        raise ValueError("Expected a scalar, a row/column scale, or one tensor scale per group")
-    group_stride = scale.stride(0) if scale.ndim == 2 and scale.shape[0] != 1 else 0
-    fiber_stride = scale.stride(-1) if scale.shape[-1] != 1 else 0
-    if fiber_stride and isinstance(n_fibers, int) and scale.shape[-1] < n_fibers:
-        raise ValueError("Tensor scale is too short for the row/column dimension; use (E, 1) for per-group scales")
-    return group_stride, fiber_stride
-
-
 @dataclass
 class MatmulAllocation:
     device: str
@@ -247,6 +232,24 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     if flex_data is not None:
         new_storage_data = flex_data.reinterpret(new_storage_data)
     return Storage(new_storage_data, storage.layout)
+
+
+def _tensor_scale_strides(scale, n_groups, n_fibers, *, persistent, routed_rows=False):
+    """Strides along groups (experts or batches) and fibers (rows or columns)."""
+    if scale is None:
+        return None, None
+    scale = torch.atleast_2d(compact_tensor_scale(scale))
+    if scale.ndim != 2 or scale.size(0) not in (1, n_groups):
+        raise ValueError("Expected a scalar, a row/column scale, or one tensor scale per group")
+    groups, fibers = scale.shape
+    if fibers != 1 and isinstance(n_fibers, int) and fibers < n_fibers:
+        raise ValueError("Tensor scale is too short for the row/column dimension; use (E, 1) for per-group scales")
+    # The regular kernel specializes broadcast axes. The persistent kernel uses numeric strides.
+    broadcast = 0 if persistent else None
+    group_stride, fiber_stride = scale.stride()
+    if groups == 1 or (routed_rows and fibers != 1):
+        group_stride = broadcast  # Row scales follow the source token across experts.
+    return group_stride, broadcast if fibers == 1 else fiber_stride
 
 
 # -----------------------------------------------------------------------------
@@ -367,8 +370,8 @@ def matmul(a, b, bias,
         a = wrap_torch_tensor(a, dtype=dtype)
     check_tensor_scale(a, a_scale, a_tensor_scale)
     check_tensor_scale(b, b_scale, b_tensor_scale)
-    uses_nvfp4 = (a_tensor_scale is not None or b_tensor_scale is not None
-                  or epilogue.specs.name == FnName.QUANTIZE_NVFP4.name)
+    nvfp4_output = epilogue.specs.name == FnName.QUANTIZE_NVFP4.name
+    uses_nvfp4 = a_tensor_scale is not None or b_tensor_scale is not None or nvfp4_output
     if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
         raise ValueError("NVFP4 matmul requires NVIDIA Blackwell or newer (compute capability 10.0+)")
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
@@ -704,20 +707,15 @@ def matmul(a, b, bias,
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
     n_input_groups = b.shape[0] if b.ndim == 3 else 1
-    a_group_stride, a_fiber_stride = _tensor_scale_strides(a_tensor_scale, n_input_groups, a.shape[-2])
-    b_group_stride, b_fiber_stride = _tensor_scale_strides(b_tensor_scale, n_input_groups, b.shape[-1])
-    a_scale_per_expert = ragged_dimension == "M" and a_group_stride != 0 and a_fiber_stride == 0
-    # None specializes a scalar load in the regular kernel. The persistent kernel
-    # uses its masked vector load with a runtime zero stride.
-    if not opt_flags.is_persistent:
-        a_group_stride = a_group_stride or None
-        b_group_stride = b_group_stride or None
-        a_fiber_stride = a_fiber_stride or None
-        b_fiber_stride = b_fiber_stride or None
+    a_tensor_strides = _tensor_scale_strides(a_tensor_scale, n_input_groups, a.shape[-2],
+                                            persistent=opt_flags.is_persistent, routed_rows=ragged_dimension == "M")
+    b_tensor_strides = _tensor_scale_strides(b_tensor_scale, n_input_groups, b.shape[-1], persistent=opt_flags.is_persistent)
+    y_tensor_scale = out_matmul_flex.expected_scale
     y_tensor_scale_stride = None
-    if epilogue.specs.name == FnName.QUANTIZE_NVFP4.name:
-        y_tensor_scale_stride = output_tensor_scale_stride(out_matmul_flex.expected_scale,
-                                                         n_input_groups if is_c_ragged else batch_size)
+    if nvfp4_output and y_tensor_scale is not None:
+        y_tensor_scale = output_scale_vector(y_tensor_scale, n_input_groups if is_c_ragged else batch_size)
+        if y_tensor_scale.numel() > 1:
+            y_tensor_scale_stride = y_tensor_scale.stride(0)
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
@@ -754,16 +752,16 @@ def matmul(a, b, bias,
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c_data, *out_matmul.stride(),
-                   *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
+                   *((y_tensor_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
-                   a_tensor_scale, a_group_stride, a_fiber_stride,
+                   a_tensor_scale, *a_tensor_strides,
                    b_tensor_or_tma, b.storage.data, *b_strides, b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
-                   b_tensor_scale, b_group_stride, b_fiber_stride,
+                   b_tensor_scale, *b_tensor_strides,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
@@ -786,7 +784,7 @@ def matmul(a, b, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
-                   out_matmul_flex.is_per_batch if y_tensor_scale_stride is None else False,
+                   not nvfp4_output and out_matmul_flex.is_per_batch,
                    flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
@@ -817,8 +815,7 @@ def matmul(a, b, bias,
                        FnName.QUANTIZE_NVFP4.name,
                    ),
                    Y_VALUE_PACK_FACTOR=precision_config.c_value_pack_factor,
-                   A_SCALE_PER_EXPERT=a_scale_per_expert,
-                   stride_y_tensor_scale=y_tensor_scale_stride or None,
+                   stride_y_tensor_scale=y_tensor_scale_stride,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs,
@@ -952,25 +949,20 @@ def matmul_torch(a, b, bias,
     routed_m = a_ragged_metadata is not None and b_ragged_metadata is None
     n_groups = b.shape[0] if b.ndim == 3 else 1
     a_scale = precision_config.a_mx_tensor_scale
-    if routed_m and a_scale is not None and a_scale.ndim == 2:
-        group_stride, row_stride = _tensor_scale_strides(a_scale, n_groups, a.shape[-2])
-        if row_stride == 0:
-            # A token can be routed to several experts. Apply its expert's scale after gathering.
-            if group_stride:
-                a_expert_scale = a_scale[:, 0]
-                a_scale = a_scale.new_ones(())
-            else:
-                a_scale = a_scale.as_strided((), ())
-            precision_config = replace(precision_config, a_mx_tensor_scale=a_scale)
+    if routed_m and a_scale is not None:
+        a_scale = compact_tensor_scale(a_scale)
+        if a_scale.shape == (n_groups, 1):
+            # A source token may visit multiple experts. Scale its values after gathering.
+            a_expert_scale = a_scale[:, 0]
+            precision_config = replace(precision_config, a_mx_tensor_scale=a_scale.new_ones(()))
     a, b = apply_precision(a, b, precision_config)
     expected_scale = precision_config.flex_ctx.out_data.expected_scale
     expert_out_scale = None
     if (expected_scale is not None and precision_config.c_mx_scale is not None
             and precision_config.c_mx_scale.data.dtype == torch.float8_e4m3fn):
         n_outputs = b_ragged_metadata.n_slices if b_ragged_metadata is not None else n_groups
-        stride = output_tensor_scale_stride(expected_scale, n_outputs)
-        expected_scale = expected_scale.as_strided((n_outputs if stride else 1,), (stride,))
-        if stride and routed_m:
+        expected_scale = output_scale_vector(expected_scale, n_outputs)
+        if routed_m and expected_scale.numel() > 1:
             expert_out_scale, expected_scale = expected_scale, None
 
     if b_ragged_metadata is not None:
@@ -1017,35 +1009,32 @@ def matmul_torch(a, b, bias,
     if a.ndim == 2:
         a = a.view(1, *a.shape)
     # memory offsets
+    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
     if a_ragged_metadata is not None and not is_input_batched:
         sizes = a_ragged_metadata.slice_sizes[:b.shape[0]]
         starts = a_ragged_metadata.slice_offs[:len(sizes)]
         offs = zip(starts.tolist(), (starts + sizes).tolist())
     else:
-        offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
+        offs = [(0, n_rows)] * b.shape[0]
     # compute
     compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
-    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
     y_dtype = a.dtype if expert_out_scale is None else torch.promote_types(a.dtype, expert_out_scale.dtype)
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=y_dtype)
     for i, (lo, hi) in enumerate(offs):
-        if gather_indx is None:
-            idx = torch.arange(lo, hi, device=a.device)
-        else:
-            idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        if gather_indx is None:
-            x = a[batch, idx, :]
-        else:
-            # Inactive routing slots contribute zero, not Python's last row.
-            x = a.new_zeros((idx.numel(), a.shape[-1]))
-            active = idx >= 0
-            x[active] = a[batch, idx[active], :]
+        rows = slice(lo, hi)
+        if gather_indx is not None:
+            indices = gather_indx[lo:hi]
+            active = indices >= 0
+            rows = indices[active]
+        x = a[batch, rows, :]
         if a_expert_scale is not None:
-            if gather_indx is None:
-                x = x * a_expert_scale[i]
-            else:
-                x[active] *= a_expert_scale[i]
+            x = x * a_expert_scale[i]
+        if gather_indx is not None:
+            # Only active slots read a token and its scale.
+            gathered = x.new_zeros((hi - lo, x.shape[-1]))
+            gathered[active] = x
+            x = gathered
         out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
