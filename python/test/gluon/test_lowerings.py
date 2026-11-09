@@ -1549,7 +1549,12 @@ _multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
 _multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
                                      for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
                                      for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
-_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+_multi_cta_small_convert2d_layout_cases = [
+    pytest.param([2, 1], [2, 1], None, ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0]),
+                 ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0]), id="multi-cta-small-shape")
+]
+_convert2d_layout_cases = (_single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases +
+                           _multi_cta_small_convert2d_layout_cases)
 # Warp-dependent broadcast with two f16 elements sharing a shuffle.
 _convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
                                 ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
@@ -1566,9 +1571,9 @@ def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layo
     if src_ctas_per_cga is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.skip("num_ctas > 1 requires NVIDIA Hopper or newer")
-        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+        if M % min(M, src_ctas_per_cga[0]) != 0 or N % min(N, src_ctas_per_cga[1]) != 0:
             pytest.skip("Shape must be divisible by the source CGA shape")
-        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+        if M % min(M, dst_ctas_per_cga[0]) != 0 or N % min(N, dst_ctas_per_cga[1]) != 0:
             pytest.skip("Shape must be divisible by the destination CGA shape")
         if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
             pytest.skip("Source and destination CGA shapes must have the same number of CTAs")

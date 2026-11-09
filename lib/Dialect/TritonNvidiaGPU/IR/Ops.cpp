@@ -718,7 +718,7 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
-  auto splits = getCTASplitNum(nvmma);
+  auto splits = nvmma.getCGALayout().getCTASplitNum();
   // Gather/scatter get row positions from the x-offsets layout.
   unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
   for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)

@@ -55,7 +55,8 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
   auto nBlocks = product(triton::gpu::getCTASplitNum(
-      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout)));
+      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout),
+      convertType<int64_t>(llvm::to_vector(srcLayout.getOutDimSizes()))));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
