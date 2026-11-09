@@ -17,7 +17,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 from .matmul_details._sparse_matmul import sparse_matmul
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
@@ -116,13 +116,6 @@ def should_upcast_indices(*args):
 
 # fmt: off
 
-def _require_nvfp4(name, operand, block_scale):
-    if (operand.dtype in (FP4, torch.uint8) and block_scale is not None
-            and block_scale.data.dtype == torch.float8_e4m3fn):
-        return
-    raise ValueError(f"{name}_mx_tensor_scale requires NVFP4 {name.upper()} with E4M3 block scales")
-
-
 @dataclass(frozen=True)
 class FlexCtx:
     lhs_data: InFlexData = InFlexData()
@@ -151,12 +144,6 @@ class PrecisionConfig:
     # None keeps split-K scratch in the accumulator dtype.
     intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
-
-    def _check_tensor_scales(self, a, b, a_scale, b_scale):
-        if self.a_mx_tensor_scale is not None:
-            _require_nvfp4("a", a, a_scale)
-        if self.b_mx_tensor_scale is not None:
-            _require_nvfp4("b", b, b_scale)
 
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
@@ -388,7 +375,8 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
-    precision_config._check_tensor_scales(a, b, a_scale, b_scale)
+    check_tensor_scale("a", a, a_scale, a_tensor_scale)
+    check_tensor_scale("b", b, b_scale, b_tensor_scale)
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
@@ -880,7 +868,8 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
-    precision_config._check_tensor_scales(x_tri, w_tri, precision_config.a_mx_scale, precision_config.b_mx_scale)
+    check_tensor_scale("a", x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
+    check_tensor_scale("b", w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):

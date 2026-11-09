@@ -3,6 +3,7 @@ import triton
 import triton.language as tl
 
 from triton_kernels.matmul_details.opt_flags_details.opt_flags_nvidia import compute_split_k
+from triton_kernels.numerics_details.mxfp import check_tensor_scale
 from triton_kernels.tensor import FP4, Tensor, dtype_to_torch_dtype
 from triton_kernels.tensor_details.layout import StridedLayout
 
@@ -145,7 +146,8 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b, sparsity_metadata)):
         raise ValueError("sparse matmul expects strided matrices or batches of matrices")
     xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
-    config._check_tensor_scales(a, b, xs, ws)
+    check_tensor_scale("a", a, xs, config.a_mx_tensor_scale)
+    check_tensor_scale("b", b, ws, config.b_mx_tensor_scale)
     if ragged is None and a.shape[:-2] != b.shape[:-2]:
         raise ValueError("input and weight batch dimensions must match")
     if ragged is not None and (a.ndim != 2 or b.ndim != 3 or b.shape[0] != ragged.n_slices):
