@@ -144,6 +144,8 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
     sparsity_metadata = _storage(sparsity_metadata)
     if not all(isinstance(t, torch.Tensor) and t.ndim in (2, 3) for t in (a, b, sparsity_metadata)):
         raise ValueError("sparse matmul expects strided matrices or batches of matrices")
+    xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
+    config._check_tensor_scales(a, b, xs, ws)
     if ragged is None and a.shape[:-2] != b.shape[:-2]:
         raise ValueError("input and weight batch dimensions must match")
     if ragged is not None and (a.ndim != 2 or b.ndim != 3 or b.shape[0] != ragged.n_slices):
@@ -175,7 +177,6 @@ def sparse_matmul(a, b, sparsity_metadata, bias, config, c, alpha, ragged, gathe
         raise ValueError("expected one int32 sparsity metadata word per eight selector groups per output column")
     if sparsity_metadata.stride(-2) != 1:
         raise ValueError("b_sparsity_metadata must be column-major (stride(-2) == 1)")
-    xs, ws = _storage(config.a_mx_scale), _storage(config.b_mx_scale)
     scale_k = config.a_microblock_size or 16
     if nvfp4:
         if (config.b_microblock_size or 16) != scale_k or k % scale_k:

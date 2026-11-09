@@ -760,11 +760,11 @@ def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("matmul_fn", [matmul, matmul_torch])
+@pytest.mark.parametrize("implementation", ["dense", "sparse", "reference"])
 @pytest.mark.parametrize("operand", ["a", "b"])
 @pytest.mark.parametrize("dtype,scale_dtype", [(torch.float16, None), (torch.uint8, None),
                                               (torch.uint8, torch.uint8), (torch.float8_e4m3fn, torch.float8_e4m3fn)])
-def test_matmul_rejects_non_nvfp4_tensor_scale(matmul_fn, operand, dtype, scale_dtype):
+def test_matmul_rejects_non_nvfp4_tensor_scale(implementation, operand, dtype, scale_dtype):
     # The other operand is NVFP4 with its own valid tensor scale.
     def make_operand(dtype, scale_dtype):
         packed = dtype == torch.uint8
@@ -780,7 +780,11 @@ def test_matmul_rejects_non_nvfp4_tensor_scale(matmul_fn, operand, dtype, scale_
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb.T if sb is not None else None,
                              a_mx_tensor_scale=torch.ones(()), b_mx_tensor_scale=torch.ones(()))
     with pytest.raises(ValueError, match=f"{operand}_mx_tensor_scale requires NVFP4"):
-        matmul_fn(a, b.T, None, precision_config=config)
+        if implementation == "reference":
+            matmul_torch(a, b.T, None, precision_config=config)
+        else:
+            selectors = torch.empty((1, 16), dtype=torch.int32).T if implementation == "sparse" else None
+            matmul(a, b.T, None, b_sparsity_metadata=selectors, precision_config=config)
 
 
 @pytest.mark.parametrize("swizzled", [False, True])
@@ -1459,8 +1463,11 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
         a, b = pack(x).cuda(), pack(w).T.cuda()
         xs = torch.randint(1, 4, (m, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
         ws = torch.randint(1, 4, (n, k // scale_k), generator=rng).to(torch.float8_e4m3fn)
+        # The two tensor scales multiply to 2. Applying the large one first would overflow.
         config = PrecisionConfig(a_mx_scale=xs.cuda(), b_mx_scale=ws.cuda().mT, a_microblock_size=scale_k,
-                                 b_microblock_size=scale_k, out_dtype=torch.float32)
+                                 b_microblock_size=scale_k, out_dtype=torch.float32,
+                                 a_mx_tensor_scale=torch.tensor(2.**125, device="cuda"),
+                                 b_mx_tensor_scale=torch.tensor(2.**-124, device="cuda"))
         x = e2m1[x] * xs.float().repeat_interleave(scale_k, dim=1)
         w = e2m1[w] * ws.float().repeat_interleave(scale_k // 2, dim=1)
     else:
@@ -1488,6 +1495,8 @@ def test_matmul_structured_sparse_weights(dtype, scale_k, extra_k):
         return
     dense = torch.zeros(n, k // group, group).scatter_(2, positions, w.float().reshape(n, k // group, group // 2))
     expected = x.float() @ dense.reshape(n, k).T
+    if nvfp4:
+        expected *= 2
     with pytest.raises(ValueError, match="must be column-major"):
         matmul(a, b, None, precision_config=config, b_sparsity_metadata=sparsity_metadata)
     sparsity_metadata = convert_layout(wrap_torch_tensor(sparsity_metadata), layout.StridedLayout(-2))
@@ -1521,13 +1530,11 @@ def test_matmul_structured_sparse_experts(routed):
         expected = torch.empty((m, n), device="cuda")
         for i, rows in enumerate(x.split(sizes)):
             start = sum(sizes[:i])
-            expected[scatter[start:start + sizes[i]]] = 2 * (2 * (rows @ dense[i]) + bias[i])
+            expected[scatter[start:start + sizes[i]]] = 2 * (rows @ dense[i] + bias[i])
     else:
-        expected = 2 * (2 * (a.float() @ dense) + bias[:, None, :])
-    # The two outer scales multiply to 2. Applying the large one first would overflow.
+        expected = 2 * (a.float() @ dense + bias[:, None, :])
     out = torch.empty((*expected.shape[:-1], 2 * n), device="cuda")[..., ::2]
-    config = PrecisionConfig(out_dtype=torch.float32, a_mx_tensor_scale=torch.tensor(2.**125, device="cuda"),
-                             b_mx_tensor_scale=torch.tensor(2.**-124, device="cuda"))
+    config = PrecisionConfig(out_dtype=torch.float32)
     matmul(a, b, bias, c=out, precision_config=config, b_sparsity_metadata=sparsity_metadata, out_alpha=2.0, **kwargs)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
