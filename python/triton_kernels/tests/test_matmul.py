@@ -688,9 +688,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("split_k", [1, 2])
 @pytest.mark.parametrize("k", [64, 80])
 @pytest.mark.parametrize("all_inactive", [False, True])
-@pytest.mark.parametrize("tensor_scale", [False, True])
 @pytest.mark.parametrize("with_bias", [False, True])
-def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_scale, with_bias, device):
+def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, with_bias, device):
     if not is_hopper_or_newer():
         pytest.skip("Requires Hopper or newer for persistent matmul")
     m, n = 33, 64
@@ -708,22 +707,16 @@ def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_sc
     active = gather >= 0
     expected[active] = a[gather[active].long(), :1] * k
 
-    scale_storage = torch.full((m + 1,), float("nan"), device=device)
-    scale_storage[1:] = 2.0
-    config = PrecisionConfig(a_mx_tensor_scale=scale_storage[1:] if tensor_scale else None)
-    if tensor_scale:
-        expected *= 2.0
     bias = torch.ones(n, dtype=torch.float32, device=device) if with_bias else None
     if with_bias:
         expected += 1.0
-    reference_a = a * (2.0 if tensor_scale else 1.0)
-    reference = matmul_torch(reference_a, b, bias, gather_indx=gather, precision_config=PrecisionConfig())
+    reference = matmul_torch(a, b, bias, gather_indx=gather, precision_config=PrecisionConfig())
     torch.testing.assert_close(reference, expected, rtol=0, atol=0)
     with opt_flags.scoped_opt_flags_constraints({
         "is_persistent": is_persistent, "split_k": split_k,
         "block_m": 32, "block_n": 64, "block_k": 64,
     }):
-        actual = matmul(a, b, bias, gather_indx=gather, precision_config=config)
+        actual = matmul(a, b, bias, gather_indx=gather)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
@@ -767,11 +760,34 @@ def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("matmul_fn", [matmul, matmul_torch])
+@pytest.mark.parametrize("operand", ["a", "b"])
+@pytest.mark.parametrize("dtype,scale_dtype", [(torch.float16, None), (torch.uint8, None),
+                                              (torch.uint8, torch.uint8), (torch.float8_e4m3fn, torch.float8_e4m3fn)])
+def test_matmul_rejects_non_nvfp4_tensor_scale(matmul_fn, operand, dtype, scale_dtype):
+    # The other operand is NVFP4 with its own valid tensor scale.
+    def make_operand(dtype, scale_dtype):
+        packed = dtype == torch.uint8
+        value = torch.empty((16, 16 if packed else 32), dtype=dtype)
+        if scale_dtype is None:
+            return value, None
+        blocks = 1 if scale_dtype == torch.uint8 else 2
+        return value, torch.empty((16, blocks), dtype=scale_dtype)
+
+    valid = make_operand(torch.uint8, torch.float8_e4m3fn)
+    invalid = make_operand(dtype, scale_dtype)
+    (a, sa), (b, sb) = (invalid, valid) if operand == "a" else (valid, invalid)
+    config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb.T if sb is not None else None,
+                             a_mx_tensor_scale=torch.ones(()), b_mx_tensor_scale=torch.ones(()))
+    with pytest.raises(ValueError, match=f"{operand}_mx_tensor_scale requires NVFP4"):
+        matmul_fn(a, b.T, None, precision_config=config)
+
+
 @pytest.mark.parametrize("swizzled", [False, True])
 @pytest.mark.parametrize("weights_swizzled", [False, True])
 @pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
 @pytest.mark.parametrize("k, out_dtype", [(256, None), (1024, torch.float32)])
-@pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
+@pytest.mark.parametrize("tensor_scale", ["none", "row", "wide_row"])
 def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell")
@@ -796,16 +812,11 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_sc
         decoded_a *= outer_scale[..., None]
         assert torch.isfinite(decoded_a).all()
         assert decoded_a.abs().max() > torch.finfo(torch.float16).max
-    elif tensor_scale in ("row", "both"):
+    elif tensor_scale == "row":
         outer_scale = torch.linspace(0.5, 1.5, decoded_a.numel() // k, device=device).reshape(decoded_a.shape[:-1])
         decoded_a *= outer_scale[..., None]
     converted, converted_scale = downcast_to_mxfp_torch(decoded_a, torch.float8_e4m3fn, -1)
     reference_a = upcast_from_mxfp_torch(converted, converted_scale, torch.float32, -1)
-    weight_outer_scale = None
-    if tensor_scale in ("column", "both"):
-        weight_outer_scale = torch.linspace(0.5, 1.5, decoded_b.numel() // k, device=device).reshape(
-            decoded_b.shape[:-2] + (n,))
-        decoded_b *= weight_outer_scale[..., None, :]
     gather = torch.randint(source_m, (m,), device=device, dtype=torch.int32) if mode in ("gather", "ragged_gather") else None
     if swizzled:
         if gather is not None:
@@ -817,8 +828,7 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_sc
     else:
         b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
     config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
-                             b_mx_scale=b_scale, b_microblock_size=32,
-                             b_mx_tensor_scale=weight_outer_scale, out_dtype=out_dtype)
+                             b_mx_scale=b_scale, b_microblock_size=32, out_dtype=out_dtype)
     actual = matmul(a, b, None, a_ragged_metadata=metadata, gather_indx=gather, precision_config=config)
     expected = matmul_torch(reference_a, decoded_b, None, a_ragged_metadata=metadata,
                             gather_indx=gather, precision_config=PrecisionConfig()).to(actual.dtype)
@@ -999,17 +1009,29 @@ def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_s
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
 
-    a = torch.zeros((128, 128), device=device)
-    b = torch.zeros((256, 128), device=device)
-    a[:, :3] = 1
-    b[:, :3] = 1
     # The accumulator is 3. Separate scaling reaches a BF16 tie; FMA stays below it.
     scale = torch.tensor([0.1], device=device)
     bias = torch.full((256, ), -0.29209595918655396, device=device)
     betas = torch.ones(128, device=device) if has_beta else None
     config = PrecisionConfig(out_dtype=torch.bfloat16)
     if scale_source == "global":
+        a = torch.zeros((128, 128), device=device, dtype=torch.float8_e4m3fn)
+        b = torch.zeros((256, 128), device=device, dtype=torch.float8_e4m3fn)
+        a[:, :3] = 1
+        b[:, :3] = 1
         config.flex_ctx = FlexCtx(lhs_data=InFlexData(scale=scale))
+    else:
+        if torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("NVFP4 tensor scales require Blackwell or newer")
+        # Packed E2M1 [1, 1, 1, 0] with unit block scales.
+        a = torch.zeros((128, 64), device=device, dtype=torch.uint8)
+        b = torch.zeros((256, 64), device=device, dtype=torch.uint8)
+        first_pair = torch.tensor([0x22, 0x02], device=device, dtype=torch.uint8)
+        a[:, :2] = first_pair
+        b[:, :2] = first_pair
+        config.a_mx_scale = torch.ones((128, 8), device=device, dtype=torch.float8_e4m3fn)
+        config.b_mx_scale = torch.ones((8, 256), device=device, dtype=torch.float8_e4m3fn)
+        config.a_microblock_size = config.b_microblock_size = 16
     if scale_source in ("row", "row_and_column"):
         config.a_mx_tensor_scale = scale.expand(128).contiguous()
     if scale_source in ("column", "row_and_column"):
@@ -1025,7 +1047,7 @@ def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_s
             split_k=1,
             epilogue_subtile=epilogue_subtile,
         ))
-    actual = matmul(a.to(torch.float8_e4m3fn), b.to(torch.float8_e4m3fn).T, bias, precision_config=config, betas=betas)
+    actual = matmul(a, b.T, bias, precision_config=config, betas=betas)
 
     torch.testing.assert_close(actual, torch.full_like(actual, expected), rtol=0, atol=0)
 

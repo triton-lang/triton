@@ -144,6 +144,19 @@ class PrecisionConfig:
     intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
+    def _check_tensor_scales(self, a, b, a_scale, b_scale):
+        if self.a_mx_tensor_scale is None and self.b_mx_tensor_scale is None:
+            return
+        for name, operand, mx_scale, tensor_scale in (
+            ("a", a, a_scale, self.a_mx_tensor_scale),
+            ("b", b, b_scale, self.b_mx_tensor_scale),
+        ):
+            if tensor_scale is None:
+                continue
+            if (operand.dtype not in (FP4, torch.uint8) or mx_scale is None
+                    or mx_scale.data.dtype != torch.float8_e4m3fn):
+                raise ValueError(f"{name}_mx_tensor_scale requires NVFP4 {name.upper()} with E4M3 block scales")
+
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
@@ -266,6 +279,9 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    a_mx_tensor_scale and b_mx_tensor_scale apply only to NVFP4 operands.
+    Each requires packed FP4 values and E4M3 block scales on the corresponding input.
+
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
     epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
@@ -343,6 +359,7 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    precision_config._check_tensor_scales(a, b, a_scale, b_scale)
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
@@ -834,6 +851,7 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
+    precision_config._check_tensor_scales(x_tri, w_tri, precision_config.a_mx_scale, precision_config.b_mx_scale)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
