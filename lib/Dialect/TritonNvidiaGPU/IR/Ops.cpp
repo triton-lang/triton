@@ -1752,6 +1752,9 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
     return op->emitOpError(regName) << " must be a 2D tensor";
   if (!type.getEncoding())
     return success();
+  if (gpu::lookupNumWarps(op) < 4)
+    return op->emitOpError(regName)
+           << " register layout must have at least 4 warps";
 
   if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
