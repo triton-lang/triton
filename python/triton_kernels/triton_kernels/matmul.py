@@ -115,6 +115,13 @@ def should_upcast_indices(*args):
 
 # fmt: off
 
+def _require_nvfp4(name, operand, block_scale):
+    if (operand.dtype in (FP4, torch.uint8) and block_scale is not None
+            and block_scale.data.dtype == torch.float8_e4m3fn):
+        return
+    raise ValueError(f"{name}_mx_tensor_scale requires NVFP4 {name.upper()} with E4M3 block scales")
+
+
 @dataclass(frozen=True)
 class FlexCtx:
     lhs_data: InFlexData = InFlexData()
@@ -145,17 +152,10 @@ class PrecisionConfig:
     enforce_bitwise_invariance: bool = False
 
     def _check_tensor_scales(self, a, b, a_scale, b_scale):
-        if self.a_mx_tensor_scale is None and self.b_mx_tensor_scale is None:
-            return
-        for name, operand, mx_scale, tensor_scale in (
-            ("a", a, a_scale, self.a_mx_tensor_scale),
-            ("b", b, b_scale, self.b_mx_tensor_scale),
-        ):
-            if tensor_scale is None:
-                continue
-            if (operand.dtype not in (FP4, torch.uint8) or mx_scale is None
-                    or mx_scale.data.dtype != torch.float8_e4m3fn):
-                raise ValueError(f"{name}_mx_tensor_scale requires NVFP4 {name.upper()} with E4M3 block scales")
+        if self.a_mx_tensor_scale is not None:
+            _require_nvfp4("a", a, a_scale)
+        if self.b_mx_tensor_scale is not None:
+            _require_nvfp4("b", b, b_scale)
 
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
