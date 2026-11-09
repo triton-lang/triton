@@ -166,7 +166,8 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
-    HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
+    # Requantization consumes the NVFP4 activation scale, and its MXFP4 weights have no tensor scale.
+    HAS_EPILOGUE_TENSOR_SCALE: tl.constexpr = not REQUANTIZE_X and (XTensorScale is not None or WTensorScale is not None)
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -257,7 +258,7 @@ def _p_matmul(
     FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
     # Preserve separate scale/bias rounding for dense sub-tiles.
     FUSE_TENSOR_SCALE: tl.constexpr = (
-        (HAS_X_EPILOGUE_SCALE or WTensorScale is not None)
+        HAS_EPILOGUE_TENSOR_SCALE
         and XScale is None and WScale is None and B is not None and Betas is None
         and (is_out_microscaled or SUBTILE_FACTOR == 1)
     )
@@ -556,10 +557,10 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
+        if HAS_EPILOGUE_TENSOR_SCALE:
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-            if HAS_X_EPILOGUE_SCALE:
+            if XTensorScale is not None:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
             if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)

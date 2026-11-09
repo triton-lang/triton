@@ -250,9 +250,8 @@ def compute_num_stages(
             # The first accumulator split needs FP32 redistribution scratch
             # alongside the output tile, before any activation reduction.
             epilogue_smem += block_m * (block_n // 2) * 4
-        elif (has_native_mxfp and not swap_xw and epilogue_subtile > 1
-              and ((precision_config.a_mx_tensor_scale is not None and not requantize_x)
-                   or precision_config.b_mx_tensor_scale is not None)):
+        elif (has_native_mxfp and not swap_xw and epilogue_subtile > 1 and not requantize_x
+              and (precision_config.a_mx_tensor_scale is not None or precision_config.b_mx_tensor_scale is not None)):
             # Only scales applied in the epilogue materialize the accumulator before splitting it.
             # Reserve an FP32 subtile for redistribution alongside the store.
             epilogue_smem += block_m * acc_block_n * 4
