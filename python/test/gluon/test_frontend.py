@@ -4372,38 +4372,49 @@ def _get_amd_scaled_downcast(target):
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
-@pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.float32, "f32")])
-def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype):
+@pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.bfloat16, "bf16"), (ttgl.float32, "f32")])
+@pytest.mark.parametrize("scale_factor", [2, 8])
+def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype, scale_factor, capfd):
     scaled_downcast = _get_amd_scaled_downcast(target)
+    threads_per_warp = [8, target.warp_size // 8]
 
     @gluon.jit
-    def kernel():
-        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
-        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+    def kernel(SCALE_FACTOR: ttgl.constexpr, THREADS_PER_WARP: ttgl.constexpr):
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], THREADS_PER_WARP, [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8 // SCALE_FACTOR], THREADS_PER_WARP, [1, 1], [1, 0])
         input = ttgl.full([16, 64], 1.0, dtype, unpacked_layout)
-        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scale = ttgl.full([16, 64 // SCALE_FACTOR], 0x7F, ttgl.uint8, scale_layout)
         scaled_downcast(input, scale, "e2m1", axis=1)
 
-    module = run_parser(kernel, *make_args(num_warps=1), target=target)
-    module_text = module.str_nodebug()
-    assert "amdg.scaled_downcast_fp4" in module_text
-    assert f"tensor<16x64x{ir_dtype}" in module_text
+    if target == HIP_TARGET_CDNA5 and scale_factor == 2:
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            run_parser(kernel, *make_args(scale_factor, threads_per_warp, num_warps=1), target=target)
+        assert ("each scale block along the scaled axis must cover a multiple of 8 fp4 values (4 packed bytes), "
+                "but got 2 fp4 values (1 packed byte) per scale") in capfd.readouterr().err
+        return
+
+    module = run_parser(kernel, *make_args(scale_factor, threads_per_warp, num_warps=1), target=target)
+    op_line = next(line for line in module.str_nodebug().splitlines() if "amdg.scaled_downcast_fp4" in line)
+    assert re.search(
+        rf": tensor<16x64x{ir_dtype}, #\w+>, tensor<16x{64 // scale_factor}xi8, #\w+> -> tensor<16x32xi8, #\w+>",
+        op_line), op_line
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
 @pytest.mark.parametrize("fp8_format,ir_dtype", [("e4m3", "f8E4M3FN"), ("e5m2", "f8E5M2")])
 def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
     scaled_downcast = _get_amd_scaled_downcast(target)
+    threads_per_warp = [8, target.warp_size // 8]
 
     @gluon.jit
-    def kernel(FORMAT: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
-        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+    def kernel(FORMAT: ttgl.constexpr, THREADS_PER_WARP: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], THREADS_PER_WARP, [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], THREADS_PER_WARP, [1, 1], [1, 0])
         input = ttgl.full([16, 64], 1.0, ttgl.bfloat16, layout)
         scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
         scaled_downcast(input, scale, FORMAT, axis=1)
 
-    module = run_parser(kernel, *make_args(fp8_format, num_warps=1), target=target)
+    module = run_parser(kernel, *make_args(fp8_format, threads_per_warp, num_warps=1), target=target)
     module_text = module.str_nodebug()
     assert "amdg.scaled_downcast_fp8" in module_text
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
