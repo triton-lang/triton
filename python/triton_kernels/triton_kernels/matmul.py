@@ -709,9 +709,7 @@ def matmul(a, b, bias,
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Tensor scales are row/fiber scales, not scalar broadcasts. They are
-    # expected to carry the non-reduction dimension, e.g. (E, N, 1) or
-    # (E, 1, N), before this path keeps the two strides needed by the kernels.
+    # Row and column scales keep their strides. A zero-dimensional scale broadcasts with two zero strides.
     a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
     a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
     b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
