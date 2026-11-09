@@ -268,8 +268,8 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
-    a_mx_tensor_scale and b_mx_tensor_scale apply only to NVFP4 operands.
-    Each requires packed FP4 values and E4M3 block scales on the corresponding input.
+    Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
+    is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
 
     With b_sparsity_metadata, B is compressed along K. Sparsity metadata has shape
     [N, ceil(K/32)] for FP16, BF16 and FP8 or [N, ceil(K/64)] for byte-packed NVFP4.
