@@ -1556,3 +1556,40 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x256xf32, #blocked>
   }
 }
+
+// -----
+
+// A row of the B operand must span at least 128 bits in tcgen05 shared memory,
+// so 8-bit dots whose N per CTA is 8 fall back to MMAv2.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: i8_n8_mmav2_fallback
+  // CHECK-NOT: ttng.tc_gen5_mma
+  // CHECK: tt.dot {{.*}} -> tensor<64x8xi32, #[[$MMA]]>
+  tt.func public @i8_n8_mmav2_fallback(
+      %a: tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<64x8xi32, #blocked> {
+    %zero = arith.constant dense<0> : tensor<64x8xi32, #blocked>
+    %d = tt.dot %a, %b, %zero : tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x8xi32, #blocked>
+    tt.return %d : tensor<64x8xi32, #blocked>
+  }
+}
+
+// -----
+
+// Same rule for FP8 operands: an N = 8 tile has no 128-bit shared-memory rows.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: fp8_n8_mmav2_fallback
+  // CHECK-NOT: ttng.tc_gen5_mma
+  // CHECK: tt.dot {{.*}} -> tensor<128x8xf32, #[[$MMA]]>
+  tt.func public @fp8_n8_mmav2_fallback(
+      %a: tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<64x8xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x8xf32, #blocked> {
+    %zero = arith.constant dense<0.000000e+00> : tensor<128x8xf32, #blocked>
+    %d = tt.dot %a, %b, %zero : tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x8xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x8xf32, #blocked>
+    tt.return %d : tensor<128x8xf32, #blocked>
+  }
+}
