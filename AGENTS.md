@@ -5,7 +5,7 @@
 - Do not introduce hidden lane- or warp-varying scalars through inline assembly, hardware IDs, or other backdoors. Such programs violate the programming model and must not be used as reproducers or as justification for compiler guards. Hardware IDs used by compiler lowerings to implement layouts are different from source-level scalar values.
 - Block-uniform does not mean loop-invariant or identical across warp-specialized regions. Preserve physical alias, execution-region, and iteration-boundary checks when reasoning about synchronization, as well as the documented waits for asynchronous operations.
 - Scope compiler changes and hand-written MLIR tests to IR patterns reachable from Triton or Gluon Python programs, either directly from the frontend or through compiler passes.
-- Regression tests must respect the block programming model. Targeted PTX delays may expose an existing race, but must not change values, memory effects, synchronization, or thread participation, or introduce divergence.
+- Regression tests must respect the block programming model. Targeted PTX delays may expose an existing race, but must not change values, memory effects, synchronization, or thread participation, or introduce divergence. The idea here is that the agent should be allowed to write a test that explicitly adds a sleep inline PTX to show that a race exists, but that PTX shouldn't do things like getting the thread_id.
 
 ## Descriptor Memory Effects
 - Synchronization footprints conservatively include storage reserved by zero bases in a descriptor's allocation layout. True subviews restrict the logical coordinates while retaining that allocation padding. This applies to all shared-memory and tensor-memory accesses, including FP4 padding.
