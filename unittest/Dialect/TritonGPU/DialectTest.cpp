@@ -583,10 +583,9 @@ protected:
     EXPECT_EQ(dstEnc.getPartitionDim(), partitionDim);
     EXPECT_EQ(dstEnc.getNumGroups(), numGroups);
     EXPECT_EQ(toLinearLayout(dstShape, dstEnc),
-              reshapeLayout(&ctx,
-                            toLinearLayout(srcTy.getShape(),
-                                           srcTy.getEncoding()),
-                            dstShape));
+              reshapeLayout(
+                  &ctx, toLinearLayout(srcTy.getShape(), srcTy.getEncoding()),
+                  dstShape));
   }
 
   MLIRContext ctx;
