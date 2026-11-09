@@ -875,8 +875,8 @@ def TT_ReduceOp: TT_Op<"reduce",
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
-      // Returns the CombineOp iff this ReduceOp's region contains only
-      // one CombineOp other than the return, or nullptr if not applicable.
+      // Returns the binary op on the block arguments whose result is returned
+      // directly, or nullptr. The region may contain other operations.
       ::mlir::Operation *getSingleCombiner();
 
       // Proves that exchanging the two input tuples preserves every result,

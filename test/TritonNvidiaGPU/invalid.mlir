@@ -205,8 +205,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 !buffered_fp8 = !ttg.memdesc<128x128xf8E4M3FN, #buffered, #ttg.shared_memory>
 !scales = !ttg.memdesc<128x4xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 !d = !ttg.memdesc<128x128xf32, #d, #ttng.tensor_memory, mutable>
+!bar = !ttg.memdesc<1xi64, #buffered, #ttg.shared_memory, mutable>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_missing_barrier_predicate(%a: !shared, %b: !transposed, %d: !d, %p: i1, %bar: !bar) {
+    // expected-error @below {{expected one predicate per completion barrier}}
+    "ttng.tc_gen5_mma"(%a, %b, %d, %p, %p, %bar)
+        <{is_async, operandSegmentSizes = array<i32: 1, 1, 1, 0, 1, 1, 1, 0>}>
+        : (!shared, !transposed, !d, i1, i1, !bar) -> ()
+    tt.return
+  }
+
   tt.func @mma_rejects_transposed_f32_lhs(%a: !transposed, %b: !transposed, %d: !d, %p: i1) {
     // expected-error @below {{transposed float32 shared-memory operands require unsupported 32-byte swizzle atomicity}}
     ttng.tc_gen5_mma %a, %b, %d, %p, %p : !transposed, !transposed, !d
@@ -418,6 +427,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @tmem_layout_cta_mismatch() {
     // expected-error @+1 {{Layout has 1 CTAs per CGA, but the context requires 2 CTAs per CGA.}}
     %0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [2, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!mem = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-warps" = 2 : i32, ttg.target = "cuda:100"} {
+  tt.func @tmem_load_two_warps(%src: !mem) {
+    // expected-error @+1 {{result register layout must have at least 4 warps}}
+    %0 = ttng.tmem_load %src : !mem -> tensor<128x128xf32, #blocked>
     tt.return
   }
 }
@@ -2287,9 +2309,24 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
 #fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6p2x16"}>
 #bytes = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 !desc = !tt.tensordesc<1x64xui8, #fp6>
-!src = !ttg.memdesc<1x64xi8, #fp6, #ttg.shared_memory>
+!src = !ttg.memdesc<1x64xi8, #bytes, #ttg.shared_memory>
 tt.func @fp6_tma_store_box_width(%desc: !desc, %coord: i32, %src: !src) {
-  // expected-error @below {{FP6 TMA requires a 128-value box}}
+  // expected-error @below {{TMA descriptor and shared memory packing must match}}
   ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %src : !desc, !src
   tt.return
+}
+
+// -----
+
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6x16_p32"}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!desc = !tt.tensordesc<2x64xui8, #fp6>
+!dst = !ttg.memdesc<2x64xi8, #fp6, #ttg.shared_memory, mutable>
+!mbar = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+module attributes {ttg.target = "cuda:103"} {
+  tt.func @fp6_load_box64(%desc: !desc, %coord: i32, %dst: !dst, %bar: !mbar, %pred: i1) {
+    // expected-error @below {{64-value FP6 TMA requires a matching unswizzled [M, 64] store}}
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred : !desc, !mbar -> !dst
+    tt.return
+  }
 }

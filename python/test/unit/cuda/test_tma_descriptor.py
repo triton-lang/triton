@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import fp6_values, pack_fp6, is_cuda
+from triton._internal_testing import fp6_values, pack_fp6, is_blackwell_ultra, is_cuda
 from triton.backends.nvidia.compiler import get_ptx_version_from_options
 from triton.language.extra.cuda import to_fp6
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
@@ -117,14 +117,51 @@ def test_ragged_tma(dtype):
 
 
 @triton.jit
-def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr, BLOCK_M: tl.constexpr):
-    offsets = tl.arange(0, BLOCK_M * 128)
+def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr, BLOCK_M: tl.constexpr, WIDTH: tl.constexpr = 128,
+                    COL: tl.constexpr = 128):
+    offsets = tl.arange(0, BLOCK_M * WIDTH)
     codes = to_fp6(tl.load(src + offsets), FORMAT)
     tl.static_assert(codes.dtype == tl.uint8)
     tl.store(raw + offsets, codes)
     if desc is None:
-        desc = tl.make_tensor_descriptor(dst, [BLOCK_M + 2, 256], [192, 1], [BLOCK_M, 128], fp6_format=FORMAT)
-    desc.store([1, 128], codes.reshape(BLOCK_M, 128))
+        desc = tl.make_tensor_descriptor(dst, [BLOCK_M + 2, 256], [192, 1], [BLOCK_M, WIDTH], fp6_format=FORMAT)
+    desc.store([1, COL], codes.reshape(BLOCK_M, WIDTH))
+
+
+def test_fp6_tma_store_box64_sm100(capfd):
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    signature = {"src": "*fp32", "dst": "*u8", "raw": "*u8", "desc": "tensordesc<fp6e2m3[2,64]>"}
+    constants = {"FORMAT": "e2m3", "BLOCK_M": 2, "WIDTH": 64, "COL": 0}
+    source = ASTSource(_fp6_desc_store, {**signature, **dict.fromkeys(constants, "constexpr")}, constants)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert "64-value FP6 TMA stores require SM103" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
+@pytest.mark.parametrize("rows,columns", [(1, 64), (1, 128), (2, 64), (2, 128), (256, 128)])
+def test_fp6_tma_store_host_box64(fmt, rows, columns):
+    if not is_blackwell_ultra():
+        pytest.skip("64-value FP6 stores require SM103")
+
+    row_bytes = columns * 6 // 8
+    pitch = 48 if columns == 64 else 112
+    storage = torch.full((16 + (rows + 2) * pitch + 16, ), 0xa5, device="cuda", dtype=torch.uint8)
+    dst = storage[16:-16].view(rows + 2, pitch)[:, :row_bytes]
+    desc = TensorDescriptor.from_tensor(dst, [rows, 64], fp6_format=fmt)
+    codes = (torch.arange(rows, device="cuda")[:, None] * 7 + torch.arange(64, device="cuda")) % 64
+    expected = storage.clone()
+    expected[16:-16].view(rows + 2, pitch)[1:-1, row_bytes - 48:row_bytes] = pack_fp6(codes)
+    raw = torch.empty_like(codes, dtype=torch.uint8)
+    kernel = _fp6_desc_store[(1, )](fp6_values(fmt, codes), dst, raw, desc, fmt, rows, 64, columns - 64)
+    torch.testing.assert_close(storage, expected)
+    assert kernel.metadata.global_scratch_size == 0
+    assert f"!tt.tensordesc<{rows}x64xui8," in kernel.asm["ttgir"]
+    assert 'padding = "b6p2x16"' in kernel.asm["ttgir"]
+    assert "cp.async.bulk.tensor.2d.global.shared::cta" in kernel.asm["ptx"]
+    assert "tensormap.replace" not in kernel.asm["ptx"]
 
 
 @pytest.mark.parametrize("block_m", [1, 2, 16, 128, 256])

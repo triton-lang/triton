@@ -88,6 +88,11 @@ public:
                   triton::ReduceOp op, unsigned reduceLaneIdMask,
                   unsigned broadcastLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
+  bool preferThreePredicateChains() const override {
+    // ptxas can fuse comparisons into each chain and merge the three
+    // partial predicates with one PLOP3.
+    return true;
+  }
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,

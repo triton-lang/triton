@@ -12,18 +12,20 @@ TRITON_MAX_TENSOR_NUMEL = 1048576
 
 
 def fp6_logical_shape(shape):
-    if shape[-1] % 96:
-        raise ValueError("packed FP6 rows must contain a multiple of 96 bytes")
+    if shape[-1] % 48:
+        raise ValueError("packed FP6 rows must contain a multiple of 48 bytes")
     return [*shape[:-1], shape[-1] // 3 * 4]
 
 
 def validate_fp6_box(width, inner, outer_strides, padding, *, host=False):
-    if width != 128 or padding != "zero":
-        raise ValueError("FP6 requires zero padding and a 128-value box")
+    widths = (64, 128) if host else (128, )
+    if width not in widths or padding != "zero":
+        raise ValueError("FP6 requires zero padding and a 128-value box or a 64-value host store box")
     if (host or isinstance(inner, int)) and inner % width:
         raise ValueError("FP6 inner extent must be a multiple of the box width")
-    if any((host or isinstance(s, int)) and s % 32 for s in outer_strides):
-        raise ValueError("FP6 outer byte strides must be multiples of 32")
+    alignment = width // 4
+    if any((host or isinstance(s, int)) and s % alignment for s in outer_strides):
+        raise ValueError(f"FP6 outer byte strides must be multiples of {alignment}")
 
 
 def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:

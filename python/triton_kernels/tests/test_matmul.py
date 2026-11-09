@@ -369,8 +369,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
-        if swiglu_opts is not None and do_gamma:
-            pytest.skip("NYI: swiglu and gamma not supported together")
 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
@@ -385,9 +383,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("NYI: MXFP4 x dense FP16/BF16 not tested on AMD GPU")
         if is_persistent:
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
-        # FIXME: this works on nvidia; looks like some sort of bug on AMD?
-        if do_gamma and swiglu_opts is not None:
-            pytest.skip("NYI: gamma and swiglu not supported together on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
         if act_dtype_str in ("float32", "float64"):
@@ -395,6 +390,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
+
+    if do_gamma and swiglu_opts is not None and split_k is not None and split_k > 1:
+        # split-K moves the activation into the reduction, after gammas were applied
+        pytest.skip("NYI: split-K applies gammas before the fused activation")
 
     if b_hbm_swizzling:
         if is_hip():
@@ -636,12 +635,20 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             gather_indx,
             scatter_indx,
             reference_precision,
-            gammas=gammas,
+            # with a fused activation, the kernel applies gammas after it, so apply them after swiglu below
+            gammas=gammas if swiglu_opts is None else None,
         )
     if c_dtype.is_nvfp4:
         assert ref_y.dtype == torch.float32
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
+        if gammas is not None:
+            out_gammas = gammas
+            if scatter_indx is not None:
+                # scatter_indx is a full permutation here, so fixed-shape indexing works under compile warmup
+                out_gammas = torch.empty_like(gammas)
+                out_gammas[scatter_indx] = gammas
+            ref_y = (ref_y.float() * out_gammas[:, None]).to(ref_y.dtype)
     if c_dtype.has_global_scale:
         ref_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
 
