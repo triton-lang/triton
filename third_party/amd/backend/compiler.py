@@ -811,11 +811,7 @@ class HIPBackend(BaseBackend):
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
-        #
-        # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
-        # not serializable to/from MIR YAML
-        if not (knobs.amd.swap_mir or knobs.amd.dump_mir):
-            amd.set_all_fn_arg_inreg(kernel_fn)
+        amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
             paths = [get_amd_bitcode_path(name) for name in ("asanrtl", "ocml", "ockl")]
