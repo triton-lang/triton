@@ -53,8 +53,9 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // NOTE: only for remapped values.
   addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                               ValueRange inputs, Location loc) {
-    auto cast =
-        triton::gpu::ConvertLayoutOp::create(builder, loc, tensorType, inputs);
+    auto cast = triton::gpu::ConvertLayoutOp::create(
+        builder, loc, tensorType, inputs,
+        triton::gpu::ConvertLayoutOp::Properties{});
     return cast.getResult();
   });
 }

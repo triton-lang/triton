@@ -215,26 +215,6 @@ def builtin_libdevice_div_rn_kernel(
     tl.store(libdevice_ptr + offsets, libdevice.div_rn(x, y), mask=mask)
 
 
-@triton.jit
-def builtin_libdevice_fma_kernel(
-    x_ptr,
-    y_ptr,
-    z_ptr,
-    builtin_ptr,
-    libdevice_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    z = tl.load(z_ptr + offsets, mask=mask)
-
-    tl.store(builtin_ptr + offsets, tl.fma(x, y, z), mask=mask)
-    tl.store(libdevice_ptr + offsets, libdevice.fma(x, y, z), mask=mask)
-
-
 def _random_payloads(generator, n_elements):
     return torch.randint(-(2**31), 2**31 - 1, (n_elements,), dtype=torch.int32, device="cuda", generator=generator)
 
@@ -281,30 +261,6 @@ def test_fpsan_libdevice_div_rn_equivalence(fresh_knobs):
     external = torch.empty_like(inputs[0])
 
     builtin_libdevice_div_rn_kernel[(triton.cdiv(n_elements, block_size),)](
-        *(triton.TensorWrapper(value, dtype=torch.float32) for value in inputs),
-        triton.TensorWrapper(builtin, dtype=torch.float32),
-        triton.TensorWrapper(external, dtype=torch.float32),
-        n_elements,
-        BLOCK_SIZE=block_size,
-    )
-
-    assert torch.equal(builtin, external)
-
-
-def test_fpsan_libdevice_fma_equivalence(fresh_knobs):
-    if not is_cuda() or not torch.cuda.is_available():
-        pytest.skip("test requires CUDA")
-
-    fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    n_elements = 1024
-    block_size = 256
-    generator = torch.Generator(device="cuda")
-    generator.manual_seed(0)
-    inputs = [_random_payloads(generator, n_elements) for _ in range(3)]
-    builtin = torch.empty_like(inputs[0])
-    external = torch.empty_like(inputs[0])
-
-    builtin_libdevice_fma_kernel[(triton.cdiv(n_elements, block_size),)](
         *(triton.TensorWrapper(value, dtype=torch.float32) for value in inputs),
         triton.TensorWrapper(builtin, dtype=torch.float32),
         triton.TensorWrapper(external, dtype=torch.float32),

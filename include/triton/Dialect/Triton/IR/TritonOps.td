@@ -255,6 +255,7 @@ def TT_AddPtrOp : TT_Op<"addptr",
 // Load/Store Ops
 //
 def TT_LoadOp : TT_Op<"load", [
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
@@ -298,10 +299,11 @@ def TT_LoadOp : TT_Op<"load", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 def TT_StoreOp : TT_Op<"store", [
+  FoldTruePredicate,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -335,7 +337,7 @@ def TT_StoreOp : TT_Op<"store", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizer = 1;
+    let hasCanonicalizeMethod = 1;
 }
 
 //
@@ -356,6 +358,7 @@ def TT_GridDependencyLaunchDependentsOp
 }
 
 def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
@@ -389,6 +392,7 @@ def TT_AtomicLoadOp : TT_Op<"atomic_load", [
 }
 
 def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
@@ -456,6 +460,7 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
 }
 
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  FoldTruePredicate,
   AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
@@ -492,6 +497,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       functional-type(operands, $result)
     }];
 
+    let hasVerifier = 1;
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -860,6 +866,10 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -869,8 +879,8 @@ def TT_ReduceOp: TT_Op<"reduce",
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
-      // Returns the CombineOp iff this ReduceOp's region contains only
-      // one CombineOp other than the return, or nullptr if not applicable.
+      // Returns the binary op on the block arguments whose result is returned
+      // directly, or nullptr. The region may contain other operations.
       ::mlir::Operation *getSingleCombiner();
 
       // Proves that exchanging the two input tuples preserves every result,
@@ -897,6 +907,10 @@ def TT_ScanOp: TT_Op<"scan",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Associative scan using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -925,6 +939,10 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
                                                    SameOperandsAndResultShape,
                                                    RecursiveMemoryEffects]> {
     let summary = "Map a scalar subregion over a tensor";
+    let description = [{
+      The scalar function and its callees may contain memory-effect-free
+      operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region AnyRegion:$scalarOp);
@@ -990,6 +1008,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 
     let hasFolder = 1;
     let hasVerifier = 1;
+    let hasCanonicalizer = 1;
 }
 
 //
@@ -1022,7 +1041,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 //
 // Histogram Op
 //
-def TT_HistogramOp : TT_Op<"histogram", [Pure,
+def TT_HistogramOp : TT_Op<"histogram", [Pure, FoldTruePredicate,
     TypesMatchWith<"mask type matches src type",
                  "src", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {

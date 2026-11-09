@@ -473,11 +473,23 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "unsigned":$swizzlingByteWidth,
     "bool":$transposed,
     "unsigned":$elementBitWidth,
-    "bool":$fp4Padded,
+    "NVMmaPadding":$padding,
     "CGAEncodingAttr":$CGALayout
   );
 
+  let skipDefaultBuilders = 1;
   let builders = [
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "NVMmaPadding":$padding,
+                     "CGAEncodingAttr":$CGALayout), [{
+      return $_get(context, swizzlingByteWidth, transposed, elementBitWidth, padding, CGALayout);
+    }]>,
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "bool":$fp4Padded,
+                     "CGAEncodingAttr":$CGALayout), [{
+      return get(context, swizzlingByteWidth, transposed, elementBitWidth,
+                 fp4Padded ? NVMmaPadding::Fp4 : NVMmaPadding::None, CGALayout);
+    }]>,
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
@@ -487,7 +499,7 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
+        return get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
@@ -497,6 +509,15 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     static unsigned getDefaultSwizzlingByteWidth(
         ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
         CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
+
+    bool isPaddedFp4() const { return getPadding() == NVMmaPadding::Fp4; }
+    bool isPaddedFp6() const {
+      return getPadding() == NVMmaPadding::B6x16P32 || getPadding() == NVMmaPadding::B6P2x16;
+    }
+    static bool isPackedFp6(Attribute encoding) {
+      auto mma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
+      return mma && mma.getPadding() == NVMmaPadding::B6x16P32;
+    }
 
     int getPerPhase() const;
     int getMaxPhase() const;
@@ -901,7 +922,7 @@ for
         remainingCTAs /= CTAsPerCGA[i];
       }
 
-      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
+      CTAsPerCGA[CTAOrder.back()] *= remainingCTAs; // wrap at CTA level
 
       CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);

@@ -647,6 +647,47 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   Py_DECREF(stridesFast);
   stridesFast = NULL;
 
+  // cuTensorMapEncodeTiled requires 128 FP6 values. SM103 also accepts 64
+  // for a b6p2x16 store. Encode just that unswizzled 2D map here.
+  if (elemType == CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B &&
+      blockSizeInt[0] == 64) {
+    CUdevice device;
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    if (major != 10 || minor != 3) {
+      PyErr_SetString(PyExc_ValueError,
+                      "64-value FP6 TMA stores require SM103");
+      goto cleanup;
+    }
+    if (rank != 2 || swizzle || padding || elemSize != 1 || !global_address ||
+        global_address % 16 || !shapeInt[0] || shapeInt[0] % 64 ||
+        shapeInt[0] > (1ULL << 32) || !shapeInt[1] ||
+        shapeInt[1] > (1ULL << 32) || !stridesLL[0] || stridesLL[0] % 16 ||
+        stridesLL[0] / 16 > UINT32_MAX || !blockSizeInt[1] ||
+        blockSizeInt[1] > 256) {
+      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
+      goto cleanup;
+    }
+    uint32_t words[32] = {
+        [0] = (uint32_t)global_address,
+        [1] = global_address >> 32,
+        [2] = 0x690, // Tiled 2D FP6, no swizzle.
+        [3] = stridesLL[0] >> 4,
+        [8] = shapeInt[0] - 1,
+        [9] = shapeInt[1] - 1,
+        [13] = 63U << 24,
+        [14] = blockSizeInt[1] - 1,
+    };
+    _Static_assert(sizeof(words) == sizeof(CUtensorMap),
+                   "unexpected tensor map size");
+    memcpy(&desc->tensorMap, words, sizeof(words));
+    return (PyObject *)desc;
+  }
+
   CUtensorMapFloatOOBfill fill =
       (padding == 1) ? CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
                      : CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE;

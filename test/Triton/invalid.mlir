@@ -32,6 +32,30 @@ tt.func @atomic_store_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>, %value: tensor<32x
 
 // -----
 
+tt.func @atomic_and_float(%ptr: !tt.ptr<f32>, %val: f32) {
+  // expected-error @+1 {{and requires an integer element type}}
+  %old = tt.atomic_rmw and, relaxed, gpu, %ptr, %val : (!tt.ptr<f32>, f32) -> f32
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_or_float(%ptr: !tt.ptr<f64>, %val: f64) {
+  // expected-error @+1 {{or requires an integer element type}}
+  %old = tt.atomic_rmw or, relaxed, gpu, %ptr, %val : (!tt.ptr<f64>, f64) -> f64
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_xor_float(%ptr: tensor<32x!tt.ptr<f32>>, %val: tensor<32xf32>) {
+  // expected-error @+1 {{xor requires an integer element type}}
+  %old = tt.atomic_rmw xor, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<f32>>, tensor<32xf32>) -> tensor<32xf32>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>) {
   // expected-error @+1 {{result type matches expected shape}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> i1
@@ -244,6 +268,19 @@ tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tenso
       tt.reduce.return %1, %2 : f32, f32
     }) : (tensor<32x32x64xf32>, tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>)
     tt.return %0#0, %0#1 : tensor<32x64xf32>, tensor<16x64xf32>
+}
+
+// -----
+
+tt.func @reduce_with_release(%addresses: tensor<32xi64>) {
+  %0 = "tt.reduce" (%addresses) ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %ptr = tt.int_to_ptr %lhs : i64 -> !tt.ptr<i64>
+    // expected-error @+1 {{'tt.atomic_store' op is not allowed in a tt.reduce callback}}
+    tt.atomic_store release, gpu, %ptr, %rhs : !tt.ptr<i64>
+    tt.reduce.return %lhs : i64
+  }) {axis = 0 : i32} : (tensor<32xi64>) -> i64
+  tt.return
 }
 
 // -----
@@ -744,7 +781,7 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
   %cst = arith.constant dense<0> : tensor<256xi32>
   "tt.map_elementwise" (%ptr, %cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: !tt.ptr<i32>, %arg1: i32):
-     // expected-error @below {{Stores are not supported inside map_elementwise}}
+     // expected-error @below {{'tt.store' op is not allowed in a tt.map_elementwise callback}}
      tt.store %arg0, %arg1 : !tt.ptr<i32>
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)

@@ -528,11 +528,9 @@ BINARY_EXTERN_SYMBOLS = {
 
 TERNARY_EXTERN_SYMBOLS = {
     "cuda": [
-        ("fma", "__nv_fmaf"),
+        ("fma_rz", "__nv_fmaf_rz"),
     ],
-    "hip": [
-        ("fma", "__ocml_fma_f32"),
-    ],
+    "hip": [],
 }
 
 MIXED_EXTERN_SYMBOLS = {
@@ -1321,8 +1319,8 @@ def _extern_ternary_math_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl
     x = gl.load(x_ptr + offs, mask=mask, other=0.0)
     y = gl.load(y_ptr + offs, mask=mask, other=0.0)
     z = gl.load(z_ptr + offs, mask=mask, other=0.0)
-    if OP == "fma":
-        out = gl.extra.libdevice.fma(x, y, z)
+    if OP == "fma_rz":
+        out = gl.extra.libdevice.fma_rz(x, y, z)
     else:
         gl.static_assert(False, "unsupported OP")
     gl.store(out_ptr + offs, out, mask=mask)
@@ -1409,10 +1407,7 @@ def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
         y.cpu().numpy().astype(np.int32, copy=False),
         z.cpu().numpy().astype(np.int32, copy=False),
     ]
-    if symbol == "__nv_fmaf":
-        exp_bits = _expected_fma_i32(*input_bits)
-    else:
-        exp_bits = _expected_extern_variadic_tag_i32(input_bits, symbol)
+    exp_bits = _expected_extern_variadic_tag_i32(input_bits, symbol)
     _assert_payload_equal(out, exp_bits)
 
 

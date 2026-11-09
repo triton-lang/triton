@@ -271,8 +271,18 @@ chooseWmmaInstruction(tt::DotOp dot, int wmmaVersion,
         {fp8e5, fp8e5, f32},
     });
   }
-  if (wmmaVersion == 3)
-    candidates.push_back({f32, f32, f32});
+  if (wmmaVersion == 3) {
+    Type fp8e4nv = b.getType<Float8E4M3FNType>();
+    Type fp8e5 = b.getType<Float8E5M2Type>();
+    candidates.append({
+        {f32, f32, f32},
+        {f16, f16, f16},
+        {fp8e4nv, fp8e4nv, f16},
+        {fp8e4nv, fp8e5, f16},
+        {fp8e5, fp8e4nv, f16},
+        {fp8e5, fp8e5, f16},
+    });
+  }
 
   // Use simple costmodel to define optimal set of the dot operands.
   // Most expensive - accuracy loss conversions:
@@ -393,7 +403,8 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
   } else {
     if (oldElemType.isF16() && newElemType.isF32())
       castedTensor =
-          arith::ExtFOp::create(rewriter, loc, castedType, convertedTensor);
+          arith::ExtFOp::create(rewriter, loc, castedType, convertedTensor,
+                                arith::FastMathFlagsAttr{});
     else if (oldElemType.isF32() && newElemType.isF16())
       castedTensor =
           arith::TruncFOp::create(rewriter, loc, castedType, convertedTensor);
@@ -1275,7 +1286,8 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
   Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
                                 .cloneWith(std::nullopt, promotedType);
-  return triton::FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+  return triton::FpToFpOp::create(builder, loc, tensorPromotedType, operand,
+                                  RoundingModeAttr{});
 }
 
 // Promote operands of dot op if the existing combination is not natively

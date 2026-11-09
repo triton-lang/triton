@@ -312,10 +312,10 @@ Value emitMemoryThreadPredicate(
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
   if (op->getParentOfType<ThreadScopeOp>()) {
     auto block = StringAttr::get(op->getContext(), "block");
-    auto domain = ThreadDomainAttr::get(op->getContext(), 0, 0,
-                                        freeVarMasks.lookup(block) &
-                                            (lookupNumCTAs(op) - 1));
-    return emitThreadPredicate(domain, rewriter, op->getLoc(), targetInfo);
+    llvm::MapVector<StringAttr, int32_t> residualMasks;
+    residualMasks[block] = freeVarMasks.lookup(block) & (lookupNumCTAs(op) - 1);
+    return emitRedundantThreadPredicate(residualMasks, rewriter, op->getLoc(),
+                                        targetInfo);
   }
   return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
                                       targetInfo);
@@ -1182,7 +1182,18 @@ SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
 
 Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
   assert(vals.size() > 0);
-  auto vecType = vec_ty(vals[0].getType(), vals.size());
+  Type elemTy = vals[0].getType();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(elemTy);
+  if (bits < 32 && vals.size() * bits > 32) {
+    assert(llvm::isPowerOf2_64(vals.size()) && "expected a power-of-two pack");
+    // Join 32-bit groups so the backend can reuse packed producer results.
+    size_t half = vals.size() / 2;
+    Value lo = packLLVector(loc, vals.take_front(half), rewriter);
+    Value hi = packLLVector(loc, vals.take_back(half), rewriter);
+    auto mask = llvm::to_vector(llvm::seq<int32_t>(0, vals.size()));
+    return LLVM::ShuffleVectorOp::create(rewriter, loc, lo, hi, mask);
+  }
+  auto vecType = vec_ty(elemTy, vals.size());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value vec = b.undef(vecType);
   for (int i = 0; i < vals.size(); i++) {
@@ -1478,7 +1489,8 @@ LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
 LLVM::CallIntrinsicOp
 createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args) {
-  auto op = LLVM::CallIntrinsicOp::create(builder, loc, types, args);
+  auto op = LLVM::CallIntrinsicOp::create(builder, loc, types, args,
+                                          LLVM::CallIntrinsicOp::Properties{});
   op.getProperties().setIntrin(builder.getStringAttr(intrinsic));
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});

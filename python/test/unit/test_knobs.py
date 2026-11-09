@@ -236,10 +236,10 @@ def test_amd_llvm_options_concurrent():
 
 
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
-    ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", [], True),
-    ("gfx950", True, "disable-lsr", [], False),
-    ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
+    ("gfx90a", True, None, ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx942", False, "1", ["instcombine-simplify-vector-elts-depth=32"], True),
+    ("gfx950", True, "disable-lsr", ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx1250", True, "0", ["instcombine-simplify-vector-elts-depth=32", "amdgpu-anti-hints-for-va-vdst"], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
                              monkeypatch):
@@ -531,11 +531,13 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.use_buffer_atomics
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+    fresh_knobs.amd.use_buffer_ops = True
 
     with fresh_knobs.amd.scope():
         # Use the environment
@@ -548,18 +550,38 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_atomics
     assert fresh_knobs.amd.use_buffer_ops
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+
+def test_use_buffer_ops_is_read_once(fresh_knobs, monkeypatch):
+    # use_buffer_ops is read at import time, only refresh_knobs() re-reads it
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS", raising=False)
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+    assert fresh_knobs.amd.use_buffer_ops
+    triton.knobs.refresh_knobs()
+    assert not fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    triton.knobs.refresh_knobs()
+    assert fresh_knobs.amd.use_buffer_ops
+
+    # Explicit assignment still wins
+    fresh_knobs.amd.use_buffer_ops = False
+    assert not fresh_knobs.amd.use_buffer_ops
 
 
 def test_env_updated(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.use_buffer_ops = False
-    assert os.getenv("AMDGCN_USE_BUFFER_OPS") == "0"
+    fresh_knobs.amd.use_buffer_atomics = False
+    assert os.getenv("AMDGCN_USE_BUFFER_ATOMICS") == "0"
     # Just triple checking both APIs give us what we expect
-    assert os.environ["AMDGCN_USE_BUFFER_OPS"] == "0"
+    assert os.environ["AMDGCN_USE_BUFFER_ATOMICS"] == "0"
 
     fresh_knobs.cache.home_dir = "/foo/bar"
     assert os.getenv("TRITON_HOME") == "/foo/bar"

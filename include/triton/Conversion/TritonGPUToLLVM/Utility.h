@@ -52,6 +52,44 @@ namespace mlir::triton {
 
 class ModuleAxisInfoAnalysis;
 
+// Split the mixed attributes accepted by the old aggregate builders.
+template <typename Op> struct BuilderAttributes {
+  typename Op::Properties properties{};
+  SmallVector<NamedAttribute> discardableAttrs;
+};
+
+template <typename Op>
+BuilderAttributes<Op> splitBuilderAttributes(OpBuilder &builder, Location loc,
+                                             ArrayRef<NamedAttribute> attrs) {
+  BuilderAttributes<Op> result;
+  if constexpr (std::is_same_v<typename Op::Properties, EmptyProperties>) {
+    llvm::append_range(result.discardableAttrs, attrs);
+  } else {
+    Op::populateDefaultProperties(
+        OperationName(Op::getOperationName(), builder.getContext()),
+        result.properties);
+    LogicalResult converted = Op::setPropertiesFromAttr(
+        result.properties, builder.getDictionaryAttr(attrs),
+        [&]() { return emitError(loc, "failed to convert properties"); });
+    assert(succeeded(converted) && "failed to convert properties");
+    (void)converted;
+
+    auto properties = dyn_cast_or_null<DictionaryAttr>(
+        Op::getPropertiesAsAttr(builder.getContext(), result.properties));
+    for (NamedAttribute attr : attrs) {
+      StringRef name = attr.getName().getValue();
+      bool isProperty = properties && properties.contains(name);
+      if (name == "operand_segment_sizes")
+        isProperty |= properties && properties.contains("operandSegmentSizes");
+      if (name == "result_segment_sizes")
+        isProperty |= properties && properties.contains("resultSegmentSizes");
+      if (!isProperty)
+        result.discardableAttrs.push_back(attr);
+    }
+  }
+  return result;
+}
+
 // The address of the descriptor's logical origin in its memory space.
 Value getMemDescAddress(RewriterBase &rewriter, Location loc,
                         const LLVMTypeConverter *typeConverter,
@@ -365,7 +403,8 @@ Value emitThreadPredicate(ThreadDomainAttr domain,
                           ConversionPatternRewriter &rewriter, Location loc,
                           const TargetInfoBase &targetInfo);
 
-// Thread-local memory operations already execute in their owner's branch.
+// Inside an owner's branch, only redundant CTAs need a predicate.
+// An empty value means all participating threads can execute the operation.
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
@@ -787,6 +826,14 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
+
+// Use storePred is supplied to skip selected producer lanes.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,

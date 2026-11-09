@@ -403,6 +403,23 @@ tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #share
 
 // -----
 
+#fp6 = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, padding = "b6x16_p32"}>
+#bytes = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func @memdesc_reinterpret_partial_fp6_atom(%arg: !ttg.memdesc<1x8xi8, #fp6, #smem, 1x16>) {
+    // expected-error @+1 {{cannot reinterpret an FP6 subview that splits a 16-value packing atom}}
+    %0 = ttg.memdesc_reinterpret %arg : !ttg.memdesc<1x8xi8, #fp6, #smem, 1x16> -> !ttg.memdesc<1x8xi8, #bytes, #smem>
+    tt.return
+}
+
+tt.func @memdesc_subslice_partial_fp6_atom(%arg: !ttg.memdesc<1x32xi8, #fp6, #smem>) {
+    // expected-error @+1 {{FP6 subviews must preserve complete 16-value packing atoms}}
+    %0 = ttg.memdesc_subslice %arg [0, 8] : !ttg.memdesc<1x32xi8, #fp6, #smem> -> !ttg.memdesc<1x8xi8, #fp6, #smem, 1x32>
+    tt.return
+}
+
+// -----
+
 #shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 #smem = #ttg.shared_memory
@@ -684,6 +701,17 @@ tt.func @warp_specialize_mismatch_partition_count() {
 
 // -----
 
+tt.func @warp_specialize_no_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // expected-error @below {{'ttg.warp_specialize' op requires at least one worker partition}}
+  %0 = ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield %arg1 : i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// -----
+
 tt.func @not_power_of_2() {
   // expected-error @below {{'ttg.warp_specialize' op partition #0 number of warps (3) must be a power of 2}}
   ttg.warp_specialize()
@@ -731,6 +759,9 @@ tt.func @bad_default_yields(%arg0: i32) {
   default {
     // expected-error @below {{'ttg.warp_yield' op has 0 operands but parent op expected 1}}
     ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> i32
   tt.return
 }
@@ -742,6 +773,9 @@ tt.func @bad_default_yields(%arg0: i32, %arg1: i64) {
   default {
     // expected-error @below {{'ttg.warp_yield' op operand #0 has type 'i64' but parent op expected 'i32'}}
     ttg.warp_yield %arg1 : i64
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> i32
   tt.return
 }
@@ -828,8 +862,14 @@ tt.func @illegal_ws_nest() {
     ttg.warp_specialize()
     default {
       ttg.warp_yield
+    }
+    partition0() num_warps(1) {
+      ttg.warp_return
     } : () -> ()
     ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -1113,6 +1153,29 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @thread_handoff_partial_cta(%value: i32) {
     // expected-error @+1 {{cross-CTA handoff requires CTA zero as its source}}
     %result = ttg.thread_handoff %value <31, 3, 1> -> <0, 0> : i32
+    tt.return
+  }
+}
+
+// -----
+
+#generic = #ttg.generic_linear<{register = [], lane = [[2], [1], [8], [32], [64]], warp = [[17], [4]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @generic_linear_on_nvidia() {
+    // expected-error @+1 {{Distributed layouts on non AMD targets should be permutation matrices with zero columns}}
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #generic>
+    tt.return
+  }
+}
+
+// -----
+
+#generic = #ttg.generic_linear<{register = [[1, 0], [0, 1]], lane = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]], warp = [[16, 8], [0, 8]], block = []}>
+#slice = #ttg.slice<{dim = 0, parent = #generic}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @generic_linear_slice_on_nvidia() {
+    // expected-error @+1 {{Distributed layouts on non AMD targets should be permutation matrices with zero columns}}
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #slice>
     tt.return
   }
 }

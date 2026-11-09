@@ -1422,16 +1422,23 @@ class slice:
 
 class tensor_descriptor_base_type(base_type):
 
-    def __init__(self, block_type: block_type):
+    def __init__(self, block_type: block_type, fp6_format=None):
         self.block_type = block_type
+        self.fp6_format = fp6_format
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor_base, int]:
-        value = tensor_descriptor_base(handles[cursor], self.block_type)
+        value = tensor_descriptor_base(handles[cursor], self.block_type, self.fp6_format)
         return value, cursor + 1
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        is_signed = self.block_type.element_ty.is_int_signed()
-        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder), is_signed))
+        out.append(self._to_ir(builder))
+
+    def _to_ir(self, builder):
+        if self.fp6_format and (builder.options.backend_name != "cuda"
+                                or builder.options.arch not in ("sm100", "sm103")):
+            raise ValueError("FP6 TMA stores require SM100 or SM103")
+        return builder.create_tensor_descriptor_type(self.block_type.to_ir(builder),
+                                                     self.block_type.element_ty.is_int_signed(), self.fp6_format)
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1440,13 +1447,13 @@ class tensor_descriptor_base_type(base_type):
     def __eq__(self, other) -> bool:
         if type(other) is not type(self):
             return False
-        return self.block_type == other.block_type
+        return self.block_type == other.block_type and self.fp6_format == other.fp6_format
 
     def __neq__(self, other) -> bool:
         return not (self == other)
 
     def mangle(self) -> str:
-        return f"TD{self.block_type.mangle()}"
+        return f"TD{self.fp6_format or ''}{self.block_type.mangle()}"
 
 
 class tensor_descriptor_base(base_value):
@@ -1454,12 +1461,12 @@ class tensor_descriptor_base(base_value):
     A tensor descriptor with unknown shape and strides
     """
 
-    def __init__(self, handle, block_type: block_type):
+    def __init__(self, handle, block_type: block_type, fp6_format=None):
         """Not called by user code."""
         super().__init__()
 
         self.handle = handle  # IR handle
-        self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
+        self.type = tensor_descriptor_base_type(block_type, fp6_format)  # Tensor type (block_type)
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
@@ -1545,8 +1552,8 @@ class tensor_descriptor_base(base_value):
 
 class tensor_descriptor_type(tensor_descriptor_base_type):
 
-    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type):
-        self.block_type = block_type
+    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type, fp6_format=None):
+        super().__init__(block_type, fp6_format)
         self.shape_type = shape_type
         self.strides_type = strides_type
 
@@ -1557,7 +1564,7 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
         shape = shape.values
         strides = strides.values
-        value = tensor_descriptor(handle, shape, strides, self.block_type)
+        value = tensor_descriptor(handle, shape, strides, self.block_type, self.fp6_format)
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
@@ -1574,10 +1581,10 @@ class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type):
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type, fp6_format=None):
         """Not called by user code."""
         # IR handle
-        super().__init__(handle, block_type)
+        super().__init__(handle, block_type, fp6_format)
         # Global shape
         self.shape = tuple(shape)
         self.strides = tuple(strides)
@@ -1585,6 +1592,7 @@ class tensor_descriptor(tensor_descriptor_base):
             block_type,
             shape_type=self.shape.type,
             strides_type=self.strides.type,
+            fp6_format=fp6_format,
         )
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
@@ -2550,6 +2558,7 @@ def make_tensor_descriptor(
     strides: List[tensor],
     block_shape: List[constexpr],
     padding_option="zero",
+    fp6_format=None,
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2559,6 +2568,8 @@ def make_tensor_descriptor(
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
+    :param fp6_format: For packed FP6 TMA stores, use "e2m3" or "e3m2" with a uint8 base.
+        Shape and offsets count logical values. Outer strides count bytes. Each source uint8 holds one FP6 code.
 
     Notes
     *****
@@ -2601,7 +2612,8 @@ def make_tensor_descriptor(
     """
 
     padding_option = _unwrap_if_constexpr(padding_option)
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
+    fp6_format = _unwrap_if_constexpr(fp6_format)
+    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option, fp6_format)
 
 
 # -----------------------
@@ -3041,7 +3053,9 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int | None
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
@@ -3121,7 +3135,9 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done
     :type axis: int
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param reverse: whether to apply the associative scan in the reverse direction along axis
     :type reverse: bool
@@ -3224,6 +3240,8 @@ def map_elementwise(
                 return tl.map_elementwise(selu_scalar, x, alpha)
 
         :param scalar_fn: the function to map over.
+            The function and its callees must be pure, except for :code:`assume`,
+            :code:`device_assert`, and :code:`device_print`.
         :param pack: the number of elements to be processed by one function call.
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''

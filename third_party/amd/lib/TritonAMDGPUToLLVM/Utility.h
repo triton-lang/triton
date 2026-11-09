@@ -37,9 +37,6 @@ enum class MemoryOp { Load, Store };
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::amdgpu::ISAFamily isaFamily =
-                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);
