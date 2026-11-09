@@ -52,8 +52,8 @@ SmallVector<int> computeScaleRegisters(OpT op, int64_t numOutputValues) {
   LinearLayout scaleLL =
       triton::gpu::toLinearLayout(scaleTy).removeZeroBasesAlongDim(kReg);
 
-  auto outputToScaleLL =
-      OpT::computeScaleLayout(outputLL, axis, elementsPerScale);
+  auto outputToScaleLL = OpT::computeScaleLayout(
+      outputLL.removeZeroBasesAlongDim(kReg), axis, elementsPerScale);
   assert(outputToScaleLL && "expected valid scale layout after verifier");
   LinearLayout outputRegToScaleReg = outputToScaleLL->invertAndCompose(scaleLL);
 

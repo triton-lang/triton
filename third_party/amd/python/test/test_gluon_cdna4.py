@@ -114,8 +114,35 @@ def per_lane_layouts(scale_factor):
     return layout, scale_layout
 
 
+def linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor):
+
+    def to_scale(bases):
+        return [[row, col // scale_factor] for row, col in bases]
+
+    layout = ttgl.DistributedLinearLayout(reg_bases, lane_bases, warp_bases, [], [32, 128])
+    scale_layout = ttgl.DistributedLinearLayout(to_scale(reg_bases), to_scale(lane_bases), to_scale(warp_bases), [],
+                                                [32, 128 // scale_factor])
+    return layout, scale_layout
+
+
+def repeated_register_layouts(scale_factor):
+    reg_bases = [[0, 1], [0, 0], [0, 8], [8, 0], [16, 0]]
+    lane_bases = [[0, 2], [0, 4], [0, 16], [0, 32], [0, 64], [1, 0]]
+    warp_bases = [[2, 0], [4, 0]]
+    return linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor)
+
+
+def repeated_register_in_group_layouts(scale_factor):
+    reg_bases = [[0, 1], [0, 2], [0, 0], [0, 4], [0, 8]]
+    lane_bases = [[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]]
+    warp_bases = [[8, 0], [16, 0]]
+    return linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor)
+
+
 SCALED_DOWNCAST_LAYOUTS = {
     "per_lane": per_lane_layouts,
+    "repeated_register": repeated_register_layouts,
+    "repeated_register_in_group": repeated_register_in_group_layouts,
 }
 
 
