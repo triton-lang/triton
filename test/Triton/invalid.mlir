@@ -32,6 +32,30 @@ tt.func @atomic_store_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>, %value: tensor<32x
 
 // -----
 
+tt.func @atomic_and_float(%ptr: !tt.ptr<f32>, %val: f32) {
+  // expected-error @+1 {{and requires an integer element type}}
+  %old = tt.atomic_rmw and, relaxed, gpu, %ptr, %val : (!tt.ptr<f32>, f32) -> f32
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_or_float(%ptr: !tt.ptr<f64>, %val: f64) {
+  // expected-error @+1 {{or requires an integer element type}}
+  %old = tt.atomic_rmw or, relaxed, gpu, %ptr, %val : (!tt.ptr<f64>, f64) -> f64
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_xor_float(%ptr: tensor<32x!tt.ptr<f32>>, %val: tensor<32xf32>) {
+  // expected-error @+1 {{xor requires an integer element type}}
+  %old = tt.atomic_rmw xor, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<f32>>, tensor<32xf32>) -> tensor<32xf32>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>) {
   // expected-error @+1 {{result type matches expected shape}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> i1

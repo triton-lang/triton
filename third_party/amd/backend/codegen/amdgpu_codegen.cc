@@ -1,20 +1,19 @@
 #include "LLVMABIGuard.h"
 
+#include "DAGBuilder.h"
 #include "triton/Tools/LLVMOptions.h"
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/MIRParser/MIRParser.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/AutoUpgrade.h"
-#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -37,8 +36,6 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/AMDGPUAddrSpace.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
@@ -70,7 +67,7 @@ namespace {
 
 using mlir::triton::tools::ScopedLLVMOptions;
 
-constexpr uint32_t codegenABIVersion = 1;
+constexpr uint32_t codegenABIVersion = 2;
 
 struct CodegenOptions {
   uint32_t abiVersion;
@@ -85,6 +82,9 @@ struct CodegenOptions {
   uint8_t canonicalizeGEP;
   uint8_t dumpIR;
   uint8_t enableTiming;
+  // Read only by triton_amdgpu_translate_mir_to_asm.
+  uint8_t enableMISched;
+  uint8_t emitObject;
 };
 
 std::once_flag targetInitialization;
@@ -136,145 +136,17 @@ void enableFPContraction(llvm::Module &module) {
         instruction.setHasAllowContract(true);
 }
 
-// LLVM 5bf967cb132b moved named barriers from the LDS address space into their
-// own address space, and AutoUpgrade does not convert the legacy form
-// emitted by Triton's LLVM. Retype barrier handles by following them forward
-// from the named-barrier globals through direct helper calls and SSA
-// forwarding.
-// TODO: Remove once Triton's LLVM (cmake/llvm-hash.txt) includes 5bf967cb132b
-// and ConvertWarpSpecializeToLLVM creates named barriers in the new address
-// space.
-llvm::Error upgradeLegacyNamedBarriers(llvm::Module &module) {
-  const llvm::Intrinsic::ID barrierIntrinsics[] = {
-      llvm::Intrinsic::amdgcn_s_barrier_init,
-      llvm::Intrinsic::amdgcn_s_barrier_join,
-      llvm::Intrinsic::amdgcn_s_barrier_signal_var,
-      llvm::Intrinsic::amdgcn_s_get_named_barrier_state,
-      llvm::Intrinsic::amdgcn_s_wakeup_barrier};
-  llvm::LLVMContext &context = module.getContext();
-  llvm::Type *barrierType =
-      llvm::Intrinsic::getType(context, llvm::Intrinsic::amdgcn_s_barrier_join)
-          ->getParamType(0);
-
-  llvm::SmallSetVector<llvm::Value *, 16> handles;
-  for (llvm::GlobalVariable &global : module.globals()) {
-    auto *type = llvm::dyn_cast<llvm::TargetExtType>(global.getValueType());
-    if (type && type->getName() == "amdgcn.named.barrier" &&
-        global.getAddressSpace() == llvm::AMDGPUAS::LOCAL_ADDRESS)
-      handles.insert(&global);
-  }
-
-  auto unsupported = [](const llvm::User *user) {
-    std::string message;
-    llvm::raw_string_ostream stream(message);
-    stream << "unsupported use of a legacy named barrier:\n";
-    user->print(stream);
-    return llvm::createStringError(message);
-  };
-
-  // Collect every handle before retyping anything.
-  llvm::SmallSetVector<llvm::Function *, 8> helpers;
-  for (size_t i = 0; i < handles.size(); ++i) {
-    for (llvm::Use &use : handles[i]->uses()) {
-      llvm::User *user = use.getUser();
-      if (llvm::isa<llvm::PHINode, llvm::SelectInst, llvm::FreezeInst>(user)) {
-        handles.insert(user);
-        continue;
-      }
-      auto *call = llvm::dyn_cast<llvm::CallBase>(user);
-      llvm::Function *callee = call ? call->getCalledFunction() : nullptr;
-      if (!callee || !call->isArgOperand(&use))
-        return unsupported(user);
-      unsigned argNo = call->getArgOperandNo(&use);
-      if (argNo == 0 &&
-          llvm::is_contained(barrierIntrinsics, callee->getIntrinsicID()))
-        continue;
-      if (callee->isDeclaration() || argNo >= callee->arg_size())
-        return unsupported(user);
-      handles.insert(callee->getArg(argNo));
-      helpers.insert(callee);
-    }
-  }
-  // Helpers (functions that receive a barrier handle) are rewritten below, so
-  // each of their uses must be a direct call whose signature matches the
-  // helper's original signature.
-  for (llvm::Function *helper : helpers)
-    for (llvm::Use &use : helper->uses()) {
-      auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
-      if (!call || !call->isCallee(&use) ||
-          call->getFunctionType() != helper->getFunctionType())
-        return unsupported(use.getUser());
-    }
-
-  for (llvm::Value *handle : handles)
-    handle->mutateType(barrierType);
-
-  // A function's signature cannot be changed in place, so move each helper's
-  // arguments and body into a new function whose signature matches the
-  // retyped arguments.
-  for (llvm::Function *helper : helpers) {
-    llvm::SmallVector<llvm::Type *> params;
-    for (llvm::Argument &arg : helper->args())
-      params.push_back(arg.getType());
-    llvm::Function *replacement = llvm::Function::Create(
-        llvm::FunctionType::get(helper->getReturnType(), params,
-                                helper->isVarArg()),
-        helper->getLinkage(), helper->getAddressSpace());
-    module.getFunctionList().insert(helper->getIterator(), replacement);
-    replacement->copyAttributesFrom(helper);
-    replacement->setComdat(helper->getComdat());
-    replacement->copyMetadata(helper, 0);
-    replacement->stealArgumentListFrom(*helper);
-    replacement->splice(replacement->begin(), helper);
-    for (llvm::Use &use : llvm::make_early_inc_range(helper->uses()))
-      llvm::cast<llvm::CallBase>(use.getUser())->setCalledFunction(replacement);
-    replacement->takeName(helper);
-    helper->eraseFromParent();
-  }
-
-  for (llvm::Intrinsic::ID id : barrierIntrinsics) {
-    llvm::Function *legacy =
-        llvm::Intrinsic::getDeclarationIfExists(&module, id);
-    if (!legacy ||
-        legacy->getFunctionType() == llvm::Intrinsic::getType(context, id))
-      continue;
-    legacy->setName("");
-    llvm::Function *declaration =
-        llvm::Intrinsic::getOrInsertDeclaration(&module, id);
-    for (llvm::Use &use : llvm::make_early_inc_range(legacy->uses())) {
-      auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
-      if (!call || !call->isCallee(&use))
-        return unsupported(use.getUser());
-      call->setCalledFunction(declaration);
-    }
-    legacy->eraseFromParent();
-  }
-  return llvm::Error::success();
-}
-
-} // namespace
-
-extern "C" TRITON_AMD_EXPORT int
-triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
-                      const CodegenOptions *options, char **amdgcn,
-                      size_t *amdgcnSize, char **error) {
-  if (error)
-    *error = nullptr;
-  if (amdgcn)
-    *amdgcn = nullptr;
-  if (amdgcnSize)
-    *amdgcnSize = 0;
-
-  if (!llvmIR || !options || !amdgcn || !amdgcnSize)
-    return fail("invalid AMD code-generation arguments", error);
+int validateOptions(const CodegenOptions *options, char **error) {
   if (options->abiVersion != codegenABIVersion)
     return fail("incompatible AMD code-generation ABI", error);
   if (!options->triple || !options->processor || !options->features ||
       !options->abi)
     return fail("incomplete AMD code-generation target options", error);
+  return 0;
+}
 
-  std::call_once(targetInitialization, initializeTarget);
-
+std::vector<ScopedLLVMOptions::Setting>
+collectOptionSettings(const CodegenOptions *options) {
   std::vector<ScopedLLVMOptions::Setting> settings;
   if (options->dumpIR)
     settings.emplace_back("print-after-all", "true");
@@ -286,9 +158,13 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   if (options->flags && options->flags[0]) {
     llvm::SmallVector<llvm::StringRef, 4> flags;
     llvm::StringRef(options->flags).split(flags, ',');
-    for (llvm::StringRef flag : flags)
-      if (!flag.empty())
-        settings.emplace_back(flag.str(), "true");
+    for (llvm::StringRef flag : flags) {
+      if (flag.empty())
+        continue;
+      auto [name, value] = flag.split('=');
+      settings.emplace_back(name.str(),
+                            name.size() == flag.size() ? "true" : value.str());
+    }
   }
 
   if (options->disabledPasses && options->disabledPasses[0]) {
@@ -298,52 +174,20 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
       if (!pass.empty())
         settings.emplace_back(pass.str(), "true");
   }
-  llvm::LLVMContext context;
-  std::unique_ptr<llvm::Module> module;
-  {
-    // UpgradeDebugInfo can abort on legacy named-barrier signatures while
-    // parsing. Defer it until after the barrier upgrade and verifyModule, so
-    // verification errors are returned through fail() instead of aborting the
-    // process.
-    std::vector<ScopedLLVMOptions::Setting> parseSettings = settings;
-    parseSettings.emplace_back("disable-auto-upgrade-debug-info", "true");
-    ScopedLLVMOptions parseScope(parseSettings);
+  return settings;
+}
 
-    llvm::SMDiagnostic diagnostic;
-    auto buffer = llvm::MemoryBuffer::getMemBuffer(
-        llvm::StringRef(llvmIR, llvmIRSize), "triton-amd-codegen", false);
-    module = llvm::parseIR(buffer->getMemBufferRef(), diagnostic, context);
-    if (!module) {
-      std::string message;
-      llvm::raw_string_ostream stream(message);
-      diagnostic.print("triton-amd-codegen", stream);
-      return fail(message, error);
-    }
-    if (llvm::Error upgradeError = upgradeLegacyNamedBarriers(*module))
-      return fail(llvm::toString(std::move(upgradeError)), error);
-
-    std::string message;
-    llvm::raw_string_ostream stream(message);
-    bool brokenDebugInfo = false;
-    if (llvm::verifyModule(*module, &stream, &brokenDebugInfo))
-      return fail("invalid LLVM IR:\n" + message, error);
-  }
-
-  ScopedLLVMOptions optionScope(settings);
-  llvm::UpgradeDebugInfo(*module);
-
-  // LLVM no longer supports globally enabling FP contraction through
-  // TargetOptions. Preserve enableFPFusion by expressing that permission on
-  // the operations consumed by the independently pinned code generator.
-  if (options->enableFPFusion)
-    enableFPContraction(*module);
-
-  module->setTargetTriple(llvm::Triple(options->triple));
+std::unique_ptr<llvm::TargetMachine>
+createTargetMachine(llvm::Module &module, const CodegenOptions *options,
+                    char **error) {
+  module.setTargetTriple(llvm::Triple(options->triple));
   std::string targetError;
-  const llvm::Target *target = llvm::TargetRegistry::lookupTarget(
-      module->getTargetTriple(), targetError);
-  if (!target)
-    return fail(targetError, error);
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(module.getTargetTriple(), targetError);
+  if (!target) {
+    fail(targetError, error);
+    return nullptr;
+  }
 
   llvm::TargetOptions targetOptions;
   targetOptions.TrapUnreachable = true;
@@ -352,13 +196,55 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   targetOptions.MCOptions.ABIName = options->abi;
 
   std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
-      module->getTargetTriple(), options->processor, options->features,
+      module.getTargetTriple(), options->processor, options->features,
       targetOptions, llvm::Reloc::PIC_, std::nullopt,
       options->disableOptimization ? llvm::CodeGenOptLevel::None
                                    : llvm::CodeGenOptLevel::Aggressive));
+  if (!machine) {
+    fail("failed to create AMD target machine", error);
+    return nullptr;
+  }
+  module.setDataLayout(machine->createDataLayout());
+  return machine;
+}
+
+// Parse `llvmIR` and run the prologue every AMDGCN pipeline shares.
+//
+// triton_amdgpu_compile and triton_amdgpu_translate_to_mir must keep sharing
+// it: a prologue that drifts reintroduces the very gap between dumped MIR and
+// shipped code that dumping from this library exists to close.
+//
+// `settings` is installed here, not by the caller, because the parse reads them
+// and ScopedLLVMOptions scopes cannot nest.
+int prepareModule(const char *llvmIR, size_t llvmIRSize,
+                  const CodegenOptions *options,
+                  const std::vector<ScopedLLVMOptions::Setting> &settings,
+                  llvm::LLVMContext &context,
+                  std::unique_ptr<llvm::Module> &module,
+                  std::optional<ScopedLLVMOptions> &optionScope,
+                  std::unique_ptr<llvm::TargetMachine> &machine, char **error) {
+  optionScope.emplace(settings);
+
+  llvm::SMDiagnostic diagnostic;
+  auto buffer = llvm::MemoryBuffer::getMemBuffer(
+      llvm::StringRef(llvmIR, llvmIRSize), "triton-amd-codegen", false);
+  module = llvm::parseIR(buffer->getMemBufferRef(), diagnostic, context);
+  if (!module) {
+    std::string message;
+    llvm::raw_string_ostream stream(message);
+    diagnostic.print("triton-amd-codegen", stream);
+    return fail(message, error);
+  }
+
+  // LLVM no longer supports globally enabling FP contraction through
+  // TargetOptions. Preserve enableFPFusion by expressing that permission on
+  // the operations consumed by the independently pinned code generator.
+  if (options->enableFPFusion)
+    enableFPContraction(*module);
+
+  machine = createTargetMachine(*module, options, error);
   if (!machine)
-    return fail("failed to create AMD target machine", error);
-  module->setDataLayout(machine->createDataLayout());
+    return 1;
 
   for (llvm::Function &function : module->functions())
     if (!function.hasFnAttribute(llvm::Attribute::NoInline))
@@ -381,6 +267,61 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     cleanup.run(*module);
   }
 
+  return 0;
+}
+
+// Hand `value` back to the caller through a malloc'd buffer it frees with
+// triton_amdgpu_free.
+int publish(llvm::StringRef value, char **out, size_t *outSize,
+            const char *what, char **error) {
+  *out = copyString(value);
+  if (!*out)
+    return fail(std::string("failed to allocate ") + what, error);
+  *outSize = value.size();
+  return 0;
+}
+
+// Drain the -time-passes report enableTiming asked for. LLVM accumulates into
+// process-global timers, so an entry point that sets the option and does not
+// drain it leaks its numbers into whoever reports next.
+void reportTimings(const CodegenOptions *options) {
+  if (!options->enableTiming)
+    return;
+  llvm::SmallString<0> timings;
+  llvm::raw_svector_ostream stream(timings);
+  llvm::reportAndResetTimings(&stream);
+  llvm::dbgs() << stream.str();
+}
+
+} // namespace
+
+extern "C" TRITON_AMD_EXPORT int
+triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
+                      const CodegenOptions *options, char **amdgcn,
+                      size_t *amdgcnSize, char **error) {
+  if (error)
+    *error = nullptr;
+  if (amdgcn)
+    *amdgcn = nullptr;
+  if (amdgcnSize)
+    *amdgcnSize = 0;
+
+  if (!llvmIR || !options || !amdgcn || !amdgcnSize)
+    return fail("invalid AMD code-generation arguments", error);
+  if (int status = validateOptions(options, error))
+    return status;
+
+  std::call_once(targetInitialization, initializeTarget);
+
+  llvm::LLVMContext context;
+  std::unique_ptr<llvm::Module> module;
+  std::optional<ScopedLLVMOptions> optionScope;
+  std::unique_ptr<llvm::TargetMachine> machine;
+  if (int status = prepareModule(llvmIR, llvmIRSize, options,
+                                 collectOptionSettings(options), context,
+                                 module, optionScope, machine, error))
+    return status;
+
   std::string assembly;
   {
     llvm::raw_string_ostream output(assembly);
@@ -392,18 +333,167 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     codegen.run(*module);
   }
 
-  if (options->enableTiming) {
-    llvm::SmallString<0> timings;
-    llvm::raw_svector_ostream stream(timings);
-    llvm::reportAndResetTimings(&stream);
-    llvm::dbgs() << stream.str();
+  reportTimings(options);
+  return publish(assembly, amdgcn, amdgcnSize, "AMDGCN assembly result", error);
+}
+
+// Emit the pre-machine-scheduler MIR for `llvmIR`, together with the scheduling
+// DAG built on that same MachineFunction.
+//
+// Both buffers go back to the caller: this library never touches the
+// filesystem or reads Triton's environment.
+extern "C" TRITON_AMD_EXPORT int triton_amdgpu_translate_to_mir(
+    const char *llvmIR, size_t llvmIRSize, const CodegenOptions *options,
+    char **mir, size_t *mirSize, char **dag, size_t *dagSize, char **error) {
+  if (error)
+    *error = nullptr;
+  if (mir)
+    *mir = nullptr;
+  if (mirSize)
+    *mirSize = 0;
+  if (dag)
+    *dag = nullptr;
+  if (dagSize)
+    *dagSize = 0;
+
+  if (!llvmIR || !options || !mir || !mirSize || !dag || !dagSize)
+    return fail("invalid AMD MIR translation arguments", error);
+  if (int status = validateOptions(options, error))
+    return status;
+
+  std::call_once(targetInitialization, initializeTarget);
+
+  std::vector<ScopedLLVMOptions::Setting> settings =
+      collectOptionSettings(options);
+  // Stop right after the scheduling-DAG pass, which substitutes itself for the
+  // machine scheduler (see LivePipelineDAGEmission). This truncates the
+  // pipeline at exactly the same point -stop-before=machine-scheduler did, so
+  // the MIR dumped below is unchanged.
+  settings.emplace_back("stop-after", llvm::mir_dag::livePipelineDAGPassName());
+
+  llvm::LLVMContext context;
+  std::unique_ptr<llvm::Module> module;
+  std::optional<ScopedLLVMOptions> optionScope;
+  std::unique_ptr<llvm::TargetMachine> machine;
+  if (int status = prepareModule(llvmIR, llvmIRSize, options, settings, context,
+                                 module, optionScope, machine, error))
+    return status;
+
+  llvm::StripDebugInfo(*module);
+
+  // The DAG pass holds the machine scheduler's slot, so the DAG describes
+  // exactly the MachineFunction printed here: (bb, position) maps 1:1 onto the
+  // dumped body lines, `bb` being the number in the printer's `bb.N` labels.
+  std::string mirText;
+  std::string dagText;
+  {
+    llvm::mir_dag::LivePipelineDAGEmission dagEmission(&dagText);
+    llvm::raw_string_ostream output(mirText);
+    llvm::buffer_ostream bufferedOutput(output);
+    llvm::legacy::PassManager codegen;
+    if (machine->addPassesToEmitFile(codegen, bufferedOutput, nullptr,
+                                     llvm::CodeGenFileType::AssemblyFile))
+      return fail("AMD target cannot emit MIR", error);
+    codegen.run(*module);
   }
 
-  *amdgcn = copyString(assembly);
-  if (!*amdgcn)
-    return fail("failed to allocate AMDGCN assembly result", error);
-  *amdgcnSize = assembly.size();
+  reportTimings(options);
+
+  if (int status = publish(mirText, mir, mirSize, "MIR result", error))
+    return status;
+  if (int status =
+          publish(dagText, dag, dagSize, "scheduling DAG result", error)) {
+    std::free(*mir);
+    *mir = nullptr;
+    *mirSize = 0;
+    return status;
+  }
   return 0;
+}
+
+// Resume code generation from `mirText`, which must be MIR this library
+// produced, and emit AMDGCN assembly (or an object file when emitObject is
+// set).
+extern "C" TRITON_AMD_EXPORT int
+triton_amdgpu_translate_mir_to_asm(const char *mirText, size_t mirTextSize,
+                                   const CodegenOptions *options, char **output,
+                                   size_t *outputSize, char **error) {
+  if (error)
+    *error = nullptr;
+  if (output)
+    *output = nullptr;
+  if (outputSize)
+    *outputSize = 0;
+
+  if (!mirText || !options || !output || !outputSize)
+    return fail("invalid AMD MIR code-generation arguments", error);
+  if (int status = validateOptions(options, error))
+    return status;
+
+  std::call_once(targetInitialization, initializeTarget);
+
+  std::vector<ScopedLLVMOptions::Setting> settings =
+      collectOptionSettings(options);
+  // machine-scheduler is the anchor other passes are inserted around, so start
+  // before it and disable it; starting after it would drop those passes.
+  settings.emplace_back("start-before", "machine-scheduler");
+  settings.emplace_back("enable-misched",
+                        options->enableMISched ? "true" : "false");
+  settings.emplace_back("enable-post-misched",
+                        options->enableMISched ? "true" : "false");
+  ScopedLLVMOptions optionScope(settings);
+
+  llvm::LLVMContext context;
+  auto buffer = llvm::MemoryBuffer::getMemBuffer(
+      llvm::StringRef(mirText, mirTextSize), "triton-amd-mir", false);
+  std::unique_ptr<llvm::MIRParser> mirParser =
+      llvm::createMIRParser(std::move(buffer), context);
+  if (!mirParser)
+    return fail("failed to create MIR parser", error);
+
+  std::unique_ptr<llvm::Module> module = mirParser->parseIRModule();
+  if (!module)
+    return fail("failed to parse MIR IR module", error);
+
+  std::unique_ptr<llvm::TargetMachine> machine =
+      createTargetMachine(*module, options, error);
+  if (!machine)
+    return 1;
+
+  llvm::legacy::PassManager pass;
+
+  // Loading MIR directly skips the IR passes that would register
+  // ScopedNoAliasAA. Without it the machine scheduler cannot prove async buffer
+  // loads (BUFFER_LOAD_DWORDX4_LDS) do not alias LDS reads (DS_READ), and the
+  // spurious dependencies cost ~30%.
+  pass.add(llvm::createScopedNoAliasAAWrapperPass());
+
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+
+    auto fileType = options->emitObject ? llvm::CodeGenFileType::ObjectFile
+                                        : llvm::CodeGenFileType::AssemblyFile;
+
+    // MMI must exist before addPassesToEmitFile so the emitted passes share it,
+    // and the machine functions can only be parsed into it afterwards.
+    llvm::MachineModuleInfoWrapperPass *MMIWP =
+        new llvm::MachineModuleInfoWrapperPass(machine.get());
+
+    if (machine->addPassesToEmitFile(pass, pstream, nullptr, fileType,
+                                     /*NoVerify*/ false, MMIWP))
+      return fail("AMD target cannot emit code from MIR", error);
+
+    if (mirParser->parseMachineFunctions(*module, MMIWP->getMMI()))
+      return fail("failed to parse machine functions from MIR", error);
+
+    pass.run(*module);
+  }
+
+  reportTimings(options);
+  return publish(result, output, outputSize, "MIR code-generation result",
+                 error);
 }
 
 extern "C" TRITON_AMD_EXPORT int
@@ -480,11 +570,8 @@ triton_amdgpu_assemble(const char *assembly, size_t assemblySize,
   if (parser->Run(/*NoInitialTextSection=*/false))
     return fail("AMD assembler rejected generated AMDGCN", error);
 
-  *object = copyString(llvm::StringRef(result.data(), result.size()));
-  if (!*object)
-    return fail("failed to allocate AMD object result", error);
-  *objectSize = result.size();
-  return 0;
+  return publish(llvm::StringRef(result.data(), result.size()), object,
+                 objectSize, "AMD object result", error);
 }
 
 extern "C" TRITON_AMD_EXPORT void triton_amdgpu_free(void *pointer) {

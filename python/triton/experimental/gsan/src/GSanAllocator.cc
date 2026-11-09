@@ -14,10 +14,11 @@
 #include <numeric>
 #include <random>
 
+#include "AllocatorPython.h"
 #include "GSan.h"
 #include "GSanDriver.h"
 
-namespace drv = gsan::drv;
+using namespace triton::cuda_allocator;
 
 // #define GSAN_LOG_ALLOCATIONS
 #ifdef GSAN_LOG_ALLOCATIONS
@@ -35,56 +36,6 @@ void gsanFree(void *ptr, ssize_t size, int device, void *stream);
 namespace {
 constexpr size_t kThreadStateHeaderSize =
     offsetof(gsan::ThreadState, vectorClock);
-
-union GSanShareableHandle {
-  int fd;
-  drv::FabricHandle fabricHandle;
-};
-
-void *getShareableHandleImportArg(const GSanShareableHandle *handle,
-                                  drv::HandleType handleType) {
-  if (handleType == drv::HandleType::PosixFileDescriptor)
-    return reinterpret_cast<void *>(static_cast<uintptr_t>(handle->fd));
-  if (handleType == drv::HandleType::Fabric)
-    return const_cast<drv::FabricHandle *>(&handle->fabricHandle);
-  return nullptr;
-}
-
-void *getShareableHandleExportArg(GSanShareableHandle *handle,
-                                  drv::HandleType handleType) {
-  if (handleType == drv::HandleType::PosixFileDescriptor)
-    return &handle->fd;
-  if (handleType == drv::HandleType::Fabric)
-    return &handle->fabricHandle;
-  return nullptr;
-}
-
-// We use a tree structure to manage virtual address allocations.
-//
-// This is a binary tree where each node represents a power of two-sized region
-// of memory. Each node tracks the largest free node in its subtree. This
-// allows us to allocate best-fit regions in O(log(AddressSpaceSize)), and same
-// for deallocation.
-//
-// Note that we don't really care about being compact/defragmented in any way,
-// since we can reserve millions of times more virtual memory than there is
-// physical memory.
-// We also are based under the PyTorch CUDACachingAllocator which manages most
-// of the hard parts for us and only asks us to allocate large blocks that it
-// will divide up as needed.
-struct AllocNode {
-  uintptr_t virtualAddress = 0;
-  AllocNode *parent = nullptr;
-  std::unique_ptr<AllocNode> leftChild;
-  std::unique_ptr<AllocNode> rightChild;
-  size_t size = 0;
-  size_t maxFreeBlockSize = 0;
-
-  // Allocation handles, used only by leaf nodes
-  drv::Handle realHandle = 0;
-  drv::Handle shadowHandle = 0;
-  size_t allocSize = 0;
-};
 
 struct GSanConfig {
   int numGPUs = 1;
@@ -113,11 +64,6 @@ struct AllocatorState {
   size_t perDeviceStateSize = 0;
 };
 
-void printDriverError(drv::Result err) {
-  fprintf(stderr, "gsan allocator encountered an unexpected error: %s\n",
-          drv::errorString(err));
-}
-
 static AllocatorState *alloc = nullptr;
 static GSanConfig config;
 static std::mutex mut;
@@ -135,12 +81,7 @@ drv::HandleType getRequestedShareableHandleType() {
   if (config.shareableHandleTypeConfigured)
     return config.shareableHandleType;
 
-  const auto *allocConf = getenv("PYTORCH_CUDA_ALLOC_CONF");
-  if (drv::kHasFabricHandles && allocConf != nullptr &&
-      strstr(allocConf, "fabric_handles:True") != nullptr) {
-    return drv::HandleType::Fabric;
-  }
-  return drv::HandleType::PosixFileDescriptor;
+  return defaultShareableHandleType();
 }
 
 int getDeviceRankForCudaDevice(int device) {
@@ -175,22 +116,6 @@ drv::Result ensureTopologyConfigured() {
   }
   config.topologyConfigured = true;
   return drv::kSuccess;
-}
-
-size_t cdiv(size_t num, size_t den) { return (num + (den - 1)) / den; }
-
-size_t roundUp(size_t val, size_t alignment) {
-  return cdiv(val, alignment) * alignment;
-}
-
-size_t roundDownToPowerOfTwo(size_t x) {
-  if (x == 0)
-    return 0;
-
-  for (size_t shift = 1; shift < sizeof(x) * 8; shift <<= 1)
-    x |= x >> shift;
-
-  return x - (x >> 1);
 }
 
 size_t getShadowSize(size_t realMemSize, uintptr_t realAddress) {
@@ -235,146 +160,11 @@ int getMaxClockBufferSize(int numSMs, int numThreads) {
       std::min<size_t>(clocksPerThread - 1, kMaxClockBufferSize));
 }
 
-bool isLeaf(const AllocNode *node) {
-  return node->leftChild == nullptr && node->rightChild == nullptr;
-}
-
-void recomputeNodeState(AllocNode *node) {
-  assert((node->leftChild == nullptr) == (node->rightChild == nullptr) &&
-         "allocator tree node should have both children or none");
-
-  if (isLeaf(node)) {
-    assert(
-        (node->maxFreeBlockSize == 0 || node->maxFreeBlockSize == node->size) &&
-        "leaf nodes should be either fully free or fully allocated");
-    return;
-  }
-
-  node->maxFreeBlockSize = std::max(node->leftChild->maxFreeBlockSize,
-                                    node->rightChild->maxFreeBlockSize);
-}
-
-void recomputeToRoot(AllocNode *node) {
-  for (AllocNode *curr = node; curr != nullptr; curr = curr->parent)
-    recomputeNodeState(curr);
-}
-
-void splitNode(AllocNode *node) {
-  assert(isLeaf(node));
-  assert(node->maxFreeBlockSize == node->size);
-  const size_t halfSize = node->size / 2;
-  auto left = std::make_unique<AllocNode>();
-  auto right = std::make_unique<AllocNode>();
-
-  left->virtualAddress = node->virtualAddress;
-  left->size = halfSize;
-  left->maxFreeBlockSize = halfSize;
-  left->parent = node;
-
-  right->virtualAddress = node->virtualAddress + halfSize;
-  right->size = halfSize;
-  right->maxFreeBlockSize = halfSize;
-  right->parent = node;
-
-  node->leftChild = std::move(left);
-  node->rightChild = std::move(right);
-  node->maxFreeBlockSize = halfSize;
-}
-
-AllocNode *allocateNode(AllocNode *root, size_t allocSize) {
-  AllocNode *node = root;
-  if (node == nullptr || node->maxFreeBlockSize < allocSize)
-    return nullptr;
-
-  if (isLeaf(node)) {
-    assert(node->maxFreeBlockSize == node->size);
-
-    while (node->size > 1 && (node->size / 2) >= allocSize) {
-      splitNode(node);
-      node = node->leftChild.get();
-    }
-    node->maxFreeBlockSize = 0;
-    recomputeToRoot(node->parent);
-    return node;
-  }
-
-  auto *left = node->leftChild.get();
-  auto *right = node->rightChild.get();
-  const bool leftFits = left->maxFreeBlockSize >= allocSize;
-  const bool rightFits = right->maxFreeBlockSize >= allocSize;
-
-  AllocNode *next = nullptr;
-  // Prefer the tighter-fitting subtree to keep larger blocks available.
-  if (leftFits && rightFits) {
-    next = (left->maxFreeBlockSize <= right->maxFreeBlockSize) ? left : right;
-  } else if (leftFits) {
-    next = left;
-  } else {
-    next = right;
-  }
-  return allocateNode(next, allocSize);
-}
-
-AllocNode *findNodeByAddress(AllocNode *root, uintptr_t address) {
-  AllocNode *node = root;
-  while (node != nullptr) {
-    if (address < node->virtualAddress ||
-        address >= node->virtualAddress + node->size)
-      return nullptr;
-
-    if (!node->leftChild && !node->rightChild)
-      return node;
-
-    if (node->rightChild && address >= node->rightChild->virtualAddress) {
-      node = node->rightChild.get();
-    } else {
-      node = node->leftChild.get();
-    }
-  }
-  return nullptr;
-}
-
-bool canCoalesce(const AllocNode *node) {
-  if (node == nullptr)
-    return false;
-  assert((node->leftChild == nullptr) == (node->rightChild == nullptr) &&
-         "allocator tree node should have both children or none");
-  if (!node->leftChild)
-    return false;
-
-  const auto *left = node->leftChild.get();
-  const auto *right = node->rightChild.get();
-  const bool leftFree = left->maxFreeBlockSize == left->size;
-  const bool rightFree = right->maxFreeBlockSize == right->size;
-  return leftFree && rightFree;
-}
-
 AllocNode *findAllocation(uintptr_t address) {
   if (!gsan::isGsanManaged(address, alloc->reserveBaseAddress))
     return nullptr;
   return findNodeByAddress(&alloc->treeRoots[gsan::getPoolIndex(address)],
                            address);
-}
-
-void coalesceUp(AllocNode *node) {
-  if (node == nullptr)
-    return;
-  while (node != nullptr && canCoalesce(node)) {
-    node->leftChild.reset();
-    node->rightChild.reset();
-    node->maxFreeBlockSize = node->size;
-    node = node->parent;
-  }
-  recomputeToRoot(node);
-}
-
-void freeNode(AllocNode *leaf) {
-  assert(isLeaf(leaf));
-  leaf->allocSize = 0;
-  leaf->realHandle = 0;
-  leaf->shadowHandle = 0;
-  leaf->maxFreeBlockSize = leaf->size;
-  coalesceUp(leaf->parent);
 }
 
 int gsanEnsureInit() {
@@ -588,50 +378,6 @@ error:
   return err;
 }
 
-drv::Result mapNodeHandles(AllocNode *node, drv::Handle realHandle,
-                           drv::Handle shadowHandle, size_t allocSize,
-                           int device, bool *realMapped, bool *shadowMapped) {
-  assert(node != nullptr);
-  assert(realMapped != nullptr);
-  assert(shadowMapped != nullptr);
-
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(allocSize, node->virtualAddress);
-
-  drv::Result err = drv::memMap(node->virtualAddress, allocSize, realHandle);
-  if (err != drv::kSuccess)
-    return err;
-  *realMapped = true;
-
-  err = drv::memMap(shadowAddress, shadowSize, shadowHandle);
-  if (err != drv::kSuccess)
-    return err;
-  *shadowMapped = true;
-
-  err = drv::memSetAccess(node->virtualAddress, allocSize, device);
-  if (err != drv::kSuccess)
-    return err;
-
-  err = drv::memSetAccess(shadowAddress, shadowSize, device);
-  if (err != drv::kSuccess)
-    return err;
-
-  node->allocSize = allocSize;
-  node->realHandle = realHandle;
-  node->shadowHandle = shadowHandle;
-  return drv::kSuccess;
-}
-
-void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
-  assert(node != nullptr);
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->allocSize, node->virtualAddress);
-  if (shadowMapped)
-    (void)drv::memUnmap(shadowAddress, shadowSize);
-  if (realMapped)
-    (void)drv::memUnmap(node->virtualAddress, node->allocSize);
-}
-
 } // namespace
 
 // TODO: Handle streams?
@@ -675,44 +421,18 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
   if (node == nullptr)
     return nullptr;
 
-  drv::Handle realHandle = 0;
-  drv::Handle shadowHandle = 0;
-  bool realMapped = false;
-  bool shadowMapped = false;
-  auto drvStream = reinterpret_cast<drv::Stream>(stream);
-  auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  auto shadowSize = getShadowSize(allocSize, node->virtualAddress);
-  err = drv::memCreate(&realHandle, allocSize, device, handleType);
-  if (err != drv::kSuccess)
-    goto error;
-
-  err = drv::memCreate(&shadowHandle, shadowSize, device, handleType);
-  if (err != drv::kSuccess)
-    goto error;
-
-  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
-                       &realMapped, &shadowMapped);
-  if (err != drv::kSuccess)
-    goto error;
-
-  // Zero-initialize shadow memory
-  err = drv::memsetD8Async(shadowAddress, shadowSize, drvStream);
-  if (err != drv::kSuccess)
-    goto error;
-
+  err = createAllocation(node, allocSize,
+                         gsan::getShadowAddress(node->virtualAddress),
+                         getShadowSize(allocSize, node->virtualAddress), device,
+                         handleType, reinterpret_cast<drv::Stream>(stream));
+  if (err != drv::kSuccess) {
+    printDriverError(err);
+    freeNode(node);
+    return nullptr;
+  }
   LOGF("gsanMalloc: %p, 0x%zxu", reinterpret_cast<void *>(node->virtualAddress),
        size);
   return reinterpret_cast<void *>(node->virtualAddress);
-
-error:
-  printDriverError(err);
-  unmapNodeHandles(node, realMapped, shadowMapped);
-  if (shadowHandle != 0)
-    (void)drv::memRelease(shadowHandle);
-  if (realHandle != 0)
-    (void)drv::memRelease(realHandle);
-  freeNode(node);
-  return nullptr;
 }
 
 extern "C" void *gsanMalloc(ssize_t size, int device, void *stream) {
@@ -778,31 +498,12 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   // null stream belongs to the current device, so make `device` current.
   drv::CurrentDeviceScope deviceScope;
   drv::Result err = deviceScope.enter(device);
-  if (err == drv::kSuccess)
-    err = drv::streamSynchronize(reinterpret_cast<drv::Stream>(stream));
   if (err != drv::kSuccess)
     printDriverError(err);
 
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
-  const auto shadowSize = getShadowSize(node->allocSize, node->virtualAddress);
-
-  err = drv::memUnmap(node->virtualAddress, node->allocSize);
-  if (err != drv::kSuccess)
-    printDriverError(err);
-
-  err = drv::memUnmap(shadowAddress, shadowSize);
-  if (err != drv::kSuccess)
-    printDriverError(err);
-
-  err = drv::memRelease(node->realHandle);
-  if (err != drv::kSuccess)
-    printDriverError(err);
-
-  err = drv::memRelease(node->shadowHandle);
-  if (err != drv::kSuccess)
-    printDriverError(err);
-
-  freeNode(node);
+  releaseAllocation(node, gsan::getShadowAddress(node->virtualAddress),
+                    getShadowSize(node->allocSize, node->virtualAddress),
+                    reinterpret_cast<drv::Stream>(stream));
 }
 
 void *gsanGetReservePointer() {
@@ -813,8 +514,8 @@ void *gsanGetReservePointer() {
 }
 
 int gsanExportAllocationHandles(void *void_ptr,
-                                GSanShareableHandle *realShareableHandle,
-                                GSanShareableHandle *shadowShareableHandle,
+                                ShareableHandle *realShareableHandle,
+                                ShareableHandle *shadowShareableHandle,
                                 size_t *allocSize, drv::HandleType handleType,
                                 bool includeGranularity) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
@@ -841,25 +542,15 @@ int gsanExportAllocationHandles(void *void_ptr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
-  if (!includeGranularity && gsan::getShadowGranularity(ptr) !=
-                                 (gsan::isWriteOnceAddress(ptr) ? 1 : 4))
+  int defaultGranularity = gsan::isWriteOnceAddress(ptr) ? 1 : 4;
+  if (!includeGranularity &&
+      gsan::getShadowGranularity(ptr) != defaultGranularity)
     return -2;
 
-  drv::Result err = drv::exportHandle(
-      getShareableHandleExportArg(realShareableHandle, handleType),
-      node->realHandle, handleType);
+  drv::Result err = exportAllocation(node, realShareableHandle,
+                                     shadowShareableHandle, handleType);
   if (err != drv::kSuccess) {
     printDriverError(err);
-    return -1;
-  }
-
-  err = drv::exportHandle(
-      getShareableHandleExportArg(shadowShareableHandle, handleType),
-      node->shadowHandle, handleType);
-  if (err != drv::kSuccess) {
-    printDriverError(err);
-    if (handleType == drv::HandleType::PosixFileDescriptor)
-      close(realShareableHandle->fd);
     return -1;
   }
 
@@ -905,8 +596,7 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
   return 0;
 }
 
-int gsanExportRuntimeStateHandle(int device,
-                                 GSanShareableHandle *shareableHandle,
+int gsanExportRuntimeStateHandle(int device, ShareableHandle *shareableHandle,
                                  size_t *allocSize,
                                  drv::HandleType handleType) {
   if (shareableHandle == nullptr || allocSize == nullptr ||
@@ -952,12 +642,11 @@ int gsanExportRuntimeStateHandle(int device,
   return 0;
 }
 
-void *
-gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
-                            const GSanShareableHandle *shadowShareableHandle,
-                            drv::HandleType handleType, size_t allocSize,
-                            int device, int shadowGranularity,
-                            bool writeOnce = false) {
+void *gsanImportAllocationHandles(const ShareableHandle *realShareableHandle,
+                                  const ShareableHandle *shadowShareableHandle,
+                                  drv::HandleType handleType, size_t allocSize,
+                                  int device, int shadowGranularity,
+                                  bool writeOnce = false) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       !drv::isSupportedHandleType(handleType) || allocSize == 0 ||
       !gsan::isValidShadowGranularity(shadowGranularity))
@@ -988,42 +677,19 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
   if (node == nullptr)
     return nullptr;
 
-  drv::Handle realHandle = 0;
-  drv::Handle shadowHandle = 0;
-  bool realMapped = false;
-  bool shadowMapped = false;
-  err = drv::importHandle(
-      &realHandle, getShareableHandleImportArg(realShareableHandle, handleType),
-      handleType);
-  if (err != drv::kSuccess)
-    goto error;
-
-  err = drv::importHandle(
-      &shadowHandle,
-      getShareableHandleImportArg(shadowShareableHandle, handleType),
-      handleType);
-  if (err != drv::kSuccess)
-    goto error;
-
-  err = mapNodeHandles(node, realHandle, shadowHandle, allocSize, device,
-                       &realMapped, &shadowMapped);
-  if (err != drv::kSuccess)
-    goto error;
-
+  err = importAllocation(
+      node, allocSize, gsan::getShadowAddress(node->virtualAddress),
+      getShadowSize(allocSize, node->virtualAddress), *realShareableHandle,
+      *shadowShareableHandle, handleType, device);
+  if (err != drv::kSuccess) {
+    printDriverError(err);
+    freeNode(node);
+    return nullptr;
+  }
   return reinterpret_cast<void *>(node->virtualAddress);
-
-error:
-  printDriverError(err);
-  unmapNodeHandles(node, realMapped, shadowMapped);
-  if (shadowHandle != 0)
-    (void)drv::memRelease(shadowHandle);
-  if (realHandle != 0)
-    (void)drv::memRelease(realHandle);
-  freeNode(node);
-  return nullptr;
 }
 
-int gsanImportRuntimeStateHandle(const GSanShareableHandle *shareableHandle,
+int gsanImportRuntimeStateHandle(const ShareableHandle *shareableHandle,
                                  drv::HandleType handleType, size_t allocSize,
                                  int peerDevice, int device) {
   if (shareableHandle == nullptr || !drv::isSupportedHandleType(handleType) ||
@@ -1087,67 +753,6 @@ namespace {
 
 constexpr const char *kModuleName = "gsan_allocator";
 
-bool parseIntArg(PyObject *obj, const char *name, int *out) {
-  long value = PyLong_AsLong(obj);
-  if (value == -1 && PyErr_Occurred())
-    return false;
-  if (value < std::numeric_limits<int>::min() ||
-      value > std::numeric_limits<int>::max()) {
-    PyErr_Format(PyExc_OverflowError, "%s is out of range for int", name);
-    return false;
-  }
-  *out = static_cast<int>(value);
-  return true;
-}
-
-bool parseShareableHandleTypeArg(PyObject *obj, const char *name,
-                                 drv::HandleType *out) {
-  int handleType = 0;
-  if (!parseIntArg(obj, name, &handleType))
-    return false;
-  if (!drv::isSupportedHandleType(static_cast<drv::HandleType>(handleType))) {
-    PyErr_Format(PyExc_ValueError, "%s has unsupported value %d", name,
-                 handleType);
-    return false;
-  }
-  *out = static_cast<drv::HandleType>(handleType);
-  return true;
-}
-
-bool parseShareableHandleArg(PyObject *obj, const char *name,
-                             drv::HandleType handleType,
-                             GSanShareableHandle *out) {
-  if (handleType == drv::HandleType::PosixFileDescriptor)
-    return parseIntArg(obj, name, &out->fd);
-
-  if (!PyBytes_Check(obj)) {
-    PyErr_Format(PyExc_TypeError, "%s must be bytes", name);
-    return false;
-  }
-
-  char *data = nullptr;
-  Py_ssize_t size = 0;
-  if (PyBytes_AsStringAndSize(obj, &data, &size) != 0)
-    return false;
-  if (size != static_cast<Py_ssize_t>(sizeof(out->fabricHandle))) {
-    PyErr_Format(PyExc_ValueError, "%s must contain exactly %zu bytes, got %zd",
-                 name, sizeof(out->fabricHandle), size);
-    return false;
-  }
-
-  memcpy(&out->fabricHandle, data, sizeof(out->fabricHandle));
-  return true;
-}
-
-PyObject *shareableHandleToPyObject(const GSanShareableHandle &handle,
-                                    drv::HandleType handleType) {
-  if (handleType == drv::HandleType::PosixFileDescriptor)
-    return PyLong_FromLong(handle.fd);
-  return PyBytes_FromStringAndSize(
-      reinterpret_cast<const char *>(&handle.fabricHandle),
-      sizeof(handle.fabricHandle));
-}
-
 bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
   unsigned long long value = PyLong_AsUnsignedLongLong(obj);
   if (value == std::numeric_limits<unsigned long long>::max() &&
@@ -1159,11 +764,6 @@ bool parseUInt32Arg(PyObject *obj, const char *name, uint32_t *out) {
   }
   *out = static_cast<uint32_t>(value);
   return true;
-}
-
-bool parseVoidPtrArg(PyObject *obj, void **out) {
-  *out = PyLong_AsVoidPtr(obj);
-  return !(*out == nullptr && PyErr_Occurred());
 }
 
 bool parseShadowGranularityArg(PyObject *obj, int *out) {
@@ -1643,8 +1243,8 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
   if (includeGranularity < 0)
     return nullptr;
 
-  GSanShareableHandle realShareableHandle = {};
-  GSanShareableHandle shadowShareableHandle = {};
+  ShareableHandle realShareableHandle = {};
+  ShareableHandle shadowShareableHandle = {};
   size_t allocSize = 0;
   int rc = gsanExportAllocationHandles(ptr, &realShareableHandle,
                                        &shadowShareableHandle, &allocSize,
@@ -1716,8 +1316,8 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
-  GSanShareableHandle realShareableHandle = {};
-  GSanShareableHandle shadowShareableHandle = {};
+  ShareableHandle realShareableHandle = {};
+  ShareableHandle shadowShareableHandle = {};
   int device = 0;
   drv::HandleType handleType = drv::HandleType::PosixFileDescriptor;
   if (!parseIntArg(args[3], "device", &device) ||
@@ -1768,7 +1368,7 @@ PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
       !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
     return nullptr;
 
-  GSanShareableHandle shareableHandle = {};
+  ShareableHandle shareableHandle = {};
   size_t allocSize = 0;
   int rc = gsanExportRuntimeStateHandle(device, &shareableHandle, &allocSize,
                                         handleType);
@@ -1793,7 +1393,7 @@ PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
-  GSanShareableHandle shareableHandle = {};
+  ShareableHandle shareableHandle = {};
   int peerDevice = 0;
   int device = 0;
   drv::HandleType handleType = drv::HandleType::PosixFileDescriptor;

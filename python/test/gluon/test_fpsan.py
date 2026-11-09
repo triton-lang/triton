@@ -528,11 +528,9 @@ BINARY_EXTERN_SYMBOLS = {
 
 TERNARY_EXTERN_SYMBOLS = {
     "cuda": [
-        ("fma", "__nv_fmaf"),
+        ("fma_rz", "__nv_fmaf_rz"),
     ],
-    "hip": [
-        ("fma", "__ocml_fma_f32"),
-    ],
+    "hip": [],
 }
 
 MIXED_EXTERN_SYMBOLS = {
@@ -1321,8 +1319,8 @@ def _extern_ternary_math_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl
     x = gl.load(x_ptr + offs, mask=mask, other=0.0)
     y = gl.load(y_ptr + offs, mask=mask, other=0.0)
     z = gl.load(z_ptr + offs, mask=mask, other=0.0)
-    if OP == "fma":
-        out = gl.extra.libdevice.fma(x, y, z)
+    if OP == "fma_rz":
+        out = gl.extra.libdevice.fma_rz(x, y, z)
     else:
         gl.static_assert(False, "unsupported OP")
     gl.store(out_ptr + offs, out, mask=mask)
@@ -1409,10 +1407,7 @@ def test_extern_ternary_payload_semantics(device, op, symbol, fresh_knobs):
         y.cpu().numpy().astype(np.int32, copy=False),
         z.cpu().numpy().astype(np.int32, copy=False),
     ]
-    if symbol == "__nv_fmaf":
-        exp_bits = _expected_fma_i32(*input_bits)
-    else:
-        exp_bits = _expected_extern_variadic_tag_i32(input_bits, symbol)
+    exp_bits = _expected_extern_variadic_tag_i32(input_bits, symbol)
     _assert_payload_equal(out, exp_bits)
 
 
@@ -2988,7 +2983,7 @@ def test_tmem_index_subslice(device, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("operation,pred", [("store", False), ("store", True), ("copy", True)])
+@pytest.mark.parametrize("operation,pred", [("store", False), ("store", True), ("copy", False), ("copy", True)])
 @pytest.mark.parametrize("column_slice", [False, True])
 def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
     _require_cuda_backend(device)
@@ -2999,7 +2994,7 @@ def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
-    @gluon.jit
+    @gluon.jit(do_not_specialize=["pred"])
     def kernel(parent_ptr, value_ptr, view_out_ptr, parent_out_ptr, pred, OPERATION: gl.constexpr,
                COLUMN_SLICE: gl.constexpr, VIEW_N: gl.constexpr):
         parent = allocate_tensor_memory(gl.float32, [256, 128], TensorMemoryLayout([128, 64], col_stride=1))
@@ -3022,11 +3017,11 @@ def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
             smem.store(values)
             bar = mbarrier.allocate_mbarrier()
             mbarrier.init(bar, count=1)
-            tcgen05_copy(smem, view)
+            tcgen05_copy(smem, view, pred=pred)
             tcgen05_commit(bar)
             mbarrier.wait(bar, phase=0)
         else:
-            view.store(values, pred=pred != 0)
+            view.store(values, pred=pred)
 
         gl.store(view_out_ptr + view_rows * VIEW_N + view_cols, view.load(view_layout))
         gl.store(parent_out_ptr + parent_rows * 128 + parent_cols, parent.load(parent_layout))
@@ -3045,7 +3040,7 @@ def test_tmem_row_subslice(device, operation, pred, column_slice, fresh_knobs):
     parent_out = torch.empty_like(parent)
     kernel[(1, )](triton.TensorWrapper(parent, dtype=torch.float32), triton.TensorWrapper(value, dtype=torch.float32),
                   triton.TensorWrapper(view_out, dtype=torch.float32),
-                  triton.TensorWrapper(parent_out, dtype=torch.float32), int(pred), operation, column_slice, view_n,
+                  triton.TensorWrapper(parent_out, dtype=torch.float32), pred, operation, column_slice, view_n,
                   num_warps=4)
 
     _assert_payload_equal(view_out, expected_view)

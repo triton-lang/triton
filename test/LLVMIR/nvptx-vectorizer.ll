@@ -3,7 +3,7 @@
 ; RUN: sed '/^target triple =/d' %s | triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=90 | FileCheck %s --check-prefixes=CHECK,HOPPER,HOPPER-ONLY
 ; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=80 %s | FileCheck %s --check-prefixes=CHECK,AMPERE
 ; RUN: triton-llvm-opt -nvptx-vectorize -mtriple=amdgcn-amd-amdhsa %s | FileCheck %s --check-prefix=OTHER
-; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=100 %s | llc -mtriple=nvptx64 -mcpu=sm_100 -fp-contract=off | FileCheck %s --check-prefix=PTX
+; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=100 %s | llc -mtriple=nvptx64 -mcpu=sm_100 | FileCheck %s --check-prefix=PTX
 
 target datalayout = "e-p:64:64-p1:64:64-p3:32:32-p5:64:64"
 target triple = "nvptx64-nvidia-cuda"

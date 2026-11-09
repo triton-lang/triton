@@ -1,5 +1,6 @@
 #include "triton/Tools/LLVMOptions.h"
 
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/Support/CommandLine.h"
 
 #include <atomic>
@@ -76,6 +77,21 @@ TEST(LLVMOptions, LastSettingWins) {
                                    {"triton-test-string-option", "second"}});
   EXPECT_EQ(stringOption.getValue(), "second");
   EXPECT_EQ(stringOption.getNumOccurrences(), 1);
+}
+
+TEST(LLVMOptions, LibraryOptionsApplyAndRestore) {
+  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+  {
+    ScopedLLVMOptions scope(Settings{{"start-before", "machine-scheduler"},
+                                     {"stop-after", "machine-scheduler"},
+                                     {"triton-test-bool-option", "true"}});
+    EXPECT_TRUE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+    EXPECT_FALSE(llvm::TargetPassConfig::willCompleteCodeGenPipeline());
+    EXPECT_TRUE(boolOption.getValue());
+  }
+  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+  EXPECT_TRUE(llvm::TargetPassConfig::willCompleteCodeGenPipeline());
+  EXPECT_FALSE(boolOption.getValue());
 }
 
 TEST(LLVMOptions, UnknownOptionsAreIgnored) {
@@ -164,7 +180,8 @@ TEST(LLVMOptions, ScopesWaitForExclusiveAccess) {
 #ifndef _WIN32
 TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
   auto parentScope = std::make_unique<ScopedLLVMOptions>(
-      Settings{{"triton-test-bool-option", "true"}});
+      Settings{{"triton-test-bool-option", "true"},
+               {"stop-after", "machine-scheduler"}});
 
   pid_t child = fork();
   ASSERT_NE(child, -1);
@@ -172,7 +189,8 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
     // This guard belongs to the parent's registry generation. Destroying it
     // must not underflow the child's freshly reset user count.
     parentScope.reset();
-    bool succeeded = !boolOption.getValue();
+    bool succeeded = !boolOption.getValue() &&
+                     !llvm::TargetPassConfig::hasLimitedCodeGenPipeline();
     {
       ScopedLLVMOptions childScope(
           Settings{{"triton-test-bool-option", "true"}});
@@ -189,8 +207,10 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
   // The child reset must not affect the parent's registry.
   EXPECT_TRUE(boolOption.getValue());
+  EXPECT_TRUE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
   parentScope.reset();
   EXPECT_FALSE(boolOption.getValue());
+  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
 }
 #endif
 

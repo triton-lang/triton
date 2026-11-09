@@ -63,11 +63,14 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   case ISAFamily::CDNA4: {
     Value dsReadTr;
     if (logicalBitWidth == 16)
-      dsReadTr = ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr16_b64::create(
+          rewriter, loc, vTy, vecAddr, ROCDL::ds_read_tr16_b64::Properties{});
     else if (logicalBitWidth == 8)
-      dsReadTr = ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr8_b64::create(
+          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr8_b64::Properties{});
     else if (logicalBitWidth == 4)
-      dsReadTr = ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr4_b64::create(
+          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr4_b64::Properties{});
     else
       return {};
     AMD::addLocalLoadNoAliasScope(
@@ -608,8 +611,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
-                          info.threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 

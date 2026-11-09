@@ -363,7 +363,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
   let hasCanonicalizeMethod = 1;
 
@@ -411,7 +411,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -787,7 +787,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_unsigned
+    UnitAttr:$is_unsigned,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$a_type,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$b_type
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -799,7 +801,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$is_unsigned)>
+      CArg<"bool", "false">:$is_unsigned,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$a_type,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$b_type)>
   ];
 
   let assemblyFormat = [{
@@ -809,6 +813,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
+  let extraClassDeclaration = [{
+    Type getAElementType();
+    Type getBElementType();
+  }];
   let hasVerifier = 1;
 }
 
@@ -892,7 +900,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
   let hasCanonicalizeMethod = 1;
 
@@ -1140,13 +1148,16 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
     This op lowers to the PTX instruction tcgen05.cp. This supports writing to
     the scales TMEM layout as well as the default TMEM layout.
+    The copy is skipped when the optional predicate is false. An omitted
+    predicate is equivalent to true.
     For the default layout, each contiguous TMEM row segment must contain at
     least 128 bits, the minimum width supported by tcgen05.cp.
     Currently, the semantics are different when writing to the TMEM scale layout.
@@ -1191,10 +1202,14 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+    Optional<I1>:$pred
   );
 
-  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{
+    $src `,` $dst (`,` $pred^)? attr-dict `:`
+    qualified(type($src)) `,` qualified(type($dst))
+  }];
   let hasVerifier = 1;
 }
 

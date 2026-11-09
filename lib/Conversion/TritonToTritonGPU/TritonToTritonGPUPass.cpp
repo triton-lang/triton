@@ -40,8 +40,9 @@ template <class Op> struct GenericOpPattern : public OpConversionPattern<Op> {
     if (failed(this->getTypeConverter()->convertTypes(op->getResultTypes(),
                                                       retTypes)))
       return failure();
-    rewriter.replaceOpWithNewOp<Op>(op, retTypes, adaptor.getOperands(),
-                                    op->getAttrs());
+    rewriter.replaceOpWithNewOp<Op>(
+        op, retTypes, adaptor.getOperands(), op.getProperties(),
+        op->getDiscardableAttrDictionary().getValue());
 
     return success();
   }
@@ -443,6 +444,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
+      GenericOpPattern<triton::AnnotateOp>,
       GenericOpPattern<triton::ReshapeOp>,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,

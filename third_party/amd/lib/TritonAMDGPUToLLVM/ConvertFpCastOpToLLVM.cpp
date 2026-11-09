@@ -1035,55 +1035,58 @@ public:
     return result;
   }
 
-  Value Fp8E4M3fnToFp16OneValue(Location loc,
-                                ConversionPatternRewriter &rewriter, Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto fp8x2VecTy = vec_ty(i8_ty, 2);
-    Value a = b.undef(fp8x2VecTy);
-    a = b.insert_element(fp8x2VecTy, a, b.i8_val(0), b.i32_val(0));
-    a = b.insert_element(fp8x2VecTy, a, v, b.i32_val(1));
-    a = b.bitcast(a, i16_ty);
-
-    // Get sign and absolute value
-    Value sign = b.and_(a, b.i16_val(0x8000));
-    a = b.and_(a, b.i16_val(0x7FFF));
-
-    // Right shift 1 bit to adjust the positions of exponent and mantissa
-    a = b.lshr(a, b.i16_val(1));
-
-    // Adjust exponent, (15 - 7) << 10 === 0x2000
-    a = b.add(a, b.i16_val(0x2000));
-
-    // Check NaN
-    Value vAbs = b.and_(b.bitcast(v, i8_ty), b.i8_val(0x7F));
-    a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
-
-    // Check denorms and zero
-    // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
-    // fp16 value
-    constexpr size_t lutSize = 8;
-    static constexpr int denormsAndZeroLut[lutSize] = {
-        0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
-
-    for (int i = 0; i < lutSize; i++) {
-      a = b.select(b.icmp_eq(vAbs, b.i8_val(i)),
-                   b.i16_val(denormsAndZeroLut[i]), a);
-    }
-
-    // Set sign
-    a = b.or_(a, sign);
-    a = b.bitcast(a, f16_ty);
-
-    return a;
-  }
-
   // Ocp Fp8->Fp16
   SmallVector<Value> Fp8E4M3fnToFp16SW(Location loc,
                                        ConversionPatternRewriter &rewriter,
-                                       const SmallVector<Value> &values) {
-    SmallVector<Value> results(4);
-    for (size_t i = 0; i < 4; i++)
-      results[i] = Fp8E4M3fnToFp16OneValue(loc, rewriter, values[i]);
+                                       const SmallVector<Value> &v) {
+    assert(v.size() == 4);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto fp8x4VecTy = vec_ty(i8_ty, 4);
+    auto fp16x2VecTy = vec_ty(f16_ty, 2);
+    auto i16x2VecTy = vec_ty(i16_ty, 2);
+
+    Value scale = b.undef(fp16x2VecTy);
+    scale =
+        b.insert_element(fp16x2VecTy, scale, b.f16_val(0x1p+8), b.i32_val(0));
+    scale =
+        b.insert_element(fp16x2VecTy, scale, b.f16_val(0x1p+8), b.i32_val(1));
+
+    SmallVector<Value> results;
+    for (size_t i = 0; i < 4; i += 2) {
+      // Pack two fp8 values into the high bytes of the 16-bit halves of an i32
+      Value a = b.undef(fp8x4VecTy);
+      a = b.insert_element(fp8x4VecTy, a, b.i8_val(0), b.i32_val(0));
+      a = b.insert_element(fp8x4VecTy, a, v[i], b.i32_val(1));
+      a = b.insert_element(fp8x4VecTy, a, b.i8_val(0), b.i32_val(2));
+      a = b.insert_element(fp8x4VecTy, a, v[i + 1], b.i32_val(3));
+      a = b.bitcast(a, i32_ty);
+
+      // Get sign and absolute value
+      Value sign = b.and_(i32_ty, a, b.i32_val(0x80008000));
+      a = b.and_(i32_ty, a, b.i32_val(0x7FFF7FFF));
+
+      // Right shift 1 bit to adjust the positions of exponent and mantissa
+      a = b.lshr(i32_ty, a, b.i32_val(1));
+      a = b.bitcast(a, fp16x2VecTy);
+
+      // Multiplying by 2^(15-7) rebiases the exponent and normalizes
+      // subnormals. fp8 subnormals are fp16 denormals before the multiply, so
+      // this requires fp16 denormals to be preserved, not flushed to zero.
+      a = b.fmul(fp16x2VecTy, a, scale);
+      a = b.bitcast(a, i32_ty);
+
+      // Set sign
+      a = b.or_(i32_ty, a, sign);
+      a = b.bitcast(a, i16x2VecTy);
+
+      for (size_t j = 0; j < 2; j++) {
+        Value r = b.extract_element(i16_ty, a, b.i32_val(j));
+        // Check NaN
+        Value vAbs = b.and_(v[i + j], b.i8_val(0x7F));
+        r = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), r);
+        results.push_back(b.bitcast(r, f16_ty));
+      }
+    }
     return results;
   }
 

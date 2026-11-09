@@ -66,7 +66,9 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (getAMDArch(moduleOp))
+  // The decomposition emits NVIDIA MMA layouts.
+  auto target = moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+  if (target && target.getValue().split(':').first != "cuda")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
@@ -2698,14 +2700,21 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
       // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
-    Value srcReg =
-        ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
-            .getResult();
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                               /*stride0=*/1,
-                               info->tensorType.getShape().front(),
-                               /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Value pred = op.getPred()) {
+        auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      }
+      Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
+                                              op.getSrc(), Value())
+                         .getResult();
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                                 /*stride0=*/1,
+                                 info->tensorType.getShape().front(),
+                                 /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());

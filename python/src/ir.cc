@@ -194,8 +194,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
     auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
-    if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
-      auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
+    if (auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding)) {
       auto swizzle = ttng::getTMASwizzleMode(arg.getLoc(), descTy);
       auto elemType = ttng::getTMAElementType(arg.getLoc(), descTy);
       if (failed(swizzle) || failed(elemType))
@@ -203,13 +202,16 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
           ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
+      // CUDA assigns the same element type to both FP6 packing modes.
+      if (!isIm2Col && blockSize.back() == 64 &&
+          mmaEncoding.getPadding() == ttg::NVMmaPadding::B6x16P32)
+        throw py::type_error("64-value FP6 host maps require store packing");
       metadata["swizzle"] = *swizzle;
       metadata["elem_size"] =
           getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
-      metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
       metadata["is_im2col"] = isIm2Col;
     } else {
       auto blockShape = descTy.getShape();
@@ -433,9 +435,18 @@ void init_triton_ir(py::module_ &m) {
       .def(py::init<>())
       .def("set_attr",
            [](Value &self, std::string &name, Attribute &attr) -> void {
-             if (Operation *definingOp = self.getDefiningOp())
+             if (Operation *definingOp = self.getDefiningOp()) {
+               if (definingOp->getNumResults() != 1) {
+                 OpBuilder builder(definingOp);
+                 builder.setInsertionPointAfter(definingOp);
+                 auto annotate =
+                     AnnotateOp::create(builder, self.getLoc(), self);
+                 self.replaceAllUsesExcept(annotate.getResult(), annotate);
+                 self = annotate.getResult();
+                 definingOp = annotate;
+               }
                definingOp->setAttr(name, attr);
-             else {
+             } else {
                auto arg = mlir::cast<BlockArgument>(self);
                int id = arg.getArgNumber();
                std::string attrName = name + "_arg" + std::to_string(id);
@@ -1283,7 +1294,7 @@ void init_triton_ir(py::module_ &m) {
                   RoundingModeAttr::get(self.getBuilder().getContext(),
                                         roundingMode.value()));
             else
-              return self.create<FpToFpOp>(dstType, src);
+              return self.create<FpToFpOp>(dstType, src, RoundingModeAttr{});
           },
           py::arg("src"), py::arg("dstType"), py::arg("roundingMode").none())
       // Conversions for standard LLVM builtin types
@@ -1309,7 +1320,8 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("create_fp_ext",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
-             return self.create<arith::ExtFOp>(dstType, src);
+             return self.create<arith::ExtFOp>(dstType, src,
+                                               arith::FastMathFlagsAttr{});
            })
       .def("create_fp_trunc",
            [](TritonOpBuilder &self, Value &src, Type &dstType) -> Value {
@@ -1628,12 +1640,23 @@ void init_triton_ir(py::module_ &m) {
           },
           py::arg("ptrs"), py::arg("val"), py::arg("mask"),
           py::arg("cachePolicy"))
-      .def("create_tensor_descriptor_type",
-           [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-             auto rtt = cast<RankedTensorType>(blockTy);
-             return triton::TensorDescType::get(rtt.getShape(),
-                                                rtt.getElementType(), isSigned);
-           })
+      .def(
+          "create_tensor_descriptor_type",
+          [](TritonOpBuilder &self, Type blockTy, bool isSigned,
+             std::optional<std::string> fp6Format) -> Type {
+            auto rtt = cast<RankedTensorType>(blockTy);
+            Type elemTy = rtt.getElementType();
+            if (fp6Format == "e2m3")
+              elemTy = Float6E2M3FNType::get(self.getContext());
+            else if (fp6Format == "e3m2")
+              elemTy = Float6E3M2FNType::get(self.getContext());
+            else if (fp6Format)
+              throw py::value_error("unknown FP6 descriptor format");
+            return triton::TensorDescType::get(rtt.getShape(), elemTy,
+                                               isSigned);
+          },
+          py::arg("block_type"), py::arg("is_signed"),
+          py::arg("fp6_format") = py::none())
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               Attribute cachePolicy) -> Value {
@@ -1664,10 +1687,8 @@ void init_triton_ir(py::module_ &m) {
              self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
       .def("create_reshape",
-           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
-              bool allowReorder) -> Value {
-             return self.create<ReshapeOp>(shape, arg, allowReorder);
-           })
+           [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape)
+               -> Value { return self.create<ReshapeOp>(shape, arg); })
       .def("create_expand_dims",
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);
@@ -1942,6 +1963,13 @@ void init_triton_ir(py::module_ &m) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
            })
       // Make a tensor descriptor
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Type descTy, Value base,
+              std::vector<Value> &shape, std::vector<Value> &strides,
+              PaddingOption padding) -> Value {
+             return self.create<MakeTensorDescOp>(descTy, base, shape, strides,
+                                                  padding);
+           })
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,

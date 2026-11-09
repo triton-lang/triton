@@ -81,7 +81,7 @@ def _register_pressure_scheduler_kernel():
     for lane in range(32):
         arithmetic.extend([
             f"  %seed{lane} = add i32 %seed, {lane + 1}",
-            f"  %high{lane} = call i32 @llvm.nvvm.mulhi.ui(i32 %seed{lane}, i32 -766435501)",
+            f"  %high{lane} = call i32 @llvm.umulh.i32(i32 %seed{lane}, i32 -766435501)",
             f"  %low{lane} = mul i32 %seed{lane}, -845247145",
             f"  %value{lane} = xor i32 %high{lane}, %low{lane}",
         ])
@@ -91,7 +91,7 @@ def _register_pressure_scheduler_kernel():
         ])
 
     source = ('target triple = "nvptx64-nvidia-cuda"\n'
-              'declare i32 @llvm.nvvm.mulhi.ui(i32, i32)\n'
+              'declare i32 @llvm.umulh.i32(i32, i32)\n'
               'define ptx_kernel void @scheduler_kernel(ptr addrspace(1) %out, i32 %seed) {\n' +
               "\n".join(arithmetic + stores) + "\n  ret void\n}\n")
     return backend, source
@@ -151,7 +151,7 @@ define ptx_kernel void @short_pointer_kernel(ptr addrspace(1) %out, i64 %offset)
 
 @pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
 @pytest.mark.parametrize("link_hip_first", [False, True])
-def test_nvidia_short_pointer_option(link_hip_first, fresh_triton_cache):
+def test_nvidia_short_pointer_abi(link_hip_first, fresh_triton_cache):
     from triton.backends.compiler import GPUTarget
 
     if link_hip_first:
@@ -165,6 +165,7 @@ def test_nvidia_short_pointer_option(link_hip_first, fresh_triton_cache):
     compiled = triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("cuda", 90, 32))
     data_layout = next(line for line in compiled.asm["llir"].splitlines() if line.startswith("target datalayout"))
     assert "p3:32:32" in data_layout
+    assert "p5:32:32" in data_layout
 
     backend, source = _nvidia_short_pointer_kernel()
     options = backend.parse_options({"ptx_version": 80})
@@ -235,10 +236,10 @@ def test_amd_llvm_options_concurrent():
 
 
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
-    ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", [], True),
-    ("gfx950", True, "disable-lsr", [], False),
-    ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
+    ("gfx90a", True, None, ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx942", False, "1", ["instcombine-simplify-vector-elts-depth=32"], True),
+    ("gfx950", True, "disable-lsr", ["instcombine-simplify-vector-elts-depth=32"], False),
+    ("gfx1250", True, "0", ["instcombine-simplify-vector-elts-depth=32", "amdgpu-anti-hints-for-va-vdst"], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
                              monkeypatch):
@@ -276,6 +277,23 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
     assert arguments["disabled_passes"] == ("disable-lsr" if disable_opt == "disable-lsr" else "")
     assert metadata["name"] == "test_kernel"
     assert "s_endpgm" in assembly
+
+
+def test_amd_bitcode_path_override(fresh_knobs, monkeypatch, tmp_path):
+    from triton.backends.amd import compiler
+
+    monkeypatch.delenv("TRITON_AMD_BITCODE_PATH", raising=False)
+    options = compiler.HIPOptions(arch="gfx942")
+    default_dir = Path(compiler.__file__).parent / "lib"
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == default_dir / "ockl.bc"
+    assert Path(libs["ocml"]) == default_dir / "ocml.bc"
+
+    monkeypatch.setenv("TRITON_AMD_BITCODE_PATH", str(tmp_path))
+    options = compiler.HIPOptions(arch="gfx942")
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == tmp_path / "ockl.bc"
+    assert Path(libs["ocml"]) == tmp_path / "ocml.bc"
 
 
 def test_amd_codegen_path_override(fresh_knobs, monkeypatch):
@@ -397,7 +415,7 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
     # One call, not two: translate_to_mir dumps the MIR and, from that same
     # MachineFunction, the scheduling DAG appended after the marker. The knob
     # gates that single call.
-    monkeypatch.setattr(compiler.llvm, "translate_to_mir", lambda *args: events.append("mir"))
+    monkeypatch.setattr(compiler, "translate_to_mir", lambda *args: events.append("mir"))
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -422,7 +440,7 @@ def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
         replacement_calls.append((path, args))
         return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
 
-    monkeypatch.setattr(compiler.llvm, "translate_mir_to_asm", replace_mir)
+    monkeypatch.setattr(compiler, "translate_mir_to_asm", replace_mir)
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: pytest.fail("MIR replacement bypassed"))
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -513,11 +531,13 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.use_buffer_atomics
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+    fresh_knobs.amd.use_buffer_ops = True
 
     with fresh_knobs.amd.scope():
         # Use the environment
@@ -530,18 +550,38 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_atomics
     assert fresh_knobs.amd.use_buffer_ops
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+
+def test_use_buffer_ops_is_read_once(fresh_knobs, monkeypatch):
+    # use_buffer_ops is read at import time, only refresh_knobs() re-reads it
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS", raising=False)
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+    assert fresh_knobs.amd.use_buffer_ops
+    triton.knobs.refresh_knobs()
+    assert not fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    triton.knobs.refresh_knobs()
+    assert fresh_knobs.amd.use_buffer_ops
+
+    # Explicit assignment still wins
+    fresh_knobs.amd.use_buffer_ops = False
+    assert not fresh_knobs.amd.use_buffer_ops
 
 
 def test_env_updated(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.use_buffer_ops = False
-    assert os.getenv("AMDGCN_USE_BUFFER_OPS") == "0"
+    fresh_knobs.amd.use_buffer_atomics = False
+    assert os.getenv("AMDGCN_USE_BUFFER_ATOMICS") == "0"
     # Just triple checking both APIs give us what we expect
-    assert os.environ["AMDGCN_USE_BUFFER_OPS"] == "0"
+    assert os.environ["AMDGCN_USE_BUFFER_ATOMICS"] == "0"
 
     fresh_knobs.cache.home_dir = "/foo/bar"
     assert os.getenv("TRITON_HOME") == "/foo/bar"
@@ -555,7 +595,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert not fresh_knobs.language.force_disable_fp_fusion
+    assert not fresh_knobs.language.allow_fp_fusion
     # str defaulting to None
     assert fresh_knobs.compilation.use_ir_loc is None
     # str defaulting to not None
@@ -566,7 +606,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     assert len(fresh_knobs.build.backend_dirs) == 0
 
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", falsey)
-    monkeypatch.setenv("TRITON_FORCE_DISABLE_FP_FUSION", truthy)
+    monkeypatch.setenv("TRITON_ALLOW_FP_FUSION", truthy)
     monkeypatch.setenv("TRITON_DEBUG", truthy)
     monkeypatch.setenv("USE_IR_LOC", "ttir")
     monkeypatch.setenv("TRITON_CACHE_DIR", "/tmp/triton_cache")
@@ -578,7 +618,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert fresh_knobs.language.force_disable_fp_fusion
+    assert fresh_knobs.language.allow_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
     assert fresh_knobs.cache.home_dir == "/tmp/triton_home"
     assert fresh_knobs.cache.dir == "/tmp/triton_cache"

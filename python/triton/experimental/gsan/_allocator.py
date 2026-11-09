@@ -2,65 +2,15 @@ from __future__ import annotations
 
 import functools
 import gc
-import hashlib
-import os
-from enum import IntEnum
-from pathlib import Path
 from types import ModuleType
 from typing import Literal, overload
 
-from triton.runtime import driver as runtime_driver
-from triton.runtime.build import compile_module_from_file
-
-_THIS_DIR = Path(__file__).resolve().parent
-_GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
-_GSAN_HEADER_PATHS = (_THIS_DIR / "src" / "GSan.h", _THIS_DIR / "src" / "GSanDriver.h")
-
-
-class ShareableHandleType(IntEnum):
-    POSIX_FILE_DESCRIPTOR = 0x1
-    FABRIC = 0x8
-
-
-def _header_digest() -> str:
-    # The module cache is keyed on the main source only, so fold in the headers
-    # to rebuild when just they change.
-    digest = hashlib.sha256()
-    for path in _GSAN_HEADER_PATHS:
-        digest.update(path.read_bytes())
-    return digest.hexdigest()[:16]
+from ._allocator_common import ShareableHandleType, load_allocator
 
 
 @functools.lru_cache()
 def _load_gsan_module() -> ModuleType:
-    backend = runtime_driver.active.get_current_target().backend
-    ccflags = [f"-DGSAN_HEADER_DIGEST={_header_digest()}"]
-    if backend == "cuda":
-        from triton.backends.nvidia import driver as nvidia_driver
-
-        library_dirs = nvidia_driver.library_dirs()
-        include_dirs = nvidia_driver.include_dirs
-        libraries = ["libcuda.so.1"]
-    elif backend == "hip":
-        from triton.backends.amd import driver as amd_driver
-
-        # Link the HIP runtime PyTorch uses so allocations are visible to it.
-        libhip = amd_driver._get_path_to_hip_runtime_dylib()
-        include_dirs = amd_driver.include_dirs
-        library_dirs = [os.path.dirname(libhip)]
-        libraries = [os.path.basename(libhip)]
-        ccflags += ["-DGSAN_BACKEND_HIP", f"-Wl,-rpath,{library_dirs[0]}"]
-    else:
-        raise RuntimeError("GSan allocator requires the CUDA or HIP backend.")
-
-    return compile_module_from_file(
-        src_path=str(_GSAN_SOURCE_PATH),
-        name="gsan_allocator",
-        library_dirs=library_dirs,
-        include_dirs=include_dirs,
-        libraries=libraries,
-        ccflags=ccflags,
-    )
+    return load_allocator("GSanAllocator.cc", "gsan_allocator")
 
 
 @functools.lru_cache()
@@ -113,7 +63,7 @@ def configure(
     """Configures the process-local GSan state.
 
     GSan keeps one allocator configuration per process. Call this before the
-    allocator initializes runtime state, or before calling :func:`freeze_config`.
+    first allocation, runtime-state initialization, or :func:`freeze_config`.
     Once frozen, later calls to :func:`configure` raise ``RuntimeError``.
 
     Args:

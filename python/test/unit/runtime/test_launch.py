@@ -307,6 +307,30 @@ def test_launch_with_options(options, monkeypatch) -> None:
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("keyword", [False, True])
+def test_callable_grid_launch_arguments(device, keyword):
+
+    @triton.jit
+    def kernel(X, N, VALUE: tl.constexpr = 7):
+        offset = tl.program_id(0) * N + tl.program_id(1)
+        tl.store(X + offset, VALUE)
+
+    x = torch.zeros((2, 4), dtype=torch.int32, device=device)
+
+    def grid(args):
+        assert args["X"] is x
+        assert isinstance(args["N"], int)
+        assert args["VALUE"] == 7
+        return (args["X"].numel() // args["N"], args["X"].shape[1])
+
+    if keyword:
+        kernel[grid](N=x.shape[1], X=x)
+    else:
+        kernel[grid](x, x.shape[1])
+    torch.testing.assert_close(x, torch.full_like(x, 7))
+
+
+@pytest.mark.interpreter
 def test_pre_run_hooks(device):
 
     @triton.jit

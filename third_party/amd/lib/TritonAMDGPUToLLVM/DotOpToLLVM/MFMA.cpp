@@ -152,6 +152,7 @@ struct DotOpMFMAConversionHelper {
                rewriter, loc, acc.getType(), ValueRange{acc},
                /*asm_string=*/"", constraints, /*has_side_effects=*/false,
                /*is_align_stack=*/false, LLVM::TailCallKind::None,
+               /*convergent=*/false,
                LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
                /*operand_attrs=*/ArrayAttr())
         ->getResult(0);
@@ -236,53 +237,6 @@ struct DotOpMFMAConversionHelper {
     return processSubBlocks(numSubBlocks, acc, false, true);
   }
 
-  /// Dot operand layout minimal tile is kDimInstrSize elements across
-  /// K dimension. If dot operand K dimension is smaller, layout
-  /// assigns tensor elements to multiple different hardware locations.
-  /// In this case mfma instruction adds elements in accumulator
-  /// multiple times.
-  ///
-  /// Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
-  /// Consider instruction K size is 4,
-  /// in this case operands will be duplicated:
-  /// A' = [1,2,1,2] B' = [3,4,3,4]
-  /// C' = (1*3+2*4) + (1*3+2*4) = 22
-  ///
-  /// Following code adjusts accumulator values in such cases.
-  /// If accumulator is integer, shift accumulator right by
-  /// log2(duplicationRate). If accumulator is float, multiply accum
-  /// with 1/duplicationRate constant.
-  void adjustAccForSmallKDim(SmallVector<Value> &fc, Value &acc, Type dstElemTy,
-                             int b, int m, int n, int64_t numRepM,
-                             int64_t numRepN, int64_t kDimInstrSize,
-                             int64_t kDimOperandSize,
-                             unsigned elemsPerVec) const {
-    auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    for (unsigned v = 0; v < elemsPerVec; ++v) {
-      Value accElem = tb.extract_element(dstElemTy, acc, tb.i32_val(v));
-      if (kDimInstrSize > kDimOperandSize) {
-        assert(kDimInstrSize % kDimOperandSize == 0);
-        int duplicationRate = kDimInstrSize / kDimOperandSize;
-        assert(llvm::isPowerOf2_32(duplicationRate));
-        if (dstElemTy.isInteger()) {
-          auto shiftSize = llvm::Log2_32(duplicationRate);
-          assert(!accElem.getType().isUnsignedInteger() &&
-                 "MFMA uses signed accumulator");
-          accElem = tb.ashr(accElem, tb.i32_val(shiftSize));
-        } else {
-          auto multiplierAttr =
-              rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
-          auto multiplierVal = LLVM::ConstantOp::create(
-              rewriter, loc, dstElemTy, multiplierAttr);
-          accElem = tb.fmul(accElem, multiplierVal);
-        }
-      }
-      auto linearIdx = b * numRepM * numRepN * elemsPerVec +
-                       m * numRepN * elemsPerVec + n * elemsPerVec + v;
-      fc[linearIdx] = accElem;
-    }
-  }
-
   template <typename T>
   void packAndReplaceResult(T &op, SmallVector<Value> &fc,
                             const FailureOr<MfmaIntrinsic> &maybeMfmaIntrinsic,
@@ -319,8 +273,6 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
-    const auto kDimOperandSize = aTensorTy.getShape().back();
-
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
@@ -351,8 +303,6 @@ struct DotOpMFMAConversionHelper {
     int kWidth = aEncoding.getKWidth();
 
     intrinsicName = maybeMfmaIntrinsic->name;
-
-    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
@@ -447,8 +397,10 @@ struct DotOpMFMAConversionHelper {
           // Pin D right after the tile's last MFMA.
           acc = pinRegClass(acc, cdPins->d);
 
-          adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                kDimInstrSize, kDimOperandSize, elemsPerVec);
+          for (int v = 0; v < elemsPerVec; ++v) {
+            int linearIdx = linearize({b, m, n, v}, fcStrides);
+            fc[linearIdx] = tb.extract_element(dstElemTy, acc, tb.i32_val(v));
+          }
         }
       }
     }
@@ -547,6 +499,46 @@ struct DotOpMFMAConversionHelper {
       nonKRep /= kBase / (kRepInKWidth * kWidth);
       assert(nonKRep > 0 && "nonKrep too small");
     }
+
+    // When the K dim of operand is smaller than the MFMA instruction's K dim,
+    // they will hold duplicate values for the MFMA instruction. We need to
+    // ensure only unique registers and lanes (canonical) are used.
+    Value isCanonicalKLane;
+    auto dotEnc = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
+    if (dotEnc) {
+      auto ll = triton::gpu::toLinearLayout(tensorType);
+      auto freeMasks = ll.getFreeVariableMasks();
+      auto kReg = StringAttr::get(ctx, "register");
+      auto kLane = StringAttr::get(ctx, "lane");
+
+      // Set duplicate registers to zero
+      int32_t kRegFreeMask = freeMasks.lookup(kReg) & (dotEnc.getKWidth() - 1);
+      for (size_t reg = 0; reg < elems.size(); ++reg)
+        if (reg & kRegFreeMask)
+          elems[reg] = tb.null(elems[reg].getType());
+
+      // Select canonical lanes
+      int nonKDim = mfmaLayout.getInstrShape()[dotEnc.getOpIdx()];
+      int32_t kLaneFreeMask = freeMasks.lookup(kLane) & ~(nonKDim - 1);
+      if (kLaneFreeMask) {
+        Value freeBits =
+            tb.and_(getLaneId(rewriter, loc), tb.i32_val(kLaneFreeMask));
+        isCanonicalKLane = tb.icmp_eq(freeBits, tb.i32_val(0));
+      }
+
+      int numRegs = numVecInKBase * kBase;
+      int numLayoutRegs = elems.size() / (batch * nonKRep);
+      if (numLayoutRegs < numRegs) {
+        SmallVector<Value> paddedElems;
+        Value zero = tb.null(elems.front().getType());
+        for (int i = 0; i < batch * nonKRep; ++i) {
+          auto begin = elems.begin() + i * numLayoutRegs;
+          paddedElems.append(begin, begin + numLayoutRegs);
+          paddedElems.append(numRegs - numLayoutRegs, zero);
+        }
+        elems = std::move(paddedElems);
+      }
+    }
     ValueTable dotOpVals;
 
     SmallVector<int64_t> strides =
@@ -567,6 +559,8 @@ struct DotOpMFMAConversionHelper {
             rawElems =
                 tb.insert_element(ty, rawElems, elems[index], tb.i32_val(k));
           }
+          if (isCanonicalKLane)
+            rawElems = tb.select(isCanonicalKLane, rawElems, tb.null(ty));
 
           // Step 2: process rawElems based on element type
           // Note that for f32 and XF32 is not allowed or f64, nothing needs
@@ -692,8 +686,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       llvm::report_fatal_error("NYI: mxfp6\n");
     }
 
-    int64_t kDimOperandSize = aTensorTy.getShape().back();
-
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
@@ -718,8 +710,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     int aKWidth = aKBase;
     int bKWidth = bKBase;
-
-    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(aKBase, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), aKWidth, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), bKWidth, 1);
@@ -894,8 +884,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
             // Pin D right after this pass's MFMAs.
             acc = pinRegClass(acc, cdPins->d);
             acc = reduceSubBlocks(subBlocks, acc);
-            adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                  kDimInstrSize, kDimOperandSize, elemsPerVec);
+            for (unsigned v = 0; v < elemsPerVec; ++v) {
+              fc[b * numRepM * numRepN * elemsPerVec +
+                 m * numRepN * elemsPerVec + n * elemsPerVec + v] =
+                  tb.extract_element(dstElemTy, acc, tb.i32_val(v));
+            }
           }
         }
       }

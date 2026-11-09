@@ -56,6 +56,10 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   createLoad(desc, barrierAlloc, alloc, pred);
   Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
   WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase);
+  // Conservatively synchronize CTAs for two-CTA MMA, since these completion
+  // barriers are per-CTA.
+  if (getModuleTwoCTAs(op))
+    ClusterBarrierOp::create(rewriter, loc);
   InvalBarrierOp::create(rewriter, loc, barrierAlloc);
   replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
   op->erase();

@@ -37,9 +37,6 @@ enum class MemoryOp { Load, Store };
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::amdgpu::ISAFamily isaFamily =
-                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);
@@ -87,6 +84,15 @@ std::pair<bool, bool> getCacheModifierFlagsForLoadStore(LLVM::CallOp);
 int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                     const mlir::triton::AMD::TargetInfo &);
+
+// Get the cachepolicy (aux) value of a buffer load or store from its
+// `cachePolicy` attribute and its optional coherence `scope`.
+// Fails, with a diagnostic on `op`, for a combination the target can't encode.
+FailureOr<int32_t>
+getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
+                           std::optional<triton::MemSyncScope> scope,
+                           bool isLoad,
+                           const mlir::triton::AMD::TargetInfo &targetInfo);
 
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`

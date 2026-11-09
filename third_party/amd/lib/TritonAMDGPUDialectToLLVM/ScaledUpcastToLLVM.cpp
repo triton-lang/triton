@@ -393,10 +393,6 @@ struct ScaledUpcastFp8OpPattern
     auto scaleVals =
         unpackUniqueTensorElements(loc, adaptor.getScale(), rewriter);
 
-    // The op verifier guarantees whole register-consecutive groups.
-    assert(inputVals.size() %
-               (targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4) ==
-           0);
     assert(inputVals.size() == scaleVals.size());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -406,9 +402,17 @@ struct ScaledUpcastFp8OpPattern
     // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
     // (opSel=8) and pack lane j^16's scale into byte 1.
     bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
-    if (targetInfo.supportsCvtPkScalePk8Upcast() &&
-        (broadcast ||
-         targetInfo.supportsCvtPkScalePk8Block16())) { // b32 vs b16 needed
+    bool usePk8 = targetInfo.supportsCvtPkScalePk8Upcast() &&
+                  (broadcast || targetInfo.supportsCvtPkScalePk8Block16());
+    // The op verifier guarantees whole register-consecutive groups for
+    // hardware conversion paths.
+    if (usePk8)
+      assert(inputVals.size() % 8 == 0);
+    else if (targetInfo.supportsHwScaledUpcast() &&
+             !targetInfo.supportsCvtPkScalePk8())
+      assert(inputVals.size() % 4 == 0);
+
+    if (usePk8) {
       SmallVector<Value> crossScaleVals(scaleVals.size());
       auto getCrossScale = [&](int scaleIdx) -> Value {
         if (broadcast)

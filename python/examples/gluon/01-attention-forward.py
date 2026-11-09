@@ -1182,6 +1182,11 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     if cga_layout is None:
         cga_layout = p.CGA_LAYOUT
 
+    # The kernel will split the cluster tile into two subtiles. Keep the
+    # configured M tile per CTA and grow the cluster tile with the CTA layout.
+    BLOCK_M = p.BLOCK_M * get_split_dim(cga_layout, 0)
+    assert q.shape[2] % BLOCK_M == 0, f"Sequence length must be divisible by BLOCK_M ({BLOCK_M})"
+
     if o is None:
         o = torch.empty_like(q)
     if M is None:
@@ -1189,9 +1194,6 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 
     y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
-    # The kernel will split the cluster tile into two subtiles. Keep the
-    # configured M tile per CTA and grow the cluster tile with the CTA layout.
-    BLOCK_M = p.BLOCK_M * get_split_dim(cga_layout, 0)
     BLOCK_N = p.BLOCK_N
     SPLIT_M = BLOCK_M // 2
     GROUP_SIZE_N = p.GROUP_SIZE_N

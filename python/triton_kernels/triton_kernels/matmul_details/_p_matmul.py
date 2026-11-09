@@ -151,6 +151,7 @@ def _p_matmul(
              all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
+             MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -342,7 +343,7 @@ def _p_matmul(
         if X_TMA_MODE is None:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
-            # no needs to bounds-check here because `offs_m` wraps around M dim
+            # Wrapping bounds the gather-array position, not the gathered row index.
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
@@ -356,7 +357,8 @@ def _p_matmul(
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
             offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
-            XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
+            mx_scale_offs_m = offs_x_m if USE_GATHER_TMA else offs_m
+            XMxScalePtrs += mx_scale_offs_m.to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
         if XTensorScale is not None:
@@ -371,8 +373,9 @@ def _p_matmul(
                 XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
+        # Inactive rows have no source scales; neutral scales preserve their zero values.
         if REQUANTIZE_X and XTensorScale is not None:
-            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
         else:
             x_conversion_scale: tl.constexpr = None
 
@@ -421,13 +424,17 @@ def _p_matmul(
                 # Keep the aligned base pointer outside the flattened loop's conditional prologue.
                 XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
                 mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
+                # Without a gather, row offsets are nonnegative by construction.
+                # Negative gather indices (including -1) mark inactive input rows.
+                # Do not dereference them: zero-fill X before matmul. This does not
+                # suppress output stores or epilogue operations such as bias.
                 if EVEN_K:
                     if SPLIT_K > 1:
-                        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+                        x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k[None, :], other=0.0)
                     else:
-                        x = tl.load(XPtrs)
+                        x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True), other=0.0)
                 else:
-                    x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+                    x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k[None, :], other=0.0)
                 if x.dtype == tl.float32 and ALLOW_TF32:
                     # since data are not loaded from TMA we need to explicitly round to tf32.
                     x = round_f32_to_tf32(x)
@@ -441,7 +448,10 @@ def _p_matmul(
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, X_SCALE_BLOCK_K) < tl.cdiv(K, X_MX_BLOCK_SIZE)
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                    # TMA may mask activation gathers, but pointer-based scales
+                    # still need their own source-row check. A zero scale byte
+                    # preserves zero activations and permits async-copy zero filling.
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & (mask_m & (mx_scale_offs_m >= 0 if GatherIndx is not None else True))[:, None], other=0.0)
                 else: # use TMA for x scale load
                     # Gathered values can use a dense descriptor while their
                     # scales are already padded and ordered by ragged slice.
@@ -550,7 +560,7 @@ def _p_matmul(
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
             if HAS_X_EPILOGUE_SCALE:
-                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
             if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
                 w_tensor_scales = tl.load(
@@ -789,7 +799,15 @@ def _p_matmul(
             else:
                 # Flexpoint
                 if USE_LOCAL_ABSMAX:
-                    out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
+                    out_view = out
+                    if MAXABS_PERMUTE_SEQUENCE is not None:
+                        NDIMS: tl.constexpr = len(MAXABS_PERMUTE_SEQUENCE)
+                        tl.static_assert(NDIMS > 0)
+                        NBITS: tl.constexpr = out.numel.value.bit_length() - 1
+                        tl.static_assert(NBITS % NDIMS == 0, "Permutation requires equally sized dimensions")
+                        CHUNK_SIZE: tl.constexpr = 1 << (NBITS // NDIMS)
+                        out_view = out_view.reshape((CHUNK_SIZE,) * NDIMS).permute(MAXABS_PERMUTE_SEQUENCE)
+                    out_view = tl.reshape(out_view, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK])
                     local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
 
                 if PER_BATCH_OUT_SCALE:

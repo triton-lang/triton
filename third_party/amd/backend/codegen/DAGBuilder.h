@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_
-#define TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_
+#ifndef TRITON_THIRD_PARTY_AMD_BACKEND_CODEGEN_DAGBUILDER_H_
+#define TRITON_THIRD_PARTY_AMD_BACKEND_CODEGEN_DAGBUILDER_H_
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -21,6 +21,7 @@ namespace llvm {
 class AAResults;
 class AssumptionCache;
 class BasicAAResult;
+class ScopedNoAliasAAResult;
 class LiveIntervals;
 class MachineDominatorTree;
 class MachineLoopInfo;
@@ -106,6 +107,7 @@ private:
   std::unique_ptr<AssumptionCache> AC;
   std::unique_ptr<AAResults> AA;
   std::unique_ptr<BasicAAResult> BasicAA;
+  std::unique_ptr<ScopedNoAliasAAResult> ScopedAA;
 
   /// Set up alias analysis for the function.
   void setupAliasAnalysis();
@@ -141,9 +143,14 @@ SmallVector<SchedulingRegion, 8> getSchedulingRegions(MachineBasicBlock &MBB);
 void emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
                             LiveIntervals *LIS = nullptr);
 
-/// Arm DAG emission from the live codegen pipeline: the next
-/// addPassesToEmitFile run for an AMDGCN target will emit its scheduling DAG
-/// into \p Sink, built on the MachineFunction the pipeline itself produced.
+/// For this guard's lifetime, an addPassesToEmitFile run for an AMDGCN target
+/// emits its scheduling DAG into \p Sink, built on the MachineFunction the
+/// pipeline itself produced.
+///
+/// The guard must outlive BOTH the addPassesToEmitFile call and the PassManager
+/// run, on the thread that constructed it: construction is when the pass is
+/// substituted in, the run is when it fills the sink. Separating the two leaves
+/// the sink empty rather than reporting an error.
 ///
 /// The caller must run that pipeline with
 /// `-stop-after=<livePipelineDAGPassName()>` instead of
@@ -152,15 +159,25 @@ void emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
 /// and preserves all analyses. Building the DAG does perturb the MF --
 /// buildSchedGraph clears `undef` on subregister defs, expecting the scheduler
 /// to re-add it -- so the pass restores those flags itself, leaving the dumped
-/// MIR unchanged. Must be paired with disarmLivePipelineDAGEmission().
+/// MIR unchanged.
 ///
 /// Emitting from the live MF means the `region <bb-number>` key is the same
 /// block number the MIR printer puts in the `bb.N` labels, which re-parsing the
 /// dumped text cannot guarantee (see DAGBuilder.cpp).
 ///
-/// Not thread-safe: arming is process-global (see DAGBuilder.cpp).
-void armLivePipelineDAGEmission(std::string *Sink);
-void disarmLivePipelineDAGEmission();
+/// State is per-thread, so concurrent callers do not clobber each other's sink;
+/// nesting on one thread restores the enclosing sink.
+class LivePipelineDAGEmission {
+public:
+  explicit LivePipelineDAGEmission(std::string *Sink);
+  ~LivePipelineDAGEmission();
+
+  LivePipelineDAGEmission(const LivePipelineDAGEmission &) = delete;
+  LivePipelineDAGEmission &operator=(const LivePipelineDAGEmission &) = delete;
+
+private:
+  std::string *Previous;
+};
 
 /// Command-line name of the DAG-emitting pass, for `-stop-after`.
 const char *livePipelineDAGPassName();
@@ -168,4 +185,4 @@ const char *livePipelineDAGPassName();
 } // namespace mir_dag
 } // namespace llvm
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_
+#endif // TRITON_THIRD_PARTY_AMD_BACKEND_CODEGEN_DAGBUILDER_H_

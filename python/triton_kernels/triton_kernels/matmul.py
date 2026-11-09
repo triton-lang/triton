@@ -259,17 +259,25 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
+    maxabs_permute_sequence: tuple[int, ...] | None = None,
 ):
     """
     Y[:, :] = 0.
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    A gather index of -1 denotes an inactive input row: its values contribute
+    zero to the matmul without reading source values or scales. Bias and other
+    epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
+
     With gather_indx, BlackwellActMXScaleLayout activation scales must already
     follow the gathered row order; strided activation scales are gathered with
     the values. For ragged-M matmul, the Blackwell scale layout must use the same
     RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
     segmentation and padding without comparing metadata tensors on the device.
+
+    maxabs_permute_sequence optionally permutes equally sized dimensions of each
+    output tile before the persistent kernel computes its local absolute maximum.
 
     On Blackwell, NVFP4 activation tiles are requantized to MXFP8 inside the
     matmul kernel for MXFP4 weights. This can add rounding error.
@@ -703,6 +711,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.is_persistent:
+        extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
@@ -756,8 +766,6 @@ def matmul(a, b, bias,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
                    TOKENS_PER_EXPT_FOR_ANNOTATION=None if a_ragged_metadata is None else a_ragged_metadata.expected_slice_size,
-                   # Persistent kernels express their contractions explicitly.
-                   enable_fp_fusion=not opt_flags.is_persistent,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
@@ -963,7 +971,14 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+        if gather_indx is None:
+            x = a[batch, idx, :]
+        else:
+            # Inactive routing slots contribute zero, not Python's last row.
+            x = a.new_zeros((idx.numel(), a.shape[-1]))
+            active = idx >= 0
+            x[active] = a[batch, idx[active], :]
+        out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]

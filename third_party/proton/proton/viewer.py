@@ -249,8 +249,8 @@ def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
 
     if print_sorted:
         print("Sorted kernels by metric " + metrics[0])
-        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-        for row in range(1, len(sorted_df)):
+        sorted_df = gf.dataframe.drop(index=gf.graph.roots).sort_values(by=[metrics[0]], ascending=False)
+        for row in range(len(sorted_df)):
             kernel_name = (sorted_df.iloc[row]["name"][:100] +
                            "..." if len(sorted_df.iloc[row]["name"]) > 100 else sorted_df.iloc[row]["name"])
             print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
