@@ -293,9 +293,9 @@ def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expe
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
     unit = torch.ones(())
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit)
     args = {
-        "precision_config": PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit,
-                                           b_mx_tensor_scale=unit),
+        "precision_config": precision,
         "is_persistent": True,
         "block_m": 128,
         "block_n": 256,
