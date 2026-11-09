@@ -16,6 +16,13 @@ from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
 
+def check_tensor_scale(operand, block_scale, tensor_scale):
+    is_nvfp4 = (block_scale is not None and operand.dtype in (FP4, torch.uint8)
+                and block_scale.data.dtype == torch.float8_e4m3fn)
+    if (tensor_scale is not None) != is_nvfp4:
+        raise ValueError("A tensor scale must be set if and only if the operand is NVFP4 (packed FP4 with E4M3 block scales)")
+
+
 class DequantScaleRoundingMode(Enum):
     # 2^round_up(log2(max/max_q)) avoids clipping the max value
     # For E4M3 scales, round up to the next representable value (saturating at 448).
