@@ -2094,6 +2094,8 @@ and returns a descriptor object which can be used to load/store from the tensor 
 <section id="tt-map-elementwise-triton-mapelementwiseop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.map_elementwise</span></code> (triton::MapElementwiseOp)<a class="headerlink" href="#tt-map-elementwise-triton-mapelementwiseop" title="Link to this heading"></a></h2>
 <p><em>Map a scalar subregion over a tensor</em></p>
+<p>The scalar function and its callees may contain memory-effect-free
+operations, <code class="docutils literal notranslate"><span class="pre">llvm.intr.assume</span></code>, <code class="docutils literal notranslate"><span class="pre">tt.assert</span></code>, and <code class="docutils literal notranslate"><span class="pre">tt.print</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <section id="id79">
 <h3>Attributes:<a class="headerlink" href="#id79" title="Link to this heading"></a></h3>
@@ -2372,6 +2374,8 @@ format are generated automatically from the arguments.</p>
 <section id="tt-reduce-triton-reduceop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.reduce</span></code> (triton::ReduceOp)<a class="headerlink" href="#tt-reduce-triton-reduceop" title="Link to this heading"></a></h2>
 <p><em>Reduction using generic combination algorithm</em></p>
+<p>The combiner and its callees may contain memory-effect-free operations,
+<code class="docutils literal notranslate"><span class="pre">llvm.intr.assume</span></code>, <code class="docutils literal notranslate"><span class="pre">tt.assert</span></code>, and <code class="docutils literal notranslate"><span class="pre">tt.print</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsShape</span></code>, <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -2530,6 +2534,8 @@ that contains the operation.</p>
 <section id="tt-scan-triton-scanop">
 <h2><code class="docutils literal notranslate"><span class="pre">tt.scan</span></code> (triton::ScanOp)<a class="headerlink" href="#tt-scan-triton-scanop" title="Link to this heading"></a></h2>
 <p><em>Associative scan using generic combination algorithm</em></p>
+<p>The combiner and its callees may contain memory-effect-free operations,
+<code class="docutils literal notranslate"><span class="pre">llvm.intr.assume</span></code>, <code class="docutils literal notranslate"><span class="pre">tt.assert</span></code>, and <code class="docutils literal notranslate"><span class="pre">tt.print</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code>, <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>

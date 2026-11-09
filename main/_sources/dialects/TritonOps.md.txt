@@ -1367,6 +1367,9 @@ Effects: `MemoryEffects::Effect{}`
 
 _Map a scalar subregion over a tensor_
 
+The scalar function and its callees may contain memory-effect-free
+operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+
 Traits: `RecursiveMemoryEffects`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 #### Attributes:
@@ -1582,6 +1585,9 @@ Effects: `MemoryEffects::Effect{}`
 
 _Reduction using generic combination algorithm_
 
+The combiner and its callees may contain memory-effect-free operations,
+`llvm.intr.assume`, `tt.assert`, and `tt.print`.
+
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsEncoding`, `SameOperandsShape`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
@@ -1716,6 +1722,9 @@ Effects: `MemoryEffects::Effect{}`
 ### `tt.scan` (triton::ScanOp)
 
 _Associative scan using generic combination algorithm_
+
+The combiner and its callees may contain memory-effect-free operations,
+`llvm.intr.assume`, `tt.assert`, and `tt.print`.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
