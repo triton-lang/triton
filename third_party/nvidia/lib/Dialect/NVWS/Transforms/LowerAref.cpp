@@ -622,13 +622,14 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
           mmav5Ops.insert(mmav5);
         } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          auto users =
-              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                return isa<MMAv5OpInterface>(user);
-              });
-          for (auto user : users) {
-            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
-          }
+          // Collect the MMAs themselves: the top-level users returned here are
+          // their ancestors in the loop body, e.g. an scf.if around the MMA.
+          getTopLevelUsersInLoop(consumer, forOp, [&](Operation *user) {
+            auto mmav5 = dyn_cast<MMAv5OpInterface>(user);
+            if (mmav5)
+              mmav5Ops.insert(mmav5);
+            return bool(mmav5);
+          });
         }
       }
     }

@@ -108,10 +108,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
   // CHECK-LABEL: @tmem_load_reduce
   tt.func public @tmem_load_reduce() -> tensor<128xf32, #red> {
+    // CHECK: %[[MASK:.*]] = arith.constant dense<2147483647>
     // CHECK: %[[LOADED:.*]] = tt.load
-    // CHECK: %[[VALUE:.*]] = tti.experimental_fpsan_unembed %[[LOADED]]
-    // CHECK: %[[ABS:.*]] = math.absf %[[VALUE]]
-    // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed %[[ABS]]
+    // CHECK: %[[ABS:.*]] = math.absi %[[LOADED]]
+    // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]]
     // CHECK: %[[REDUCED:.*]] = "tt.reduce"(%[[PAYLOAD]]) <{axis = 1 : i32}>
     // CHECK: arith.maxsi
     // CHECK: tt.reduce.return

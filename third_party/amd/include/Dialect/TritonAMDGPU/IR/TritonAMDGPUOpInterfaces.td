@@ -21,15 +21,22 @@ def TDMOpInterface : OpInterface<"TDMOpInterface"> {
 def BufferOpInterface : OpInterface<"BufferOpInterface"> {
   let description = [{
     This interface is implemented by buffer load/store operations.
-    It provides methods to access common properties such base pointer, offset, mask and others.
+    It provides methods to access common properties such base pointer, offset,
+    mask and others.
+
+    `ptr` is a scalar global pointer or, for loads and stores, a buffer
+    descriptor (`amdg.make_buffer_desc`). A pointer gets a default descriptor
+    with a 2^31 - 2 byte bound. `offsets` and `soffset` count elements of the
+    accessed type. Element `i` accesses `base + soffset + offsets[i]`.
+    Bounds are those of the descriptor (see `amdg.make_buffer_desc`).
   }];
 
   let cppNamespace = "::mlir::triton::amdgpu";
 
   let methods = [
     InterfaceMethod<
-      /*desc=*/"Get operation base ptr.",
-      /*retType=*/"::mlir::TypedValue<::mlir::triton::PointerType>",
+      /*desc=*/"Get operation base: a scalar pointer or a buffer descriptor.",
+      /*retType=*/"::mlir::Value",
       /*methodName=*/"getPtr">,
     InterfaceMethod<
       /*desc=*/"Get mutable operation base ptr.",
@@ -50,7 +57,14 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
     InterfaceMethod<
       /*desc=*/"Get mutable operation stride.",
       /*retType=*/"::mlir::MutableOperandRange ",
-      /*methodName=*/"getStrideMutable">
+      /*methodName=*/"getStrideMutable">,
+    InterfaceMethod<
+      /*desc=*/"Get the scalar offset (an i32 or an i32 tensor), in elements, or null.",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getSoffset",
+      /*args=*/(ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/"return {};">
   ];
 }
 

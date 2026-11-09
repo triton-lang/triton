@@ -6,6 +6,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -86,8 +87,10 @@ public:
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
-  virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                          int i) const = 0;
+  // Return the shuffled value and whether the source lane is in bounds.
+  virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
+                                            Location loc, Value val,
+                                            int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -129,6 +132,15 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  // Returns true if the target does not abort the kernel in |assertFail| and
+  // requires |assertTrap| to be emitted instead. The trap is emitted after a
+  // block-wide barrier so that all failing threads finish reporting first.
+  virtual bool requiresAssertTrap() const { return false; }
+
+  // Emits LLVM code with |rewriter| to abort the kernel after a failed
+  // assertion. Only called if |requiresAssertTrap| returns true.
+  virtual void assertTrap(RewriterBase &rewriter, Location loc) const = 0;
+
   virtual int getSharedMemoryBanks() const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
@@ -136,6 +148,7 @@ public:
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
+  virtual bool supportNativeBF16AtomicAdd() const { return false; }
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
@@ -151,6 +164,8 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
+  // Whether to use three interleaved register chains for a Boolean reduction.
+  virtual bool preferThreePredicateChains() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means

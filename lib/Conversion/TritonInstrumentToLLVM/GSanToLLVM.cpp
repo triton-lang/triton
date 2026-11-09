@@ -635,8 +635,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -687,8 +686,8 @@ public:
     if (sem == MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          *targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, *targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -719,8 +718,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, /*emitBarrierAfter=*/true, rewriter,
-                                 *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -851,8 +849,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -893,8 +890,9 @@ public:
                               static_cast<int32_t>(scope), sourceLoc);
 
       SmallVector<Value> rmwVals{rmwVal};
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, rmwOp, sem, scope, pred);
+      auto old =
+          NVIDIA::emitAtomicRMW(rewriter, loc, valueElemTy, rmwPtr, rmwVals,
+                                rmwOp, sem, scope, pred, *targetInfo);
       if (failed(old))
         return failure();
 
@@ -904,8 +902,8 @@ public:
       resultVals[i] = *old;
     }
 
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          *targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, *targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -934,8 +932,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -972,8 +969,9 @@ public:
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, sem, scope, pred);
+      Value old =
+          NVIDIA::emitAtomicCAS(rewriter, loc, valueElemTy, casPtr, casCmp,
+                                casVal, sem, scope, pred, *targetInfo);
 
       auto oldInt = bitcastToScalarInt(rewriter, loc, old);
       auto cmpInt = bitcastToScalarInt(rewriter, loc, casCmp);
@@ -986,8 +984,8 @@ public:
       resultVals[i] = old;
     }
 
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          *targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, *targetInfo,
+                          getTypeConverter());
     return success();
   }
 };

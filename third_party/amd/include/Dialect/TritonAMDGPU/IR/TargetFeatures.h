@@ -14,15 +14,13 @@ inline constexpr llvm::StringLiteral kWmmaRestrictedInstsFeature =
 
 enum class ISAFamily {
   Unknown,
-  GCN5_1,
-  CDNA1,
   CDNA2,
   CDNA3,
   CDNA4,
+  CDNA5,
   RDNA3,
   RDNA4m,
   RDNA4,
-  GFX1250,
 };
 
 class TargetFeatures {
@@ -57,7 +55,7 @@ public:
   bool isRDNA() const;
   bool isCDNA3() const;
   bool isCDNA4() const;
-  bool isGFX1250() const;
+  bool isCDNA5() const;
   bool isGFX1250Strict() const;
 
   int getWarpSize() const;

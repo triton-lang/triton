@@ -3,6 +3,24 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Set bits select lane, warp, and CTA coordinates that must be zero.
+def ThreadDomainAttr : TritonGPU_Attr<"ThreadDomain", "thread_domain"> {
+  let mnemonic = "thread_domain";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp,
+                        DefaultValuedParameter<"uint32_t", "0">:$block);
+  let assemblyFormat = "`<` $lane `,` $warp (`,` $block^)? `>`";
+  let extraClassDeclaration = [{
+    bool isFull() const { return !(getLane() | getWarp() | getBlock()); }
+    bool hasSameWarpAndBlock(ThreadDomainAttr other) const {
+      return getWarp() == other.getWarp() && getBlock() == other.getBlock();
+    }
+    bool hasMasksWithin(uint32_t lane, uint32_t warp, uint32_t block) const {
+      return !(getLane() & ~lane) && !(getWarp() & ~warp) &&
+             !(getBlock() & ~block);
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -186,7 +204,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth);
     }]>,
 
@@ -196,7 +214,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool":$needTrans), [{
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       return get(context, dotOpEnc, shape, order, CGALayout, bitwidth, needTrans);
     }]>,
   ];
@@ -455,21 +473,33 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     "unsigned":$swizzlingByteWidth,
     "bool":$transposed,
     "unsigned":$elementBitWidth,
-    "bool":$fp4Padded,
+    "NVMmaPadding":$padding,
     "CGAEncodingAttr":$CGALayout
   );
 
+  let skipDefaultBuilders = 1;
   let builders = [
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "NVMmaPadding":$padding,
+                     "CGAEncodingAttr":$CGALayout), [{
+      return $_get(context, swizzlingByteWidth, transposed, elementBitWidth, padding, CGALayout);
+    }]>,
+    AttrBuilder<(ins "unsigned":$swizzlingByteWidth, "bool":$transposed,
+                     "unsigned":$elementBitWidth, "bool":$fp4Padded,
+                     "CGAEncodingAttr":$CGALayout), [{
+      return get(context, swizzlingByteWidth, transposed, elementBitWidth,
+                 fp4Padded ? NVMmaPadding::Fp4 : NVMmaPadding::None, CGALayout);
+    }]>,
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
-        unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
+        unsigned eleBitWidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
         unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
             shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
+        return get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
@@ -479,6 +509,15 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
     static unsigned getDefaultSwizzlingByteWidth(
         ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
         CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
+
+    bool isPaddedFp4() const { return getPadding() == NVMmaPadding::Fp4; }
+    bool isPaddedFp6() const {
+      return getPadding() == NVMmaPadding::B6x16P32 || getPadding() == NVMmaPadding::B6P2x16;
+    }
+    static bool isPackedFp6(Attribute encoding) {
+      auto mma = llvm::dyn_cast_if_present<NVMMASharedEncodingAttr>(encoding);
+      return mma && mma.getPadding() == NVMmaPadding::B6x16P32;
+    }
 
     int getPerPhase() const;
     int getMaxPhase() const;
@@ -883,7 +922,7 @@ for
         remainingCTAs /= CTAsPerCGA[i];
       }
 
-      CTAsPerCGA[rank - 1] *= remainingCTAs; // wrap at CTA level
+      CTAsPerCGA[CTAOrder.back()] *= remainingCTAs; // wrap at CTA level
 
       CGAEncodingAttr CGALayout = CGAEncodingAttr::fromSplitParams(context, CTAsPerCGA, CTASplitNum, CTAOrder);
       return get(context, shape, sizePerThread, order, numWarps, numThreadsPerWarp, CGALayout);
@@ -904,7 +943,6 @@ available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
 - `version`: The GPU architecture:
-  - 1: gfx908: CDNA1
   - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
@@ -1080,7 +1118,7 @@ It is characterized by the following parameters:
 - `version` indicates the GPU architecture:
   - 1: RDNA3; e.g., gfx1100, gfx1101
   - 2: RDNA4; e.g., gfx1200, gfx1201
-  - 3: gfx1250
+  - 3: CDNA5; e.g., gfx1250
 - `ctaLayout` indicates the warp layout in the block. This is a generalization
    compared to previous warp layout representation using warpsPerCTA and tilesPerWarp
    parameters.
@@ -1210,7 +1248,7 @@ warpsPerCTA  = [2, 2], tilesPerWarp = [2, 2]
 but with a different ordering of repetitions.
 
 The motivation for this broader formulation comes from the need to describe swizzled warp
-layouts, which help avoid LDS partition conflicts on architectures such as gfx1250.
+layouts, which help avoid LDS partition conflicts on architectures such as CDNA5.
 A valid example of such swizzled configuration is:
 
 ctaLayout = {reg = [[2, 0]], warps = [[2, 1], [1, 0]]}
@@ -1447,7 +1485,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
         return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
-      unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+      unsigned bitwidth = ::mlir::getIntOrFloatOrPtrBitWidth(eltTy);
       unsigned kWidth = std::max(32 / bitwidth, 1u);
       return $_get(context, opIdx, parent, kWidth);
     }]>

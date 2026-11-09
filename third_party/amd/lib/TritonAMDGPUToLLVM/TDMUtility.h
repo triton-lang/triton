@@ -1,15 +1,10 @@
-#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
-#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
 
-#include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
-
-using mlir::triton::AMD::TargetInfo;
-using PartitionedSharedEncodingAttr =
-    mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
 namespace mlir::LLVM::AMD {
 
@@ -74,6 +69,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
 // `isPureForm`: inherit `pred` from the descriptor (group0[0]) instead of the
 // `pred` arg, and leave the barrier-enable bit untouched.
+// Warps the layout leaves idle get a NULL descriptor (pred = 0). When
+// `barrierPtr` is set they get a NOP instead (tile_dim0 = 0, workgroup mask
+// cleared, pred kept), so every warp sends exactly one barrier arrive.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
@@ -90,6 +88,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 // PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
 // the op auto-splits into multiple instructions when warps don't cover all
 // pieces, while a hint guarantees single-instruction emission (verifier).
+// Only the last instruction carries `barrierPtr`, so each warp arrives once.
 // `warpUsedHint`: see TritonAMDGPUOps.td.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
@@ -143,7 +142,7 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
 // Calculate the number of TDM gather/scatter instructions needed using the
 // same LinearLayout analysis as emitTDMGatherScatter: broadcasts are removed
 // and contiguity is considered when batching indices per instruction.
-size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
+size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType);
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS
@@ -158,6 +157,8 @@ size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
 //   whether indices are 32-bit or 16-bit, detect redundant warps (via
 //   getFreeVariableMasks), and compute per-warp LDS offsets.
 // Multiple TDM instructions are issued automatically if more rows are needed.
+// Only the last one carries `barrierPtr`; with a barrier, redundant warps get
+// a NOP on it rather than a NULL descriptor, so each warp arrives once.
 LogicalResult
 emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                      const LLVMTypeConverter *typeConverter,
@@ -166,7 +167,7 @@ emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                      Value multicastMask, Type elementType, Value barrierPtr,
                      const triton::LinearLayout &cgaLayout, Value ctaId,
                      ArrayRef<Value> rowIndices, bool isGather, int numWarps,
-                     RankedTensorType indicesType);
+                     RankedTensorType indicesType, int32_t auxBits);
 
 // Emit prefetches for a TDM tile to make it available for an actual load in
 // the future. Data is prefetched cooperatively across all CTAs, warps, and
@@ -183,4 +184,4 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
 } // namespace mlir::LLVM::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_

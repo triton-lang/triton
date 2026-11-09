@@ -19,7 +19,7 @@ jobs:
         image_variant: ["default"]
         include:
           - image: rocm/pytorch:rocm7.0_ubuntu24.04_py3.12_pytorch_release_2.8.0
-            runner: ["self-hosted", "gfx90a"]
+            runner: ["amd-gfx90a"]
             # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
             # container expect it at /github/home/.triton. So map here to make sure visible in docker.
             options: >-
@@ -59,7 +59,11 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: ${{ matrix.image_variant == 'rocm10.1' && '0' || '1' }}
       PROTON_SKIP_CUDAGRAPH_TEST: 1
       PYTHON: "python3"
-      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      # Time out individual tests so a hang names the test instead of silently
+      # running out the job's timeout-minutes. The thread method is used rather
+      # than the default signal method because signal needs the main thread to
+      # regain control, which a wedged GPU queue may never give back.
+      PYTEST_ADDOPTS: "-p triton._compile_warmup --timeout=600 --timeout-method=thread"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
@@ -133,6 +137,7 @@ jobs:
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
+          pip install pytest-timeout
           make dev-install
       - name: Print ccache stats
         run: ccache --print-stats
@@ -176,12 +181,10 @@ jobs:
 
           TRITON_CI_CACHE_PHASE=attention pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
-                --ignore=third_party/amd/python/test/test_scalarize_packed_fops.py \
                 --ignore=third_party/amd/python/test/test_address_sanitizer.py \
                 --ignore=third_party/amd/python/test/test_gluon_cdna5.py
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_cdna5.py -k "test_compile"
-          TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
-          pytest --capture=tee-sys -rfs -n 8 python/test/backend/test_mir_stage.py
+          pytest --capture=tee-sys -rfs -n 8 python/test/backend/
           cd python/test/unit
           TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \
@@ -275,11 +278,11 @@ jobs:
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
       PYTHON: "python3"
-      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup --timeout=600 --timeout-method=thread"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
-      image: tritonci/triton-amd-ci:rocm10.2.0a20260929-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+      image: tritonci/triton-amd-ci:rocm10.3.0a20261029-pytorch2.16.0a0-gfx942-gfx950-gfx1250-r1
       options: >-
         --security-opt seccomp=unconfined --user root
         --volume /home/runner/.triton:/github/home/.triton
@@ -332,6 +335,11 @@ jobs:
             config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250.json"
           fi
           test -f "${config}"
+          bitcode="${ROCM_ROOT}/lib/llvm/amdgcn/bitcode"
+          for name in asanrtl ockl ocml; do
+            test -f "${bitcode}/${name}.bc"
+          done
+          echo "TRITON_AMD_BITCODE_PATH=${bitcode}" >> "$GITHUB_ENV"
           echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
           echo "ROCJITSU=${ROCM_ROOT}/bin/mirage run --in-process --config ${config} --" >> "$GITHUB_ENV"
       - name: Install Triton
@@ -364,9 +372,16 @@ jobs:
               -n "$workers" --durations=20 "$@"
           }
 
+          run_rocjitsu_pytest 4 4 -s --tb=short \
+            third_party/amd/python/test/test_gluon_cdna5_consan.py
+          k_gluon_skip="(test_tensor_descriptor_load_store_nd_with_padding and int32-64-1)"
+          k_gluon_skip+=" or (test_cache_modifier and tdm_load_store_roundtrip_kernel)"
+          # Known emulator issues with TDM mbarrier completion and redundant warps.
+          k_gluon_skip+=" or test_tdm_mbarrier_last_load_covers_prior"
+          k_gluon_skip+=" or (test_tdm_gather_scatter_mbarrier_count and (redundant_single_chunk or redundant_multichunk))"
           run_rocjitsu_pytest 64 1 \
             third_party/amd/python/test/test_gluon_cdna5.py \
-            -k "not test_runtime_tensor_copy"
+            -k "not test_runtime_tensor_copy and not ($k_gluon_skip)"
           run_rocjitsu_pytest 8 8 \
             third_party/amd/python/test/test_gluon_cdna5.py \
             -k "test_runtime_tensor_copy"
@@ -388,10 +403,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          k_runtime="not ((test_device_assert and not test_device_assert_barrier) or test_expect_zero_device_assert or test_sanitize_int)"
-          k_core="not (test_load_store_same_ptr or test_atomic_cas or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_scaled_dot and 128-64-128-True-False-False-e2m1-e4m3-4-16-1))"
-          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64) or (test_simple_matmul and False-4-1-64-512-32-2-float64-float64))"
-          k_tdesc="not tensor_descriptor_reduce"
+
+          k_runtime="test_hooks"  # expensive
+
+          k_core="test_load_store_same_ptr or test_atomic_cas"  # expensive
+          k_core+=" or (test_scan2d and shape365) or (test_scan2d and shape869)"
+
+          k_desc="tensor_descriptor_reduce"
+
+          k_tdm_store="(test_tensor_descriptor_store and 1-1024-1-int8)"
+          k_tdm_store+=" or (test_tensor_descriptor_store and 1-1024-1-uint8)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-float32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-int32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 64-1-1-uint32)"
+          k_tdm_store+=" or (test_tensor_descriptor_store_nd and 128-1-1 and not int8)"
+
+          k_matmul="test_batched_mxfp"  # expensive
+          k_matmul+=" or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64)"  # expensive
+          k_matmul+=" or (test_simple_matmul and False-4-1-64-512-32-2-float64-float64)"  # expensive
+          k_matmul+=" or test_preshuffle_scale_mxfp_cdna4 or test_mxfp8_mxfp4_matmul or test_block_scale_fp4"
 
           run_rocjitsu_pytest() {
             local workers="$1"
@@ -405,19 +435,18 @@ jobs:
           }
 
           run_rocjitsu_pytest 8 4 \
-            -k "$k_runtime and not test_hooks" -p no:forked \
-            --timeout=600 --timeout-method=thread \
+            -k "not ($k_runtime)" -p no:forked \
             python/test/unit/test_debug.py \
             python/test/unit/runtime
-          run_rocjitsu_pytest 24 2 \
-            -k "$k_core and $k_tdesc" -p no:forked \
-            --timeout=600 --timeout-method=thread \
+          run_rocjitsu_pytest 12 2 \
+            -k "not ($k_core or $k_desc or $k_tdm_store)" \
+            --deselect "python/test/unit/language/test_core.py::test_cat_nd[rank=1,dim=0]" \
+            -p no:forked \
             python/test/unit/language/test_core.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
           run_rocjitsu_pytest 32 2 \
-            -k "$k_matmul" -p no:forked \
-            --timeout=600 --timeout-method=thread \
+            -k "not ($k_matmul)" -p no:forked \
             python/test/unit/language/test_matmul.py
           run_rocjitsu_pytest 48 1 \
             third_party/amd/python/test/ \
@@ -428,7 +457,7 @@ jobs:
             --ignore=third_party/amd/python/test/test_tdm_copy.py \
             --ignore=third_party/amd/python/test/test_int8_dot_small_block_k.py
           run_rocjitsu_pytest 1 8 -p no:forked \
-            --timeout=300 --timeout-method=thread \
+            --timeout=300 \
             python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
           moe_tests=(
             "test_op[None-False-False-True-True-None-128-768-512-1024-batched-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"

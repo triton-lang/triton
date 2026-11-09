@@ -267,7 +267,7 @@ class Autotuner(KernelInterface):
 
                     if knobs.autotuning.listener is not None:
                         jit_fn = self.fn
-                        while not isinstance(jit_fn, JITFunction):
+                        while not inspect.isfunction(jit_fn.fn):
                             jit_fn = jit_fn.fn
                         knobs.autotuning.listener(
                             fn=jit_fn,

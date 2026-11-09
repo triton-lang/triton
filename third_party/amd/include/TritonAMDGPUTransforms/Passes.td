@@ -1,5 +1,5 @@
-#ifndef TRITONGPU_PASSES
-#define TRITONGPU_PASSES
+#ifndef TRITONAMDGPU_PASSES
+#define TRITONAMDGPU_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -63,13 +63,18 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
 }
 
 def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir::ModuleOp"> {
-  let summary = "Optimize epilogue: (1) Store accumulators directly without going thorough SMEM in epilogue.";
+  let summary = "Store MMA accumulators directly, avoiding shared memory";
 
   let description = [{
+    For a tt.store whose value is converted from an MFMA/WMMA layout to a
+    blocked layout, optionally followed by single-operand elementwise ops, this
+    pass moves the layout conversion to the pointer and mask operands so that
+    the value is stored directly from the MMA layout. This avoids the shared
+    memory round trip of the layout conversion. When possible, the store layout
+    is further adjusted to enable wide 128-bit global stores.
   }];
 
   let dependentDialects = [];
-
 }
 
 def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::triton::FuncOp"> {
@@ -78,7 +83,7 @@ def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-convers
   let description = [{
   This pass tries to hoist a convert_layout op out of the loop if 1) its dst is a tensor
   of dotOperand layout, and 2) its src is defined out of the loop.
-  The rational is as follows:
+  The rationale is as follows:
   1. When the defining op of the src is out of the loop, it means the src is loop-invariant.
      Then we can potentially hoist this convert_layout op, since it's also loop-invariant.
   2. The drawback of this LICM is higher register pressure. However, on AMD GPUs, we have
@@ -170,7 +175,10 @@ def TritonAMDGPUMoveUpPrologueLoads
 def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
   let summary = "Convert memory operations to buffer operations";
 
-  let description = "This pass converts memory and atomic operations (e.g., tt.load/tt.store/tt.atomic_rmw) to  amdgpu buffer operations, if possible";
+  let description = [{
+    This pass converts memory and atomic operations (e.g., tt.load/tt.store/
+    tt.atomic_rmw) to amdgpu buffer operations, if possible.
+  }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
@@ -183,7 +191,10 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
            "Allow buffer atomic operations when the hardware supports it.">,
     Option<"analyzeSmallTensorOfst", "analyze-small-tensor-ofst",
           "bool", /*default=*/"false",
-           "Whether to still analyze index range for tensors whose base has tt.pointer_range = 32 specialization. If false load/store from such tensors will go down buffer ops without analzying index range.">
+           "Whether to still analyze index range for tensors whose base has "
+           "tt.pointer_range = 32 specialization. If false load/store from "
+           "such tensors will go down buffer ops without analyzing index "
+           "range.">
   ];
 }
 
@@ -199,13 +210,15 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let summary = "Interleaving instructions from two warps on the same SIMD to better utilize matrix core";
 
   let description = [{
-    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
-    We call this a ping-pong scheduling pattern, where two warps run concurrently in the synchronized fashion
+    This pass reorders instructions to interleave instructions from two warps
+    on the same SIMD unit. We call this a ping-pong scheduling pattern, where
+    two warps run concurrently in the synchronized fashion.
     This block ping-pong pattern could be beneficial under few conditions including
     occupancy and number of warps.
   }];
 
-  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num-stages",
@@ -220,7 +233,7 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
   let description = [{
     Pass looks for inefficient load->local_store->local_load chains.
     In particular, this pass optimizes dot operand loading from shared memory
-    in cases when operand is stored in global memory in non-K-continous way.
+    in cases when operand is stored in global memory in non-K-contiguous way.
 
     ```
       #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
@@ -254,7 +267,8 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
     ```
 
     After transformation tt.load stays coalesced, because optimization do not change anything across fastest dimension.
-    local_alloc is vectorized and uses swizzled memory, number of bank conflics reduced
+    local_alloc is vectorized and uses swizzled memory, number of bank
+    conflicts reduced.
     local_load is vectorized, because shared memory order matches destination layout register order.
 
     This pass introduces two ttg.convert_layouts to properly cover cases when between ttg.load and ttg.local_alloc/ttg.local_store
@@ -353,13 +367,17 @@ def TritonAMDGPUConvertToTensorOps : Pass<"tritonamdgpu-convert-tensor-ops", "ml
 }
 
 def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp"> {
-  let summary = "partition and pipeline";
+  let summary = "Partition loops into warp-pipeline stages";
 
   let description = [{
-    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
+    This pass groups the operations between warp-pipeline border markers into
+    pipeline stage clusters, each materialized as an scf.execute_region. The
+    clusters are later lowered by the convert-warp-pipeline pass, which staggers
+    warps across the stages with conditional barriers.
   }];
 
-  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"> {

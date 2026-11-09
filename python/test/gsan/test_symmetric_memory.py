@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import socket
 import sys
 import tempfile
 import time
@@ -25,15 +24,17 @@ _PROCESS_GROUP_TIMEOUT = timedelta(seconds=30)
 _SPAWN_TIMEOUT_SECONDS = 60
 
 
-def _get_free_tcp_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def _connect_to_store(master_port: int) -> dist.TCPStore:
+    return dist.TCPStore("127.0.0.1", master_port, is_master=False, timeout=_PROCESS_GROUP_TIMEOUT)
 
 
 def _spawn_distributed(worker, world_size, *args):
+    # Bind the actual rendezvous server before spawning and keep it alive until
+    # all workers exit. Probing a free port and closing it leaves a race.
+    store = dist.TCPStore("127.0.0.1", 0, world_size + 1, is_master=True, wait_for_workers=False,
+                          timeout=_PROCESS_GROUP_TIMEOUT)
     mp.set_forkserver_preload(["torch", "triton"])
-    context = mp.start_processes(worker, args=(world_size, *args), nprocs=world_size, join=False,
+    context = mp.start_processes(worker, args=(world_size, store.port, *args), nprocs=world_size, join=False,
                                  start_method="forkserver")
     deadline = time.monotonic() + _SPAWN_TIMEOUT_SECONDS
     try:
@@ -389,10 +390,8 @@ def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgro
                         write_once: bool = False) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = str(master_port)
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev),
-                            timeout=_PROCESS_GROUP_TIMEOUT)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, store=_connect_to_store(master_port),
+                            device_id=torch.device(dev), timeout=_PROCESS_GROUP_TIMEOUT)
     try:
         if run_subgroup_check:
             _run_subgroup_symmetric_memory_checks(rank, shadow_granularity)
@@ -407,10 +406,8 @@ def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, maste
                                                write_once) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = str(master_port)
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev),
-                            timeout=_PROCESS_GROUP_TIMEOUT)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, store=_connect_to_store(master_port),
+                            device_id=torch.device(dev), timeout=_PROCESS_GROUP_TIMEOUT)
     try:
         _run_single_cta_atomic_sync_check(rank, world_size, shadow_granularity, write_once)
         dist.barrier()
@@ -422,9 +419,8 @@ def _distributed_worker_multi_node_simulated(rank: int, world_size: int, master_
                                              shadow_granularity, write_once) -> None:
     device_index = rank % num_local_devices
     os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = str(master_port)
-    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=_PROCESS_GROUP_TIMEOUT)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, store=_connect_to_store(master_port),
+                            timeout=_PROCESS_GROUP_TIMEOUT)
     try:
         _run_multi_node_simulated_symmetric_memory_checks(rank, world_size, device_index, shadow_granularity,
                                                           write_once)
@@ -437,10 +433,9 @@ def _distributed_worker_single_cta_no_atomic_sync(rank: int, world_size: int, ma
                                                   shadow_granularity) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = str(master_port)
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=_PROCESS_GROUP_TIMEOUT)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, store=_connect_to_store(master_port),
+                            timeout=_PROCESS_GROUP_TIMEOUT)
     torch.cuda.set_device(dev)
     try:
         with tempfile.TemporaryFile(mode="w+b") as driver_stderr:
@@ -471,8 +466,7 @@ def test_gsan_symmetric_memory_rendezvous(shadow_granularity, write_once):
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
-    master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker, world_size, master_port, False, shadow_granularity, write_once)
+    _spawn_distributed(_distributed_worker, world_size, False, shadow_granularity, write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -481,8 +475,7 @@ def test_gsan_symmetric_memory_rendezvous_subgroup_without_global_zero(shadow_gr
         pytest.skip("requires 3 CUDA devices")
 
     world_size = 3
-    master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker, world_size, master_port, True, shadow_granularity)
+    _spawn_distributed(_distributed_worker, world_size, True, shadow_granularity)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -493,9 +486,7 @@ def test_gsan_symmetric_memory_rendezvous_multi_node_simulated(shadow_granularit
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 4
-    master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker_multi_node_simulated, world_size, master_port, 2, shadow_granularity,
-                       write_once)
+    _spawn_distributed(_distributed_worker_multi_node_simulated, world_size, 2, shadow_granularity, write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -506,9 +497,7 @@ def test_gsan_symmetric_memory_single_cta_atomic_sync(shadow_granularity, write_
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
-    master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker_single_cta_atomic_sync, world_size, master_port, shadow_granularity,
-                       write_once)
+    _spawn_distributed(_distributed_worker_single_cta_atomic_sync, world_size, shadow_granularity, write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -517,11 +506,9 @@ def test_gsan_symmetric_memory_single_cta_no_atomic_sync_fails(shadow_granularit
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
-    master_port = _get_free_tcp_port()
     results = mp.get_context("forkserver").Queue()
     try:
-        _spawn_distributed(_distributed_worker_single_cta_no_atomic_sync, world_size, master_port, results,
-                           shadow_granularity)
+        _spawn_distributed(_distributed_worker_single_cta_no_atomic_sync, world_size, results, shadow_granularity)
         reports = [results.get_nowait() for _ in range(world_size)]
     finally:
         results.close()
@@ -625,9 +612,8 @@ def _distributed_worker_triton_kernels_convert_dp_to_ep(rank: int, world_size: i
                                                         shadow_granularity) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = str(master_port)
-    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=_PROCESS_GROUP_TIMEOUT)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, store=_connect_to_store(master_port),
+                            timeout=_PROCESS_GROUP_TIMEOUT)
     torch.cuda.set_device(dev)
     try:
         _run_triton_kernels_convert_dp_to_ep_with_gsan_pool(rank, world_size, shadow_granularity)
@@ -643,5 +629,4 @@ def test_gsan_symmetric_memory_with_triton_kernels_convert_dp_to_ep(shadow_granu
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
-    master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker_triton_kernels_convert_dp_to_ep, world_size, master_port, shadow_granularity)
+    _spawn_distributed(_distributed_worker_triton_kernels_convert_dp_to_ep, world_size, shadow_granularity)

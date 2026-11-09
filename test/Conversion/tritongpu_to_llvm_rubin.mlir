@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -228,12 +228,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @arrive_barrier_fromCTA0_multicast
   tt.func @arrive_barrier_fromCTA0_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
@@ -247,20 +246,79 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // A local barrier lets one thread contribute each target's full count.
+  // CHECK-LABEL: @distributed_arrival_multicast_routes
+  // CHECK-DAG: %[[C32:.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-DAG: %[[C5:.*]] = llvm.mlir.constant(5 : i32)
+  tt.func @distributed_arrival_multicast_routes(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>) {
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK-NOT: nvvm.bar.warp.sync
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[LANE:.*]] = llvm.urem %{{.*}}, %[[C32]] : i32
+    // CHECK: %[[LANE_ZERO:.*]] = llvm.icmp "eq" %[[LANE]], %{{.*}} : i32
+    // CHECK: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: %[[ROUTED_PRED:.*]] = llvm.and %[[LANE_ZERO]], %{{.*}} : i1
+    // CHECK: %[[MASK_BASE:.*]] = llvm.and %[[CTA]], %[[C5]] : i32
+    // CHECK: %[[MASK:.*]] = llvm.shl %[[C5]], %[[MASK_BASE]] : i32
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
+    // CHECK-SAME: "b,r,r" %[[ROUTED_PRED]], %{{[^,]+}}, %[[MASK]]
+    ttg.barrier warp local
+    ttng.arrive_barrier %barrier, 8 {fromCTA = 5 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.bar.warp.sync
+    // CHECK: %[[MULTICAST_CTA:.*]] = nvg.cluster_id
+    // CHECK: %[[MULTICAST_BASE:.*]] = llvm.and %[[MULTICAST_CTA]], %[[C5]] : i32
+    // CHECK: %[[MULTICAST_MASK:.*]] = llvm.shl %[[C5]], %[[MULTICAST_BASE]] : i32
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 12, $2;
+    // CHECK-SAME: "b,r,r" %{{[^,]+}}, %{{[^,]+}}, %[[MULTICAST_MASK]]
+    ttg.barrier local
+    ttng.arrive_barrier %barrier, 12 {multicastCTA = 2 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // A warp-covered direct multicast uses physical lane zero in each warp.
+  // CHECK-LABEL: @distributed_arrival_lane_multicast
+  // CHECK-DAG: %[[DIRECT_C32:.*]] = llvm.mlir.constant(32 : i32)
+  tt.func @distributed_arrival_lane_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[DIRECT_LANE:.*]] = llvm.urem %{{.*}}, %[[DIRECT_C32]] : i32
+    // CHECK: %[[DIRECT_FIRST:.*]] = llvm.icmp "eq" %[[DIRECT_LANE]], %{{.*}} : i32
+    // CHECK: %[[DIRECT_PRED:.*]] = llvm.and %[[DIRECT_FIRST]], %arg1 : i1
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
+    // CHECK-SAME: "b,r,r" %[[DIRECT_PRED]],
+    ttg.barrier warp local
+    ttng.arrive_barrier %barrier, 8, %pred {multicastCTA = 2 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: @expect_barrier_fromCTA0145_multicast
   // CHECK-DAG: llvm.mlir.constant(5 : i32)
   tt.func @expect_barrier_fromCTA0145_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK: llvm.shl
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], 16384, $2;
     ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @expect_barrier_fromCTA0145_distributed_multicast
+  // CHECK-DAG: %[[EXPECT_C32:.*]] = llvm.mlir.constant(32 : i32)
+  tt.func @expect_barrier_fromCTA0145_distributed_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[EXPECT_LANE:.*]] = llvm.urem %{{.*}}, %[[EXPECT_C32]] : i32
+    // CHECK: llvm.icmp "eq" %[[EXPECT_LANE]],
+    // CHECK-NOT: llvm.icmp "ult"
+    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: llvm.shl
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], 4096, $2;
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32, per_warp}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
@@ -347,12 +405,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_f32x2
   // CHECK: llvm.insertelement {{.*}} : vector<2xf32>
-  // CHECK: llvm.bitcast {{.*}} : vector<2xf32> to i64
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
-  // CHECK: llvm.inline_asm {{.*}} "sub.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
-  // CHECK: llvm.inline_asm {{.*}} "mul.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
+  // CHECK: llvm.fsub {{.*}} : vector<2xf32>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf32>
   // CHECK: llvm.inline_asm {{.*}} "fma.rn.f32x2 $0, $1, $2, $3;", "=l,l,l,l" {{.*}} : (i64, i64, i64) -> i64
-  // CHECK: llvm.bitcast {{.*}} : i64 to vector<2xf32>
   tt.func private @packed_arith_f32x2(
       %a: tensor<128x2xf32, #blocked>,
       %b: tensor<128x2xf32, #blocked>,
@@ -399,11 +455,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A3:.*]] = llvm.extractvalue %arg0[3]
   // CHECK: llvm.insertelement %[[A0]],
   // CHECK: llvm.insertelement %[[A1]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   // CHECK: llvm.insertelement %[[A2]],
   // CHECK: llvm.insertelement %[[A3]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
-  // CHECK: llvm.inline_asm {{.*}} "mul.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf32>
   // CHECK-NOT: {{prmt|shfl\.sync}}
   // CHECK: llvm.inline_asm {{.*}} "add.e4m3x4.e2m1x4 $0, $1, $2;", "=r,h,r"
   // CHECK-NOT: {{prmt|shfl\.sync}}
@@ -428,18 +484,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_homogeneous_half
-  // CHECK: llvm.inline_asm {{.*}} "add.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "sub.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "fma.rn.f16x2 $0, $1, $2, $3;", "=r,r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "min.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "max.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "add.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "sub.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "mul.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "fma.rn.bf16x2 $0, $1, $2, $3;", "=r,r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "min.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: llvm.inline_asm {{.*}} "max.bf16x2 $0, $1, $2;", "=r,r,r"
+  // CHECK: llvm.fadd {{.*}} : vector<2xf16>
+  // CHECK: llvm.fsub {{.*}} : vector<2xf16>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xf16>, vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.call_intrinsic "llvm.minimumnum"{{.*}} : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.call_intrinsic "llvm.maximumnum"{{.*}} : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.fadd {{.*}} : vector<2xbf16>
+  // CHECK: llvm.fsub {{.*}} : vector<2xbf16>
+  // CHECK: llvm.fmul {{.*}} : vector<2xbf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+  // CHECK: llvm.call_intrinsic "llvm.minimumnum"{{.*}} : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+  // CHECK: llvm.call_intrinsic "llvm.maximumnum"{{.*}} : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
   tt.func private @packed_arith_homogeneous_half(
       %f16a: tensor<128x2xf16, #blocked>,
       %f16b: tensor<128x2xf16, #blocked>,
@@ -514,8 +570,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_mixed
-  // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
-  // CHECK: llvm.inline_asm {{.*}} "fma.rn.bf16x2 $0, $1, $2, $3;", "=r,r,r,r" {{.*}} : (i32, i32, i32) -> i32
+  // CHECK: llvm.fmul {{.*}} : vector<2xf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.bf16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "sub.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
@@ -644,10 +700,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A3:.*]] = llvm.extractvalue %arg0[3]
   // CHECK: llvm.insertelement %[[A0]],
   // CHECK: llvm.insertelement %[[A1]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   // CHECK: llvm.insertelement %[[A2]],
   // CHECK: llvm.insertelement %[[A3]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   tt.func private @packed_arith_x2_register_order(
       %a: tensor<2x256xf32, #blocked>,
       %b: tensor<2x256xf32, #blocked>) -> tensor<2x256xf32, #blocked> {

@@ -121,6 +121,10 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                     "llvm.amdgcn.wmma.f16.16x16x16.f16", 16, 16),
       TRITON_WMMA_v(2, 16, 16, f16T, f16T, 16, f16T,
                     "llvm.amdgcn.wmma.f16.16x16x16.f16", 16, 8),
+      // wmma_f16_16x16x32_f16
+      TRITON_WMMA_v_feature(3, 16, 16, f16T, f16T, 16, f16T,
+                            "llvm.amdgcn.wmma.f16.16x16x32.f16", 32, 16,
+                            kWmmaRestrictedInstsFeature),
 
       // bf16 inputs
       // wmma_f32_16x16x16_bf16
@@ -148,6 +152,12 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                                   64, kWmmaRestrictedInstsFeature,
                                   "llvm.amdgcn.wmma.f32.16x16x64.fp8.fp8", 64,
                                   32, kWmmaRestrictedInstsFeature),
+      // wmma_f16_16x16x128_fp8_fp8 & wmma_f16_16x16x64_fp8_fp8
+      TRITON_WMMA_v_2case_feature(3, 16, 16, ocpFp8T, ocpFp8T, 8, f16T,
+                                  "llvm.amdgcn.wmma.f16.16x16x128.fp8.fp8", 128,
+                                  64, kWmmaRestrictedInstsFeature,
+                                  "llvm.amdgcn.wmma.f16.16x16x64.fp8.fp8", 64,
+                                  32, kWmmaRestrictedInstsFeature),
       // wmma_f32_16x16x16_fp8_bf8
       TRITON_WMMA_v(2, 16, 16, ocpFp8T, ocpBf8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.fp8.bf8", 16, 8),
@@ -156,6 +166,12 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                                   "llvm.amdgcn.wmma.f32.16x16x128.fp8.bf8", 128,
                                   64, kWmmaRestrictedInstsFeature,
                                   "llvm.amdgcn.wmma.f32.16x16x64.fp8.bf8", 64,
+                                  32, kWmmaRestrictedInstsFeature),
+      // wmma_f16_16x16x128_fp8_bf8 & wmma_f16_16x16x64_fp8_bf8
+      TRITON_WMMA_v_2case_feature(3, 16, 16, ocpFp8T, ocpBf8T, 8, f16T,
+                                  "llvm.amdgcn.wmma.f16.16x16x128.fp8.bf8", 128,
+                                  64, kWmmaRestrictedInstsFeature,
+                                  "llvm.amdgcn.wmma.f16.16x16x64.fp8.bf8", 64,
                                   32, kWmmaRestrictedInstsFeature),
       // wmma_f32_16x16x16_bf8_fp8
       TRITON_WMMA_v(2, 16, 16, ocpBf8T, ocpFp8T, 8, f32T,
@@ -166,6 +182,12 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                                   64, kWmmaRestrictedInstsFeature,
                                   "llvm.amdgcn.wmma.f32.16x16x64.bf8.fp8", 64,
                                   32, kWmmaRestrictedInstsFeature),
+      // wmma_f16_16x16x128_bf8_fp8 & wmma_f16_16x16x64_bf8_fp8
+      TRITON_WMMA_v_2case_feature(3, 16, 16, ocpBf8T, ocpFp8T, 8, f16T,
+                                  "llvm.amdgcn.wmma.f16.16x16x128.bf8.fp8", 128,
+                                  64, kWmmaRestrictedInstsFeature,
+                                  "llvm.amdgcn.wmma.f16.16x16x64.bf8.fp8", 64,
+                                  32, kWmmaRestrictedInstsFeature),
       // wmma_f32_16x16x16_bf8_bf8
       TRITON_WMMA_v(2, 16, 16, ocpBf8T, ocpBf8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.bf8.bf8", 16, 8),
@@ -174,6 +196,12 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                                   "llvm.amdgcn.wmma.f32.16x16x128.bf8.bf8", 128,
                                   64, kWmmaRestrictedInstsFeature,
                                   "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64,
+                                  32, kWmmaRestrictedInstsFeature),
+      // wmma_f16_16x16x128_bf8_bf8 & wmma_f16_16x16x64_bf8_bf8
+      TRITON_WMMA_v_2case_feature(3, 16, 16, ocpBf8T, ocpBf8T, 8, f16T,
+                                  "llvm.amdgcn.wmma.f16.16x16x128.bf8.bf8", 128,
+                                  64, kWmmaRestrictedInstsFeature,
+                                  "llvm.amdgcn.wmma.f16.16x16x64.bf8.bf8", 64,
                                   32, kWmmaRestrictedInstsFeature),
 
       // iu8 inputs
@@ -229,7 +257,7 @@ WmmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
   if (values.empty())
     return failure();
 
-  // If We have more than one instrinsics, prefer those with a larger K.
+  // If we have more than one intrinsic, prefer those with a larger K.
   for (const auto [symbol, k, kBase, feature] : llvm::drop_end(values)) {
     if (inputKDim >= k)
       return WmmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType,
@@ -320,15 +348,12 @@ WmmaScaleDatabase::WmmaScaleDatabase(MLIRContext *context) {
 
   // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td
   wmmaScaleMap = {
-      TRITON_WMMA_SCALE_v_feature(3, 16, 16, f32T, 0u /*isScale16*/,
-                                  WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
-                                  "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4",
-                                  128, kWmmaRestrictedInstsFeature),
-      TRITON_WMMA_SCALE_v_feature(
-          3, 16, 16, f32T, 1u /*isScale16*/,
-          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
-          "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4", 128,
-          kWmmaRestrictedInstsFeature),
+      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 0u /*isScale16*/,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                          "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4", 128),
+      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 1u /*isScale16*/,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                          "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4", 128),
       TRITON_WMMA_SCALE_v_feature(3, 32, 16, f32T, 0u /*isScale16*/,
                                   WmmaScaleIntrinsic::IntrinsicFamily::F4,
                                   "llvm.amdgcn.wmma.scale.f32.32x16x128.f4",

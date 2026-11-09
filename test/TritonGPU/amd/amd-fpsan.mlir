@@ -44,3 +44,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %0 : tensor<16x64xbf16, #blocked>
   }
 }
+
+// -----
+
+#packed_axis1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#unpacked_axis1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale_axis1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#packed_axis0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+#unpacked_axis0 = #ttg.blocked<{sizePerThread = [64, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+#scale_axis0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @compact_scaled_upcast_fp4_axis1
+  tt.func public @compact_scaled_upcast_fp4_axis1(%src: tensor<8x256xi8, #packed_axis1>, %scale: tensor<8x16xi8, #scale_axis1>) -> tensor<8x512xbf16, #unpacked_axis1> {
+    // CHECK: tt.reshape {{.*}} -> tensor<8x16x1xbf16,
+    // CHECK: tt.broadcast {{.*}} -> tensor<8x16x32xbf16,
+    // CHECK: tt.reshape {{.*}} -> tensor<8x512xbf16,
+    // CHECK: arith.mulf
+    %0 = amdg.scaled_upcast_fp4 %src scale %scale {axis = 1 : i32} : tensor<8x256xi8, #packed_axis1>, tensor<8x16xi8, #scale_axis1> -> tensor<8x512xbf16, #unpacked_axis1>
+    tt.return %0 : tensor<8x512xbf16, #unpacked_axis1>
+  }
+
+  // CHECK-LABEL: @compact_scaled_upcast_fp4_axis0
+  tt.func public @compact_scaled_upcast_fp4_axis0(%src: tensor<256x8xi8, #packed_axis0>, %scale: tensor<8x8xi8, #scale_axis0>) -> tensor<512x8xf16, #unpacked_axis0> {
+    // CHECK: tt.reshape {{.*}} -> tensor<8x1x8xf16,
+    // CHECK: tt.broadcast {{.*}} -> tensor<8x64x8xf16,
+    // CHECK: tt.reshape {{.*}} -> tensor<512x8xf16,
+    // CHECK: arith.mulf
+    %0 = amdg.scaled_upcast_fp4 %src scale %scale {axis = 0 : i32} : tensor<256x8xi8, #packed_axis0>, tensor<8x8xi8, #scale_axis0> -> tensor<512x8xf16, #unpacked_axis0>
+    tt.return %0 : tensor<512x8xf16, #unpacked_axis0>
+  }
+}

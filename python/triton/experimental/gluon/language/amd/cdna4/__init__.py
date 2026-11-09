@@ -12,10 +12,12 @@ from ..cdna3 import _buffer_atomic_rmw_impl, _check_cd_regclass, _set_cd_regclas
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
+from . import buffer
 
 __all__ = [
     *__cdna3_all,
     "async_copy",
+    "buffer",
     "mfma_scaled",
     "scaled_upcast",
     "scaled_downcast",

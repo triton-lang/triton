@@ -36,7 +36,7 @@ def is_hip():
 
 def is_cdna():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
-                                                                                   'gfx90a', 'gfx908')
+                                                                                   'gfx90a')
 
 
 def naive_softmax(x):

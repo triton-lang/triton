@@ -481,15 +481,6 @@ def fmod(arg0, arg1, _semantic=None):
 
 
 @core.extern
-def fma(arg0, arg1, arg2, _semantic=None):
-    return core.extern_elementwise(
-        "", "", [arg0, arg1, arg2], {
-            (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__ocml_fma_f32", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__ocml_fma_f64", core.dtype("fp64")),
-        }, is_pure=True, _semantic=_semantic)
-
-
-@core.extern
 def pow(arg0, arg1, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {

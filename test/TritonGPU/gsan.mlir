@@ -144,6 +144,61 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_dynamic_index
+  tt.func @mbarrier_dynamic_index() {
+    // Four barriers per CTA, including those reached on later loop iterations.
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 1424 : i32,
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 8 : <i8>
+    %barriers = ttg.local_alloc : () -> !ttg.memdesc<4x2xi64, #mbarrier, #smem, mutable>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    scf.for %i = %c0 to %c4 step %c1 : i32 {
+      %barrier = ttg.memdesc_index %barriers[%i] : !ttg.memdesc<4x2xi64, #mbarrier, #smem, mutable> -> !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      // Reinitialization must not count the same allocation again.
+      ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+      ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #mbarrier, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @mbarrier_loop_carried_allocations
+  tt.func @mbarrier_loop_carried_allocations() {
+    // Both loop-carried allocations can reach the same init operation.
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 720 : i32,
+    // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 4 : <i8>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %r:2 = scf.for %i = %c0 to %c2 step %c1 iter_args(%current = %a, %next = %b) -> (!ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>, !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>) : i32 {
+      scf.for %j = %c0 to %c2 step %c1 : i32 {
+        %barrier = ttg.memdesc_index %current[%j] : !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable> -> !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+        ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+        ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #mbarrier, #smem, mutable>
+      }
+      scf.yield %next, %current : !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>, !ttg.memdesc<2x1xi64, #mbarrier, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+// -----
+
 #mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 

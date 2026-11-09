@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -240,17 +241,13 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   return applySharedPadding(index * elems * elementSize, ty);
 }
 
-struct MemDescSubsliceOffsets {
-  uint32_t storageOffset = 0;
-  uint32_t byteOffset = 0;
-  uint32_t partitionOffset = 0;
-  uint32_t ctaOffset = 0;
-};
+} // namespace
+
+namespace mlir::triton {
 
 MemDescSubsliceOffsets
-getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
-  auto srcTy = op.getSrc().getType();
-  auto offsets = op.getOffsets();
+getMemDescSubsliceUnpaddedOffsets(ttg::MemDescType srcTy,
+                                  ArrayRef<int64_t> offsets) {
   if (offsets.empty())
     return MemDescSubsliceOffsets{};
 
@@ -259,7 +256,7 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   auto layoutRank = layoutOffsets.size();
   mlir::triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(srcTy);
 
-  MLIRContext *ctx = op->getContext();
+  MLIRContext *ctx = srcTy.getContext();
   SmallVector<StringAttr> dimNames =
       mlir::triton::standardOutDimNames(ctx, layoutRank);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
@@ -304,10 +301,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
                                 partitionOffset, blockOffset};
 }
 
-} // namespace
-
-namespace mlir::triton {
-
 AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
   AddressSet result;
   for (uint32_t offset = 0; offset < length; ++offset)
@@ -346,18 +339,40 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return result;
 }
 
+// Hash every equality field, including the exact address sets.
+size_t BufferRegionView::hash() const {
+  if (cachedHash)
+    return *cachedHash;
+  auto hash = llvm::hash_combine(
+      allocationFrame, region.baseOffset, region.length, storageBase,
+      affineOffset, affinePartitionOffset, affineCTAOffset, allocation,
+      llvm::hash_combine_range(partitionBases.begin(), partitionBases.end()));
+  for (const auto &[cta, addresses] : region.ctaAddresses)
+    hash = llvm::hash_combine(
+        hash, cta,
+        llvm::hash_combine_range(addresses.begin(), addresses.end()));
+  cachedHash = hash;
+  return *cachedHash;
+}
+
 BufferRegionView
 BufferRegionView::translated(uint32_t offset,
                              uint32_t newAllocationFrame) const {
-  BufferRegionView result = *this;
-  result.region.baseOffset += offset;
-  for (auto &[cta, addresses] : result.region.ctaAddresses)
+  BufferRegion translatedRegion = region;
+  translatedRegion.baseOffset += offset;
+  for (auto &[cta, addresses] : translatedRegion.ctaAddresses)
     addresses = addresses.translated(offset);
-  result.storageBase += offset;
-  for (uint32_t &base : result.partitionBases)
+  auto translatedBases = partitionBases;
+  for (uint32_t &base : translatedBases)
     base += offset;
-  result.allocationFrame = newAllocationFrame;
-  return result;
+  return {std::move(translatedRegion),
+          storageBase + offset,
+          affineOffset,
+          std::move(translatedBases),
+          affinePartitionOffset,
+          affineCTAOffset,
+          newAllocationFrame,
+          allocation};
 }
 
 BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
@@ -469,19 +484,22 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 BufferRegionView
 BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
                                    ArrayRef<uint32_t> partitionBases) {
-  BufferRegionView view;
-  view.storageBase = storageBase;
-  view.partitionBases = llvm::to_vector<2>(partitionBases);
   Operation *op = allocation.getDefiningOp();
-  view.allocation = op;
   // TMEM allocation assigns module-wide addresses; only shared allocations
   // need a per-function frame and translation by a call's shared-memory offset.
   auto memory = cast<ttg::MemDescType>(allocation.getType());
-  view.allocationFrame =
+  uint32_t allocationFrame =
       isa<ttng::TensorMemorySpaceAttr>(memory.getMemorySpace())
           ? getOperationId(op->getParentOfType<ModuleOp>())
           : getOperationId(op->getParentOfType<FunctionOpInterface>());
-  return getSubView(allocation.getType(), view);
+  return getSubView(allocation.getType(), {{},
+                                           storageBase,
+                                           0,
+                                           llvm::to_vector<2>(partitionBases),
+                                           0,
+                                           0,
+                                           allocationFrame,
+                                           op});
 }
 
 BufferRegionView
@@ -507,14 +525,14 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
                         (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
-  BufferRegionView result = view;
-  result.region = {baseOffset, getMemDescSize(ty), std::move(footprint)};
-  result.storageBase = storageBase;
-  result.affineOffset = affineOffset;
-  result.partitionBases = std::move(partitionBases);
-  result.affinePartitionOffset = affinePartitionOffset;
-  result.affineCTAOffset = affineCTAOffset;
-  return result;
+  return {{baseOffset, getMemDescSize(ty), std::move(footprint)},
+          storageBase,
+          affineOffset,
+          std::move(partitionBases),
+          affinePartitionOffset,
+          affineCTAOffset,
+          view.allocationFrame,
+          view.allocation};
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
@@ -603,18 +621,18 @@ BufferRegionAnalysis::getScratchFootprint(Operation *op) {
     base = offset.getInt();
     length = size.getInt();
   }
-  BufferRegionView view{{base, length}, /*storageBase=*/base};
-  view.allocationFrame =
+  BufferRegion region{base, length};
+  uint32_t allocationFrame =
       getOperationId(op->getParentOfType<FunctionOpInterface>());
   AddressSet addresses = AddressSet::fromRange(base, length);
   unsigned numCTAs = ttg::lookupNumCTAs(op);
-  uint32_t broadcastMask = getAtomicScratchBroadcastMask(op).value_or(0);
+  uint32_t broadcastMask = getResultScratchBroadcastMask(op).value_or(0);
   for (unsigned cta = 0; cta < numCTAs; ++cta)
     if (!(cta & broadcastMask))
-      view.region.ctaAddresses.emplace_back(cta, addresses);
-  it->second = std::make_unique<BufferRegionFootprint>(
-      BufferRegionFootprint{ttg::SharedMemorySpaceAttr::get(op->getContext()),
-                            RegionInfo({std::move(view)})});
+      region.ctaAddresses.emplace_back(cta, addresses);
+  it->second = std::make_unique<BufferRegionFootprint>(BufferRegionFootprint{
+      ttg::SharedMemorySpaceAttr::get(op->getContext()),
+      RegionInfo({{std::move(region), base, 0, {}, 0, 0, allocationFrame}})});
   return it->second.get();
 }
 
@@ -724,8 +742,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    MemDescSubsliceOffsets relativeOffset =
-        getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
+    MemDescSubsliceOffsets relativeOffset = getMemDescSubsliceUnpaddedOffsets(
+        memdescSubsliceOp.getSrc().getType(),
+        llvm::to_vector_of<int64_t>(memdescSubsliceOp.getOffsets()));
     for (const BufferRegionView &view : in.views)
       regionInfo.views.insert(
           getSubView(memdescSubsliceOp.getType(), view,

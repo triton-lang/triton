@@ -8,7 +8,7 @@ def memrealtime(_semantic=None):
     """
     target_arch = _semantic.builder.options.arch
     asm_str = """s_memrealtime $0
-                 s_waitcnt vmcnt(0)"""
+                 s_waitcnt lgkmcnt(0)"""
     if 'gfx11' in target_arch:
         asm_str = """s_sendmsg_rtn_b64 $0, sendmsg(MSG_RTN_GET_REALTIME)
                      s_waitcnt lgkmcnt(0)"""

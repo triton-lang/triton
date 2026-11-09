@@ -707,3 +707,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!buf = !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // An MMA consuming an aref buffer from inside an scf.if must still be found
+  // and made async; looking it up used to cast the scf.if to an MMA and crash.
+  // CHECK-LABEL: @mma_in_if_consumes_aref
+  // CHECK: scf.if
+  // CHECK-NEXT: ttng.tc_gen5_mma {{.*}} {is_async,
+  tt.func @mma_in_if_consumes_aref(%a: !ttg.memdesc<128x64xf16, #shared, #smem>, %desc: !tt.tensordesc<64x64xf16, #shared>, %acc: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>, %n: i32, %cnd: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    %alloc = ttg.local_alloc : () -> !buf
+    %aref = nvws.aref.create %alloc : <[!buf]>
+    scf.for %i = %c0_i32 to %n step %c1_i32 : i32 {
+      %pbuf, %ptok = nvws.aref.put.enter %aref {ttg.partition = array<i32: 2>} : <[!buf]> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>, !ttg.async.token
+      nvws.descriptor_load %desc[%i, %c0_i32] 8192 %pbuf {ttg.partition = array<i32: 2>} : !tt.tensordesc<64x64xf16, #shared>, i32, i32, !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>
+      nvws.aref.put.exit %aref, %ptok [#nvws.async_op<tma_load>] {ttg.partition = array<i32: 2>} : <[!buf]>, !ttg.async.token
+      %gbuf, %gtok = nvws.aref.get.enter %aref {ttg.partition = array<i32: 1>} : <[!buf]> -> !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64>, !ttg.async.token
+      %b = ttg.memdesc_trans %gbuf {order = array<i32: 1, 0>, ttg.partition = array<i32: 1>} : !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64> -> !ttg.memdesc<64x64xf16, #shared_t, #smem, 1x64x64>
+      scf.if %cnd {
+        ttng.tc_gen5_mma %a, %b, %acc[], %true, %true {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_t, #smem, 1x64x64>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+      } {ttg.partition = array<i32: 1>}
+      nvws.aref.get.exit %aref, %gtok [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!buf]>, !ttg.async.token
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2>}
+    tt.return
+  }
+}

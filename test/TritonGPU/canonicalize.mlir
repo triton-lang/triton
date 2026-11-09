@@ -13,6 +13,28 @@ tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %
   %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
   tt.return %token : !ttg.async.token
 }
+
+// CHECK-LABEL: @true_async_copy_mask
+// CHECK-SAME: (%[[PTR:[^:]+]]: {{.*}}, %[[MEM:[^:]+]]:
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local %[[PTR]], %[[MEM]] {contiguity = 4 : i32} :
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @true_async_copy_mask(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %true other %zero {contiguity = 4 : i32} : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+
+// CHECK-LABEL: @fold_shared_atomic_mask
+// CHECK-NOT: arith.constant
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}} {axis = 0 : i32}
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}}, %{{[^, ]+}} {axis = 0 : i32}
+tt.func @fold_shared_atomic_mask(%dst: !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, %idx: tensor<128xi32, #blocked>, %val: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %0 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %true {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  %1 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %mask {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  tt.return
+}
 }
 
 // -----
@@ -20,17 +42,17 @@ tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %
 
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
-//   CHECK-NOT:   ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
+//       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked1 = #ttg.linear<{register = [[2048], [8], [16], [32]], lane = [[64], [128], [1], [2], [4]], warp = [[256], [512], [1024]], block = []}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -42,15 +64,15 @@ tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> 
 // CHECK-LABEL: @test_canonicalize_convert_expensive_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<256x16xf32
 //       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
-//       CHECK:   %[[V:.+]] = tt.reshape %[[C]] allow_reorder
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked1 = #ttg.linear<{register = [[1], [2], [4], [8]], lane = [[16], [32], [64], [128], [256]], warp = [[512], [1024], [2048]], block = []}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<256x16xf32, #blocked0> -> tensor<256x16xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder : tensor<256x16xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c : tensor<256x16xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -62,35 +84,33 @@ tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blo
 // CHECK-LABEL: @test_canonicalize_convert_expensive_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<2xf32
 //       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
-//       CHECK:   %[[V:.+]] = tt.reshape %[[C]] allow_reorder
-//       CHECK:   tt.return %[[V]]
+//       CHECK:   tt.return %[[C]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
   tt.func @test_canonicalize_convert_expensive_view2(%arg0: tensor<2xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> tensor<2xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<2xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<2xf32, #blocked1>
-    %r = tt.reshape %c allow_reorder : tensor<2xf32, #blocked1> -> tensor<2xf32, #blocked1>
+    %r = tt.reshape %c : tensor<2xf32, #blocked1> -> tensor<2xf32, #blocked1>
     tt.return %r : tensor<2xf32, #blocked1>
   }
 }
 
 // -----
 
-// test that the convert does get combined with the view even if the resulting operation
-// is an efficient view.
+// Retain the conversion when the reshape has an efficient layout.
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
-//   CHECK-NOT:   ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
+//       CHECK:   %[[C:.+]] = ttg.convert_layout %[[ARG]]
+//       CHECK:   %[[V:.+]] = tt.reshape %[[C]]
 //       CHECK:   tt.return %[[V]]
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked1 = #ttg.linear<{register = [[2048], [8], [16], [32]], lane = [[64], [128], [1], [2], [4]], warp = [[256], [512], [1024]], block = []}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
 tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
     %c = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked2>
-    %r = tt.reshape %c allow_reorder efficient_layout : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    %r = tt.reshape %c efficient_layout : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
     tt.return %r : tensor<4096xf32, #blocked1>
 }
 }  // end module
@@ -317,7 +337,10 @@ tt.func @unused_warp_specialize_results(%arg0: i32, %arg1: i32, %arg2: i32) -> (
   default {
     // CHECK-NEXT: ttg.warp_yield %arg0, %arg2 : i32, i32
     ttg.warp_yield %arg0, %arg1, %arg2 : i32, i32, i32
-  // CHECK-NEXT: () -> (i32, i32)
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  // CHECK: () -> (i32, i32)
   } : () -> (i32, i32, i32)
   // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
   tt.return %0#0, %0#2 : i32, i32
@@ -412,4 +435,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #slice> -> tensor<1x32xi32, #parent>
     tt.return %1 : tensor<1x32xi32, #parent>
   }
+}
+
+// -----
+
+// CHECK-LABEL: @gsan_descriptor_predicate
+// CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg2], false : !tt.tensordesc<4x4xf32>
+tt.func @gsan_descriptor_predicate(%desc: !tt.tensordesc<4x4xf32>, %x: i32, %y: i32) {
+  %true = arith.constant true
+  tti.experimental_gsan_tensordesc_access %desc[%x, %y], false, %true : !tt.tensordesc<4x4xf32>
+  tt.return
 }
