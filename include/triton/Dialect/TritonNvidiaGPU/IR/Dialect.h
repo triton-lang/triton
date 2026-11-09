@@ -159,6 +159,10 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
+// Whether every tcgen05.mma emitted for a TMEM LHS and accumulator reads A
+// from the same TMEM rows (lanes) it writes D to, as the hardware requires.
+bool areTMemRowsAligned(gpu::MemDescType lhsType, gpu::MemDescType accType);
+
 uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t offset,
                                int32_t dim);
 

@@ -66,6 +66,8 @@ public:
         lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
+    if (!areTMemRowsAligned(lhsMemDescType, tcGen5MMAOp.getD().getType()))
+      return failure();
     bool layoutTmemCompatible =
         isDistributedLayoutTMemCompatible(tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;
