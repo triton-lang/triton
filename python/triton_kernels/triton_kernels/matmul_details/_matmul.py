@@ -20,6 +20,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    load_output_tensor_scale,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
@@ -111,7 +112,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
-             stride_y_tensor_scale=None,
+             stride_y_tensor_scale=None, stride_y_tensor_scale_m=None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -616,17 +617,14 @@ def _matmul(
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
-        if stride_y_tensor_scale is not None:
-            scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
-            YExpectedScale += scale_group.to(index_type) * stride_y_tensor_scale
-        # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
-        # NVFP4 uses YExpectedScale to precondition the dense output before the
-        # microscaling epilogue writes direct e4m3 block scales.
-        out = float_to_flex(out, YExpectedScale, None, None, mask, Y, False)
+        output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
+        scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
+        expected_scale = load_output_tensor_scale(YExpectedScale, scale_group.to(index_type), stride_y_tensor_scale,
+                                                 output_scale_rows.to(index_type), stride_y_tensor_scale_m, mask_m)
+        out = float_to_flex(out, expected_scale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)
-        output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
         YActualScalePtrs = output_mx_scale_store_ptr(
             YActualScale,
             offs_m,

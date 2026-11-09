@@ -31,12 +31,15 @@ def compact_tensor_scale(scale):
     return scale.reshape(()) if scale.numel() == 1 else scale
 
 
-def output_scale_vector(scale, n_groups):
-    """Return a 1D view with one global value or one value per batch or expert."""
+def output_tensor_scale(scale, n_groups, n_rows):
+    """Return a (group, destination row) view. A length-E vector denotes groups."""
     scale = compact_tensor_scale(scale)
-    if scale.shape not in ((), (n_groups,), (n_groups, 1)):
-        raise ValueError("Output tensor scale must be global or have one value per group")
-    return scale.view(-1)
+    if scale.ndim == 1 and scale.size(0) == n_groups:
+        scale = scale[:, None]
+    scale = torch.atleast_2d(scale)
+    if scale.ndim != 2 or scale.size(0) not in (1, n_groups) or scale.size(1) not in (1, n_rows):
+        raise ValueError(f"Output tensor scale must broadcast to ({n_groups}, {n_rows})")
+    return scale
 
 
 class DequantScaleRoundingMode(Enum):
@@ -137,7 +140,10 @@ def upcast_from_mxfp(
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
     if tensor_scale is not None:
         fiber_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
-        tensor_scale = compact_tensor_scale(tensor_scale).expand(fiber_shape).unsqueeze(axis)
+        tensor_scale = compact_tensor_scale(tensor_scale)
+        if len(fiber_shape) == 1 and tensor_scale.ndim == 2:
+            tensor_scale = tensor_scale.squeeze(0)
+        tensor_scale = tensor_scale.expand(fiber_shape).unsqueeze(axis)
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -264,9 +270,14 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     if expected_scale is not None:
         n_groups = src.shape[0] if src.ndim == 3 else 1
-        expected_scale = output_scale_vector(expected_scale, n_groups)
-        if src.ndim == 3:
-            expected_scale = expected_scale[:, None, None]
+        n_rows = src.shape[-2] if src.ndim >= 2 else 1
+        expected_scale = output_tensor_scale(expected_scale, n_groups, n_rows)
+        if src.ndim == 1:
+            expected_scale = expected_scale.reshape(())
+        elif src.ndim == 3:
+            expected_scale = expected_scale[:, :, None]
+        else:
+            expected_scale = expected_scale[0, :, None]
         src = src / expected_scale.to(device=device, dtype=src.dtype)
     axis_shape = src.shape[-1]
 

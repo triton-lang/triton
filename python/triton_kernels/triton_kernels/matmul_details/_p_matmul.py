@@ -27,6 +27,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    load_output_tensor_scale,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
@@ -152,7 +153,7 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
-             stride_y_tensor_scale=None,
+             stride_y_tensor_scale=None, stride_y_tensor_scale_m=None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -682,11 +683,9 @@ def _p_matmul(
         ExpectedScale = YExpectedScale + start_z1 if PER_BATCH_OUT_SCALE else YExpectedScale
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
-            if stride_y_tensor_scale is not None:
-                scale_group = expt_id1 if RAGGED_DIMENSION == "M" else start_z1
-                ExpectedScale = YExpectedScale + scale_group.to(index_type) * stride_y_tensor_scale
-            if YExpectedScale is not None:
-                ExpectedScale = tl.load(ExpectedScale)
+            scale_group = expt_id1 if RAGGED_DIMENSION == "M" else start_z1
+            ExpectedScale = load_output_tensor_scale(ExpectedScale, scale_group.to(index_type), stride_y_tensor_scale,
+                                                     offs_y_m.to(index_type), stride_y_tensor_scale_m, mask_m)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]

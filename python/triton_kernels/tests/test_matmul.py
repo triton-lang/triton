@@ -809,16 +809,31 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
 
 
 @pytest.mark.parametrize("persistent", [False, True])
-@pytest.mark.parametrize("mode,a_per_group,b_per_group,c_per_group", [
-    ("plain", False, False, False), ("batched", True, True, True),
-    ("routed", False, True, True), ("routed", True, False, False), ("routed", True, True, True),
+@pytest.mark.parametrize("mode,x_kind,w_kind,y_kind", [
+    ("plain", "global", "row", "global"),
+    ("plain", "row", "global", "row"),
+    ("batched", "table", "table", "group"),
+    ("batched", "group", "row", "row"),
+    ("batched", "row", "group", "table"),
+    ("routed", "row", "global", "global"),
+    ("routed", "row", "table", "global"),
+    ("routed", "group", "global", "global"),
+    ("routed", "global", "group", "group"),
+    ("routed", "group", "group", "group"),
+    ("routed", "table", "row", "global"),
+    ("routed", "table", "group", "table"),
+    ("routed", "row", "table", "row"),
+    ("routed", "group", "global", "table"),
+    ("ragged", "table", "group", "table"),
 ])
-def test_nvfp4_compact_tensor_scales(mode, a_per_group, b_per_group, c_per_group, persistent, device):
+def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, device):
     if not cuda_capability_geq(10, 0):
         pytest.skip("NVFP4 requires Blackwell or newer")
     m, n, k = 64, 160, 128
     e = 1 if mode == "plain" else 3
     batched = mode == "batched"
+    if batched:
+        m = e  # A length-E output vector selects batches, (1, M) selects rows.
     a_groups = (e,) if batched else ()
     b_groups = () if mode == "plain" else (e,)
     # Every packed E2M1 pair is [1, 1], so the unscaled dot is exactly K.
@@ -826,28 +841,52 @@ def test_nvfp4_compact_tensor_scales(mode, a_per_group, b_per_group, c_per_group
     b = wrap_torch_tensor(torch.full((*b_groups, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT, dtype=FP4)
     sa = wrap_torch_tensor(torch.ones((*a_groups, m, k // 16), device=device, dtype=torch.float8_e4m3fn))
     sb = wrap_torch_tensor(torch.ones((*b_groups, k // 16, n), device=device, dtype=torch.float8_e4m3fn))
-    # Include a storage offset and a non-unit expert stride.
-    by_group = torch.tensor([0., 0.5, 0., 2., 0., 4.], device=device)[1::2][:e]
-    a_scale = by_group[:, None] if a_per_group else by_group[0]
-    b_scale = by_group[:, None].expand(e, n) if b_per_group else by_group[:1]
-    if mode == "plain":
-        a_scale = a_scale.expand(m)
-    if c_per_group:
-        c_scale = by_group[:, None] if a_per_group else by_group
-    else:
-        c_scale = by_group[0] if mode == "plain" else by_group[0].expand(e)
     meta = gather = scatter = None
-    if mode == "routed":
-        sizes = torch.tensor([47, 0, 84], device=device, dtype=torch.int32)
-        meta = make_ragged_tensor_metadata(sizes, 131)
-        groups = torch.repeat_interleave(torch.arange(e, device=device), sizes.long(), output_size=131)
-        gather = torch.arange(131, device=device, dtype=torch.int32) % m
-        gather[::11] = -1
-        scatter = torch.arange(130, -1, -1, device=device, dtype=torch.int32)
+    if mode in ("ragged", "routed"):
+        routed = mode == "routed"
+        sizes = torch.tensor([47, 0, 84 if routed else m - 47], device=device, dtype=torch.int32)
+        n_rows = 131 if routed else m
+        meta = make_ragged_tensor_metadata(sizes, n_rows)
+        groups = torch.repeat_interleave(torch.arange(e, device=device), sizes.long(), output_size=n_rows)
+        if routed:
+            gather = torch.arange(n_rows, device=device, dtype=torch.int32) % m
+            gather[::11] = -1
+            scatter = torch.arange(n_rows - 1, -1, -1, device=device, dtype=torch.int32)
+            scatter[::17] = -1
     elif batched:
         groups = torch.arange(e, device=device)[:, None].expand(e, m)
     else:
         groups = torch.zeros(m, device=device, dtype=torch.long)
+
+    def make_scale(kind, width):
+        # Nonunit strides and a storage offset exercise both address calculations.
+        group = torch.arange(e, device=device)[:, None]
+        position = torch.arange(2 * width + 1, device=device)[None, :]
+        values = (2. ** ((group + position // 2) % 5 - 2))[:, 1::2]
+        if kind == "global":
+            compact = values[0, 0]
+        elif kind == "group":
+            compact = values[:, :1]
+        elif kind == "row":
+            compact = values[:1]
+        else:
+            assert kind == "table"
+            compact = values
+        return compact, compact.expand(e, width)
+
+    a_scale, x_scales = make_scale(x_kind, m)
+    b_scale, w_scales = make_scale(w_kind, n)
+    c_scale, y_scales = make_scale(y_kind, groups.size(-1))
+    if w_kind == "group":
+        b_scale = b_scale.expand(e, n)
+    if y_kind == "group" and x_kind != "group":
+        c_scale = c_scale[:, 0]
+    if mode == "routed" and y_kind == "global":
+        c_scale = c_scale.expand(e)
+    if mode == "plain" and x_kind == "global":
+        a_scale = a_scale.expand(m)
+    if mode == "plain" and y_kind == "row":
+        c_scale = c_scale[0]
     blocks = torch.empty((*groups.shape, n // 16), device=device, dtype=torch.float8_e4m3fn)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
                              a_mx_tensor_scale=a_scale, b_mx_tensor_scale=b_scale, out_dtype=torch.uint8,
@@ -858,22 +897,26 @@ def test_nvfp4_compact_tensor_scales(mode, a_per_group, b_per_group, c_per_group
         packed = matmul(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter,
                         precision_config=config, epilogue=epilogue)
 
-    def values(per_group):
-        return by_group[groups] if per_group else by_group[0]
-
-    expected = (k * values(a_per_group) * values(b_per_group)).expand(groups.shape)
-    scaled = expected / values(c_per_group)
+    rows = torch.arange(groups.size(-1), device=device)
+    source = rows if gather is None else gather.clamp_min(0)
+    dest = rows if scatter is None else scatter.clamp_min(0)
+    unscaled = k * x_scales[groups, source][..., None] * w_scales[groups]
     if gather is not None:
-        scaled = torch.where(gather >= 0, scaled, 0.).flip([0])
-    expected = expected[..., None].expand(*groups.shape, n)
-    scaled = scaled[..., None].expand(*groups.shape, n)
+        unscaled[gather < 0] = 0
+    scaled = unscaled / y_scales[groups, dest][..., None]
+    if scatter is not None:
+        active = scatter >= 0
+        expected = torch.zeros_like(scaled)
+        expected[scatter[active]] = scaled[active]
+        scaled = expected
     ref = matmul_torch(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter, precision_config=config)
     torch.testing.assert_close(ref, scaled, rtol=0, atol=0)
-    ref_packed, ref_blocks = downcast_to_mxfp_torch(expected if batched else scaled, torch.uint8, -1,
+    ref_packed, ref_blocks = downcast_to_mxfp_torch(unscaled if meta is None else scaled, torch.uint8, -1,
                                                     scale_dtype=torch.float8_e4m3fn, microblock_size=16,
-                                                    expected_scale=c_scale if batched else None)
-    assert torch.equal(packed, ref_packed)
-    assert torch.equal(blocks.view(torch.uint8), ref_blocks.view(torch.uint8))
+                                                    expected_scale=c_scale if meta is None else None)
+    written = slice(None) if scatter is None else scatter[active]
+    assert torch.equal(packed[written], ref_packed[written])
+    assert torch.equal(blocks.view(torch.uint8)[written], ref_blocks.view(torch.uint8)[written])
 
 
 @pytest.mark.parametrize("swizzled", [False, True])

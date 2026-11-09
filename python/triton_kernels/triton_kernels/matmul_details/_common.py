@@ -162,6 +162,19 @@ def compute_offsets(
 
 
 @triton.jit
+def load_output_tensor_scale(Scale, group, group_stride, rows, row_stride, mask):
+    if Scale is None:
+        return None
+    else:
+        if group_stride is not None:
+            Scale += group * group_stride
+        if row_stride is None:
+            return tl.load(Scale)
+        else:
+            return tl.load(Scale + rows * row_stride, mask=mask, other=1.0)[:, None]
+
+
+@triton.jit
 def output_mx_scale_store_ptr(
     base,
     local_rows,
