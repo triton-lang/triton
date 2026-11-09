@@ -58,14 +58,10 @@ def test_tensor_descriptor_template_compile_only(arch, rows):
     version = re.search(r"(?m)^\.version (\d+)\.(\d+)$", ptx)
     assert version is not None
     ptx_version = tuple(map(int, version.groups()))
-    uses_alloc_class = arch in (100, 103) and ptx_version >= (9, 5)
-    assert ("tensormap.replace.tile.alloc_large" in ptx) == uses_alloc_class
+    uses_large_alloc = arch in (100, 103) and ptx_version >= (9, 5) and rows == 4096
+    assert ("tensormap.replace.tile.global_address.alloc_same" in ptx) == uses_large_alloc
     replaced = re.findall(r"tensormap\.replace\.tile\.(\w+)", ptx)
-    assert {"rank", "interleave_layout", "fill_mode"}.isdisjoint(replaced)
-    assert replaced.count("box_dim") == 2
-    assert replaced.count("global_dim") == 2
-    assert replaced.count("global_stride") == 1
-    assert replaced.count("element_stride") == 2
+    assert replaced == ["global_address"]
 
 
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:

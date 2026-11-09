@@ -624,19 +624,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256_i32 = arith.constant 256 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: llvm.mlir.constant(251658240 : i32)
+    // The box size of 256 is encoded as 0xff in the high byte of word 13.
+    // CHECK: llvm.mlir.constant(-16777216 : i32)
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br
     // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
-    // CHECK: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
-    // CHECK: nvvm.tensormap.replace field = elemtype
-    // CHECK-NOT: nvvm.tensormap.replace field = interleave_layout
-    // CHECK: nvvm.tensormap.replace field = swizzle_mode
-    // CHECK-NOT: nvvm.tensormap.replace field = fill_mode
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
     ttng.tensormap_create %arg1, %arg0, [%c256_i32], [%arg2], [], [%c1_i32] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
     tt.return
@@ -646,28 +642,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: device_tensormap_create2d
+// RUBIN-LABEL: device_tensormap_create2d
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @device_tensormap_create2d(%arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1024_i64 = arith.constant 1024 : i64
+    // The fallback initializes all words to zero and then sets the rank.
+    // RUBIN-NOT: llvm.select
+    // RUBIN: st.shared::cta.b32
+    // RUBIN: nvvm.tensormap.replace field = rank
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br {{.*}}, ^{{bb[0-9]+}}, ^[[COPY:bb[0-9]+]]
     // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
-    // CHECK-NOT: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
-    // CHECK: nvvm.tensormap.replace field = box_dim[1]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = global_dim[1]
-    // CHECK: nvvm.tensormap.replace field = global_stride[0]{{.*}} : !llvm.ptr<3>, i64
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[1]
-    // CHECK: nvvm.tensormap.replace field = elemtype
-    // CHECK: nvvm.tensormap.replace field = interleave_layout
-    // CHECK: nvvm.tensormap.replace field = swizzle_mode
-    // CHECK: nvvm.tensormap.replace field = fill_mode
+    // CHECK-NEXT: nvvm.tensormap.replace field = global_dim[1]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: ^[[COPY]]:
     // CHECK: bar.warp.sync
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
