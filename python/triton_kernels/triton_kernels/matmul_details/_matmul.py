@@ -27,7 +27,7 @@ from ._common import (
 
 
 @triton.jit
-def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride: "int | tl.tensor | None",
+def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride: int | None | tl.tensor,
                        mask: "bool | tl.tensor", other: tl.constexpr) -> tl.tensor:
     """Return one input scale per offset, broadcasting a scalar load when the stride is shared."""
     if stride is None:
@@ -114,7 +114,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
-             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: "int | tl.tensor | None" = None,
+             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: int | None | tl.tensor = None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)

@@ -163,8 +163,7 @@ def compute_offsets(
 
 @triton.jit
 def load_output_tensor_scale(Scale: tl.tensor | None, group: tl.tensor, group_stride: "int | tl.tensor",
-                             rows: tl.tensor, row_stride: "int | tl.tensor | None",
-                             mask: tl.tensor) -> tl.tensor | None:
+                             rows: tl.tensor, row_stride: int | None | tl.tensor, mask: tl.tensor) -> tl.tensor | None:
     """Load the FP32 divisor as a scalar or a (BLOCK_M, 1) column of destination-row scales. Return None if omitted."""
     if Scale is None:
         return None

@@ -153,7 +153,7 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
-             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: "int | tl.tensor | None" = None,
+             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: int | None | tl.tensor = None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
