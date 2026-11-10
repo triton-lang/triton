@@ -534,6 +534,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Row-partitioned gather: 2 partitions x 2 groups give 8-row pieces, so the 32
+// i16 indices issue 4 instructions of 8 rows instead of 2 of 16.
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_partitioned_rows
+  // CHECK-COUNT-4: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
+  tt.func public @tdm_gather_partitioned_rows(
+    %tensorDesc: !tt.tensordesc<32x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<32xi16, #slice>
+  ) {
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<32xi16, #slice>, !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<32x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// Rows split across warps: each warp gathers one 8-row piece with a single
+// instruction, selecting its partition base from the warp id.
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_partitioned_rows_split
+  // CHECK-DAG: %[[C3:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-DAG: %[[C8:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK: rocdl.wave.id
+  // The partition is bit 3 of the warp's first row.
+  // CHECK: %[[PBIT:.*]] = llvm.and %{{.*}}, %[[C8]] : i32
+  // CHECK: llvm.lshr %[[PBIT]], %[[C3]] : i32
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.load.to.lds"
+  tt.func public @tdm_gather_partitioned_rows_split(
+    %tensorDesc: !tt.tensordesc<32x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<32xi16, #slice>
+  ) {
+    amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<32xi16, #slice>, !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<32x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
 // TDM block has just 4 elements. Warps 4..7 have no work and must be
 // predicated off rather than handed an empty tile.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

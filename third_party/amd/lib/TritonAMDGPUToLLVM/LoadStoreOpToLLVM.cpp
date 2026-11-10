@@ -1705,8 +1705,8 @@ struct AsyncTDMScatterOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, srcPtr, /*multicastMask=*/{}, elementType, barrierPtr,
-            cgaLayout, ctaId, dstRowIndices,
+            padAmount, {srcPtr}, /*multicastMask=*/{}, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, dstRowIndices,
             /*isGather=*/false, numWarps, dstRowIndicesType, *auxBits)))
       return failure();
 
@@ -1738,8 +1738,7 @@ struct AsyncTDMGatherOpConversion
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getDst().getType();
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto paddedEnc = getPaddedEncoding(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
@@ -1753,7 +1752,7 @@ struct AsyncTDMGatherOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getDst(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1776,17 +1775,15 @@ struct AsyncTDMGatherOpConversion
         cast<RankedTensorType>(op.getSrcRowIndices().getType());
 
     // Create the CGA layout
-    triton::LinearLayout sharedLayout;
+    triton::LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
       assert(paddedEnc.getIntervals().size() == 1 &&
              paddedEnc.getPaddings().size() == 1);
-      sharedLayout = paddedEnc.getLinearComponent();
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
 
     auto kBlock = rewriter.getStringAttr("block");
@@ -1800,8 +1797,8 @@ struct AsyncTDMGatherOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, dstPtr, multicastMask, elementType, barrierPtr,
-            cgaLayout, ctaId, srcRowIndices,
+            padAmount, dstPtrs, multicastMask, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, srcRowIndices,
             /*isGather=*/true, numWarps, srcRowIndicesType, *auxBits)))
       return failure();
 
