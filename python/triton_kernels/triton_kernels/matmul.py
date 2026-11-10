@@ -236,12 +236,13 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 def _tensor_scale_strides(scale: torch.Tensor | None, n_groups: int, n_positions: int | torch.Tensor, *,
                           matmul_input: bool = False) -> tuple[int | triton.language.constexpr, int | None]:
-    table = broadcast_tensor_scale(scale, (n_groups, n_positions), matmul_input=matmul_input)
-    if table is None:
+    if scale is None or scale.numel() == 1:
         return triton.language.constexpr(0), None
-    group, position = (stride if size != 1 else 0 for size, stride in zip(table.shape, table.stride()))
-    # A shared group has zero offset. A shared position can use a scalar load.
-    return group or triton.language.constexpr(0), position or None
+    table = broadcast_tensor_scale(scale, (n_groups, n_positions), matmul_input=matmul_input)
+    # A singleton axis is shared even when PyTorch gives it a nonzero stride.
+    group_stride = table.stride(0) if table.size(0) != 1 else 0
+    position_stride = table.stride(1) if table.size(1) != 1 else 0
+    return group_stride or triton.language.constexpr(0), position_stride or None
 
 
 # -----------------------------------------------------------------------------

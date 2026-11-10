@@ -44,19 +44,22 @@ def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.
     """
     if scale is None:
         return None
-    # Collapse zero-stride views before interpreting the caller's shape.
-    for dim, stride in enumerate(scale.stride()):
-        if stride == 0 and scale.size(dim) > 1:
-            scale = scale.narrow(dim, 0, 1)
+    # An expanded axis repeats its first entry. Keep that entry so the same
+    # scale can broadcast to a different number of groups or positions.
+    strides = scale.stride()
+    if 0 in strides:
+        scale = scale[tuple(slice(1) if stride == 0 else slice(None) for stride in strides)]
+
     if scale.numel() == 1:
         scale = scale.reshape(())
-    elif not matmul_input and len(shape) == 2 and scale.shape == (shape[0],):
-        scale = scale[:, None]
-    elif len(shape) == 1 and scale.ndim == 2:
-        scale = scale.squeeze(0)  # Dense operands also accept (1, position).
+    elif len(shape) == 1:
+        scale = scale.squeeze(0)  # Also accept (1, position) for a dense operand.
+    elif not matmul_input and len(shape) == 2 and scale.shape == shape[:1]:
+        scale = scale[:, None]  # A conversion or output vector indexes groups.
 
-    if shape and not isinstance(shape[-1], int):
-        shape = (*shape[:-1], scale.size(-1) if scale.ndim else 1)  # Avoid reading a device-side row count.
+    if shape and isinstance(shape[-1], torch.Tensor):
+        # Keep the supplied position extent without synchronizing a device row count.
+        shape = (*shape[:-1], -1 if scale.ndim else 1)
     elif matmul_input and shape and scale.ndim and scale.size(-1) > shape[-1]:
         scale = scale[..., :shape[-1]]
     try:
