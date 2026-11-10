@@ -529,13 +529,19 @@ def _matmul(
         if has_x_epilogue_scale:
             x_tensor_scales = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
                                                  mask=offs_x_m >= 0 if GatherIndx is not None else True, other=1.0)
-        if has_w_tensor_scale:
-            w_tensor_scales = _load_tensor_scale(WTensorScale, offs_w_tensor_scale_n.to(index_type),
-                                                 stride_w_tensor_scale_n, mask=offs_w_tensor_scale_n < N, other=0.0)
-        if SWAP_XW:
-            acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
+        if has_x_epilogue_scale and has_w_tensor_scale and stride_w_tensor_scale_n is None:
+            row_scales = x_tensor_scales * tl.load(WTensorScale)
+            input_scales = row_scales[:, None]
+            if not OUT_N_TILE_ALIGNED or ACTIVATION_REDUCTION_N != 1:
+                # Padded columns have a zero W scale.
+                input_scales = tl.where(offs_w_tensor_scale_n[None, :] < N, input_scales,
+                                        (x_tensor_scales * 0.0)[:, None])
         else:
-            acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+            if has_w_tensor_scale:
+                w_tensor_scales = _load_tensor_scale(WTensorScale, offs_w_tensor_scale_n.to(index_type),
+                                                     stride_w_tensor_scale_n, mask=offs_w_tensor_scale_n < N, other=0.0)
+            input_scales = x_tensor_scales[:, None] * w_tensor_scales[None, :]
+        acc *= input_scales.T if SWAP_XW else input_scales
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)

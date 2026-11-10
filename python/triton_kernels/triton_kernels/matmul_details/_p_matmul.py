@@ -169,9 +169,8 @@ def _p_matmul(
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
     SHARED_INPUT_SCALES: tl.constexpr = stride_x_tensor_scale_m is None and stride_w_tensor_scale_n is None
-    # Keep masked vector loads and fold broadcast positions into their addresses.
+    # Fold shared X positions into the address used by masked activation loads.
     stride_x_tensor_scale_m = 0 if stride_x_tensor_scale_m is None else stride_x_tensor_scale_m
-    stride_w_tensor_scale_n = 0 if stride_w_tensor_scale_n is None else stride_w_tensor_scale_n
     HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
@@ -583,19 +582,25 @@ def _p_matmul(
             if HAS_X_EPILOGUE_SCALE:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
             if WTensorScale is not None:
+                w_scale_ptr = WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-                w_tensor_scales = tl.load(
-                    WTensorScale
-                    + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                    + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
-                    mask=offs_w_tensor_scale_n < N,
-                    other=0.0,
-                )
+            if HAS_X_EPILOGUE_SCALE and WTensorScale is not None and stride_w_tensor_scale_n is None:
+                row_scales = x_tensor_scales * tl.load(w_scale_ptr)
+                input_scales = row_scales[:, None]
+                if not OUT_N_TILE_ALIGNED or ACTIVATION_REDUCTION_N != 1:
+                    # Padded columns have a zero W scale.
+                    input_scales = tl.where(offs_w_tensor_scale_n[None, :] < N, input_scales,
+                                            (x_tensor_scales * 0.0)[:, None])
+            else:
+                if WTensorScale is not None:
+                    stride_n = 0 if stride_w_tensor_scale_n is None else stride_w_tensor_scale_n
+                    w_tensor_scales = tl.load(w_scale_ptr + offs_w_tensor_scale_n.to(index_type) * stride_n,
+                                              mask=offs_w_tensor_scale_n < N, other=0.0)
+                input_scales = x_tensor_scales[:, None] * w_tensor_scales[None, :]
+            if SWAP_XW:
+                input_scales = input_scales.T
             if not FUSE_TENSOR_SCALE:
-                if SWAP_XW:
-                    acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
-                else:
-                    acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+                acc *= input_scales
 
         # ------------------------------------------------------------
         # epilogue
@@ -665,9 +670,9 @@ def _p_matmul(
 
         if FUSE_TENSOR_SCALE:
             if SWAP_XW:
-                acc = _scaled_add(acc, w_tensor_scales[:, None] * x_tensor_scales[None, :], bias[:, None])
+                acc = _scaled_add(acc, input_scales, bias[:, None])
             else:
-                acc = _scaled_add(acc, x_tensor_scales[:, None] * w_tensor_scales[None, :], bias[None, :])
+                acc = _scaled_add(acc, input_scales, bias[None, :])
 
         accs = (acc,)
         biases = (bias,)
