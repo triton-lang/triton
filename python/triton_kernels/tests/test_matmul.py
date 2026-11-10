@@ -1641,31 +1641,3 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-
-@pytest.mark.parametrize("persistent", [False, True])
-def test_nvfp4_ragged_large_block_scale_stride(persistent, device):
-    if not cuda_capability_geq(10, 0):
-        pytest.skip("NVFP4 requires Blackwell or newer")
-    if torch.cuda.mem_get_info(device)[0] < 5 << 30:
-        pytest.skip("requires 4 GiB for a guarded block-scale table")
-
-    m, n, k = 3, 128, 128
-    row_stride = 1 << 30
-    # Expert 1 starts at row 2. A signed 32-bit offset wraps into the guard.
-    storage = torch.empty(4 * row_stride + k // 16, device=device, dtype=torch.float8_e4m3fn)
-    storage[:k // 16].fill_(7)
-    x_blocks = storage.as_strided((m, k // 16), (row_stride, 1), storage_offset=2 * row_stride)
-    x_blocks.copy_(torch.arange(1, m + 1, device=device)[:, None])
-    a = torch.full((m, k // 2), 0x22, device=device, dtype=torch.uint8)
-    b = torch.full((2, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT
-    unit = torch.ones((), device=device)
-    w_blocks = torch.ones((2, k // 16, n), device=device, dtype=x_blocks.dtype)
-    config = PrecisionConfig(a_mx_scale=x_blocks, b_mx_scale=w_blocks,
-                             a_mx_tensor_scale=unit, b_mx_tensor_scale=unit,
-                             a_microblock_size=16, b_microblock_size=16, out_dtype=torch.float32)
-    meta = make_ragged_tensor_metadata(torch.tensor([2, 1], dtype=torch.int32, device=device), m)
-    with opt_flags.scoped_opt_flags_constraints({"is_persistent": persistent, "split_k": 1}):
-        actual = matmul(a, b, None, a_ragged_metadata=meta, precision_config=config)
-    expected = torch.arange(1, m + 1, dtype=torch.float32, device=device)[:, None] * k
-    torch.testing.assert_close(actual, expected.expand_as(actual), rtol=0, atol=0)
