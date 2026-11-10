@@ -761,17 +761,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // An M-sliced GEMM: one dot per A tile, both sharing a loop-invariant B. The
 // two 512x32 loads tile a 1024x32 parent, so they share one TDM copy. Only the
 // leading slice is prefetched across the backedge; the second is read from a
-// subslice in the iteration that uses it, with the fused wait between that
-// load and d1. Contrast with the single-dot kernels above, where both operands
-// stay prefetched as loop-carried registers.
+// subslice in the iteration that uses it, right before d1. d1 is followed by
+// the fused copy, then its wait, then the read of the next leading slice.
+// Contrast with the single-dot kernels above, where both operands stay
+// prefetched as loop-carried registers.
 // LDS_PREFETCH-LABEL: tt.func @sliced_m
 // LDS_PREFETCH: ttg.local_alloc : () -> !ttg.memdesc<2x1024x32xf16
 // LDS_PREFETCH: scf.for
 // LDS_PREFETCH: tt.dot %arg{{[0-9]+}}, %arg1
 // LDS_PREFETCH: ttg.memdesc_subslice {{.*}}[512, 0]
 // LDS_PREFETCH: %[[TILE:.*]] = ttg.local_load
-// LDS_PREFETCH: amdg.async_tdm_wait
+// LDS_PREFETCH-NOT: amdg.async_tdm_wait
 // LDS_PREFETCH: tt.dot %[[TILE]], %arg1
+// LDS_PREFETCH-NOT: amdg.async_tdm_wait
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<1024x32xf16
+// LDS_PREFETCH: %[[WAIT:.+]] = amdg.async_tdm_wait
+// LDS_PREFETCH: ttg.memdesc_subslice {{.*}}[0, 0]
+// LDS_PREFETCH: ttg.local_load %{{.+}} token %[[WAIT]]
+// LDS_PREFETCH: scf.yield
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 32]}>
@@ -1160,7 +1167,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // first uses it. Every dot keeps its program-order place, including the one
 // whose operands were both first read by earlier dots. The quarter loads of
 // each operand tile one 256x128 tile, so they share one whole-tile TDM copy
-// per operand, padded once per 128-element row of the whole tile.
+// per operand, padded once per 128-element row of the whole tile. Both copies
+// are issued before the one wait for the next K's tiles, so they stay in
+// flight across it.
 // LDS_PREFETCH: [[SHARED:#[a-z0-9]+]] = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [256, 128]}>
 // LDS_PREFETCH: tt.func public @gemm_tdm_sliceMN_k2_kernel
 // LDS_PREFETCH-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x256x128xf16, [[SHARED]]
@@ -1172,8 +1181,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH: tt.dot %{{.+}}, %[[B_TR]]
 // LDS_PREFETCH-NOT: tt.dot
 // LDS_PREFETCH: tt.dot %[[A_BL]], %[[B_TR]]
+// LDS_PREFETCH-NOT: amdg.async_tdm_wait
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<256x128xf16
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<256x128xf16
+// LDS_PREFETCH: %[[WAIT:.+]] = amdg.async_tdm_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
+// LDS_PREFETCH: ttg.local_load %{{.+}} token %[[WAIT]]
 // LDS_PREFETCH: scf.yield
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>

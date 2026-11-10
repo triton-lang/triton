@@ -362,8 +362,10 @@ LogicalResult initSchedule(scf::ForOp forOp, int maxDist, Stages &stages,
 
   // ldsPrefetch ordering: lead the loop body with the tt.dot (it consumes
   // operands pre-loaded into registers the previous iteration, so it has no
-  // intra-iteration dependency), then the async_wait, the next-tile TDM copy,
-  // and finally the ttg.local_load that feeds the next iteration.
+  // intra-iteration dependency), then the next-tile TDM copy, the async_wait,
+  // and finally the ttg.local_load that feeds the next iteration. The copy
+  // goes first so that it stays in flight across the wait, which only has to
+  // retire the previous iteration's copy.
   if (ldsPrefetch) {
     computeCluster = 0;
     globalLoadCluster = 1;
@@ -650,17 +652,18 @@ FillPlacement placeFill(const StreamBuffer &buffer, const Stages &stages,
 //   copy A, copy B
 //
 // If every current-K slice of every fused buffer is read before any next-K
-// slice, that split is a single cut. Move every fused wait to the end of
-// the group before the cut and every fused copy to the load cluster of the
-// group after it (right after that group's dot). The waits then sit
-// together and fold to one barrier, which both publishes the next-K tiles
-// and frees the slots the copies refill:
+// slice, that split is a single cut. Move every fused copy and wait to the
+// group right after the cut, in the order the single-dot schedule uses: the
+// group's dot, the copies, the waits, which fold into one, and then the
+// next-K reads. The copies follow every current-K read, so the slots they
+// refill are no longer read, and they stay in flight across the wait, which
+// only has to retire the previous iteration's copies:
 //
 //   %a1 = ttg.local_load %sliceA1
 //   %b1 = ttg.local_load %sliceB1
-//   %w  = amdg.async_tdm_wait %tokA, %tokB   // end of group 0
 //   d1
-//   copy A, copy B                          // after d1
+//   copy A, copy B
+//   %w  = amdg.async_tdm_wait %tokA, %tokB
 //   %a0 = ttg.local_load %sliceA0
 //   %b0 = ttg.local_load %sliceB0
 //
@@ -669,7 +672,6 @@ FillPlacement placeFill(const StreamBuffer &buffer, const Stages &stages,
 // come before the cut, so it keeps the fill placeFill gave it.
 void gatherSharedFills(ArrayRef<StreamBuffer> buffers,
                        MutableArrayRef<FillPlacement> fills,
-                       tt::CoarseSchedule &schedule,
                        ArrayRef<Clusters> groupClusters) {
   auto isGathered = [](const StreamBuffer &buffer) {
     return buffer.reads.size() >= 2 &&
@@ -693,19 +695,14 @@ void gatherSharedFills(ArrayRef<StreamBuffer> buffers,
       lastCurrentRead >= firstNextRead)
     return;
 
-  const Clusters &waitGroup = groupClusters[firstNextRead - 1];
-  tt::CoarseSchedule::Cluster waitCluster = waitGroup[0];
-  for (tt::CoarseSchedule::Cluster cluster : waitGroup)
-    if (schedule.clusters.isBefore(waitCluster, cluster))
-      waitCluster = cluster;
+  const Clusters &afterCut = groupClusters[firstNextRead];
   for (auto [buffer, fill] : llvm::zip(buffers, fills)) {
     if (!isGathered(buffer))
       continue;
     assert(fill.stages[SCHED_ASYNC_WAIT] != fill.stages[SCHED_COMPUTE] &&
            "a gathered wait must run a stage ahead of the current-K reads");
-    fill.clusters[SCHED_ASYNC_WAIT] = waitCluster;
-    fill.clusters[SCHED_GLOBAL_LOAD] =
-        groupClusters[firstNextRead][SCHED_GLOBAL_LOAD];
+    fill.clusters[SCHED_GLOBAL_LOAD] = afterCut[SCHED_GLOBAL_LOAD];
+    fill.clusters[SCHED_ASYNC_WAIT] = afterCut[SCHED_ASYNC_WAIT];
   }
 }
 
@@ -745,7 +742,7 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
   for (const StreamBuffer &buffer : buffers)
     fills.push_back(placeFill(buffer, stages, groupClusters));
   if (interleaved)
-    gatherSharedFills(buffers, fills, schedule, groupClusters);
+    gatherSharedFills(buffers, fills, groupClusters);
 
   for (auto [buffer, fill] : llvm::zip(buffers, fills)) {
     int copyStage = schedule[buffer.origLoad].first;
