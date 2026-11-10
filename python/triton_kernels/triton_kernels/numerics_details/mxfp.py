@@ -35,12 +35,10 @@ def check_tensor_scale(operand, block_scale, tensor_scale, microblock_size):
         raise ValueError("microblock_size is required when block scales are set")
 
 
-def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.Tensor, ...], *,
-                           matmul_input: bool = False) -> torch.Tensor | None:
+def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.Tensor, ...]) -> torch.Tensor | None:
     """Broadcast over the axes outside the microblocks, typically (group, position).
 
     A length-E vector selects groups for standalone conversions and matmul outputs.
-    Matmul input vectors always select positions and may cover padded storage.
     """
     if scale is None:
         return None
@@ -52,14 +50,12 @@ def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.
         scale = scale.reshape(())
     elif len(shape) == 1:
         scale = scale.squeeze(0)  # Also accept (1, position) for a dense operand.
-    elif not matmul_input and len(shape) == 2 and scale.shape == shape[:1]:
+    elif len(shape) == 2 and scale.shape == shape[:1]:
         scale = scale[:, None]  # A conversion or output vector indexes groups.
 
     if shape and isinstance(shape[-1], torch.Tensor):
         # Keep the supplied position extent without synchronizing a device row count.
         shape = (*shape[:-1], -1 if scale.ndim else 1)
-    elif matmul_input and shape and scale.ndim and scale.size(-1) > shape[-1]:
-        scale = scale[..., :shape[-1]]
     try:
         return scale.expand(shape)
     except RuntimeError as exc:

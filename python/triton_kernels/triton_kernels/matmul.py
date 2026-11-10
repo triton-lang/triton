@@ -142,6 +142,17 @@ class PrecisionConfig:
     intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
+
+def _input_scale_table(scale, n_groups, n_positions):
+    """View a matmul input scale as (group, position). A vector indexes positions."""
+    if scale is None:
+        return None
+    scale = torch.atleast_2d(scale)
+    if scale.ndim == 2 and isinstance(n_positions, int) and scale.size(1) > n_positions:
+        scale = scale[:, :n_positions]  # The caller may supply scales for padded storage.
+    return broadcast_tensor_scale(scale, (n_groups, n_positions))
+
+
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
@@ -270,8 +281,9 @@ def matmul(a, b, bias,
     is NVFP4 (packed FP4 values with E4M3 block scales). A scalar broadcasts globally.
     For batched or ragged-M matmul, a scale of shape (E, 1) supplies one value per
     batch or expert. Ragged-M selects the activation scale by the scheduled expert
-    even when it gathers a token shared by several experts. An (E, M_source) scale
-    uses both the scheduled expert and the source row.
+    even when it gathers a token shared by several experts. A 1D input scale
+    indexes positions, equivalent to (1, M_source) for X or (1, N) for W.
+    An (E, M_source) scale uses both the scheduled expert and the source row.
     The NVFP4 output tensor scale (flex_ctx.out_data.expected_scale) broadcasts
     over (E, M_output). Its row index is the destination after scatter. A vector
     of length E selects groups. Use (1, M_output) for shared row scales when E == M_output.
@@ -667,16 +679,16 @@ def matmul(a, b, bias,
     b_scale_strides = pad_strides(b_scale_strides, 3)
     n_groups = b.shape[0] if b.ndim == 3 else 1
     y_tensor_scale = out_matmul_flex.expected_scale
-    y_scale_shape = (n_groups if is_c_ragged else batch_size, out_matmul.size(-2))
+    a_tensor_scale = _input_scale_table(a_tensor_scale, n_groups, a.shape[-2])
+    b_tensor_scale = _input_scale_table(b_tensor_scale, n_groups, b.shape[-1])
+    y_scale_table = None
+    if nvfp4_output:
+        y_scale_shape = (n_groups if is_c_ragged else batch_size, out_matmul.size(-2))
+        y_scale_table = broadcast_tensor_scale(y_tensor_scale, y_scale_shape)
     tensor_scale_strides = []
-    for scale, shape, matmul_input in (
-        (a_tensor_scale, (n_groups, a.shape[-2]), True),
-        (b_tensor_scale, (n_groups, b.shape[-1]), True),
-        (y_tensor_scale if nvfp4_output else None, y_scale_shape, False),
-    ):
+    for table in (a_tensor_scale, b_tensor_scale, y_scale_table):
         group_stride = position_stride = 0
-        if scale is not None and scale.numel() != 1:
-            table = broadcast_tensor_scale(scale, shape, matmul_input=matmul_input)
+        if table is not None:
             group_stride = table.stride(0) if table.size(0) != 1 else 0
             position_stride = table.stride(1) if table.size(1) != 1 else 0
         tensor_scale_strides.append((group_stride or triton.language.constexpr(0), position_stride or None))
@@ -847,7 +859,8 @@ def apply_precision(x_tri, w_tri, precision_config):
             block_scale = convert_layout(block_scale, StridedLayout(major_dim=axis)).data
         if tensor_scale is not None:
             fiber_shape = x.shape[:axis] + x.shape[axis + 1:]
-            tensor_scale = broadcast_tensor_scale(tensor_scale, fiber_shape, matmul_input=True)
+            n_groups = x.size(0) if x.ndim == 3 else 1
+            tensor_scale = _input_scale_table(tensor_scale, n_groups, fiber_shape[-1])
         return upcast_from_mxfp(x, block_scale, torch.bfloat16, axis=axis, tensor_scale=tensor_scale)
 
     x_scale = precision_config.a_mx_tensor_scale
@@ -935,20 +948,20 @@ def matmul_torch(a, b, bias,
     gather_before_decode = gathered_blocks
     x_scale = precision_config.a_mx_tensor_scale
     if x_scale is not None and a.ndim == 2 and b_ragged_metadata is None:
-        table = broadcast_tensor_scale(x_scale, (n_groups, a.shape[-2]), matmul_input=True)
+        table = _input_scale_table(x_scale, n_groups, a.shape[-2])
         if gathered_blocks or (n_groups > 1 and table.stride(0) != 0):
             # An activation may visit multiple experts with different outer scales.
             gather_before_decode = gather_indx is not None
-            x_scale = table.new_ones(n_rows)
+            x_scale = table.new_ones((1, n_rows))
             for expert, (lo, hi) in enumerate(offs):
                 if gather_indx is None:
-                    x_scale[lo:hi] = table[expert, lo:hi]
+                    x_scale[0, lo:hi] = table[expert, lo:hi]
                 else:
                     rows = gather_indx[lo:hi]
                     active = rows >= 0
-                    x_scale[lo:hi][active] = table[expert, rows[active]]
+                    x_scale[0, lo:hi][active] = table[expert, rows[active]]
         else:
-            x_scale = table[0]
+            x_scale = table[:1]
         precision_config = replace(precision_config, a_mx_tensor_scale=x_scale)
 
     if gather_before_decode:
