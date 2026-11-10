@@ -832,27 +832,23 @@ def matmul(a, b, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def _strided_reference_data(x: Tensor | torch.Tensor, axis: int) -> torch.Tensor:
-    if isinstance(x, Tensor):
-        return convert_layout(x, StridedLayout(major_dim=axis)).data
-    return x
-
-
 def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool = True):
     from .numerics_details.mxfp import upcast_from_mxfp
 
     def decode(x: Tensor | torch.Tensor, block_scale: Tensor | torch.Tensor | None, tensor_scale: torch.Tensor | None,
                flex_scale: torch.Tensor | None, axis: int) -> torch.Tensor:
-        values = _strided_reference_data(x, axis)
+        if isinstance(x, Tensor):
+            x = convert_layout(x, StridedLayout(major_dim=axis)).data
         if block_scale is None:
             if flex_scale is None:
-                return values.clone()
-            return values.float() * flex_scale
-        blocks = _strided_reference_data(block_scale, axis)
+                return x.clone()
+            return x.float() * flex_scale
+        if isinstance(block_scale, Tensor):
+            block_scale = convert_layout(block_scale, StridedLayout(major_dim=axis)).data
         if tensor_scale is not None:
-            fiber_shape = values.shape[:axis] + values.shape[axis + 1:]
+            fiber_shape = x.shape[:axis] + x.shape[axis + 1:]
             tensor_scale = broadcast_tensor_scale(tensor_scale, fiber_shape, matmul_input=True)
-        return upcast_from_mxfp(values, blocks, torch.bfloat16, axis=axis, tensor_scale=tensor_scale)
+        return upcast_from_mxfp(x, block_scale, torch.bfloat16, axis=axis, tensor_scale=tensor_scale)
 
     x_scale = precision_config.a_mx_tensor_scale
     w_scale = precision_config.b_mx_tensor_scale
@@ -934,10 +930,12 @@ def matmul_torch(a, b, bias,
     w_scales = broadcast_tensor_scale(precision_config.b_mx_tensor_scale, (n_groups, b.shape[-1]), matmul_input=True)
     if gathered_blocks:
         # Blackwell activation block scales already follow the routing order.
-        values = _strided_reference_data(a, a.ndim - 1)
+        if isinstance(a, Tensor):
+            a = convert_layout(a, StridedLayout(major_dim=a.ndim - 1)).data
         active = gather_indx >= 0
-        a = values.new_zeros((gather_indx.numel(), *values.shape[1:]))
-        a[active] = values[gather_indx[active]]
+        gathered = a.new_zeros((gather_indx.numel(), *a.shape[1:]))
+        gathered[active] = a[gather_indx[active]]
+        a = gathered
     x_is_nvfp4 = x_scales is not None
     w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_mx_scale is not None
                   and precision_config.b_mx_scale.data.dtype == torch.uint8)
