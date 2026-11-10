@@ -5,7 +5,7 @@ import torch
 import triton
 from enum import Enum, auto
 import math
-from typing import Callable
+from typing import Callable, Sequence
 # utilities
 from triton_kernels import target_info
 from triton_kernels.meta import Closure
@@ -234,7 +234,8 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     return Storage(new_storage_data, storage.layout)
 
 
-def _tensor_scale_strides(scale, n_groups, n_positions, *, output=False):
+def _tensor_scale_strides(scale: torch.Tensor | None, n_groups: int, n_positions: int | torch.Tensor, *,
+                          output: bool = False) -> tuple[int | triton.language.constexpr, int | None]:
     table = broadcast_tensor_scale(scale, (n_groups, n_positions), output=output)
     if table is None:
         return triton.language.constexpr(0), None
@@ -856,10 +857,12 @@ def matmul(a, b, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def apply_precision(x_tri, w_tri, precision_config, *, defer_x_scale=False):
+def apply_precision(x_tri: Tensor | torch.Tensor, w_tri: Tensor | torch.Tensor, precision_config: PrecisionConfig, *,
+                    defer_x_scale: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     from .numerics_details.mxfp import upcast_from_mxfp
 
-    def decode(x, block_scale, tensor_scale, flex_scale, axis):
+    def decode(x: Tensor | torch.Tensor, block_scale: Tensor | None, tensor_scale: torch.Tensor | None,
+               flex_scale: torch.Tensor | None, axis: int) -> torch.Tensor:
         if block_scale is None:
             return x.clone() if flex_scale is None else x.float() * flex_scale
         layout = StridedLayout(major_dim=axis)
@@ -879,7 +882,7 @@ def apply_precision(x_tri, w_tri, precision_config, *, defer_x_scale=False):
     return x, w
 
 
-def scale(val, scal):
+def scale(val: torch.Tensor, scal: torch.Tensor | None) -> torch.Tensor:
     if scal is None:
         return val
     elif scal.numel() == 1 or scal.ndim == val.ndim:
@@ -899,7 +902,8 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
     return maxvals / max_finite
 
 
-def _reference_output(out, precision_config, n_groups, expert_slices=(), scatter=None):
+def _reference_output(out: torch.Tensor, precision_config: PrecisionConfig, n_groups: int,
+                      expert_slices: Sequence[tuple[int, int]] = (), scatter: torch.Tensor | None = None) -> torch.Tensor:
     flex = precision_config.flex_ctx.out_data
     expected_scale = flex.expected_scale
     block_scale = precision_config.c_mx_scale
