@@ -280,7 +280,8 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
     compatible = descLL == allocPad.getLinearComponent();
     if (!compatible &&
         isa<AsyncTDMGatherOp, AsyncTDMScatterOp, AsyncTDMCopyGlobalToLocalOp,
-            AsyncTDMFusedCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(op)) {
+            AsyncTDMFusedCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(
+            op)) {
       // Gather/scatter use one buffer row per index, independently of the
       // descriptor's row count. Loads may fill a contiguous prefix of rows;
       // stores may read full-row subviews of a larger allocation.
