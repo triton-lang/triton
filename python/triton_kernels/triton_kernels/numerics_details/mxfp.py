@@ -16,11 +16,23 @@ from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
 
-def check_tensor_scale(operand, block_scale, tensor_scale):
+def check_tensor_scale(operand, block_scale, tensor_scale, microblock_size):
     is_nvfp4 = (block_scale is not None and operand.dtype in (FP4, torch.uint8)
                 and block_scale.data.dtype == torch.float8_e4m3fn)
     if (tensor_scale is not None) != is_nvfp4:
         raise ValueError("A tensor scale must be set if and only if the operand is NVFP4 (packed FP4 with E4M3 block scales)")
+    if microblock_size is not None and microblock_size not in (int(NVFP_BLOCK_SIZE), int(MXFP_BLOCK_SIZE)):
+        raise ValueError(f"Unsupported microscale block size {microblock_size}")
+    if block_scale is None:
+        return
+    if block_scale.data.dtype not in (torch.uint8, torch.float8_e4m3fn):
+        raise ValueError(f"Unsupported microscale dtype {block_scale.data.dtype}")
+    if is_nvfp4 and microblock_size != int(NVFP_BLOCK_SIZE):
+        raise ValueError(f"NVFP4 requires microblock_size=16, got {microblock_size}")
+    if block_scale.data.dtype == torch.uint8 and microblock_size != int(MXFP_BLOCK_SIZE):
+        raise ValueError(f"E8M0 block scales require microblock_size=32, got {microblock_size}")
+    if microblock_size is None:
+        raise ValueError("microblock_size is required when block scales are set")
 
 
 def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.Tensor, ...], *,

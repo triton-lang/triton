@@ -16,7 +16,6 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale, broadcast_tensor_scale
-from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
@@ -364,8 +363,10 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
-    check_tensor_scale(a, a_scale, a_tensor_scale)
-    check_tensor_scale(b, b_scale, b_tensor_scale)
+    a_microblock_size = precision_config.a_microblock_size
+    b_microblock_size = precision_config.b_microblock_size
+    check_tensor_scale(a, a_scale, a_tensor_scale, a_microblock_size)
+    check_tensor_scale(b, b_scale, b_tensor_scale, b_microblock_size)
     nvfp4_output = epilogue.specs.name == FnName.QUANTIZE_NVFP4.name
     uses_nvfp4 = a_tensor_scale is not None or b_tensor_scale is not None or nvfp4_output
     if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
@@ -377,35 +378,8 @@ def matmul(a, b, bias,
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
-    a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
-    b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
-    # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
-    if a_scale_dtype is not None:
-        assert a_scale_dtype == torch.uint8 or a_scale_dtype == torch.float8_e4m3fn, (
-            f"Unsupported microscale dtype {a_scale_dtype}"
-        )
-    a_microblock_size = precision_config.a_microblock_size
-    if a_microblock_size is not None:
-        assert a_microblock_size == int(MXFP_BLOCK_SIZE) or a_microblock_size == int(NVFP_BLOCK_SIZE), (
-            f"Unsupported microscale block size {a_microblock_size}"
-        )
-    assert a_scale is None or a_microblock_size is not None, (
-        "precision_config.a_microblock_size is required when precision_config.a_mx_scale is set"
-    )
-    if b_scale_dtype is not None:
-        assert b_scale_dtype == torch.uint8 or b_scale_dtype == torch.float8_e4m3fn, (
-            f"Unsupported microscale dtype {b_scale_dtype}"
-        )
-    b_microblock_size = precision_config.b_microblock_size
-    if b_microblock_size is not None:
-        assert b_microblock_size == int(MXFP_BLOCK_SIZE) or b_microblock_size == int(NVFP_BLOCK_SIZE), (
-            f"Unsupported microscale block size {b_microblock_size}"
-        )
-    assert b_scale is None or b_microblock_size is not None, (
-        "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
-    )
-    x_is_nvfp4 = a_tensor_scale is not None and a_microblock_size == int(NVFP_BLOCK_SIZE)
-    w_is_mxfp4 = b.dtype == FP4 and b_microblock_size == int(MXFP_BLOCK_SIZE) and b_scale_dtype == torch.uint8
+    x_is_nvfp4 = a_tensor_scale is not None
+    w_is_mxfp4 = b.dtype == FP4 and b_scale is not None and b_scale.data.dtype == torch.uint8
     if x_is_nvfp4 and w_is_mxfp4:
         assert a.shape[-1] % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
         precision_config = replace(
@@ -886,8 +860,8 @@ def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool
 
     x_scale = precision_config.a_mx_tensor_scale
     w_scale = precision_config.b_mx_tensor_scale
-    check_tensor_scale(x_tri, precision_config.a_mx_scale, x_scale)
-    check_tensor_scale(w_tri, precision_config.b_mx_scale, w_scale)
+    check_tensor_scale(x_tri, precision_config.a_mx_scale, x_scale, precision_config.a_microblock_size)
+    check_tensor_scale(w_tri, precision_config.b_mx_scale, w_scale, precision_config.b_microblock_size)
     if not apply_tensor_scales:
         x_scale = w_scale = None
     flex = precision_config.flex_ctx
@@ -959,12 +933,12 @@ def matmul_torch(a, b, bias,
                        and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout))
     x_scales = broadcast_tensor_scale(precision_config.a_mx_tensor_scale, (n_groups, a.shape[-2]), matmul_input=True)
     w_scales = broadcast_tensor_scale(precision_config.b_mx_tensor_scale, (n_groups, b.shape[-1]), matmul_input=True)
-    x_is_nvfp4 = x_scales is not None and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
-    w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_microblock_size == int(MXFP_BLOCK_SIZE)
-                  and precision_config.b_mx_scale is not None and precision_config.b_mx_scale.data.dtype == torch.uint8)
     if gathered_blocks:
         # Blackwell activation block scales already follow the routing order.
         a = _gather_reference_rows(_strided_reference_data(a, a.ndim - 1), gather_indx)
+    x_is_nvfp4 = x_scales is not None
+    w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_mx_scale is not None
+                  and precision_config.b_mx_scale.data.dtype == torch.uint8)
     a, b = apply_precision(a, b, precision_config, apply_tensor_scales=False)
     if gathered_blocks:
         a.masked_fill_(gather_indx[:, None] < 0, 0.0)

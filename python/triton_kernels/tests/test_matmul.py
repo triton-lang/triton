@@ -762,9 +762,24 @@ def test_matmul_rejects_invalid_tensor_scale(matmul_fn, operand, dtype, scale_dt
     invalid = make_operand(dtype, scale_dtype, has_tensor_scale)
     (a, sa, a_tensor_scale), (b, sb, b_tensor_scale) = (invalid, valid) if operand == "a" else (valid, invalid)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb.T if sb is not None else None,
-                             a_mx_tensor_scale=a_tensor_scale, b_mx_tensor_scale=b_tensor_scale)
+                             a_mx_tensor_scale=a_tensor_scale, b_mx_tensor_scale=b_tensor_scale,
+                             a_microblock_size=16, b_microblock_size=16)
     with pytest.raises(ValueError, match="tensor scale must be set if and only if the operand is NVFP4"):
         matmul_fn(a, b.T, None, precision_config=config)
+
+
+@pytest.mark.parametrize("matmul_fn", [matmul, matmul_torch])
+@pytest.mark.parametrize("operand", ["a", "b"])
+@pytest.mark.parametrize("scale_dtype,wrong_size,expected_size", [(torch.uint8, 16, 32), (torch.float8_e4m3fn, 32, 16)])
+def test_matmul_rejects_wrong_microblock_size(matmul_fn, operand, scale_dtype, wrong_size, expected_size):
+    value = torch.empty((32, 16), dtype=torch.uint8)
+    blocks = torch.empty((32, 32 // expected_size), dtype=scale_dtype)
+    outer = torch.ones(()) if scale_dtype == torch.float8_e4m3fn else None
+    config = PrecisionConfig(a_mx_scale=blocks, b_mx_scale=blocks.T, a_mx_tensor_scale=outer, b_mx_tensor_scale=outer,
+                             a_microblock_size=wrong_size if operand == "a" else expected_size,
+                             b_microblock_size=wrong_size if operand == "b" else expected_size)
+    with pytest.raises(ValueError, match=f"microblock_size={expected_size}"):
+        matmul_fn(value, value.T, None, precision_config=config)
 
 
 @pytest.mark.parametrize("nvfp4_operand", ["a", "b", "output"])
