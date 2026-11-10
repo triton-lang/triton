@@ -1453,3 +1453,36 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("scale_kind", ["block", "tensor"])
+def test_nvfp4_ragged_large_scale_stride(scale_kind, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    m, n, k = 3, 128, 128
+    row_stride = 1 << 30
+    width = k // 16 if scale_kind == "block" else 1
+    dtype = torch.float8_e4m3fn if scale_kind == "block" else torch.float32
+    storage_size = 4 * row_stride + width
+    if torch.cuda.mem_get_info(device)[0] < storage_size * dtype.itemsize + (1 << 30):
+        pytest.skip("insufficient memory for the guarded scale table")
+
+    # Expert 1 starts at row 2. A signed 32-bit offset wraps into the guard.
+    storage = torch.empty(storage_size, device=device, dtype=dtype)
+    storage[:width].fill_(7)
+    scales = storage.as_strided((m, width), (row_stride, 1), storage_offset=2 * row_stride)
+    scales.copy_(torch.arange(1, m + 1, device=device)[:, None])
+    a = torch.full((m, k // 2), 0x22, device=device, dtype=torch.uint8)
+    b = torch.full((2, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT
+    unit = torch.ones((), device=device)
+    x_blocks = scales if scale_kind == "block" else torch.ones((m, k // 16), device=device, dtype=torch.float8_e4m3fn)
+    x_tensor_scale = unit if scale_kind == "block" else scales[:, 0]
+    w_blocks = torch.ones((2, k // 16, n), device=device, dtype=x_blocks.dtype)
+    config = PrecisionConfig(a_mx_scale=x_blocks, b_mx_scale=w_blocks,
+                             a_mx_tensor_scale=x_tensor_scale, b_mx_tensor_scale=unit,
+                             a_microblock_size=16, b_microblock_size=16, out_dtype=torch.float32)
+    meta = make_ragged_tensor_metadata(torch.tensor([2, 1], dtype=torch.int32, device=device), m)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True, "split_k": 1}):
+        actual = matmul(a, b, None, a_ragged_metadata=meta, precision_config=config)
+    expected = torch.arange(1, m + 1, dtype=torch.float32, device=device)[:, None] * k
+    torch.testing.assert_close(actual, expected.expand_as(actual), rtol=0, atol=0)
