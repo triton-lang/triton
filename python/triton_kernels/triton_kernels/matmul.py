@@ -151,6 +151,7 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
         return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
+
 # ---------------------
 # Allocation
 # ---------------------
@@ -403,23 +404,21 @@ def matmul(a, b, bias,
     assert b_scale is None or b_microblock_size is not None, (
         "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
     )
-    requantize_a = (a.dtype == FP4 and b.dtype == FP4 and a_microblock_size == 16
-                    and b_microblock_size == 32 and is_cuda()
-                    and target_info.cuda_capability_geq(10, 0))
-    if requantize_a:
-        assert a_scale_dtype == torch.float8_e4m3fn and b_scale_dtype == torch.uint8
+    x_is_nvfp4 = a_tensor_scale is not None and a_microblock_size == int(NVFP_BLOCK_SIZE)
+    w_is_mxfp4 = b.dtype == FP4 and b_microblock_size == int(MXFP_BLOCK_SIZE) and b_scale_dtype == torch.uint8
+    if x_is_nvfp4 and w_is_mxfp4:
         assert a.shape[-1] % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
         precision_config = replace(
             precision_config,
             out_dtype=precision_config.out_dtype or (c.dtype if c is not None else torch.bfloat16),
         )
     mx_block_size = (
-        b_microblock_size if requantize_a else
+        b_microblock_size if x_is_nvfp4 and w_is_mxfp4 else
         a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
     )
     assert all(
         size is None or size == mx_block_size
-        for size in (None if requantize_a else a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+        for size in (None if x_is_nvfp4 and w_is_mxfp4 else a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
     ), (
         "Microscaled operands/output must share a block size. "
         f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
@@ -486,7 +485,7 @@ def matmul(a, b, bias,
     else:
         a_uses_tma_when_persistent = has_gather_tma or not has_gather
     # Select tiles for the operand consumed by the dot, not its packed input.
-    dot_a_dtype = FP8_E4M3FN if requantize_a else a.dtype
+    dot_a_dtype = FP8_E4M3FN if x_is_nvfp4 and w_is_mxfp4 else a.dtype
     opt_flags = make_opt_flags(out_dtype, dot_a_dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
@@ -960,9 +959,9 @@ def matmul_torch(a, b, bias,
                        and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout))
     x_scales = broadcast_tensor_scale(precision_config.a_mx_tensor_scale, (n_groups, a.shape[-2]), matmul_input=True)
     w_scales = broadcast_tensor_scale(precision_config.b_mx_tensor_scale, (n_groups, b.shape[-1]), matmul_input=True)
-    requantize_x = (x_scales is not None and b.dtype in (FP4, torch.uint8)
-                    and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
-                    and precision_config.b_microblock_size == int(MXFP_BLOCK_SIZE))
+    x_is_nvfp4 = x_scales is not None and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
+    w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_microblock_size == int(MXFP_BLOCK_SIZE)
+                  and precision_config.b_mx_scale is not None and precision_config.b_mx_scale.data.dtype == torch.uint8)
     if gathered_blocks:
         # Blackwell activation block scales already follow the routing order.
         a = _gather_reference_rows(_strided_reference_data(a, a.ndim - 1), gather_indx)
@@ -983,7 +982,7 @@ def matmul_torch(a, b, bias,
         if x_scales is not None:
             x_scale = (x_scales[group, lo:hi] if gather_indx is None else
                        _gather_reference_rows(x_scales[group], gather_indx[lo:hi], fill=1))[:, None]
-        if requantize_x:
+        if x_is_nvfp4 and w_is_mxfp4:
             from .numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
             # NVFP4 activations absorb their outer scale before rounding to MXFP8 for MXFP4 weights.
             values, blocks = downcast_to_mxfp_torch(x.float() * x_scale, torch.float8_e4m3fn, axis=-1)
