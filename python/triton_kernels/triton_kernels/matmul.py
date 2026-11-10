@@ -234,17 +234,6 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     return Storage(new_storage_data, storage.layout)
 
 
-def _tensor_scale_strides(scale: torch.Tensor | None, n_groups: int, n_positions: int | torch.Tensor, *,
-                          matmul_input: bool = False) -> tuple[int | triton.language.constexpr, int | None]:
-    if scale is None or scale.numel() == 1:
-        return triton.language.constexpr(0), None
-    table = broadcast_tensor_scale(scale, (n_groups, n_positions), matmul_input=matmul_input)
-    # A singleton axis is shared even when PyTorch gives it a nonzero stride.
-    group_stride = table.stride(0) if table.size(0) != 1 else 0
-    position_stride = table.stride(1) if table.size(1) != 1 else 0
-    return group_stride or triton.language.constexpr(0), position_stride or None
-
-
 # -----------------------------------------------------------------------------
 # Triton Implementation
 # -----------------------------------------------------------------------------
@@ -677,12 +666,20 @@ def matmul(a, b, bias,
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
     n_groups = b.shape[0] if b.ndim == 3 else 1
-    a_tensor_scale_strides = _tensor_scale_strides(a_tensor_scale, n_groups, a.shape[-2], matmul_input=True)
-    b_tensor_scale_strides = _tensor_scale_strides(b_tensor_scale, n_groups, b.shape[-1], matmul_input=True)
     y_tensor_scale = out_matmul_flex.expected_scale
-    y_group_stride, y_row_stride = _tensor_scale_strides(y_tensor_scale if nvfp4_output else None,
-                                                         n_groups if is_c_ragged else batch_size,
-                                                         out_matmul.size(-2))
+    tensor_scale_strides = []
+    for scale, shape, matmul_input in (
+        (a_tensor_scale, (n_groups, a.shape[-2]), True),
+        (b_tensor_scale, (n_groups, b.shape[-1]), True),
+        (y_tensor_scale if nvfp4_output else None, (n_groups if is_c_ragged else batch_size, out_matmul.size(-2)), False),
+    ):
+        group_stride = position_stride = 0
+        if scale is not None and scale.numel() != 1:
+            table = broadcast_tensor_scale(scale, shape, matmul_input=matmul_input)
+            group_stride = table.stride(0) if table.size(0) != 1 else 0
+            position_stride = table.stride(1) if table.size(1) != 1 else 0
+        tensor_scale_strides.append((group_stride or triton.language.constexpr(0), position_stride or None))
+    a_tensor_scale_strides, b_tensor_scale_strides, (y_group_stride, y_row_stride) = tensor_scale_strides
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
