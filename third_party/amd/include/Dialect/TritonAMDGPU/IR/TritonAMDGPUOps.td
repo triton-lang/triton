@@ -421,6 +421,41 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 }
 
 //===----------------------------------------------------------------------===//
+// GlobalReduceOp
+//===----------------------------------------------------------------------===//
+
+def GlobalReduceOp : TT_AMDGPU_Op<"global_reduce", [
+  AtomicOpInterface,
+  SameOperandsShape,
+  SameOperandsEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  TypesMatchWith<"ptr type matches value type", "val", "ptr",
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type", "val", "mask",
+                 "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Global reduction for TDM emulation";
+  let description = [{
+    Atomically reduces each active value into its global pointer, with release
+    ordering and GPU scope. The global-reduction lowering pass orders the
+    operation against asynchronous TDM accesses and replaces it with atomics.
+  }];
+  let arguments = (ins
+    TT_AtomicRMWAttr:$atomic_rmw_op,
+    Arg<TT_PtrTensor, "Global element pointers", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_Tensor:$val,
+    Optional<TT_BoolTensor>:$mask
+  );
+  let assemblyFormat = [{
+    $atomic_rmw_op `,` $ptr `,` $val (`,` $mask^)? attr-dict `:` type(operands)
+  }];
+  let extraClassDeclaration = [{
+    ::mlir::triton::MemSemantic getSem() { return ::mlir::triton::MemSemantic::RELEASE; }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // BufferAtomicRMWOp
 //===----------------------------------------------------------------------===//
 
@@ -1410,6 +1445,19 @@ def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
 //===----------------------------------------------------------------------===//
 // UpdateTensorDescriptorOp
 //===----------------------------------------------------------------------===//
+
+def ExtractTensorDescriptorFieldsOp : TT_AMDGPU_Op<"extract_tensor_descriptor_fields", [Pure]> {
+  let summary = "Decode scalar fields of a TDM descriptor";
+  let description = [{
+    Returns the global base pointer, rank i32 bounds, rank i64 element strides,
+    and an i32 predicate, in that order. Dimensions use Triton's
+    outermost-to-innermost order.
+  }];
+  let arguments = (ins TT_TensorDescType:$desc);
+  let results = (outs Variadic<AnyType>:$fields);
+  let assemblyFormat = "$desc attr-dict `:` qualified(type($desc)) `->` `(` type($fields) `)`";
+  let hasVerifier = 1;
+}
 
 def UpdateTensorDescriptorOp : TT_AMDGPU_Op<"update_tensor_descriptor", [Pure,
     AttrSizedOperandSegments,

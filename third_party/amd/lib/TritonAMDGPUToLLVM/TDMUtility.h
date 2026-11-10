@@ -24,6 +24,10 @@ SmallVector<Value> unpackTDMDescriptor(RewriterBase &rewriter, Location loc,
 SmallVector<Value> scalarizeTDMDescriptor(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vectors);
 
+std::tuple<Value, SmallVector<Value>, SmallVector<Value>>
+decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
+                        ArrayRef<Value> groups, size_t numDims);
+
 // Updates TDM descriptor fields in place.
 // Mirrors the parameter semantics of `amdg.update_tensor_descriptor`.
 //

@@ -1280,3 +1280,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+module {
+  tt.func @extract_fields_wrong_rank(%desc: !tt.tensordesc<8x32xf32>) {
+    // expected-error @+1 {{expected base, rank bounds, rank strides, and predicate for rank 1-5}}
+    %fields:4 = amdg.extract_tensor_descriptor_fields %desc : !tt.tensordesc<8x32xf32> -> (!tt.ptr<f32>, i32, i64, i32)
+    tt.return
+  }
+}
