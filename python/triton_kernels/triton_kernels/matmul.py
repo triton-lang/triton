@@ -1011,6 +1011,8 @@ def matmul_torch(a, b, bias,
         w_slice_offs = b_ragged_metadata.slice_offs
         for expt in range(n_expts_tot):
             k = int(b_ragged_metadata.slice_sizes[expt].item())
+            if k == 0:
+                continue
             x_start = int(x_slice_offs[expt].item())
             w_start = int(w_slice_offs[expt].item())
             x_slice = a[:, x_start:x_start + k]
