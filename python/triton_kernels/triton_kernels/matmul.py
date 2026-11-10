@@ -1015,7 +1015,7 @@ def matmul_torch(a, b, bias,
             w_slice = b[w_start:w_start + k, :]
             out[expt] = dot(x_slice, w_slice, 0, 0, m).to(result_dtype)
         if y_scales is not None:
-            out = out / y_scales[:, :, None]
+            out = out * y_scales[:, :, None].float().reciprocal()
         return finish_output(out)
 
     is_input_batched = a.ndim == 3
@@ -1037,7 +1037,7 @@ def matmul_torch(a, b, bias,
         out = dot(x, b[i], i, lo, hi)
         if y_scales is not None:
             dest = slice(lo, hi) if scatter_indx is None else scatter_indx[lo:hi].clamp_min(0)
-            out = out.to(result_dtype) / y_scales[i, dest, None]
+            out = out.to(result_dtype) * y_scales[i, dest, None].float().reciprocal()
         y[batch, lo:hi] = out
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
