@@ -1641,8 +1641,7 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
   unsigned elementBitWidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (paddedEnc) {
     if (paddedEnc.getIntervals().size() != 1)
-      return op->emitOpError(
-          "TDM load only supports a single padding interval");
+      return op->emitOpError("TDM only supports a single padding interval");
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
          llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -1816,6 +1815,12 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
     return failure();
 
   auto enc = smemTy.getEncoding();
+  auto partitionedEnc = llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc);
+  if (partitionedEnc) {
+    if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
+      return failure();
+    enc = partitionedEnc.getPartitionLayout();
+  }
   auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
   if (!paddedEnc && !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
@@ -1828,7 +1833,14 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
     if (intervals.size() != 1)
       return emitOpError("TDM store only supports single interval paddings.");
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    SmallVector<int64_t> shapePerCTA;
+    if (partitionedEnc) {
+      shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+      if (partitionedEnc.getPartitionDim() == shapePerCTA.size() - 1)
+        shapePerCTA.back() /= partitionedEnc.getNumLogicalPieces();
+    } else {
+      shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    }
     if (intervals[0] != shapePerCTA.back())
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "

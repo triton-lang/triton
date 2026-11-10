@@ -2006,6 +2006,71 @@ def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROU
                              f"numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
+@gluon.jit
+def partitioned_tdm_store_kernel(a_ptr, b_ptr, M, N,  #
+                                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
+                                 NUM_PARTITIONS: ttgl.constexpr, NUM_GROUPS: ttgl.constexpr,  #
+                                 PARTITION_DIM: ttgl.constexpr, INNER: ttgl.constexpr):
+    """Fill a PartitionedSharedLayout from registers, then TDM store it out."""
+    if PARTITION_DIM == 0:
+        inner_shape_m: ttgl.constexpr = BLOCK_M // (NUM_PARTITIONS * NUM_GROUPS)
+        inner_shape_n: ttgl.constexpr = BLOCK_N
+    else:
+        inner_shape_m: ttgl.constexpr = BLOCK_M
+        inner_shape_n: ttgl.constexpr = BLOCK_N // (NUM_PARTITIONS * NUM_GROUPS)
+
+    # TDM store pads only once per row of the piece it reads.
+    if INNER == "padded":
+        inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[inner_shape_n, 8]],
+                                                                                 [inner_shape_m, inner_shape_n], [1, 0])
+    else:
+        inner_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, inner_layout)
+
+    idx_m = ttgl.program_id(axis=0) * BLOCK_M
+    idx_n = ttgl.program_id(axis=1) * BLOCK_N
+    # Fill the buffer with local_store so the TDM store is checked
+    # independently of the TDM load address mapping.
+    REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [ttgl.num_warps(), 1], [1, 0])
+    offs_m = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    offs_n = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    tile = ttgl.load(a_ptr + offs_m[:, None] * N + offs_n[None, :], mask=mask, other=0)
+    buffer = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, (BLOCK_M, BLOCK_N), smem_layout)
+    buffer.store(tile)
+
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    ttgl.amd.cdna5.tdm.async_store(b_desc, [idx_m, idx_n], buffer)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("DTYPE", [torch.float16, torch.int8])
+@pytest.mark.parametrize("INNER", ["padded", "swizzled"])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_runtime_partitioned_tdm_store(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, INNER, DTYPE,
+                                       num_warps):
+    """Test a TDM store from a PartitionedSharedLayout.
+
+    N is not a multiple of BLOCK_N, so the last column block is partly out of
+    bounds (whole pieces for partitionDim=1); 208 keeps the row stride 16-byte aligned.
+    """
+    M, N = 256, 208
+    torch.manual_seed(42)
+    a = torch.randint(-128, 128, (M, N)).to(DTYPE)
+    b = torch.zeros_like(a)
+    a_device = a.cuda()
+    b_device = b.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    partitioned_tdm_store_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                       NUM_PARTITIONS=NUM_PARTITIONS, NUM_GROUPS=NUM_GROUPS,
+                                       PARTITION_DIM=PARTITION_DIM, INNER=INNER, num_warps=num_warps)
+    assert torch.equal(b_device.cpu(), a)
+
+
 _LOAD_SHARED_FP4_REPACKED_CASES = [
     pytest.param(
         (128, 32),

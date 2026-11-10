@@ -587,6 +587,80 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Row-partitioned TDM store: each warp's 16-row tile lies in one 64-row piece,
+// so one instruction per warp reads from its partition's base.
+#inner = #ttg.padded_shared<[256:+16] {order = [1, 0], shape = [64, 256]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_partitioned_rows
+  // tile_dim0 is widened to 256 + 16 = 272 (encoded as 272 << 16, i.e. 17825792), and the tensor width is
+  // capped at the tile width so the padding is dropped as out of bounds.
+  // CHECK-DAG: llvm.mlir.constant(17825792 : i32) : i32
+  // CHECK-DAG: %[[W:.*]] = llvm.mlir.constant(256 : i32) : i32
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK: %[[LT:.*]] = llvm.icmp "ult" %[[D:.*]], %[[W]] : i32
+  // CHECK: llvm.select %[[LT]], %[[D]], %[[W]] : i1, i32
+  // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+  tt.func public @tdm_store_partitioned_rows(
+    %tensorDesc: !tt.tensordesc<128x256xi8, #partitioned>,
+    %memDesc: !ttg.memdesc<128x256xi8, #partitioned, #smem, mutable>
+  ) {
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<128x256xi8, #partitioned, #smem, mutable> -> !tt.tensordesc<128x256xi8, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// Column-partitioned TDM store: each of the 4 warps reads one 32-column piece.
+#inner = #ttg.padded_shared<[32:+8] {order = [1, 0], shape = [64, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_partitioned_cols
+  // tile_dim0 = 32 + 8 = 40 (40 << 16), width capped at the 32-column piece.
+  // CHECK-DAG: llvm.mlir.constant(2621440 : i32) : i32
+  // CHECK-DAG: %[[W:.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK: %[[LT:.*]] = llvm.icmp "ult" %[[D:.*]], %[[W]] : i32
+  // CHECK: llvm.select %[[LT]], %[[D]], %[[W]] : i1, i32
+  // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+  tt.func public @tdm_store_partitioned_cols(
+    %tensorDesc: !tt.tensordesc<64x128xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<64x128xf16, #partitioned, #smem, mutable>
+  ) {
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x128xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<64x128xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// Row-partitioned TDM store with 8 pieces and 4 warps: 2 instructions per warp.
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_partitioned_multi_instr
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+  tt.func public @tdm_store_partitioned_multi_instr(
+    %tensorDesc: !tt.tensordesc<64x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable>
+  ) {
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<64x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
 // TDM block has just 4 elements. Warps 4..7 have no work and must be
 // predicated off rather than handed an empty tile.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
