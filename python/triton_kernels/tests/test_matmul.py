@@ -811,6 +811,7 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
 @pytest.mark.parametrize("persistent", [False, True])
 @pytest.mark.parametrize("mode,x_kind,w_kind,y_kind", [
     ("plain", "expanded_global_positions", "position", "global"),
+    ("plain", "expanded_global_positions", "global", "global"),
     ("plain", "position", "global", "position_vector"),
     ("batched", "table", "table", "group_vector"),
     ("batched", "group", "position", "position"),
@@ -825,6 +826,7 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
     ("routed", "position", "table", "position"),
     ("routed", "group", "global", "table"),
     ("ragged", "table", "expanded_group", "table"),
+    ("ragged", "group", "expanded_group", "group_vector"),
 ])
 def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, device):
     if not cuda_capability_geq(10, 0):
@@ -913,6 +915,33 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
     written = slice(None) if scatter is None else scatter[active]
     assert torch.equal(packed[written], ref_packed[written])
     assert torch.equal(blocks.view(torch.uint8)[written], ref_blocks.view(torch.uint8)[written])
+
+
+def test_nvfp4_uniform_scale_rounding(device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    e, m, n, k = 2, 32, 128, 128
+    a = torch.zeros((e, m, k // 2), device=device, dtype=torch.uint8)
+    w = torch.zeros((e, n, k // 2), device=device, dtype=torch.uint8).mT
+    a[:, 1:, 0] = 0x05  # Each dot product is 3 except on row zero.
+    w[:, 0, :] = 0x02
+    blocks = torch.empty((e, m, n // 16), device=device, dtype=torch.float8_e4m3fn)
+    config = PrecisionConfig(
+        a_mx_scale=torch.ones((e, m, k // 16), device=device, dtype=torch.float8_e4m3fn),
+        b_mx_scale=torch.ones((e, k // 16, n), device=device, dtype=torch.float8_e4m3fn),
+        a_mx_tensor_scale=torch.tensor([[1.08], [-1.08]], device=device), b_mx_tensor_scale=torch.ones((), device=device),
+        a_microblock_size=16, b_microblock_size=16, c_microblock_size=16, c_mx_scale=blocks, out_dtype=torch.uint8,
+        flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=torch.tensor(0.54, device=device))),
+    )
+    epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.)
+    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=True, block_m=128, block_n=128, block_k=128)):
+        packed = matmul(a, w, None, precision_config=config, epilogue=epilogue)
+    # (3 * 1.08f) * (1 / 0.54f) rounds just above 6, selecting the next E4M3 block scale.
+    assert (blocks[:, 1:].float() == 1.125).all()
+    assert (blocks[:, 0].float() == 0).all()
+    assert (packed[:, 0] == 0).all()  # Both output zero rows encode positive zero.
+    assert (packed[0, 1:] == 0x77).all()
+    assert (packed[1, 1:] == 0xFF).all()
 
 
 @pytest.mark.parametrize("swizzled", [False, True])

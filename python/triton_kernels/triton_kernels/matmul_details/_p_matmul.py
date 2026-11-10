@@ -168,6 +168,7 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    SHARED_INPUT_SCALES: tl.constexpr = stride_x_tensor_scale_m is None and stride_w_tensor_scale_n is None
     # Keep masked vector loads and fold broadcast positions into their addresses.
     stride_x_tensor_scale_m = 0 if stride_x_tensor_scale_m is None else stride_x_tensor_scale_m
     stride_w_tensor_scale_n = 0 if stride_w_tensor_scale_n is None else stride_w_tensor_scale_n
@@ -265,6 +266,12 @@ def _p_matmul(
         (HAS_X_EPILOGUE_SCALE or WTensorScale is not None)
         and XScale is None and WScale is None and B is not None and Betas is None
         and (is_out_microscaled or SUBTILE_FACTOR == 1)
+    )
+    SCALAR_NVFP4_SCALES: tl.constexpr = (
+        HAS_X_EPILOGUE_SCALE and WTensorScale is not None and SHARED_INPUT_SCALES
+        and is_out_fp4 and YActualScale.dtype.element_ty == tl.float8e4nv
+        and YExpectedScale is not None and stride_y_tensor_scale_m is None
+        and not HAS_GATHER and not FUSE_TENSOR_SCALE
     )
     yN = N // ACTIVATION_REDUCTION_N
 
@@ -561,7 +568,11 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
+        if SCALAR_NVFP4_SCALES:
+            x_outer = tl.load(XTensorScale + off_w_z.to(index_type) * stride_x_tensor_scale_z)
+            w_outer = tl.load(WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e)
+            input_outer_scale = x_outer * w_outer
+        elif HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
             if HAS_X_EPILOGUE_SCALE:
@@ -696,6 +707,9 @@ def _p_matmul(
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
+            if SCALAR_NVFP4_SCALES:
+                # Keep the FP32 product before bias and the output divisor before quantization.
+                acc_tile *= input_outer_scale
             if not FUSE_TENSOR_SCALE:
                 if Betas is None:
                     # Preserve the scale-plus-bias rounding when beta is implicit.
