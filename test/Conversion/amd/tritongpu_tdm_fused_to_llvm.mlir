@@ -141,3 +141,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [128]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // TTG-LABEL: tdm_fused_partial_selected_buffers
+  // LLVM-LABEL: tdm_fused_partial_selected_buffers
+  tt.func @tdm_fused_partial_selected_buffers(%desc0: !tt.tensordesc<1x64xf16, #desc>, %desc1: !tt.tensordesc<1x64xf16, #desc>) {
+    %c0 = arith.constant 0 : i32
+    %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x128xf16, #alloc, #smem, mutable>
+    %dst0 = ttg.memdesc_index %alloc0[%c0] : !ttg.memdesc<1x128xf16, #alloc, #smem, mutable> -> !ttg.memdesc<128xf16, #alloc, #smem, mutable>
+    %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<1x128xf16, #alloc, #smem, mutable>
+    %dst1 = ttg.memdesc_index %alloc1[%c0] : !ttg.memdesc<1x128xf16, #alloc, #smem, mutable> -> !ttg.memdesc<128xf16, #alloc, #smem, mutable>
+    // TTG: amdg.async_tdm_fused_copy_global_to_local
+    // TTG-SAME: warp_used_hints = array<i32: 3, 12>
+    // LLVM: "llvm.amdgcn.tensor.load.to.lds"
+    // LLVM-NOT: "llvm.amdgcn.tensor.load.to.lds"
+    amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %dst0, %dst1 {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<1x64xf16, #desc>, !tt.tensordesc<1x64xf16, #desc> -> !ttg.memdesc<128xf16, #alloc, #smem, mutable>, !ttg.memdesc<128xf16, #alloc, #smem, mutable>
+    tt.return
+  }
+}

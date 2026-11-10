@@ -1157,13 +1157,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // A non-unit pipeline dimension on the operand is not a transfer dimension.
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [2, 64]}>
 #padded = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_load_non_unit_pipeline(%desc: !tt.tensordesc<2x64xf16, #padded>) {
+  tt.func @tdm_load_non_unit_pipeline(%desc: !tt.tensordesc<2x64xf16, #desc>) {
     %dst = ttg.local_alloc : () -> !ttg.memdesc<2x64xf16, #padded, #smem, mutable>
-    // expected-error @+1 {{TDM requires a unit pipeline dimension on the shared memory operand; select an individual pipeline buffer before the transfer}}
-    %token = amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<2x64xf16, #padded> -> !ttg.memdesc<2x64xf16, #padded, #smem, mutable>
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension; select an individual pipeline buffer before the transfer}}
+    %token = amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<2x64xf16, #desc> -> !ttg.memdesc<2x64xf16, #padded, #smem, mutable>
     tt.return
   }
 }
@@ -1364,7 +1365,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 
   tt.func @tdm_load_unsliced_pipeline_dimension(%desc: !tt.tensordesc<2x32x64xf16>, %buf: !ttg.memdesc<2x32x64xf16, #shared, #smem, mutable>) {
-    // expected-error @+1 {{TDM requires a unit pipeline dimension on the shared memory operand; select an individual pipeline buffer before the transfer}}
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension; select an individual pipeline buffer before the transfer}}
     amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<2x32x64xf16> -> !ttg.memdesc<2x32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -1571,6 +1572,86 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @async_copy_local_to_global_cache_modifier_and_scope(%buf: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %ptrs: tensor<32x32x!tt.ptr<f32>, #blocked>) {
     // expected-error @+1 {{a cache modifier can't be combined with scope}}
     %0 = amdg.async_copy_local_to_global %buf, %ptrs cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> {scope = 1 : i32} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %dst: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<1x64xf16, #desc> -> !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>
+    tt.return
+  }
+  tt.func @tdm_fused_load_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %dst: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>, %other: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_fused_copy_global_to_local %desc, %desc into %dst, %other {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<1x64xf16, #desc>, !tt.tensordesc<1x64xf16, #desc> -> !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>, !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>
+    tt.return
+  }
+  tt.func @tdm_store_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #desc>, %src: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<1x64xf16, #alloc, #smem, mutable> -> !tt.tensordesc<1x64xf16, #desc>
+    tt.return
+  }
+  tt.func @tdm_store_unit_pipeline_no_descriptor_layout(%desc: !tt.tensordesc<1x64xf16>, %src: !ttg.memdesc<1x64xf16, #alloc, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer must not have an unsliced pipeline dimension}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<1x64xf16, #alloc, #smem, mutable> -> !tt.tensordesc<1x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [128, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [256, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_padding(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {order = [0, 1], shape = [128, 64]}>
+#alloc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [256, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_order(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[64:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], block = [[0, 32]]}>
+#alloc = #ttg.padded_shared<[64:+8] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], block = [[128, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_row_subview_inconsistent_cga(%desc: !tt.tensordesc<128x64xf16, #desc>, %src: !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<128x64xf16, #alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+#desc = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 32]}>
+#alloc = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_padded_column_subview(%desc: !tt.tensordesc<64x32xf16, #desc>, %src: !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64>) {
+    // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64> -> !tt.tensordesc<64x32xf16, #desc>
     tt.return
   }
 }

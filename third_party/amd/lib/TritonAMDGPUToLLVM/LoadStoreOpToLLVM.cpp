@@ -75,8 +75,8 @@ getTDMSharedMemoryBases(Location loc, RewriterBase &rewriter,
 
 // TDM addresses shared memory through the layout of the whole allocation, with
 // one dimension per descriptor dimension. Restore leading unit dimensions for
-// rank-reducing accesses or a retained unit pipeline dimension. The verifiers
-// reject non-unit pipeline dimensions on the shared memory operand.
+// rank-reducing accesses. The verifiers require pipeline buffers to be selected
+// before the transfer.
 triton::LinearLayout getTDMSharedLayout(MemDescType memDescTy, int rank) {
   triton::LinearLayout layout = toLinearLayoutIgnoringPadding(memDescTy);
   assert(layout.getNumOutDims() <= rank &&

@@ -186,11 +186,10 @@ LogicalResult verifyTDMBuffer(Operation *op, triton::TensorDescType descTy,
     return op->emitOpError(
         "TDM descriptor and buffer element types must match");
 
-  ArrayRef<int64_t> smemShape = smemTy.getShape();
-  auto layoutShape = gpu::dropPipeliningDim(smemShape, smemTy.getEncoding());
-  if (layoutShape.size() < smemShape.size() && smemShape.front() != 1)
+  if (cast<gpu::LayoutEncodingTrait>(smemTy.getEncoding()).getRank() !=
+      smemTy.getRank())
     return op->emitOpError(
-        "TDM requires a unit pipeline dimension on the shared memory operand; "
+        "TDM buffer must not have an unsliced pipeline dimension; "
         "select an individual pipeline buffer before the transfer");
 
   auto shape = descTy.getShape();
@@ -276,17 +275,18 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
       descPad.getIntervals() == allocPad.getIntervals() &&
       descPad.getPaddings() == allocPad.getPaddings()) {
     auto descLL = descPad.getLinearComponent();
-    for (int i = 0; i < descRank - allocRank; ++i)
+    for (int i = 0; i < numDropped; ++i)
       descLL = triton::removeStandardDim(descLL, 0);
     compatible = descLL == allocPad.getLinearComponent();
     if (!compatible &&
         isa<AsyncTDMGatherOp, AsyncTDMScatterOp, AsyncTDMCopyGlobalToLocalOp,
-            AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
+            AsyncTDMFusedCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(op)) {
       // Gather/scatter use one buffer row per index, independently of the
-      // descriptor's row count. Loads may fill a contiguous prefix of rows.
+      // descriptor's row count. Loads may fill a contiguous prefix of rows;
+      // stores may read full-row subviews of a larger allocation.
       // These are allowed for canonical row-major mappings with matching
-      // padding and CTA distribution. Gather/scatter also require matching
-      // columns; load bounds and contiguity are checked separately.
+      // padding and CTA distribution. Only loads may differ in column count;
+      // bounds and contiguity are checked separately.
       auto descShape = llvm::to_vector_of<int64_t>(descLL.getOutDimSizes());
       auto allocShape = llvm::to_vector_of<int64_t>(
           allocPad.getLinearComponent().getOutDimSizes());

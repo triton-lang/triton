@@ -474,17 +474,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A partial load with a retained unit pipeline dimension checks contiguity
-// using the rank-1 layout shapes of both the block and the allocation.
-#padded_desc = #ttg.padded_shared<[64:+8] {order = [0], shape = [64]}>
+// Select the single pipeline buffer before a rank-reducing partial load.
+#padded_desc = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [1, 64]}>
 #padded_alloc = #ttg.padded_shared<[64:+8] {order = [0], shape = [128]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: tdm_load_partial_unit_pipeline
-  tt.func @tdm_load_partial_unit_pipeline(%desc: !tt.tensordesc<1x64xf16, #padded_desc>) {
-    %dst = ttg.local_alloc : () -> !ttg.memdesc<1x128xf16, #padded_alloc, #smem, mutable>
+  // CHECK-LABEL: tdm_load_partial_selected_buffer
+  tt.func @tdm_load_partial_selected_buffer(%desc: !tt.tensordesc<1x64xf16, #padded_desc>) {
+    %c0 = arith.constant 0 : i32
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<1x128xf16, #padded_alloc, #smem, mutable>
+    %dst = ttg.memdesc_index %alloc[%c0] : !ttg.memdesc<1x128xf16, #padded_alloc, #smem, mutable> -> !ttg.memdesc<128xf16, #padded_alloc, #smem, mutable>
     // CHECK: "llvm.amdgcn.tensor.load.to.lds"
-    %token = amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<1x64xf16, #padded_desc> -> !ttg.memdesc<1x128xf16, #padded_alloc, #smem, mutable>
+    %token = amdg.async_tdm_copy_global_to_local %desc into %dst : !tt.tensordesc<1x64xf16, #padded_desc> -> !ttg.memdesc<128xf16, #padded_alloc, #smem, mutable>
     tt.return
   }
 }
@@ -847,6 +848,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 }
 
+// -----
+
 // A load may fill the start of a larger destination. The warps split the
 // block's 64 rows, so each warp writes 16 full rows starting 16 * 64 = 1024
 // elements after the previous one.
@@ -910,6 +913,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
 
 // TDM pads the per-warp offsets it adds to the base of a row subview of a
 // padded layout, so the base pads the subview offset separately: for
