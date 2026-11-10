@@ -2325,7 +2325,7 @@ tt.func @fp6_tma_store_box_width(%desc: !desc, %coord: i32, %src: !src) {
 !mbar = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
 module attributes {ttg.target = "cuda:103"} {
   tt.func @fp6_load_box64(%desc: !desc, %coord: i32, %dst: !dst, %bar: !mbar, %pred: i1) {
-    // expected-error @below {{64-value FP6 TMA requires a matching unswizzled [M, 64] store}}
+    // expected-error @below {{64-value FP6 TMA requires a matching unswizzled rank-2 to rank-5 store}}
     ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred : !desc, !mbar -> !dst
     tt.return
   }
