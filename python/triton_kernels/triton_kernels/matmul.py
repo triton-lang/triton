@@ -832,7 +832,7 @@ def matmul(a, b, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool = True):
+def apply_precision(x_tri, w_tri, precision_config):
     from .numerics_details.mxfp import upcast_from_mxfp
 
     def decode(x: Tensor | torch.Tensor, block_scale: Tensor | torch.Tensor | None, tensor_scale: torch.Tensor | None,
@@ -854,8 +854,6 @@ def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool
     w_scale = precision_config.b_mx_tensor_scale
     check_tensor_scale(x_tri, precision_config.a_mx_scale, x_scale, precision_config.a_microblock_size)
     check_tensor_scale(w_tri, precision_config.b_mx_scale, w_scale, precision_config.b_microblock_size)
-    if not apply_tensor_scales:
-        x_scale = w_scale = None
     flex = precision_config.flex_ctx
     x = decode(x_tri, precision_config.a_mx_scale, x_scale, flex.lhs_data.scale, x_tri.ndim - 1)
     w = decode(w_tri, precision_config.b_mx_scale, w_scale, flex.rhs_data.scale, w_tri.ndim - 2)
@@ -891,15 +889,15 @@ def _reference_output(out: torch.Tensor, precision_config: PrecisionConfig, n_gr
         n_rows = out.size(-2) if scatter is None else scatter.numel()
         table = broadcast_tensor_scale(expected_scale, (n_groups, n_rows))
         if out.ndim == 3:
-            out = out * table.float().reciprocal()[:, :, None]
+            out = out / table[:, :, None]
         else:
-            # Apply the FP32 reciprocal used by float_to_flex before scattering.
+            # Scattered rows use the scale at their destination.
             for expert, (lo, hi) in enumerate(expert_slices):
                 if scatter is None:
                     dest = slice(lo, hi)
                 else:
                     dest = scatter[lo:hi].clamp_min(0)
-                out[lo:hi] *= table[expert, dest, None].float().reciprocal()
+                out[lo:hi] /= table[expert, dest, None]
         expected_scale = None
 
     if scatter is not None:
@@ -926,59 +924,66 @@ def matmul_torch(a, b, bias,
     block_scale = precision_config.a_mx_scale
     gathered_blocks = (gather_indx is not None and isinstance(block_scale, Tensor)
                        and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout))
-    x_scales = broadcast_tensor_scale(precision_config.a_mx_tensor_scale, (n_groups, a.shape[-2]), matmul_input=True)
-    w_scales = broadcast_tensor_scale(precision_config.b_mx_tensor_scale, (n_groups, b.shape[-1]), matmul_input=True)
-    if gathered_blocks:
-        # Blackwell activation block scales already follow the routing order.
+    n_rows = a.shape[-2] if gather_indx is None else gather_indx.numel()
+    if a_ragged_metadata is not None and b_ragged_metadata is None and a.ndim == 2:
+        sizes = a_ragged_metadata.slice_sizes[:n_groups]
+        starts = a_ragged_metadata.slice_offs[:len(sizes)]
+        offs = list(zip(starts.tolist(), (starts + sizes).tolist()))
+    else:
+        offs = [(0, n_rows)] * n_groups
+
+    gather_before_decode = gathered_blocks
+    x_scale = precision_config.a_mx_tensor_scale
+    if x_scale is not None and a.ndim == 2 and b_ragged_metadata is None:
+        table = broadcast_tensor_scale(x_scale, (n_groups, a.shape[-2]), matmul_input=True)
+        if gathered_blocks or (n_groups > 1 and table.stride(0) != 0):
+            # An activation may visit multiple experts with different outer scales.
+            gather_before_decode = gather_indx is not None
+            x_scale = table.new_ones(n_rows)
+            for expert, (lo, hi) in enumerate(offs):
+                if gather_indx is None:
+                    x_scale[lo:hi] = table[expert, lo:hi]
+                else:
+                    rows = gather_indx[lo:hi]
+                    active = rows >= 0
+                    x_scale[lo:hi][active] = table[expert, rows[active]]
+        else:
+            x_scale = table[0]
+        precision_config = replace(precision_config, a_mx_tensor_scale=x_scale)
+
+    if gather_before_decode:
+        check_tensor_scale(a, block_scale, x_scale, precision_config.a_microblock_size)
         if isinstance(a, Tensor):
             a = convert_layout(a, StridedLayout(major_dim=a.ndim - 1)).data
         active = gather_indx >= 0
-        gathered = a.new_zeros((gather_indx.numel(), *a.shape[1:]))
-        gathered[active] = a[gather_indx[active]]
+        rows = gather_indx[active]
+        # Gather bytes so the same indexing works for packed FP4 and FP8.
+        gathered = a.new_zeros((n_rows, *a.shape[1:]))
+        gathered.view(torch.uint8)[active] = a.view(torch.uint8)[rows]
         a = gathered
-    x_is_nvfp4 = x_scales is not None
-    w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_mx_scale is not None
-                  and precision_config.b_mx_scale.data.dtype == torch.uint8)
-    a, b = apply_precision(a, b, precision_config, apply_tensor_scales=False)
-    if gathered_blocks:
-        a.masked_fill_(gather_indx[:, None] < 0, 0.0)
+        if not gathered_blocks:
+            if isinstance(block_scale, Tensor):
+                block_scale = convert_layout(block_scale, StridedLayout(major_dim=a.ndim - 1)).data
+            blocks = block_scale.new_zeros((n_rows, block_scale.size(-1)))
+            blocks.view(torch.uint8)[active] = block_scale.view(torch.uint8)[rows]
+            precision_config = replace(precision_config, a_mx_scale=blocks)
+
+    a, b = apply_precision(a, b, precision_config)
+    if gather_before_decode:
+        a.masked_fill_(~active[:, None], 0.0)
     output_blocks = precision_config.c_mx_scale
     nvfp4_output = output_blocks is not None and output_blocks.data.dtype == torch.float8_e4m3fn
     compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
-    result_dtype = a.dtype if x_scales is None else torch.promote_types(a.dtype, x_scales.dtype)
+    result_dtype = a.dtype
     if nvfp4_output:
         result_dtype = torch.float32  # The quantization epilogue reads the FP32 accumulator.
     if bias is not None and bias.ndim == 1:
         bias = bias[None, :]
 
     def dot(x, w, group, lo, hi):
-        x_scale = None
-        if x_scales is not None:
-            if gather_indx is None:
-                x_scale = x_scales[group, lo:hi]
-            else:
-                rows = gather_indx[lo:hi]
-                active = rows >= 0
-                x_scale = x_scales.new_ones(rows.shape)
-                x_scale[active] = x_scales[group, rows[active]]
-            x_scale = x_scale[:, None]
-        if x_is_nvfp4 and w_is_mxfp4:
-            from .numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
-            # NVFP4 activations absorb their outer scale before rounding to MXFP8 for MXFP4 weights.
-            values, blocks = downcast_to_mxfp_torch(x.float() * x_scale, torch.float8_e4m3fn, axis=-1)
-            x = upcast_from_mxfp_torch(values, blocks, torch.float32, axis=-1)
-            x_scale = None
         if round_x is not None:
             x = round_x(x, torch.arange(lo, hi, device=x.device))
         acc = torch.matmul(x.to(compute_dtype), w.to(compute_dtype))
-        if x_scale is not None or w_scales is not None:
-            # Native NVFP4 applies the rounded product of both outer scales after the dot.
-            if x_scale is None:
-                x_scale = 1.0
-            w_scale = 1.0 if w_scales is None else w_scales[group]
-            acc *= x_scale * w_scale
-            if bias is None:
-                acc += 0.0  # The implicit zero bias normalizes zeros after a negative scale.
         if bias is not None:
             group_bias = bias[group]
             if betas is not None:
@@ -1016,19 +1021,11 @@ def matmul_torch(a, b, bias,
         b = b.view(1, *b.shape)
     if a.ndim == 2:
         a = a.view(1, *a.shape)
-    # memory offsets
-    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
-    if a_ragged_metadata is not None and not is_input_batched:
-        sizes = a_ragged_metadata.slice_sizes[:b.shape[0]]
-        starts = a_ragged_metadata.slice_offs[:len(sizes)]
-        offs = list(zip(starts.tolist(), (starts + sizes).tolist()))
-    else:
-        offs = [(0, n_rows)] * b.shape[0]
     # compute
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=result_dtype)
     for i, (lo, hi) in enumerate(offs):
         batch = i if is_input_batched else 0
-        if gather_indx is None or gathered_blocks:
+        if gather_indx is None or gather_before_decode:
             x = a[batch, lo:hi]
         else:
             rows = gather_indx[lo:hi]

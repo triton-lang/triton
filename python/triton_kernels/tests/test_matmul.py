@@ -993,7 +993,10 @@ def test_nvfp4_uniform_scale_rounding(ragged, x_outer, w_outer, expected_block, 
     ref = matmul_torch(a, w, None, a_ragged_metadata=meta, precision_config=config)
     ref_packed, ref_blocks = downcast_to_mxfp_torch(ref, torch.uint8, -1, torch.float8_e4m3fn, 16)
     assert torch.equal(packed, ref_packed)
-    assert torch.equal(blocks.view(torch.uint8), ref_blocks.view(torch.uint8))
+    # Scaling the operands before the reference dot gives a unit block scale here.
+    ref_blocks = ref_blocks.reshape(e, m, -1).float()
+    assert (ref_blocks[:, 1:] == 1.).all()
+    assert (ref_blocks[:, 0] == 0.).all()
     packed, blocks = packed.reshape(e, m, -1), blocks.reshape(e, m, -1)
     # (3 * (X * W)) * reciprocal(Y) can land on either side of the E4M3 rounding boundary.
     assert (blocks[:, 1:].float() == expected_block).all()
