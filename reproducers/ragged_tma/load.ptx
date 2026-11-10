@@ -1,0 +1,44 @@
+.version 8.3
+.target sm_90
+.address_size 64
+
+.visible .entry load_ragged_only(
+    .param .u64 tensor_map, .param .u64 output, .param .u32 live_rows)
+{
+    .reg .pred p;
+    .reg .b32 t, live, row, shared_ptr, barrier_ptr, offset, word;
+    .reg .b64 desc, out, addr, state;
+    .shared .align 128 .b8 tile[16384];
+    .shared .align 8 .b64 barrier;
+    ld.param.u64 desc, [tensor_map];
+    ld.param.u64 out, [output];
+    ld.param.u32 live, [live_rows];
+    mov.u32 t, %tid.x;
+    setp.ne.u32 p, t, 0;
+    @p bra copied;
+    mov.u32 shared_ptr, tile;
+    mov.u32 barrier_ptr, barrier;
+    mbarrier.init.shared::cta.b64 [barrier_ptr], 1;
+    fence.proxy.async.shared::cta;
+    fence.proxy.tensormap::generic.acquire.gpu [desc], 128;
+    mbarrier.arrive.expect_tx.shared::cta.b64 state, [barrier_ptr], 16384;
+    sub.u32 row, 1073741824, live;
+    cp.async.bulk.tensor.5d.shared::cluster.global.mbarrier::complete_tx::bytes [shared_ptr], [desc, {0, row, 0, live, 1073741824}], [barrier_ptr];
+wait:
+    mbarrier.try_wait.parity.shared::cta.b64 p, [barrier_ptr], 0;
+    @!p bra wait;
+copied:
+    bar.sync 0;
+    shl.b32 offset, t, 2;
+copy_words:
+    mov.u32 shared_ptr, tile;
+    add.u32 shared_ptr, shared_ptr, offset;
+    ld.shared.u32 word, [shared_ptr];
+    cvt.u64.u32 addr, offset;
+    add.u64 addr, out, addr;
+    st.global.u32 [addr], word;
+    add.u32 offset, offset, 128;
+    setp.lt.u32 p, offset, 16384;
+    @p bra copy_words;
+    ret;
+}

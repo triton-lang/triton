@@ -1,0 +1,22 @@
+
+--- original ---
+{"kind": "environment", "device": "NVIDIA GB200", "compute_capability": [10, 0], "driver_api": 13050, "libcuda": ["/usr/local/cuda-13.4/compat/libcuda.so.620.07"], "case": "original"}
+{"kind": "descriptor", "original_class": "LARGE", "effective_class": "LARGE", "class_read_method": "Blackwell descriptor bit 85", "base": "0xfc51fddf0000", "guard": "0xfc51fde00000", "accessible_bytes_from_base": 65536, "physical_shape": [1, 32, 2048], "physical_strides": [0, 2048, 1], "cuda_dimensions": [2048, 1073741824, 1, 2147418112, 2147418112], "cuda_byte_strides": [2048, 0, 2048, 17179867136], "cuda_box": [128, 128, 1, 1, 1], "slice_offset": 0, "live_rows": 1}
+{"kind": "result", "case": "original", "status": "ILLEGAL_ADDRESS", "effective_class": "LARGE", "stage": "load", "error": "cuCtxSynchronize: CUDA_ERROR_ILLEGAL_ADDRESS (700)"}
+
+--- small ---
+{"kind": "environment", "device": "NVIDIA GB200", "compute_capability": [10, 0], "driver_api": 13050, "libcuda": ["/usr/local/cuda-13.4/compat/libcuda.so.620.07"], "case": "small"}
+{"kind": "descriptor", "original_class": "LARGE", "effective_class": "SMALL", "class_read_method": "Blackwell descriptor bit 85", "base": "0xf565fddf0000", "guard": "0xf565fde00000", "accessible_bytes_from_base": 65536, "physical_shape": [1, 32, 2048], "physical_strides": [0, 2048, 1], "cuda_dimensions": [2048, 1073741824, 1, 2147418112, 2147418112], "cuda_byte_strides": [2048, 0, 2048, 17179867136], "cuda_box": [128, 128, 1, 1, 1], "slice_offset": 0, "live_rows": 1}
+{"kind": "result", "case": "small", "status": "PASS", "effective_class": "SMALL"}
+
+--- large ---
+{"kind": "environment", "device": "NVIDIA GB200", "compute_capability": [10, 0], "driver_api": 13050, "libcuda": ["/usr/local/cuda-13.4/compat/libcuda.so.620.07"], "case": "large"}
+{"kind": "descriptor", "original_class": "LARGE", "effective_class": "LARGE", "class_read_method": "Blackwell descriptor bit 85", "base": "0xffe73ddf0000", "guard": "0xffe73de00000", "accessible_bytes_from_base": 65536, "physical_shape": [1, 32, 2048], "physical_strides": [0, 2048, 1], "cuda_dimensions": [2048, 1073741824, 1, 2147418112, 2147418112], "cuda_byte_strides": [2048, 0, 2048, 17179867136], "cuda_box": [128, 128, 1, 1, 1], "slice_offset": 0, "live_rows": 1}
+{"kind": "result", "case": "large", "status": "ILLEGAL_ADDRESS", "effective_class": "LARGE", "stage": "load", "error": "cuCtxSynchronize: CUDA_ERROR_ILLEGAL_ADDRESS (700)"}
+
+--- backed ---
+{"kind": "environment", "device": "NVIDIA GB200", "compute_capability": [10, 0], "driver_api": 13050, "libcuda": ["/usr/local/cuda-13.4/compat/libcuda.so.620.07"], "case": "backed"}
+{"kind": "descriptor", "original_class": "LARGE", "effective_class": "LARGE", "class_read_method": "Blackwell descriptor bit 85", "base": "0xf35dbdde0000", "guard": "0xf35dbde00000", "accessible_bytes_from_base": 131072, "physical_shape": [1, 32, 2048], "physical_strides": [0, 2048, 1], "cuda_dimensions": [2048, 1073741824, 1, 2147418112, 2147418112], "cuda_byte_strides": [2048, 0, 2048, 17179867136], "cuda_box": [128, 128, 1, 1, 1], "slice_offset": 0, "live_rows": 1}
+{"kind": "result", "case": "backed", "status": "PASS", "effective_class": "LARGE"}
+
+CONFIRMED: original/LARGE + 64 KiB faults; SMALL and 128 KiB controls pass.
