@@ -1455,8 +1455,9 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("persistent", [False, True])
 @pytest.mark.parametrize("scale_kind", ["block", "tensor"])
-def test_nvfp4_ragged_large_scale_stride(scale_kind, device):
+def test_nvfp4_ragged_large_scale_stride(scale_kind, persistent, device):
     if not cuda_capability_geq(10, 0):
         pytest.skip("NVFP4 requires Blackwell or newer")
     m, n, k = 3, 128, 128
@@ -1482,7 +1483,51 @@ def test_nvfp4_ragged_large_scale_stride(scale_kind, device):
                              a_mx_tensor_scale=x_tensor_scale, b_mx_tensor_scale=unit,
                              a_microblock_size=16, b_microblock_size=16, out_dtype=torch.float32)
     meta = make_ragged_tensor_metadata(torch.tensor([2, 1], dtype=torch.int32, device=device), m)
-    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True, "split_k": 1}):
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": persistent, "split_k": 1}):
         actual = matmul(a, b, None, a_ragged_metadata=meta, precision_config=config)
     expected = torch.arange(1, m + 1, dtype=torch.float32, device=device)[:, None] * k
     torch.testing.assert_close(actual, expected.expand_as(actual), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_matmul_large_bias_stride(persistent, device):
+    if not cuda_capability_geq(9, 0):
+        pytest.skip("requires NVIDIA persistent matmul")
+    if torch.cuda.mem_get_info(device)[0] < 17 << 30:
+        pytest.skip("requires 16 GiB for a guarded bias table")
+    stride = 1 << 30
+    n = 128
+    storage = torch.empty(4 * stride + n, device=device, dtype=torch.float32)
+    storage[:n].fill_(7)
+    bias = storage.as_strided((3, n), (stride, 1), storage_offset=2 * stride)
+    bias.copy_(torch.arange(1, 4, device=device)[:, None])
+    x = torch.zeros((3, 16, n), device=device, dtype=torch.bfloat16)
+    w = torch.zeros((3, n, n), device=device, dtype=torch.bfloat16)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": persistent, "split_k": 1}):
+        actual = matmul(x, w, bias)
+    torch.testing.assert_close(actual, bias[:, None, :].expand_as(actual).to(actual.dtype), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_nvfp4_large_block_scale_k_stride(persistent, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    if torch.cuda.mem_get_info(device)[0] < 7 << 30:
+        pytest.skip("requires 6 GiB for a guarded block-scale table")
+    m, n, k = 16, 128, 256
+    stride = 1 << 28
+    # Advancing eight scale columns to the second K tile crosses the int32 limit.
+    storage = torch.empty((1 << 31) + 15 * stride + m, device=device, dtype=torch.float8_e4m3fn)
+    scales = storage.as_strided((m, k // 16), (1, stride), storage_offset=1 << 31)
+    guard = storage.as_strided((m, 8), (1, stride))
+    guard.fill_(7)
+    scales.fill_(1)
+    x = torch.full((m, k // 2), 0x22, device=device, dtype=torch.uint8)
+    w = torch.full((n, k // 2), 0x22, device=device, dtype=torch.uint8).T
+    unit = torch.ones((), device=device)
+    w_scales = torch.ones((k // 16, n), device=device, dtype=scales.dtype)
+    config = PrecisionConfig(a_mx_scale=scales, b_mx_scale=w_scales, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit,
+                             a_microblock_size=16, b_microblock_size=16, out_dtype=torch.float32)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": persistent, "block_k": 128, "split_k": 1}):
+        actual = matmul(x, w, None, precision_config=config)
+    torch.testing.assert_close(actual, torch.full_like(actual, k), rtol=0, atol=0)

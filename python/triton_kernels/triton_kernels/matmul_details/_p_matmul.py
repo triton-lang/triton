@@ -554,7 +554,7 @@ def _p_matmul(
                 acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
 
             if is_x_microscaled and XMxScalePtrs is not None:
-                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
+                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * tl.cast(stride_x_mx_k, index_type)
 
         if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
@@ -621,7 +621,7 @@ def _p_matmul(
         offs_y_n = off_n1 + tl.arange(0, BLOCK_N)
         mask_n = offs_y_n < N
         if B is not None:
-            BPtrs = B + expt_id1 * stride_b_e + offs_y_n
+            BPtrs = B + expt_id1.to(index_type) * stride_b_e + offs_y_n
             if pid_k1 == 0:
                 bias = tl.load(BPtrs, mask=mask_n, other=0)
             else:
@@ -869,7 +869,7 @@ def _p_matmul(
                     pid_k1.to(index_type) * stride_y_k +
                     start_z1.to(index_type) * stride_y_z +
                     dst_y_n[None, :] * stride_y_n +
-                    dst_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
+                    (dst_y_m.to(index_type)[:, None] * n_reduce_shards + reduce_rank) * stride_y_m
                 )
                 for i in tl.static_range(n_reduce_shards):
                     if dst_shard_idx is not None:

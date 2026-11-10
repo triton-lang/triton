@@ -721,6 +721,9 @@ def matmul(a, b, bias,
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
     if opt_flags.is_persistent:
         extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
+    else:
+        extra_kernel_kwargs["UPCAST_INDICES"] = should_upcast_indices(
+            a, b, out_matmul, bias, c_acc_in, a_scale, b_scale, a_tensor_scale, b_tensor_scale, out_matmul_scale)
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
@@ -777,7 +780,6 @@ def matmul(a, b, bias,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(a, b, out_matmul),
                    X_TMA_MODE=a_tma_mode,
                    Y_TMA_MODE=c_tma_mode,
                    Y_MX_SCALE_LAYOUT=out_matmul_scale_layout,

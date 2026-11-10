@@ -507,18 +507,18 @@ def _matmul(
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
             if is_w_microscaled:
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
-                    WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
+                    WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * tl.cast(stride_w_mx_k, index_type)
                 else:
-                    WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_w_mx_k
+                    WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * tl.cast(stride_w_mx_k, index_type)
             if is_x_microscaled:
-                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
+                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * tl.cast(stride_x_mx_k, index_type)
         else:
             acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
         if is_x_fp4:
-            XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
+            XPtrs += ((BLOCK_K // 2) * SPLIT_K) * tl.cast(stride_x_k, index_type)
         else:
-            XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
-        WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
+            XPtrs += (BLOCK_K * SPLIT_K) * tl.cast(stride_x_k, index_type)
+        WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * tl.cast(stride_w_k, index_type)
     if has_x_epilogue_scale or has_w_tensor_scale:
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
@@ -667,8 +667,8 @@ def _matmul(
             OUT_BLOCK_N * pid_n, offs_y_n,
             *map_dst_coord.captured)
         offs_mn = (
-            dst_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m +
-            dst_y_n[None, :] * stride_y_n
+            (dst_y_m.to(index_type)[:, None] * n_reduce_shards + reduce_rank) * stride_y_m +
+            dst_y_n.to(index_type)[None, :] * stride_y_n
         )
         for i in tl.static_range(n_reduce_shards):
             if dst_shard_idx is not None:
