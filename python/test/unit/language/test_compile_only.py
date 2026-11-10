@@ -71,6 +71,107 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
+def test_umulhi_truncated_input(seed_type, dtype):
+    from triton._C.libtriton import ir
+    from triton.compiler.compiler import make_backend
+
+    @triton.jit
+    def kernel(seed, out, DTYPE: tl.constexpr):
+        x = seed.to(DTYPE)
+        tl.store(out, tl.umulhi(x, x))
+
+    target = GPUTarget("cuda", 100, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({"num_warps": 1, "ptx_version": 94})
+    bits = dtype.primitive_bitwidth
+    source = ASTSource(kernel, signature={"seed": seed_type, "out": f"*u{bits}", "DTYPE": "constexpr"},
+                       constexprs={"DTYPE": dtype})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
+                            context)
+    metadata = {"target": target, **vars(options)}
+    stages = {}
+    backend.add_stages(stages, options, source.language)
+    # Stop at PTX so this regression test needs neither a GPU nor ptxas.
+    for kind, stage in stages.items():
+        module = stage(module, metadata)
+        if kind == "llir":
+            assert f"@llvm.umulh.i{bits}" in str(module)
+        if kind == "ptx":
+            assert f"mul.hi.u{bits}" in module
+            assert "mul.lo." not in module
+            break
+    else:
+        pytest.fail("PTX stage not found")
+
+
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_fabs_preserves_nan_payload(instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    source = """
+target triple = "nvptx64-nvidia-cuda"
+declare <4 x float> @llvm.fabs.v4f32(<4 x float>)
+define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %output) {
+  %value = load <4 x float>, ptr addrspace(1) %input, align 16
+  %absolute = call <4 x float> @llvm.fabs.v4f32(<4 x float> %value)
+  store <4 x float> %absolute, ptr addrspace(1) %output, align 16
+  ret void
+}
+"""
+    ptx = backend.make_ptx(source, {}, options, 90)
+    if instrumentation_mode == "fpsan":
+        assert "abs.f32" not in ptx
+        masks = re.findall(r"\band\.b32\s+[^;]+,\s*(0x[0-9a-fA-F]+|\d+)\s*;", ptx)
+        assert len(masks) == 4
+        assert all(int(mask, 0) == 0x7FFFFFFF for mask in masks)
+    else:
+        assert len(re.findall(r"\babs\.f32\b", ptx)) == 4
+        assert "and.b32" not in ptx
+
+
+@pytest.mark.parametrize("dtype, suffix", [("half", "f16"), ("bfloat", "bf16")])
+@pytest.mark.parametrize("lanes", [1, 4])
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_copysign_preserves_nan_payload(dtype, suffix, lanes, instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 100, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    ty = dtype if lanes == 1 else f"<{lanes} x {dtype}>"
+    intrinsic = suffix if lanes == 1 else f"v{lanes}{suffix}"
+    source = f'''
+target triple = "nvptx64-nvidia-cuda"
+declare {ty} @llvm.copysign.{intrinsic}({ty}, {ty})
+define ptx_kernel void @copysign_kernel(ptr addrspace(1) %input,
+                                      ptr addrspace(1) %signs,
+                                      ptr addrspace(1) %output) {{
+  %value = load {ty}, ptr addrspace(1) %input, align 8
+  %sign = load {ty}, ptr addrspace(1) %signs, align 8
+  %signed = call {ty} @llvm.copysign.{intrinsic}({ty} %value, {ty} %sign)
+  store {ty} %signed, ptr addrspace(1) %output, align 8
+  ret void
+}}
+'''
+    ptx = backend.make_ptx(source, {}, options, 100)
+    if instrumentation_mode == "fpsan":
+        assert not re.search(r"\b(?:abs|neg)\.(?:f16|bf16)(?:x2)?\b", ptx)
+        assert ptx.count("xor.b16 diff,") == lanes
+        assert ptx.count("and.b16 diff, diff, 0x8000;") == lanes
+        assert len(re.findall(r"xor\.b16 [^,]+, [^,]+, diff;", ptx)) == lanes
+    else:
+        assert "xor.b16 diff," not in ptx
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"
@@ -119,11 +220,14 @@ module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tar
     ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
     pattern = re.compile(
         rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
-        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+        r"(?P<output>%\w+),\s*(?P<inputs>[^;]+);", re.MULTILINE)
     emitted_operations = list(pattern.finditer(ptx))
     assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
     for previous, current in zip(emitted_operations, emitted_operations[1:]):
-        assert current.group("input") == previous.group("output")
+        inputs = re.findall(r"%\w+", current.group("inputs"))
+        # Subtraction keeps its operand order; FMA only commutes multiplicands.
+        input_count = 1 if current.group("operation") == "sub" else 2
+        assert previous.group("output") in inputs[:input_count]
     assert "prmt.b32" not in ptx
 
 
@@ -172,14 +276,54 @@ def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch, fresh_t
 
     src = ASTSource(fn=kernel, signature={"out": "*i32"})
     compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
-                              options={"maxnreg": 42, "instrumentation_mode": instrumentation_mode})
+                              options={"maxnreg": 42, "max_occupancy": 4, "instrumentation_mode": instrumentation_mode})
     assert compiled.module is None
+    assert compiled.metadata.max_occupancy == (1 if "gsan" in instrumentation_mode else 4)
     if instrumentation_mode:
         assert compiled.metadata.maxnreg is None
         assert ".maxnreg" not in compiled.asm["ptx"]
     else:
         assert compiled.metadata.maxnreg == 42
         assert ".maxnreg 42" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("max_occupancy", [None, 1, 4])
+def test_max_occupancy_compile_only(max_occupancy, monkeypatch, fresh_triton_cache):
+
+    class UnavailableDriver:
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Compilation accessed the driver: {name}")
+
+    monkeypatch.setattr(driver, "_active", UnavailableDriver())
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32), options={"max_occupancy": max_occupancy})
+    assert compiled.module is None
+    assert compiled.metadata.max_occupancy == max_occupancy
+    assert compiled.metadata.shared == 0
+
+
+@pytest.mark.parametrize("max_occupancy", [0, -1, 1.5, True, "2"])
+def test_max_occupancy_invalid(max_occupancy):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(ValueError, match="max_occupancy must be a positive integer or None"):
+        backend.parse_options({"max_occupancy": max_occupancy})
+
+
+@pytest.mark.parametrize("num_ctas", [0, -2, 3])
+def test_num_ctas_invalid(num_ctas):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(AssertionError, match="num_ctas must be a power of 2"):
+        backend.parse_options({"num_ctas": num_ctas})
 
 
 def test_compile_only_expect_zero() -> None:

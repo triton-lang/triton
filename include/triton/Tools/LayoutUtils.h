@@ -16,6 +16,12 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       ArrayRef<StringAttr> localDims);
 
+// Map registers to shared addresses for a store. Extra high register bits
+// repeat the source values across the remaining CTA replicas.
+[[nodiscard]] LinearLayout
+invertAndComposeStore(const LinearLayout &sharedLayout,
+                      const LinearLayout &regLayout);
+
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).
@@ -106,6 +112,10 @@ uint32_t getOutputBasisMask(const LinearLayout &layout,
 // selected output dimension.
 uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
                            ArrayRef<StringAttr> outDims);
+
+// Return the 32-bit mask of IDs formed by subsets of varyingIdBits.
+// For example, varying bits 0 and 2 select IDs 0, 1, 4, and 5.
+uint32_t getGroupZeroMask(unsigned varyingIdBits);
 
 struct IdentityFactor {
   int32_t size;

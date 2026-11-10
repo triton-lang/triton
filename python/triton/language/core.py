@@ -401,7 +401,9 @@ def check_bit_width(value, shift_value):
 class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = [
+        'fp4e2m1x2', 'fp8e8m0fnu', 'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64'
+    ]
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -427,7 +429,13 @@ class dtype(base_type):
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
             self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4b15':
+            if name == 'fp4e2m1x2':
+                self.fp_mantissa_width = 1
+                self.exponent_bias = 1
+            elif name == 'fp8e8m0fnu':
+                self.fp_mantissa_width = 0
+                self.exponent_bias = 127
+            elif name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
@@ -593,6 +601,10 @@ class dtype(base_type):
         out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name == 'fp4e2m1x2':
+            return builder.get_fp4e2m1x2_ty()
+        if self.name == 'fp8e8m0fnu':
+            return builder.get_fp8e8m0fnu_ty()
         if self.name.startswith("fp8"):
             if hasattr(builder, "options") and self.name not in builder.options.supported_fp8_dtypes:
                 raise ValueError(f'type {self} not supported in this architecture. '
@@ -832,6 +844,8 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
+float4e2m1x2 = dtype('fp4e2m1x2')
+float8e8m0fnu = dtype('fp8e8m0fnu')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -1278,6 +1292,12 @@ class tensor(base_value):
     def ravel(self) -> tensor:
         ...
 
+    def all(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def any(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
     def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
@@ -1402,16 +1422,23 @@ class slice:
 
 class tensor_descriptor_base_type(base_type):
 
-    def __init__(self, block_type: block_type):
+    def __init__(self, block_type: block_type, fp6_format=None):
         self.block_type = block_type
+        self.fp6_format = fp6_format
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor_base, int]:
-        value = tensor_descriptor_base(handles[cursor], self.block_type)
+        value = tensor_descriptor_base(handles[cursor], self.block_type, self.fp6_format)
         return value, cursor + 1
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        is_signed = self.block_type.element_ty.is_int_signed()
-        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder), is_signed))
+        out.append(self._to_ir(builder))
+
+    def _to_ir(self, builder):
+        if self.fp6_format and (builder.options.backend_name != "cuda"
+                                or builder.options.arch not in ("sm100", "sm103")):
+            raise ValueError("FP6 TMA stores require SM100 or SM103")
+        return builder.create_tensor_descriptor_type(self.block_type.to_ir(builder),
+                                                     self.block_type.element_ty.is_int_signed(), self.fp6_format)
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1420,13 +1447,13 @@ class tensor_descriptor_base_type(base_type):
     def __eq__(self, other) -> bool:
         if type(other) is not type(self):
             return False
-        return self.block_type == other.block_type
+        return self.block_type == other.block_type and self.fp6_format == other.fp6_format
 
     def __neq__(self, other) -> bool:
         return not (self == other)
 
     def mangle(self) -> str:
-        return f"TD{self.block_type.mangle()}"
+        return f"TD{self.fp6_format or ''}{self.block_type.mangle()}"
 
 
 class tensor_descriptor_base(base_value):
@@ -1434,12 +1461,12 @@ class tensor_descriptor_base(base_value):
     A tensor descriptor with unknown shape and strides
     """
 
-    def __init__(self, handle, block_type: block_type):
+    def __init__(self, handle, block_type: block_type, fp6_format=None):
         """Not called by user code."""
         super().__init__()
 
         self.handle = handle  # IR handle
-        self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
+        self.type = tensor_descriptor_base_type(block_type, fp6_format)  # Tensor type (block_type)
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
         self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
@@ -1525,8 +1552,8 @@ class tensor_descriptor_base(base_value):
 
 class tensor_descriptor_type(tensor_descriptor_base_type):
 
-    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type):
-        self.block_type = block_type
+    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type, fp6_format=None):
+        super().__init__(block_type, fp6_format)
         self.shape_type = shape_type
         self.strides_type = strides_type
 
@@ -1537,7 +1564,7 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
         shape = shape.values
         strides = strides.values
-        value = tensor_descriptor(handle, shape, strides, self.block_type)
+        value = tensor_descriptor(handle, shape, strides, self.block_type, self.fp6_format)
         return value, cursor
 
     def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
@@ -1554,10 +1581,10 @@ class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type):
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type, fp6_format=None):
         """Not called by user code."""
         # IR handle
-        super().__init__(handle, block_type)
+        super().__init__(handle, block_type, fp6_format)
         # Global shape
         self.shape = tuple(shape)
         self.strides = tuple(strides)
@@ -1565,6 +1592,7 @@ class tensor_descriptor(tensor_descriptor_base):
             block_type,
             shape_type=self.shape.type,
             strides_type=self.strides.type,
+            fp6_format=fp6_format,
         )
 
     def _set_name(self, builder: ir.builder, name: str) -> None:
@@ -2110,7 +2138,7 @@ def split(a, _semantic=None, _generator=None) -> tuple[tensor, tensor]:
 def view(input, *shape, _semantic=None):
     """
     Returns a tensor with the same elements as `input` but a different shape.
-    The order of the elements may not be preserved.
+    The order of the elements is preserved.
 
     :param input: The input tensor.
     :type input: Block
@@ -2122,9 +2150,9 @@ def view(input, *shape, _semantic=None):
         view(x, (32, 32))
         view(x, 32, 32)
     """
-    warn("view is deprecated, please use reshape with can_reorder being true.")
+    warn("view is deprecated, please use reshape.")
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    return _semantic.reshape(input, shape, can_reorder=True)
+    return _semantic.reshape(input, shape)
 
 
 @_tensor_member_fn
@@ -2146,6 +2174,7 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
     :param input: The input tensor.
     :type input: Block
     :param shape: The new shape.
+    :param can_reorder: Ignored. Retained for backward compatibility.
 
     :code:`shape` can be passed as a tuple or as individual parameters: ::
 
@@ -2154,10 +2183,9 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
-    can_reorder = _unwrap_if_constexpr(can_reorder)
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
-    return _semantic.reshape(input, shape, can_reorder)
+    return _semantic.reshape(input, shape)
 
 
 def _wrap_axis(axis, ndim):
@@ -2291,15 +2319,15 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
         batch_size = 1
         for i in builtins.range(rank - 2):
             batch_size *= c_shape[i]
-        input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
-        other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
+        input = _semantic.reshape(input, [batch_size] + a_shape[-2:])
+        other = _semantic.reshape(other, [batch_size] + b_shape[-2:])
         if acc is not None:
-            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
+            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:])
 
     res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
 
     if rank >= 4:
-        res = _semantic.reshape(res, c_shape, can_reorder=False)
+        res = _semantic.reshape(res, c_shape)
 
     assert list(res.shape) == c_shape, "output shape is unexpected"
     return res
@@ -2530,6 +2558,7 @@ def make_tensor_descriptor(
     strides: List[tensor],
     block_shape: List[constexpr],
     padding_option="zero",
+    fp6_format=None,
     _semantic=None,
 ) -> tensor_descriptor:
     """Make a tensor descriptor object
@@ -2539,6 +2568,8 @@ def make_tensor_descriptor(
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
+    :param fp6_format: For packed FP6 TMA stores, use "e2m3" or "e3m2" with a uint8 base.
+        Shape and offsets count logical values. Outer strides count bytes. Each source uint8 holds one FP6 code.
 
     Notes
     *****
@@ -2581,7 +2612,8 @@ def make_tensor_descriptor(
     """
 
     padding_option = _unwrap_if_constexpr(padding_option)
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)
+    fp6_format = _unwrap_if_constexpr(fp6_format)
+    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option, fp6_format)
 
 
 # -----------------------
@@ -3021,7 +3053,9 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int | None
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
@@ -3063,24 +3097,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     return ret
 
 
-@builtin
-def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
-    axis = _unwrap_if_constexpr(axis)
-    n = input.shape[axis]
-    index = arange(0, n, _semantic=_semantic)
-
-    if len(input.shape) > 1:
-        # Broadcast index across the non-reduced axes
-        axes_to_expand = [constexpr(d) for d in builtins.range(len(input.shape))]
-        del axes_to_expand[axis]
-        index = expand_dims(index, axes_to_expand, _semantic=_semantic)
-        index = broadcast_to(index, input.shape, _semantic=_semantic)
-
-    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic,
-                              _generator=_generator)
-    return rvalue, rindices
-
-
 # -----------------------
 # Scans
 # -----------------------
@@ -3119,7 +3135,9 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :type input: Tensor
     :param axis: the dimension along which the reduction should be done
     :type axis: int
-    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+    :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
+        The function and its callees must be pure, except for :code:`assume`,
+        :code:`device_assert`, and :code:`device_print`.
     :type combine_fn: Callable
     :param reverse: whether to apply the associative scan in the reverse direction along axis
     :type reverse: bool
@@ -3222,6 +3240,8 @@ def map_elementwise(
                 return tl.map_elementwise(selu_scalar, x, alpha)
 
         :param scalar_fn: the function to map over.
+            The function and its callees must be pure, except for :code:`assume`,
+            :code:`device_assert`, and :code:`device_print`.
         :param pack: the number of elements to be processed by one function call.
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
@@ -3764,7 +3784,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
         raise ValueError(f"length of input args does not match."
-                         f"Expect {len(args)}, got {num_args}")
+                         f"Expect {num_args}, got {len(args)}")
 
     arg_types = []
     arg_list = []

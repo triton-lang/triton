@@ -50,9 +50,9 @@ entry point: one without warp specialization, and at most 16.
 
 - Base threads occupy `[0, N)`. The default region is thread 0;
   warp-specialize partition regions use `partition_index + 1`.
-- TMA, Tensor Core (`tcgen05`), and CLC peer classes are enabled only if used
-  by the entry point. Each gets `N` consecutive ids, appended after the base
-  threads in that order; absent classes reserve no ids.
+- TMA, Tensor Core (`tcgen05`), CLC, and AsyncCopyMbarrierArrive peer classes
+  are enabled only if used by the entry point. Each gets `N` consecutive ids,
+  appended after the base threads in that order; absent classes reserve no ids.
 - There are at most 64 logical threads per CTA. Base-thread and all-thread
   tensor axes are padded to powers of two.
 
@@ -402,8 +402,19 @@ AMD hooks additionally cover:
 - Async TDM global-to-local and local-to-global copies. With a barrier, these
   are modeled through barrier arrivals; without a barrier, they use `TmaStore`
   commit counts and implicit commits.
-- AMD async wait variants for `AsyncCp`, and TDM wait variants for `TmaStore`
-  commit counts.
+- `amdg.async_copy_local_to_global` reads shared memory; ConSan tracks these
+  reads using `AsyncCpRead` commit counts, which `ttg.async_commit_group`
+  commits together with `AsyncCp`.
+- AMD async waits clear `AsyncCp` and `AsyncCpRead` entries beyond the same
+  pending-count threshold, transferring write visibility for loads and read
+  visibility for stores.
+- `amdg.async_copy_mbarrier_arrive` arrives once per thread of the issuing
+  warp after that warp's earlier async loads have completed; it does not track
+  async stores. ConSan uses the AsyncCopyMbarrierArrive peer class to track
+  pending updates to the barrier. An `amdg.wait_barrier` on that barrier
+  completes those updates and publishes the covered loads; `amdg.async_wait`
+  does not complete the barrier updates.
+- TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
 ## Implementation Notes

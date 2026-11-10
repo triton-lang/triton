@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile, print_tree
 from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 from subprocess_utils import clean_rocprofiler_env
@@ -159,6 +159,15 @@ def test_util():
     derivation_metrics_test(metrics=["util"], expected_data={
         "util": [np.nan, 0.247044, 0.147830, 0.118451],
     }, sample_file=cuda_example_file)
+
+
+def test_print_sorted_exclusive_metric(capsys):
+    # util is NaN on ROOT, so ROOT sorts last and foo0 sorts first
+    gf, metrics = parse(["util"], cuda_example_file)
+    print_tree(gf, metrics, print_sorted=True)
+    sorted_out = capsys.readouterr().out.split("Sorted kernels by metric util")[1]
+    names = [line.split()[0] for line in sorted_out.strip().splitlines()]
+    assert names == ["foo0", "foo1", "foo2"]
 
 
 def test_time_derivation():

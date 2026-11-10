@@ -32,10 +32,31 @@ tt.func @load_false_mask_with_other(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
 // CHECK-LABEL: @load_true_mask
 // CHECK-NEXT: %[[VALUE:.*]] = tt.load %arg0 : !tt.ptr<i32>
 // CHECK-NEXT: tt.return %[[VALUE]] : i32
-tt.func @load_true_mask(%ptr: !tt.ptr<i32>) -> i32 {
+tt.func @load_true_mask(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
   %true = arith.constant true
-  %value = tt.load %ptr, %true : !tt.ptr<i32>
+  %value = tt.load %ptr, %true, %other : !tt.ptr<i32>
   tt.return %value : i32
+}
+
+// -----
+
+// CHECK-LABEL: @fold_true_masks
+// CHECK-NEXT: %[[VAL:.*]] = tt.atomic_load acquire, gpu, %arg0 : (tensor<4x!tt.ptr<i32>>) -> tensor<4xi32>
+// CHECK-NEXT: %[[OLD:.*]] = tt.atomic_rmw add, relaxed, gpu, %arg0, %[[VAL]] : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>) -> tensor<4xi32>
+// CHECK-NEXT: %[[MASKED:.*]] = tt.atomic_rmw add, relaxed, gpu, %arg0, %[[OLD]], %arg1 : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+// CHECK-NEXT: %[[BINS:.*]] = tt.histogram %[[MASKED]] : tensor<4xi32> -> tensor<4xi32>
+// CHECK-NEXT: tt.atomic_store release, gpu, %arg0, %[[BINS]] : tensor<4x!tt.ptr<i32>>
+// CHECK-NEXT: tt.store %arg0, %[[MASKED]] : tensor<4x!tt.ptr<i32>>
+// CHECK-NEXT: tt.return
+tt.func @fold_true_masks(%ptrs: tensor<4x!tt.ptr<i32>>, %mask: tensor<4xi1>) {
+  %all = arith.constant dense<true> : tensor<4xi1>
+  %val = tt.atomic_load acquire, gpu, %ptrs, %all : (tensor<4x!tt.ptr<i32>>, tensor<4xi1>) -> tensor<4xi32>
+  %old = tt.atomic_rmw add, relaxed, gpu, %ptrs, %val, %all : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+  %masked = tt.atomic_rmw add, relaxed, gpu, %ptrs, %old, %mask : (tensor<4x!tt.ptr<i32>>, tensor<4xi32>, tensor<4xi1>) -> tensor<4xi32>
+  %bins = tt.histogram %masked, %all : tensor<4xi32> -> tensor<4xi32>
+  tt.atomic_store release, gpu, %ptrs, %bins, %all : tensor<4x!tt.ptr<i32>>
+  tt.store %ptrs, %masked, %all : tensor<4x!tt.ptr<i32>>
+  tt.return
 }
 
 // -----
@@ -75,6 +96,25 @@ tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
 
   // CHECK-DAG: tt.return %[[c]], %[[d]] : tensor<128x1xi32>, tensor<1xi32>
   tt.return %c, %d : tensor<128x1xi32>, tensor<1xi32>
+}
+
+// -----
+
+// CHECK-LABEL: @range_comparisons
+tt.func @range_comparisons() -> (tensor<8xi1>, tensor<8xi1>, tensor<8xi1>, tensor<8xi1>) {
+  // CHECK-DAG: %[[T:.*]] = arith.constant dense<true> : tensor<8xi1>
+  // CHECK-DAG: %[[F:.*]] = arith.constant dense<false> : tensor<8xi1>
+  // CHECK: %[[TAIL:.*]] = arith.cmpi slt
+  // CHECK: %[[UNSIGNED:.*]] = arith.cmpi ult
+  // CHECK: tt.return %[[T]], %[[F]], %[[TAIL]], %[[UNSIGNED]]
+  %r = tt.make_range {start = -4 : i32, end = 4 : i32} : tensor<8xi32>
+  %end = arith.constant dense<4> : tensor<8xi32>
+  %mid = arith.constant dense<0> : tensor<8xi32>
+  %full = arith.cmpi slt, %r, %end : tensor<8xi32>
+  %empty = arith.cmpi sge, %r, %end : tensor<8xi32>
+  %tail = arith.cmpi slt, %r, %mid : tensor<8xi32>
+  %unsigned = arith.cmpi ult, %r, %end : tensor<8xi32>
+  tt.return %full, %empty, %tail, %unsigned : tensor<8xi1>, tensor<8xi1>, tensor<8xi1>, tensor<8xi1>
 }
 
 // -----

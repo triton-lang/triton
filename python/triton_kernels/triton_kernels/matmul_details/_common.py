@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+from triton_kernels.target_info import cuda_capability_geq
 from triton_kernels.tensor_details.layout_details.blackwell_scale import (
     SWIZZLE_SIZE_OUTER,
     swizzle_act_mx_scale_bw_store_ptr,
@@ -9,6 +10,13 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 # -----------------------------------------------------------------------------
 #                                  Utilities
 # -----------------------------------------------------------------------------
+
+
+@triton.jit
+def round_f32_to_tf32(x):
+    # Use round-to-nearest-even on Hopper+ to match TMA.
+    rounding: tl.constexpr = "rn" if cuda_capability_geq(9, 0) else "rna"
+    return tl.extra.cuda.round_f32_to_tf32(x, rounding)
 
 
 @triton.constexpr_function

@@ -142,6 +142,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
 
   // create a struct to hold device properties
   int max_shared_mem;
+  int max_shared_mem_per_multiprocessor;
+  int reserved_shared_mem_per_block;
   int max_num_regs;
   int multiprocessor_count;
   int warp_size;
@@ -169,6 +171,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   }
 
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &max_shared_mem_per_multiprocessor,
+      CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &reserved_shared_mem_per_block,
+      CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &max_num_regs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
@@ -181,12 +189,14 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
-                       max_shared_mem, "max_num_regs", max_num_regs,
-                       "multiprocessor_count", multiprocessor_count, "warpSize",
-                       warp_size, "sm_clock_rate", sm_clock_rate,
-                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width);
+  return Py_BuildValue(
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+      max_shared_mem, "max_shared_mem_per_multiprocessor",
+      max_shared_mem_per_multiprocessor, "reserved_shared_mem_per_block",
+      reserved_shared_mem_per_block, "max_num_regs", max_num_regs,
+      "multiprocessor_count", multiprocessor_count, "warpSize", warp_size,
+      "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
+      "mem_bus_width", mem_bus_width);
 
 cleanup:
   return NULL;
@@ -321,14 +331,21 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       device));
   assert(shared_optin <= 228 * 1024 && "sanity check");
   if (shared > 49152 && shared_optin > 49152) {
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
     // XXX: remove attribute enum defs once latest cuda.h is in use
     // try to use oversized shared memory via new API
     // L1$ size is set to 8KB, CGA scheduling must be in SPREAD mode.
-    if (CUDA_SUCCESS !=
-        cuFuncSetAttribute(
-            fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
-            CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY)) {
-      // use legacy api if cuda doesn't support oversized shared memory
+    // Use the same CC 10.7 guard as the oversized device-attribute query.
+    if (major == 10 && minor == 7) {
+      CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+          fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
+          CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY));
+    } else {
+      // Use legacy opt-in on other devices.
       CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
           cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
       int shared_total, shared_static;
@@ -587,7 +604,13 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
     goto cleanup;
-  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  Py_ssize_t blockRank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  if (blockRank < 1 || blockRank > 5) {
+    PyErr_SetString(PyExc_ValueError,
+                    "tensor map rank must be between 1 and 5");
+    goto cleanup;
+  }
+  int rank = (int)blockRank;
 
   for (int i = 0; i < rank; ++i) {
     PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
@@ -639,6 +662,51 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   shapeFast = NULL;
   Py_DECREF(stridesFast);
   stridesFast = NULL;
+
+  // cuTensorMapEncodeTiled requires 128 FP6 values. SM103 also accepts 64
+  // for a b6p2x16 store. Encode the unswizzled narrow map here.
+  if (elemType == CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B &&
+      blockSizeInt[0] == 64) {
+    CUdevice device;
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    if (major != 10 || minor != 3) {
+      PyErr_SetString(PyExc_ValueError,
+                      "64-value FP6 TMA stores require SM103");
+      goto cleanup;
+    }
+    uint32_t words[32] = {
+        [0] = (uint32_t)global_address,
+        [1] = global_address >> 32,
+        [2] = 0x680 | ((uint32_t)(rank - 1) << 4), // Tiled FP6, no swizzle.
+        [8] = shapeInt[0] - 1,
+        [13] = 63U << 24, // Innermost box size minus one.
+    };
+    bool valid = rank >= 2 && !swizzle && !padding && elemSize == 1 &&
+                 global_address && global_address % 16 == 0 && shapeInt[0] &&
+                 shapeInt[0] <= (1ULL << 32) && shapeInt[0] % 64 == 0;
+    for (int i = 0; i < rank - 1; ++i) {
+      uint64_t dim = shapeInt[i + 1], stride = stridesLL[i];
+      uint32_t box = blockSizeInt[i + 1];
+      valid &= dim && dim <= (1ULL << 32) && stride && stride % 16 == 0 &&
+               stride / 16 <= UINT32_MAX && box && box <= 256;
+      words[3 + i] = stride >> 4;
+      words[9 + i] = dim - 1;
+      words[14] |= (box - 1) << (8 * i);
+    }
+    if (!valid) {
+      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
+      goto cleanup;
+    }
+    _Static_assert(sizeof(words) == sizeof(CUtensorMap),
+                   "unexpected tensor map size");
+    memcpy(&desc->tensorMap, words, sizeof(words));
+    return (PyObject *)desc;
+  }
 
   CUtensorMapFloatOOBfill fill =
       (padding == 1) ? CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA

@@ -1,5 +1,5 @@
-#ifndef TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
-#define TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -37,9 +37,9 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
       const DenseMap<Value, SetVector<Operation *>> &assumptions,
-      DominanceInfo *dominanceInfo, bool assumeNoArithOverflow_ = false)
+      DominanceInfo *dominanceInfo)
       : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
-        domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
+        domInfo(dominanceInfo) {}
 
   /// Set the maximum PID value for a given axis. When set, GetProgramIdOp
   /// for that axis will use [0, maxPID] instead of the default range.
@@ -48,8 +48,6 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
   void initializeFuncOp(triton::FuncOp funcOp);
-
-  LogicalResult initialize(Operation *top) override;
 
   LogicalResult visitOperation(
       Operation *op,
@@ -163,10 +161,8 @@ private:
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
 
-  DenseSet<Value> signedIntValues;
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo *domInfo = nullptr;
-  bool assumeNoArithOverflow = false;
 
   /// Optional per-axis PID bounds. When set via setPidBound(), these override
   /// the default kDefaultMaxPrograms for GetProgramIdOp on the given axis.
@@ -189,4 +185,4 @@ void initializeFuncOps(Operation *op,
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_

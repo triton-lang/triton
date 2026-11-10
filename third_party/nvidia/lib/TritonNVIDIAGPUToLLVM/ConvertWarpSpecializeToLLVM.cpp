@@ -30,13 +30,10 @@ static constexpr const char kDisableSetMaxRegisterAttr[] =
 // Utilities
 //===----------------------------------------------------------------------===//
 
-// Reserve one barrier for the default warp group, one for the start barrier,
-// and one for the end barrier.
+// Reserve distinct barrier IDs for the default warp group and the whole CTA.
 enum BarrierIndex {
   kDefaultWarpGroupBarrierIdx,
-  kSwitchLoopBarrierIdx,
-
-  kNumReservedBarriers,
+  kNumReservedBarriers = LLVM::NVIDIA::kWarpSpecializeCTABarrierId + 1,
   kNumBarriers = 16
 };
 
@@ -81,7 +78,10 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads));
+      // Only this warp partition participates, so the barrier is not
+      // CTA-aligned.
+      NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads),
+                              /*aligned=*/false);
     }
   }
 
@@ -117,8 +117,10 @@ static void rewriteWarpSpecializeWarpIdsOnce(ModuleOp mod) {
 // lowerWarpSpecialize
 //===----------------------------------------------------------------------===//
 
-static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs,
-                             int adjRegs) {
+static void createRegRealloc(TritonLLVMIRRewriter &b, int curRegs, int adjRegs,
+                             bool acquire = true) {
+  if (!acquire)
+    std::swap(curRegs, adjRegs);
   curRegs = std::min(256, curRegs);
   adjRegs = std::min(256, adjRegs);
   auto action = adjRegs < curRegs ? NVVM::SetMaxRegisterAction::decrease
@@ -179,84 +181,67 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // Attempt to elide captures of trivial computations by hoisting them into the
   // header or rematerializing them into each partition.
   elideTrivialCaptures(func, wsOps);
+  bool direct = canDirectDispatch(wsOps);
 
-  MLIRContext *ctx = func.getContext();
-  TritonLLVMIRRewriter b(func.getLoc(), ctx);
-  Builder rewriter(ctx);
-
-  // Generate the function header.
-  Block *entry = &func.getBody().front();
-  SmallVector<Location> argLocs = llvm::to_vector(llvm::map_range(
-      func.getArguments(), [](BlockArgument arg) { return arg.getLoc(); }));
-  Block *header = b.createBlock(entry, func.getArgumentTypes(), argLocs);
-  Block *switchLoop = b.createBlock(entry);
+  TritonLLVMIRRewriter b(func.getLoc(), func.getContext());
+  // Keep the kernel arguments in the header so they dominate every warp group.
+  Block *header = &func.getBody().front();
+  Block *entry = b.splitBlock(header, header->begin());
+  Block *workers = b.createBlock(entry);
   b.setInsertionPointToStart(header);
 
   // This is the absolute thread ID.
-  Value tid = NVVM::ThreadIdXOp::create(b, b.getLoc(), i32_ty);
+  Value tid = NVVM::ThreadIdXOp::create(b, b.getLoc(), b.getI32Type());
   Value wid = b.udiv(tid, b.i32_val(threadsPerWarp));
   // Tell PTXAS this value is warp-uniform.
   wid = targetInfo.shuffleIdx(b, b.getLoc(), wid, 0);
   Value isDefault = b.icmp_ult(wid, b.i32_val(defaultNumWarps));
-  LLVM::CondBrOp::create(b, b.getLoc(), isDefault, entry, switchLoop);
+  LLVM::CondBrOp::create(b, b.getLoc(), isDefault, entry, workers);
 
-  // Forward arguments from the header into the old entry block.
-  for (auto [arg, oldArg] :
-       llvm::zip(header->getArguments(), entry->getArguments()))
-    oldArg.replaceAllUsesWith(arg);
-  entry->eraseArguments([](auto) { return true; });
-  b.setInsertionPointToStart(entry);
-  if (emitDynamicRegRealloc && maxnreg)
+  Block *switchLoop = workers;
+  if (emitDynamicRegRealloc && maxnreg) {
+    b.setInsertionPointToStart(entry);
     createRegRealloc(b, maxnreg.getInt(), defRegs);
+    b.setInsertionPointToStart(workers);
+    createRegRealloc(b, maxnreg.getInt(), lowRegs);
+    if (!direct) {
+      switchLoop = b.createBlock(entry);
+      b.setInsertionPointToEnd(workers);
+      LLVM::BrOp::create(b, b.getLoc(), switchLoop);
+    }
+  }
 
   WarpSpecializeCallbacks callbacks;
-  callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
-    assert(barIdx < kNumBarriers && "not enough barriers");
-    LLVM::createLLVMIntrinsicCallOp(
-        b, b.getLoc(), "llvm.nvvm.barrier.cta.sync.all", {}, b.i32_val(barIdx));
-  };
-
-  callbacks.reallocRegisters = [&](TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
-                                   RegisterReallocPhase phase,
-                                   unsigned regionNumber) {
-    if (!emitDynamicRegRealloc)
-      return;
-
-    if (phase == RegisterReallocPhase::SwitchLoopStart) {
-      if (maxnreg)
-        createRegRealloc(b, maxnreg.getInt(), lowRegs);
-      return;
-    }
-
-    if (auto actRegs = ws.getActualRegisters()) {
-      switch (phase) {
-      case RegisterReallocPhase::WorkerPartitionStart:
-        createRegRealloc(b, lowRegs, (*actRegs)[regionNumber + 1]);
-        break;
-      case RegisterReallocPhase::WorkerPartitionEnd:
-        createRegRealloc(b, (*actRegs)[regionNumber + 1], lowRegs);
-        break;
-      case RegisterReallocPhase::DefaultPartitionStart:
-        createRegRealloc(b, defRegs, actRegs->front());
-        break;
-      case RegisterReallocPhase::DefaultPartitionEnd:
-        createRegRealloc(b, actRegs->front(), defRegs);
-        break;
-      default:
-        break;
+  callbacks.warpsPerCommand = 4;
+  if (emitDynamicRegRealloc) {
+    callbacks.getWorkerRegisterCap = [lowRegs](WarpSpecializeOp ws,
+                                               unsigned p) {
+      if (auto regs = ws.getActualRegisters()) {
+        int32_t cap = std::min(256, (*regs)[p + 1]);
+        return cap == lowRegs ? -1 : cap;
       }
-    }
+      return -1;
+    };
+    callbacks.reallocWorkerRegisters = [lowRegs](TritonLLVMIRRewriter &b,
+                                                 int32_t cap, bool acquire) {
+      createRegRealloc(b, lowRegs, cap, acquire);
+    };
+    callbacks.reallocDefaultRegisters =
+        [defRegs](TritonLLVMIRRewriter &b, WarpSpecializeOp ws, bool acquire) {
+          if (auto regs = ws.getActualRegisters())
+            createRegRealloc(b, defRegs, regs->front(), acquire);
+        };
+  }
+  callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b) {
+    constexpr unsigned barIdx = LLVM::NVIDIA::kWarpSpecializeCTABarrierId;
+    static_assert(barIdx < kNumBarriers);
+    NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx), Value{},
+                            /*aligned=*/false);
   };
 
-  // ^switchLoop:
-  //   barrier.sync 1
-  //   %state_ptr = getelementptr (ptr @shared), <offset>
-  //   %rel_tid = sub %tid, <default_warp_group_size>
-  //   %rel_wid = udiv %rel_tid, 32
-
-  return lowerWarpSpecializeCommon(
-      func, wsOps, entry, header, switchLoop, wid, ctx, defaultNumWarps,
-      totalNumWarpsAttr.getInt(), targetInfo, callbacks, kSwitchLoopBarrierIdx);
+  return lowerWarpSpecializeCommon(func, wsOps, direct, switchLoop, wid,
+                                   defaultNumWarps, totalNumWarpsAttr.getInt(),
+                                   targetInfo, callbacks);
 }
 
 //===----------------------------------------------------------------------===//

@@ -161,28 +161,35 @@ emitPtxAtomicRMWImpl(ConversionPatternRewriter &rewriter, Location loc,
   return ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 }
 
-inline FailureOr<Value>
-emitPtxAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
-                 Type valueElemTy, Value ptr, ArrayRef<Value> vals,
-                 RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope,
-                 Value pred, unsigned vec = 1, unsigned packed = 1) {
-  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr,
-                              sem, stringifyMemSyncScope(scope).str(), pred,
-                              vec, packed, PtxAtomicAddrSpace::Global,
-                              PtxAtomicInstr::Atom);
+inline bool usePtxForHalfAdd(RMWOp op, Type type,
+                             const TargetInfoBase &targetInfo) {
+  // NVPTX can widen a 16-bit add of NaN to a 32-bit CAS.
+  return op == RMWOp::FADD &&
+         (type.isF16() ||
+          (type.isBF16() && targetInfo.supportNativeBF16AtomicAdd()));
 }
 
 inline FailureOr<Value>
-emitPtxSharedAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
-                       Type valueElemTy, Value ptr, ArrayRef<Value> vals,
-                       RMWOp rmwOpAttr, Value pred, bool isCluster,
-                       PtxAtomicInstr instr) {
-  auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
-                             : PtxAtomicAddrSpace::Shared;
-  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr,
-                              MemSemantic::RELAXED,
-                              isCluster ? "cluster" : "cta", pred, /*vec=*/1,
-                              /*packed=*/1, addrSpace, instr);
+emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
+              Type valueElemTy, Value ptr, ArrayRef<Value> vals,
+              RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
+              const TargetInfoBase &targetInfo, unsigned vec = 1,
+              unsigned packed = 1, bool returnOld = true) {
+  if (pred || vec != 1 || packed != 1 ||
+      usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
+    return emitPtxAtomicRMWImpl(
+        rewriter, loc, valueElemTy, ptr, vals, rmwOpAttr, sem,
+        stringifyMemSyncScope(scope).str(), pred, vec, packed,
+        PtxAtomicAddrSpace::Global,
+        returnOld ? PtxAtomicInstr::Atom : PtxAtomicInstr::Red);
+  auto binOp = matchAtomicOp(rmwOpAttr);
+  auto ordering = getMemoryOrdering(sem);
+  if (!binOp || !ordering)
+    return failure();
+  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
+                                   *ordering,
+                                   targetInfo.getAtomicSyncScope(scope))
+      .getResult();
 }
 
 inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
@@ -203,6 +210,34 @@ inline Value emitPtxAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
   atom.global().o(semStr).o(stringifyMemSyncScope(scope).str()).o("cas").o(sTy);
   atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(pred);
   return ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
+}
+
+inline Value emitAtomicCAS(ConversionPatternRewriter &rewriter, Location loc,
+                           Type valueElemTy, Value ptr, Value cmp, Value val,
+                           MemSemantic sem, MemSyncScope scope, Value pred,
+                           const TargetInfoBase &targetInfo) {
+  // LLVM widens 16-bit cmpxchg to a 32-bit CAS, touching adjacent storage.
+  if (pred || valueElemTy.getIntOrFloatBitWidth() == 16)
+    return emitPtxAtomicCAS(rewriter, loc, valueElemTy, ptr, cmp, val, sem,
+                            scope, pred);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  bool bitcast = isa<FloatType>(valueElemTy);
+  if (bitcast) {
+    auto intTy = int_ty(valueElemTy.getIntOrFloatBitWidth());
+    cmp = b.bitcast(cmp, intTy);
+    val = b.bitcast(val, intTy);
+  }
+  auto ordering = *getMemoryOrdering(sem);
+  // PTX acquire also applies when the comparison fails.
+  auto failureOrdering =
+      sem == MemSemantic::ACQUIRE || sem == MemSemantic::ACQUIRE_RELEASE
+          ? LLVM::AtomicOrdering::acquire
+          : LLVM::AtomicOrdering::monotonic;
+  Value result = LLVM::AtomicCmpXchgOp::create(
+      rewriter, loc, ptr, cmp, val, ordering, failureOrdering,
+      targetInfo.getAtomicSyncScope(scope));
+  Value old = b.extract_val(result, 0);
+  return bitcast ? b.bitcast(old, valueElemTy) : old;
 }
 
 } // namespace mlir::triton::NVIDIA
