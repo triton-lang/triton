@@ -528,10 +528,10 @@ def _matmul(
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
         if has_x_epilogue_scale:
             x_tensor_scales = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
-                                                 offs_x_m >= 0 if GatherIndx is not None else True, 1.0)
+                                                 mask=offs_x_m >= 0 if GatherIndx is not None else True, other=1.0)
         if has_w_tensor_scale:
             w_tensor_scales = _load_tensor_scale(WTensorScale, offs_w_tensor_scale_n.to(index_type),
-                                                 stride_w_tensor_scale_n, offs_w_tensor_scale_n < N, 0.0)
+                                                 stride_w_tensor_scale_n, mask=offs_w_tensor_scale_n < N, other=0.0)
         if SWAP_XW:
             acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
         else:
