@@ -367,7 +367,7 @@ def _p_matmul(
                 offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
-                XMxScalePtrs += slice_off_m.to(index_type) * stride_x_mx_m
+                XMxScalePtrs += slice_off_m * stride_x_mx_m
             offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
             mx_scale_offs_m = offs_x_m if USE_GATHER_TMA else offs_m
             XMxScalePtrs += mx_scale_offs_m.to(index_type)[:, None] * stride_x_mx_m
@@ -382,7 +382,7 @@ def _p_matmul(
             else:
                 scale_offs_m = tile_offs_m
             if GatherIndx is None:
-                XTensorScalePtrs += slice_off_m.to(index_type) * stride_x_tensor_scale_m
+                XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
         # Inactive rows have no source scales; neutral scales preserve their zero values.
