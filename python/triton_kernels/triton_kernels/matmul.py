@@ -911,8 +911,6 @@ def matmul_torch(a, b, bias,
                  ):
     n_groups = b.shape[0] if b.ndim == 3 else 1
     block_scale = precision_config.a_mx_scale
-    gathered_blocks = (gather_indx is not None and isinstance(block_scale, Tensor)
-                       and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout))
     n_rows = a.shape[-2] if gather_indx is None else gather_indx.numel()
     if a_ragged_metadata is not None and b_ragged_metadata is None and a.ndim == 2:
         sizes = a_ragged_metadata.slice_sizes[:n_groups]
@@ -921,13 +919,11 @@ def matmul_torch(a, b, bias,
     else:
         offs = [(0, n_rows)] * n_groups
 
-    gather_before_decode = gathered_blocks
     x_scale = precision_config.a_mx_tensor_scale
     if x_scale is not None and a.ndim == 2 and b_ragged_metadata is None:
         table = _input_scale_table(x_scale, n_groups, a.shape[-2])
-        if gathered_blocks or (n_groups > 1 and table.stride(0) != 0):
+        if gather_indx is not None or table.stride(0) != 0:
             # An activation may visit multiple experts with different outer scales.
-            gather_before_decode = gather_indx is not None
             x_scale = table.new_ones((1, n_rows))
             for expert, (lo, hi) in enumerate(offs):
                 if gather_indx is None:
@@ -940,25 +936,30 @@ def matmul_torch(a, b, bias,
             x_scale = table[:1]
         precision_config = replace(precision_config, a_mx_tensor_scale=x_scale)
 
-    if gather_before_decode:
+    if gather_indx is not None:
+        assert a.ndim == 2 and b_ragged_metadata is None, "gather requires an unbatched M dimension"
         check_tensor_scale(a, block_scale, x_scale, precision_config.a_microblock_size)
-        if isinstance(a, Tensor):
-            a = convert_layout(a, StridedLayout(major_dim=a.ndim - 1)).data
         active = gather_indx >= 0
         rows = gather_indx[active]
-        # Gather bytes so the same indexing works for packed FP4 and FP8.
-        gathered = a.new_zeros((n_rows, *a.shape[1:]))
-        gathered.view(torch.uint8)[active] = a.view(torch.uint8)[rows]
-        a = gathered
-        if not gathered_blocks:
-            if isinstance(block_scale, Tensor):
-                block_scale = convert_layout(block_scale, StridedLayout(major_dim=a.ndim - 1)).data
-            blocks = block_scale.new_zeros((n_rows, block_scale.size(-1)))
-            blocks.view(torch.uint8)[active] = block_scale.view(torch.uint8)[rows]
-            precision_config = replace(precision_config, a_mx_scale=blocks)
+
+        def gather_rows(data):
+            if isinstance(data, Tensor):
+                data = convert_layout(data, StridedLayout(major_dim=1)).data
+            dtype = data.dtype
+            if data.element_size() == 1:
+                data = data.view(torch.uint8)  # FP8 indexing uses its storage bytes.
+            out = data.new_zeros((n_rows, data.size(1)))
+            out[active] = data[rows]
+            return out.view(dtype)
+
+        a = gather_rows(a)
+        # Blackwell activation block scales are already stored in gathered row order.
+        if block_scale is not None and not (isinstance(block_scale, Tensor)
+                                            and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout)):
+            precision_config = replace(precision_config, a_mx_scale=gather_rows(block_scale))
 
     a, b = apply_precision(a, b, precision_config)
-    if gather_before_decode:
+    if gather_indx is not None:
         a.masked_fill_(~active[:, None], 0.0)
     output_blocks = precision_config.c_mx_scale
     nvfp4_output = output_blocks is not None and output_blocks.data.dtype == torch.float8_e4m3fn
@@ -1033,13 +1034,7 @@ def matmul_torch(a, b, bias,
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=result_dtype)
     for i, (lo, hi) in enumerate(offs):
         batch = i if is_input_batched else 0
-        if gather_indx is None or gather_before_decode:
-            x = a[batch, lo:hi]
-        else:
-            rows = gather_indx[lo:hi]
-            active = rows >= 0
-            x = a.new_zeros((rows.numel(), a.shape[-1]))
-            x[active] = a[batch, rows[active]]
+        x = a[batch, lo:hi]
         y[batch, lo:hi] = dot(x, b[i], i, lo, hi)
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
