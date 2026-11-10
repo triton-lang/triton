@@ -870,8 +870,7 @@ def _gather_reference_rows(values: torch.Tensor, indices: torch.Tensor, fill: fl
     return gathered
 
 
-def apply_precision(x_tri: Tensor | torch.Tensor, w_tri: Tensor | torch.Tensor, precision_config: PrecisionConfig, *,
-                    apply_tensor_scales: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
+def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool = True):
     from .numerics_details.mxfp import upcast_from_mxfp
 
     def decode(x: Tensor | torch.Tensor, block_scale: Tensor | torch.Tensor | None, tensor_scale: torch.Tensor | None,

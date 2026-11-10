@@ -16,8 +16,7 @@ from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
 
-def check_tensor_scale(operand: Tensor | torch.Tensor, block_scale: Tensor | torch.Tensor | None,
-                       tensor_scale: torch.Tensor | None) -> None:
+def check_tensor_scale(operand, block_scale, tensor_scale):
     is_nvfp4 = (block_scale is not None and operand.dtype in (FP4, torch.uint8)
                 and block_scale.data.dtype == torch.float8_e4m3fn)
     if (tensor_scale is not None) != is_nvfp4:
@@ -137,7 +136,7 @@ def upcast_from_mxfp(
     target_dtype: torch.dtype,
     axis: int,
     tensor_scale: torch.Tensor | None = None,
-) -> torch.Tensor:
+):
     """
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
@@ -234,13 +233,11 @@ def get_max_quant_val(dtype: torch.dtype):
     return d[dtype]
 
 
-def downcast_to_mxfp_torch(
-    src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
-    scale_dtype: torch.dtype = torch.uint8,
-    microblock_size: int = MXFP_BLOCK_SIZE.value,
-    expected_scale: torch.Tensor | None = None,
-    DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
+                           scale_dtype: torch.dtype = torch.uint8,
+                           microblock_size: int = MXFP_BLOCK_SIZE.value,
+                           expected_scale: torch.Tensor | None = None,
+                           DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
     Converts the src tensor to the output format specified by out_quant_type.
       axis: The axis along which the tensors are contiguous and quantization is applied.
