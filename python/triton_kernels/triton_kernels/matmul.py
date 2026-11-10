@@ -851,17 +851,23 @@ def apply_precision(x_tri, w_tri, precision_config):
                flex_scale: torch.Tensor | None, axis: int) -> torch.Tensor:
         if isinstance(x, Tensor):
             x = convert_layout(x, StridedLayout(major_dim=axis)).data
-        if block_scale is None:
-            if flex_scale is None:
-                return x.clone()
-            return x.float() * flex_scale
-        if isinstance(block_scale, Tensor):
-            block_scale = convert_layout(block_scale, StridedLayout(major_dim=axis)).data
+        if block_scale is not None:
+            if isinstance(block_scale, Tensor):
+                block_scale = convert_layout(block_scale, StridedLayout(major_dim=axis)).data
+            out = upcast_from_mxfp(x, block_scale, torch.bfloat16, axis=axis)
+        else:
+            out = x.clone()
+
         if tensor_scale is not None:
-            fiber_shape = x.shape[:axis] + x.shape[axis + 1:]
-            n_groups = x.size(0) if x.ndim == 3 else 1
-            tensor_scale = _input_scale_table(tensor_scale, n_groups, fiber_shape[-1])
-        return upcast_from_mxfp(x, block_scale, torch.bfloat16, axis=axis, tensor_scale=tensor_scale)
+            n_groups = out.size(0) if out.ndim == 3 else 1
+            n_positions = out.size(-2) if axis == out.ndim - 1 else out.size(-1)
+            table = _input_scale_table(tensor_scale, n_groups, n_positions)
+            if out.ndim == 2:
+                table = table[0]
+            out = out * table.unsqueeze(axis).to(out.device)
+        if flex_scale is not None:
+            out = out.float() * flex_scale
+        return out
 
     x_scale = precision_config.a_mx_tensor_scale
     w_scale = precision_config.b_mx_tensor_scale
@@ -970,12 +976,13 @@ def matmul_torch(a, b, bias,
         output_groups = n_groups if b_ragged_metadata is None else b_ragged_metadata.slice_sizes.shape[0]
         output_rows = n_rows if scatter_indx is None else scatter_indx.numel()
         y_scales = broadcast_tensor_scale(expected_scale, (output_groups, output_rows))
-        expected_scale = None
 
     def finish_output(out):
         if flex.actual_scale is not None:
             flex.actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-        return scale(out, expected_scale)
+        if y_scales is None:
+            out = scale(out, expected_scale)
+        return out
 
     def dot(x, w, group, lo, hi):
         if round_x is not None:
@@ -988,7 +995,9 @@ def matmul_torch(a, b, bias,
             acc += group_bias
         if gammas is not None:
             acc *= gammas[lo:hi, None]
-        return round_y(acc) if round_y is not None else acc
+        if round_y is not None:
+            acc = round_y(acc)
+        return acc
 
     if b_ragged_metadata is not None:
         n_expts_tot = b_ragged_metadata.slice_sizes.shape[0]
