@@ -289,16 +289,18 @@ def _matmul(
     else:
         GatherIndx += start_m
         # Wrapping bounds the gather-array position, not the gathered row index.
-        offs_x_m = tl.load(GatherIndx + offs_x_m)
+        offs_x_m = tl.load(GatherIndx + offs_x_m).to(index_type)
+    stride_x_k = tl.cast(stride_x_k, index_type)
     if is_x_fp4:
         offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
     else:
         offs_k_x = off_k_x + tl.arange(0, BLOCK_K)
-    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k_x.to(index_type)[None, :] * stride_x_k
+    XPtrs = X + offs_x_m[:, None] * stride_x_m + offs_k_x[None, :] * stride_x_k
 
 
     # TODO: refactor if/else when triton front end improves
     if is_w_microscaled:
+        stride_w_mx_k = tl.cast(stride_w_mx_k, index_type)
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
@@ -341,7 +343,7 @@ def _matmul(
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
         offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
-        WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
+        WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale[:, None] * stride_w_mx_n
     else:
         WMxScalePtrs = None
         offs_k_scale = None
@@ -352,18 +354,19 @@ def _matmul(
     offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % packed_n_w, PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
+        stride_x_mx_k = tl.cast(stride_x_mx_k, index_type)
         XMxScale += start_z * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
         offs_x_k_scale = off_k_x // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
-        XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
+        XMxScalePtrs = XMxScale + offs_x_m[:, None] * stride_x_mx_m + offs_x_k_scale[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
     if has_x_tensor_scale:
         XTensorScale += start_z * stride_x_tensor_scale_z
         if GatherIndx is None:
             XTensorScale += start_m * stride_x_tensor_scale_m
-        XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m
+        XTensorScalePtrs = XTensorScale + offs_x_m * stride_x_tensor_scale_m
     else:
         XTensorScalePtrs = None
 
@@ -373,15 +376,16 @@ def _matmul(
     else:
         x_conversion_scale: tl.constexpr = None
 
+    stride_w_k = tl.cast(stride_w_k, index_type)
     offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
-    WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
+    WPtrs = W + (offs_w_k[:, None] * stride_w_k + offs_w_n[None, :] * stride_w_n)
     if has_w_tensor_scale:
         offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         WTensorScalePtrs = (
             WTensorScale
             + expt_id * stride_w_tensor_scale_e
-            + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n
+            + offs_w_tensor_scale_n * stride_w_tensor_scale_n
         )
     else:
         WTensorScalePtrs = None
@@ -507,18 +511,18 @@ def _matmul(
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
             if is_w_microscaled:
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
-                    WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * tl.cast(stride_w_mx_k, index_type)
+                    WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
                 else:
-                    WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * tl.cast(stride_w_mx_k, index_type)
+                    WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_w_mx_k
             if is_x_microscaled:
-                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * tl.cast(stride_x_mx_k, index_type)
+                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
             acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
         if is_x_fp4:
-            XPtrs += ((BLOCK_K // 2) * SPLIT_K) * tl.cast(stride_x_k, index_type)
+            XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
         else:
-            XPtrs += (BLOCK_K * SPLIT_K) * tl.cast(stride_x_k, index_type)
-        WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * tl.cast(stride_w_k, index_type)
+            XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
+        WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
     if has_x_epilogue_scale or has_w_tensor_scale:
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
@@ -573,12 +577,13 @@ def _matmul(
         out = acc
     out *= gammas[:, None]
     # write-back
-    Y += start_z_out.to(index_type) * stride_y_z
+    start_z_out = start_z_out.to(index_type)
+    Y += start_z_out * stride_y_z
     if WriteBackIndx is not None:
         WriteBackIndx += start_m
         dst_idx = tl.load(WriteBackIndx + offs_m, mask=start_m + offs_m < writeback_size, other=-1)
         mask_m = mask_m & (dst_idx != -1)
-        offs_y_m = dst_idx
+        offs_y_m = dst_idx.to(index_type)
     else:
         Y += start_m * stride_y_m
         offs_y_m = offs_m
@@ -586,10 +591,10 @@ def _matmul(
     if is_out_fp4:
         tl.static_assert(Y_TMA_MODE is None, "FP4 outputs are only supported without output TMA")
         offs_y_n_store = pid_n * (OUT_BLOCK_N // 2) + tl.arange(0, OUT_BLOCK_N // 2)
-        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
+        YPtrs = Y + offs_y_m[:, None] * stride_y_m + offs_y_n_store[None, :] * stride_y_n
         mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
     else:
-        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+        YPtrs = Y + offs_y_m[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
         mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 
@@ -602,7 +607,7 @@ def _matmul(
         if Y_ACC_IS_Y:
             AccPtrs = YPtrs
         else:
-            AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
+            AccPtrs = OutAcc + start_z_out * stride_acc_z + offs_y_m[:, None] * stride_acc_m + offs_y_n[None, :] * stride_acc_n
         out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
 
     if is_out_microscaled:
