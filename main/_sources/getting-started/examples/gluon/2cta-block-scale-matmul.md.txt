@@ -149,7 +149,8 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: gl.constexpr, BLOCK_K: gl.con
 
 
 @gluon.jit
-def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, mma_bar, use_acc, pred):
+def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, a_empty_bar, b_empty_bar, use_acc,
+                          pred):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if a_smem.dtype == gl.uint8 else 1
     BLOCK_M: gl.constexpr = a_smem.shape[0]
     BLOCK_N: gl.constexpr = b_smem.shape[0]
@@ -182,7 +183,7 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     a_format: gl.constexpr = "e2m1" if a_smem.dtype == gl.uint8 else "e4m3"
     b_format: gl.constexpr = "e2m1" if b_smem.dtype == gl.uint8 else "e4m3"
     tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                       use_acc=use_acc, pred=pred, multicast=True, mbarriers=[mma_bar])
+                       use_acc=use_acc, pred=pred, multicast=True, mbarriers=[a_empty_bar, b_empty_bar])
 
 
 # This helper function computes all the load indexing and issues the async loads
@@ -194,48 +195,17 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
 # Encapsulating the load indexing logic will help keep our pipelined kernel code
 # clean, as pipelining can get messy.
 @gluon.jit
-def issue_loads(producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs,
-                b_scale_bufs, bars, pred):
-    A_ELEM_PER_BYTE: gl.constexpr = 2 if a_desc.dtype == gl.uint8 else 1
-    B_ELEM_PER_BYTE: gl.constexpr = 2 if b_desc.dtype == gl.uint8 else 1
-    BLOCK_M: gl.constexpr = a_desc.block_shape[0]
-    BLOCK_N: gl.constexpr = b_desc.block_shape[0]
-    BLOCK_K: gl.constexpr = a_desc.block_shape[1] * A_ELEM_PER_BYTE
-    REP_M: gl.constexpr = a_scale_desc.block_shape[1]
-    REP_N: gl.constexpr = b_scale_desc.block_shape[1]
-    A_REP_K: gl.constexpr = a_scale_desc.block_shape[2]
-    B_REP_K: gl.constexpr = b_scale_desc.block_shape[2]
-
-    off_m = pid_m * BLOCK_M
-    off_n = pid_n * BLOCK_N
-    off_m_a_scale = pid_m * REP_M
-    off_n_b_scale = pid_n * REP_N
-    off_k_a = k // A_ELEM_PER_BYTE
-    off_k_b = k // B_ELEM_PER_BYTE
-    off_k_a_scale = (k // BLOCK_K) * A_REP_K
-    off_k_b_scale = (k // BLOCK_K) * B_REP_K
-
-    index = producer.index
-    bar = bars.index(index)
-    mbarrier.expect(
-        bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta + a_scale_desc.nbytes_per_cta + b_scale_desc.nbytes_per_cta,
-        pred)
-    tma.async_load(a_desc, [off_m, off_k_a], bar, a_bufs.index(index), pred, multicast=True)
-    tma.async_load(b_desc, [off_n, off_k_b], bar, b_bufs.index(index), pred, multicast=True)
-    tma.async_load(a_scale_desc, [0, off_m_a_scale, off_k_a_scale, 0, 0], bar, a_scale_bufs.index(index), pred,
+def issue_operand_load(desc, scale_desc, bufs, scale_bufs, empty_bars, ready_bars, state, pid, k, pred=True):
+    ELEM_PER_BYTE: gl.constexpr = 2 if desc.dtype == gl.uint8 else 1
+    BLOCK_K: gl.constexpr = desc.block_shape[1] * ELEM_PER_BYTE
+    mbarrier.wait(empty_bars.index(state.index), state.phase, pred)
+    bar = ready_bars.index(state.index)
+    mbarrier.expect(bar, desc.nbytes_per_cta + scale_desc.nbytes_per_cta, pred)
+    tma.async_load(desc, [pid * desc.block_shape[0], k // ELEM_PER_BYTE], bar, bufs.index(state.index), pred,
                    multicast=True)
-    tma.async_load(b_scale_desc, [0, off_n_b_scale, off_k_b_scale, 0, 0], bar, b_scale_bufs.index(index), pred,
-                   multicast=True)
-    return producer.next(pred)
-
-
-@gluon.jit
-def issue_mma(consumer, c_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs, producer, p_bars, acc_tmem, use_acc, pred):
-    c_index = consumer.index
-    mbarrier.wait(c_bars.index(c_index), consumer.phase, pred)
-    async_mma_scaled_impl(a_bufs.index(c_index), b_bufs.index(c_index), a_scale_bufs.index(c_index),
-                          b_scale_bufs.index(c_index), acc_tmem, p_bars.index(producer.index), use_acc, pred)
-    return consumer.next(pred), producer.next(pred)
+    tma.async_load(scale_desc, [0, pid * scale_desc.block_shape[1], (k // BLOCK_K) * scale_desc.block_shape[2], 0, 0],
+                   bar, scale_bufs.index(state.index), pred, multicast=True)
+    return state.next(pred)
 
 
 @gluon.aggregate
@@ -418,8 +388,10 @@ class PartitionArgs:
     b_bufs: gl.shared_memory_descriptor
     a_scale_bufs: gl.shared_memory_descriptor
     b_scale_bufs: gl.shared_memory_descriptor
-    load_empty_bars: gl.shared_memory_descriptor
-    load_ready_bars: gl.shared_memory_descriptor
+    a_empty_bars: gl.shared_memory_descriptor
+    a_ready_bars: gl.shared_memory_descriptor
+    b_empty_bars: gl.shared_memory_descriptor
+    b_ready_bars: gl.shared_memory_descriptor
     acc_bufs: tensor_memory_descriptor
     acc_empty_bars: gl.shared_memory_descriptor
     acc_ready_bars: gl.shared_memory_descriptor
@@ -467,18 +439,34 @@ def mma_scaled_load_partition(p):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if p.a_desc.dtype == gl.uint8 else 1
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1] * A_ELEM_PER_BYTE
     K = p.a_desc.shape[1] * A_ELEM_PER_BYTE
-    state = Counter.create(1, p.load_empty_bars.shape[0])
+    A_LEAD: gl.constexpr = max(p.a_bufs.shape[0] - p.b_bufs.shape[0], 0)
+    B_LEAD: gl.constexpr = max(p.b_bufs.shape[0] - p.a_bufs.shape[0], 0)
+    a_state = Counter.create(1, p.a_empty_bars.shape[0])
+    b_state = Counter.create(1, p.b_empty_bars.shape[0])
     if p.scheduler == SCHEDULER_CLC:
         scheduler = p.get_clc_consumer()
     else:
         scheduler = p.get_sps_scheduler()
     i = 0
     while scheduler.has_work:
+        # Fill the deeper ring's extra slots before advancing both rings.
+        # This preserves their depth difference without another producer warp.
+        for j in gl.static_range(A_LEAD):
+            a_state = issue_operand_load(p.a_desc, p.a_scale_desc, p.a_bufs, p.a_scale_bufs, p.a_empty_bars,
+                                         p.a_ready_bars, a_state, scheduler.pid_m, j * BLOCK_K, j * BLOCK_K < K)
+        for j in gl.static_range(B_LEAD):
+            b_state = issue_operand_load(p.b_desc, p.b_scale_desc, p.b_bufs, p.b_scale_bufs, p.b_empty_bars,
+                                         p.b_ready_bars, b_state, scheduler.pid_n, j * BLOCK_K, j * BLOCK_K < K)
         for k in range(0, K, BLOCK_K):
-            mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
-            state = issue_loads(state, scheduler.pid_m, scheduler.pid_n, k, p.a_desc, p.b_desc, p.a_scale_desc,
-                                p.b_scale_desc, p.a_bufs, p.b_bufs, p.a_scale_bufs, p.b_scale_bufs, p.load_ready_bars,
-                                pred=True)
+            a_k = k + A_LEAD * BLOCK_K
+            b_k = k + B_LEAD * BLOCK_K
+            # Issue B and its scales before A and its scales for performance.
+            b_state = issue_operand_load(p.b_desc, p.b_scale_desc, p.b_bufs, p.b_scale_bufs, p.b_empty_bars,
+                                         p.b_ready_bars, b_state, scheduler.pid_n, b_k,
+                                         True if B_LEAD == 0 else b_k < K)
+            a_state = issue_operand_load(p.a_desc, p.a_scale_desc, p.a_bufs, p.a_scale_bufs, p.a_empty_bars,
+                                         p.a_ready_bars, a_state, scheduler.pid_m, a_k,
+                                         True if A_LEAD == 0 else a_k < K)
         scheduler = scheduler.step(i)
         i += 1
 
@@ -488,7 +476,8 @@ def mma_scaled_mma_partition(p):
     A_ELEM_PER_BYTE: gl.constexpr = 2 if p.a_desc.dtype == gl.uint8 else 1
     BLOCK_K: gl.constexpr = p.a_desc.block_shape[1] * A_ELEM_PER_BYTE
     K = p.a_desc.shape[1] * A_ELEM_PER_BYTE
-    load_state = Counter.create(0, p.load_empty_bars.shape[0])
+    a_state = Counter.create(0, p.a_bufs.shape[0])
+    b_state = Counter.create(0, p.b_empty_bars.shape[0])
     acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
     if p.scheduler == SCHEDULER_CLC:
         scheduler = p.get_clc_consumer()
@@ -500,8 +489,14 @@ def mma_scaled_mma_partition(p):
         acc_buf = p.acc_bufs.index(acc_state.index)
         use_acc = False
         for k in range(0, K, BLOCK_K):
-            _, load_state = issue_mma(load_state, p.load_ready_bars, p.a_bufs, p.b_bufs, p.a_scale_bufs, p.b_scale_bufs,
-                                      load_state, p.load_empty_bars, acc_buf, use_acc, pred=True)
+            mbarrier.wait(p.a_ready_bars.index(a_state.index), a_state.phase)
+            mbarrier.wait(p.b_ready_bars.index(b_state.index), b_state.phase)
+            async_mma_scaled_impl(p.a_bufs.index(a_state.index), p.b_bufs.index(b_state.index),
+                                  p.a_scale_bufs.index(a_state.index), p.b_scale_bufs.index(b_state.index), acc_buf,
+                                  a_empty_bar=p.a_empty_bars.index(a_state.index),
+                                  b_empty_bar=p.b_empty_bars.index(b_state.index), use_acc=use_acc, pred=True)
+            a_state = a_state.next()
+            b_state = b_state.next()
             use_acc = True
         tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
         acc_state = acc_state.next()
@@ -589,20 +584,20 @@ def mma_scaled_clc_partition(p):
 
 @gluon.jit
 def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N,
-                                       num_buffers: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
-                                       num_acc_buffers: gl.constexpr, GRID_MINOR_DIM: gl.constexpr,
-                                       GRID_TILE_WIDTH: gl.constexpr, CGA_LAYOUT: gl.constexpr,
-                                       scheduler: gl.constexpr):
+                                       a_buffers: gl.constexpr, b_buffers: gl.constexpr, BLOCK_M: gl.constexpr,
+                                       BLOCK_N: gl.constexpr, num_acc_buffers: gl.constexpr,
+                                       GRID_MINOR_DIM: gl.constexpr, GRID_TILE_WIDTH: gl.constexpr,
+                                       CGA_LAYOUT: gl.constexpr, scheduler: gl.constexpr):
     NUM_CTAS: gl.constexpr = gl.num_ctas()
     TWO_CTAS: gl.constexpr = NUM_CTAS > 1
     BLOCK_M_PER_CTA: gl.constexpr = BLOCK_M // NUM_CTAS
     N_PARTITIONS: gl.constexpr = 4 if scheduler == SCHEDULER_CLC else 3
 
-    a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_shape, a_desc.layout)
-    b_bufs = gl.allocate_shared_memory(b_desc.dtype, [num_buffers] + b_desc.block_shape, b_desc.layout)
-    a_scale_bufs = gl.allocate_shared_memory(a_scale_desc.dtype, [num_buffers] + a_scale_desc.block_shape,
+    a_bufs = gl.allocate_shared_memory(a_desc.dtype, [a_buffers] + a_desc.block_shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(b_desc.dtype, [b_buffers] + b_desc.block_shape, b_desc.layout)
+    a_scale_bufs = gl.allocate_shared_memory(a_scale_desc.dtype, [a_buffers] + a_scale_desc.block_shape,
                                              a_scale_desc.layout)
-    b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_shape,
+    b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [b_buffers] + b_scale_desc.block_shape,
                                              b_scale_desc.layout)
 
     # Rubin supports B reuse with BLOCK_M_PER_CTA=256.
@@ -615,11 +610,17 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
         [a_bufs.index(0), b_bufs.index(0),
          a_scale_bufs.index(0), b_scale_bufs.index(0)], multicast=True, two_ctas=acc_bufs.index(0).type.layout.two_ctas)
 
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=num_buffers, two_ctas=TWO_CTAS)
-    for i in gl.static_range(num_buffers):
-        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
-        mbarrier.init(load_ready_bars.index(i), count=1)
+    a_empty_bars = mbarrier.allocate_mbarrier(batch=a_buffers)
+    a_ready_bars = mbarrier.allocate_mbarrier(batch=a_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(a_buffers):
+        mbarrier.init(a_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(a_ready_bars.index(i), count=1)
+
+    b_empty_bars = mbarrier.allocate_mbarrier(batch=b_buffers)
+    b_ready_bars = mbarrier.allocate_mbarrier(batch=b_buffers, two_ctas=TWO_CTAS)
+    for i in gl.static_range(b_buffers):
+        mbarrier.init(b_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(b_ready_bars.index(i), count=1)
 
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
@@ -642,9 +643,10 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
     p = PartitionArgs(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
-                      load_empty_bars, load_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars, clc_result_buffers,
-                      clc_barriers, clc_planar_pid_buffers, clc_planar_ready_bars, clc_consumed_bars, GRID_MINOR_DIM,
-                      GRID_TILE_WIDTH, gl.cdiv(M, BLOCK_M), gl.cdiv(N, BLOCK_N), scheduler)
+                      a_empty_bars, a_ready_bars, b_empty_bars, b_ready_bars, acc_bufs, acc_empty_bars, acc_ready_bars,
+                      clc_result_buffers, clc_barriers, clc_planar_pid_buffers,
+                      clc_planar_ready_bars, clc_consumed_bars, GRID_MINOR_DIM, GRID_TILE_WIDTH, gl.cdiv(M, BLOCK_M),
+                      gl.cdiv(N, BLOCK_N), scheduler)
 
     if scheduler == SCHEDULER_CLC:
         gl.warp_specialize([
@@ -707,9 +709,10 @@ def mma_scaled_warp_specialized_grid(M, N, BLOCK_M, BLOCK_N, num_ctas, scheduler
 
 
 def mma_scaled_warp_specialized(A, B, A_scale, B_scale, *, scheduler, GRID_MINOR_DIM, GRID_TILE_WIDTH, out_dtype,
-                                BLOCK_M, BLOCK_N, BLOCK_K, EPILOGUE_BLOCK_N, num_buffers, acc_buffers, num_ctas,
-                                num_warps):
+                                BLOCK_M, BLOCK_N, BLOCK_K, EPILOGUE_BLOCK_N, a_buffers: int, b_buffers: int,
+                                acc_buffers, num_ctas, num_warps):
     """Warp-specialized block-scale MMA (supports 1CTA and 2CTA)."""
+    assert a_buffers > 0 and b_buffers > 0, "pipeline depths must be positive"
     assert num_ctas in (1, 2), "num_ctas must be 1 or 2"
     assert scheduler in (SCHEDULER_CLC, SCHEDULER_SPS), "unsupported scheduler"
     assert BLOCK_M // num_ctas in ((64, 128, 256) if is_rubin() else (64, 128)), "unsupported BLOCK_M per CTA"
@@ -718,9 +721,9 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, *, scheduler, GRID_MINOR
     descs = make_descriptors(A, B, A_scale, B_scale, out_dtype, BLOCK_M, BLOCK_N, BLOCK_K, EPILOGUE_BLOCK_N, num_ctas)
     M, N = A.shape[0], B.shape[0]
     grid = mma_scaled_warp_specialized_grid(M, N, BLOCK_M, BLOCK_N, num_ctas, scheduler, A.device)
-    mma_scaled_warp_specialized_kernel[grid](*descs, M, N, num_buffers, BLOCK_M, BLOCK_N, acc_buffers, GRID_MINOR_DIM,
-                                             GRID_TILE_WIDTH, ((1, 0), ) if num_ctas == 2 else (), scheduler=scheduler,
-                                             num_ctas=num_ctas, num_warps=num_warps)
+    mma_scaled_warp_specialized_kernel[grid](*descs, M, N, a_buffers, b_buffers, BLOCK_M, BLOCK_N, acc_buffers,
+                                             GRID_MINOR_DIM, GRID_TILE_WIDTH, ((1, 0), ) if num_ctas == 2 else (),
+                                             scheduler=scheduler, num_ctas=num_ctas, num_warps=num_warps)
     return descs[2].base
 
 
@@ -766,6 +769,8 @@ def get_best_config(a_format, b_format, num_ctas, K):
     config = dict(zip(CONFIG_FIELDS, vals))
     config["num_ctas"] = num_ctas
     config["scheduler"] = scheduler_for_k(K)
+    depth = config.pop("num_buffers")
+    config.update(a_buffers=depth, b_buffers=depth)
     config.update(out_dtype=torch.float16, num_warps=4)
     return config
 
@@ -778,17 +783,20 @@ def get_best_config(a_format, b_format, num_ctas, K):
 @pytest.mark.parametrize("M, N, K", [(8192, 8192, 8192), (128, 128, 128), (500, 600, 8320)])
 @pytest.mark.parametrize("double_buffer", [False, True])
 @pytest.mark.parametrize("a_format, b_format", ALL_FORMATS)
+@pytest.mark.parametrize("a_buffers, b_buffers", [(None, None), (1, 3), (3, 1)])
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("scheduler", [SCHEDULER_CLC, SCHEDULER_SPS])
 @pytest.mark.skipif(not (is_blackwell() or is_rubin()), reason="Requires Blackwell or Rubin")
 @pytest.mark.enable_warmup(min_capability=10)
-def test_mma_scaled_best_config(M, N, K, double_buffer, a_format, b_format, num_ctas, scheduler):
+def test_mma_scaled_best_config(M, N, K, double_buffer, a_format, b_format, a_buffers, b_buffers, num_ctas, scheduler):
     if double_buffer and not is_rubin():
         pytest.skip("Double-buffered 128x256 tiles require Rubin")
     config = get_best_config(a_format, b_format, num_ctas, K)
     config["scheduler"] = scheduler
     if double_buffer:
         config.update(BLOCK_M=128 * num_ctas, BLOCK_N=256, acc_buffers=2)
+    if a_buffers is not None:
+        config.update(a_buffers=a_buffers, b_buffers=b_buffers)
     torch.manual_seed(0)
     A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
     B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
@@ -825,8 +833,8 @@ def run_benchmark():
                 grid = mma_scaled_warp_specialized_grid(M, N, config["BLOCK_M"], config["BLOCK_N"], ctas,
                                                         config["scheduler"], A.device)
                 fn = lambda: mma_scaled_warp_specialized_kernel[grid](
-                    *descs, M, N, config["num_buffers"], config["BLOCK_M"], config["BLOCK_N"], config[
-                        "acc_buffers"], config["GRID_MINOR_DIM"], config["GRID_TILE_WIDTH"], ((1, 0), )
+                    *descs, M, N, config["a_buffers"], config["b_buffers"], config["BLOCK_M"], config["BLOCK_N"],
+                    config["acc_buffers"], config["GRID_MINOR_DIM"], config["GRID_TILE_WIDTH"], ((1, 0), )
                     if ctas == 2 else (), scheduler=config["scheduler"], num_ctas=ctas, num_warps=config["num_warps"])
                 ms = triton.testing.do_bench(fn)
                 rates.append(2 * M * N * K * 1e-9 / ms)
