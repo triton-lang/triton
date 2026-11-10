@@ -424,19 +424,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// TDM scatter does not read from partitioned layouts.
-#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#slice = #ttg.slice<{dim = 1, parent = #blocked}>
-#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+// A TDM store from a column-partitioned layout reads one 32-column piece per
+// warp, so the padding interval must equal the piece width.
+#inner = #ttg.padded_shared<[128:+16] {order = [1, 0], shape = [64, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_partitioned_invalid_padding_interval(
+    %tensorDesc: !tt.tensordesc<64x128xi8, #partitioned>,
+    %memDesc: !ttg.memdesc<64x128xi8, #partitioned, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM store padding is only supported when padding interval equals the innermost block dimension (got padInterval=128, innermost dimension=32)}}
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x128xi8, #partitioned, #smem, mutable> -> !tt.tensordesc<64x128xi8, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// The inner padded layout of a partitioned TDM store source is checked like an
+// unpartitioned one: 1 f16 of padding is not dword aligned.
+#inner = #ttg.padded_shared<[64:+1] {order = [1, 0], shape = [32, 64]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_scatter_partitioned(
+  tt.func @tdm_store_partitioned_invalid_inner_padding(
+    %tensorDesc: !tt.tensordesc<64x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable>
+  ) {
+    // expected-error @+1 {{TDM padding must be aligned to dwords}}
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<64x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<64x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM scatter only supports partitioning along rows.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_scatter_partitioned_cols(
     %tensorDesc: !tt.tensordesc<16x64xf16, #partitioned>,
     %memDesc: !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable>,
     %row_indices: tensor<16xi32, #slice>
   ) {
-    // expected-error @+1 {{Invalid shared memory layout for TDM}}
+    // expected-error @+1 {{NYI: TDM scatter only supports partitioning along rows (partitionDim 0)}}
     %token = amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<16x64xf16, #partitioned>
     tt.return
   }
@@ -1141,7 +1177,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @tdm_load_multiple_padding_intervals(%desc: !tt.tensordesc<32x64xf16, #shared>, %buf: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
-    // expected-error @+1 {{TDM load only supports a single padding interval}}
+    // expected-error @+1 {{TDM only supports a single padding interval}}
     amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<32x64xf16, #shared> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     tt.return
   }

@@ -643,7 +643,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A gather into a row-partitioned layout caps an instruction at one row piece.
+// A gather/scatter on a row-partitioned layout caps an instruction at one row piece.
 #shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #part_rows = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
 #smem = #ttg.shared_memory
@@ -657,7 +657,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     // 32 i16 indices fit 2 chunks of 16, but a piece holds 32 / 4 = 8 rows => 4 instructions
     %token1 = amdg.async_tdm_gather %tensorDesc[%row_indices] to %rowsBuf : tensor<32xi16, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<32x128xf16, #part_rows, #smem, mutable> -> !tt.tensordesc<32x128xf16>
-    %token2 = amdg.async_tdm_gather %tensorDesc[%row_indices] to %rowsBuf : tensor<32xi16, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<32x128xf16, #part_rows, #smem, mutable> -> !tt.tensordesc<32x128xf16>
+    %token2 = amdg.async_tdm_scatter %tensorDesc[%row_indices] from %rowsBuf : tensor<32xi16, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<32x128xf16, #part_rows, #smem, mutable> -> !tt.tensordesc<32x128xf16>
 
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0
     %w1 = amdg.async_tdm_wait %token2 {num = 0 : i32}

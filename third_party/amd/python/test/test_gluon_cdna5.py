@@ -2006,6 +2006,71 @@ def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROU
                              f"numPartitions={NUM_PARTITIONS}, numGroups={NUM_GROUPS}")
 
 
+@gluon.jit
+def partitioned_tdm_store_kernel(a_ptr, b_ptr, M, N,  #
+                                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
+                                 NUM_PARTITIONS: ttgl.constexpr, NUM_GROUPS: ttgl.constexpr,  #
+                                 PARTITION_DIM: ttgl.constexpr, INNER: ttgl.constexpr):
+    """Fill a PartitionedSharedLayout from registers, then TDM store it out."""
+    if PARTITION_DIM == 0:
+        inner_shape_m: ttgl.constexpr = BLOCK_M // (NUM_PARTITIONS * NUM_GROUPS)
+        inner_shape_n: ttgl.constexpr = BLOCK_N
+    else:
+        inner_shape_m: ttgl.constexpr = BLOCK_M
+        inner_shape_n: ttgl.constexpr = BLOCK_N // (NUM_PARTITIONS * NUM_GROUPS)
+
+    # TDM store pads only once per row of the piece it reads.
+    if INNER == "padded":
+        inner_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[inner_shape_n, 8]],
+                                                                                 [inner_shape_m, inner_shape_n], [1, 0])
+    else:
+        inner_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    smem_layout: ttgl.constexpr = PartitionedSharedLayout(NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, inner_layout)
+
+    idx_m = ttgl.program_id(axis=0) * BLOCK_M
+    idx_n = ttgl.program_id(axis=1) * BLOCK_N
+    # Fill the buffer with local_store so the TDM store is checked
+    # independently of the TDM load address mapping.
+    REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [ttgl.num_warps(), 1], [1, 0])
+    offs_m = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, REG_LAYOUT))
+    offs_n = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, REG_LAYOUT))
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    tile = ttgl.load(a_ptr + offs_m[:, None] * N + offs_n[None, :], mask=mask, other=0)
+    buffer = ttgl.allocate_shared_memory(a_ptr.dtype.element_ty, (BLOCK_M, BLOCK_N), smem_layout)
+    buffer.store(tile)
+
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+    ttgl.amd.cdna5.tdm.async_store(b_desc, [idx_m, idx_n], buffer)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("DTYPE", [torch.float16, torch.int8])
+@pytest.mark.parametrize("INNER", ["padded", "swizzled"])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_runtime_partitioned_tdm_store(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, INNER, DTYPE,
+                                       num_warps):
+    """Test a TDM store from a PartitionedSharedLayout.
+
+    N is not a multiple of BLOCK_N, so the last column block is partly out of
+    bounds (whole pieces for partitionDim=1); 208 keeps the row stride 16-byte aligned.
+    """
+    M, N = 256, 208
+    torch.manual_seed(42)
+    a = torch.randint(-128, 128, (M, N)).to(DTYPE)
+    b = torch.zeros_like(a)
+    a_device = a.cuda()
+    b_device = b.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    partitioned_tdm_store_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                       NUM_PARTITIONS=NUM_PARTITIONS, NUM_GROUPS=NUM_GROUPS,
+                                       PARTITION_DIM=PARTITION_DIM, INNER=INNER, num_warps=num_warps)
+    assert torch.equal(b_device.cpu(), a)
+
+
 _LOAD_SHARED_FP4_REPACKED_CASES = [
     pytest.param(
         (128, 32),
@@ -3404,9 +3469,10 @@ def _tdm_gather_mbarrier_kernel(inp_ptr, out_ptr, idx_ptr, M_inp, BLOCK_N: ttgl.
 
 @gluon.jit
 def _tdm_scatter_mbarrier_kernel(inp_ptr, out_ptr, idx_ptr, M_out, BLOCK_N: ttgl.constexpr, NUM_INDICES: ttgl.constexpr,
-                                 NUM_ITERS: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+                                 NUM_ITERS: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr,
+                                 SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(
+                                     vec=1, per_phase=1, max_phase=1, order=[1, 0])):
     num_warps: ttgl.constexpr = ttgl.num_warps()
-    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     REG_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [num_warps, 1], [1, 0])
 
     desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, BLOCK_N), strides=(BLOCK_N, 1),
@@ -3463,14 +3529,15 @@ def test_tdm_gather_scatter_mbarrier_count(op, indices_per_warp, warps_per_cta):
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("op", ["gather", "scatter"])
 @pytest.mark.parametrize("num_groups", [1, 2])
 @pytest.mark.parametrize("indices_per_warp, warps_per_cta", [
     pytest.param(16, [4, 1], id="active_multichunk"),
     pytest.param(16, [2, 2], id="redundant_multichunk"),
 ])
-def test_tdm_gather_partitioned_mbarrier_count(num_groups, indices_per_warp, warps_per_cta):
-    # Row pieces cap the chunk size, splitting the gather into more
-    # instructions; each warp must still arrive exactly once per gather.
+def test_tdm_gather_scatter_partitioned_mbarrier_count(op, num_groups, indices_per_warp, warps_per_cta):
+    # Row pieces cap the chunk size, splitting the op into more
+    # instructions; each warp must still arrive exactly once per op.
     idx_layout = ttgl.SliceLayout(1, ttgl.BlockedLayout([indices_per_warp, 1], [1, 32], warps_per_cta, [1, 0]))
     num_indices, num_warps = indices_per_warp * warps_per_cta[0], 4
     BLOCK_N = 64
@@ -3480,11 +3547,20 @@ def test_tdm_gather_partitioned_mbarrier_count(num_groups, indices_per_warp, war
     torch.manual_seed(42)
     indices = torch.randperm(M)[:num_iters * num_indices].to(torch.int32)
 
-    inp = _random_i32((M, BLOCK_N))
-    out = torch.zeros((num_iters * num_indices, BLOCK_N), dtype=torch.int32).cuda()
-    _tdm_gather_mbarrier_kernel[(1, )](inp.cuda(), out, indices.cuda(), M, BLOCK_N, num_indices, num_iters, idx_layout,
-                                       shared_layout, num_warps=num_warps)
-    assert torch.equal(out.cpu(), inp[indices.long()])
+    if op == "gather":
+        inp = _random_i32((M, BLOCK_N))
+        out = torch.zeros((num_iters * num_indices, BLOCK_N), dtype=torch.int32).cuda()
+        _tdm_gather_mbarrier_kernel[(1, )](inp.cuda(), out, indices.cuda(), M, BLOCK_N, num_indices, num_iters,
+                                           idx_layout, shared_layout, num_warps=num_warps)
+        ref = inp[indices.long()]
+    else:
+        inp = _random_i32((num_iters * num_indices, BLOCK_N))
+        out = torch.zeros((M, BLOCK_N), dtype=torch.int32).cuda()
+        _tdm_scatter_mbarrier_kernel[(1, )](inp.cuda(), out, indices.cuda(), M, BLOCK_N, num_indices, num_iters,
+                                            idx_layout, shared_layout, num_warps=num_warps)
+        ref = torch.zeros((M, BLOCK_N), dtype=torch.int32)
+        ref[indices.long()] = inp
+    assert torch.equal(out.cpu(), ref)
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
@@ -5492,6 +5568,62 @@ def test_runtime_tdm_gather_partitioned(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GR
     ref = torch.zeros((num_buffers * BLOCK_M, BLOCK_N * elem_size), dtype=torch.uint8)
     ref[:, :valid_cols * elem_size] = inp_bytes[src_row_indices.long(), src_col_offset * elem_size:N_inp * elem_size]
     torch.testing.assert_close(out_d.cpu().view(torch.uint8).reshape(num_buffers * BLOCK_M, -1), ref)
+
+
+@gluon.jit
+def tdm_scatter_partitioned_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m,
+                                   BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, DST_COL_OFFSET: ttgl.constexpr,
+                                   SHARED_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    """TDM scatter from a PartitionedSharedLayout filled by a TDM load."""
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    out_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, DST_COL_OFFSET], clamp_bounds=True)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT))
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS", _TDM_GATHER_PARTITIONED_PARAMS)
+@pytest.mark.parametrize("inner", ["swizzled", "padded"])
+@pytest.mark.parametrize("idx_dist", ["replicated", "split"])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+@pytest.mark.parametrize("dtype,dst_col_offset", [(torch.float16, 0), (torch.float16, 16), (torch.float32, 16)])
+def test_runtime_tdm_scatter_partitioned(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, inner, idx_dist, index_dtype,
+                                         dtype, dst_col_offset):
+    """Test TDM scatter correctness from a PartitionedSharedLayout."""
+    torch.manual_seed(42)
+    num_warps = 4
+    SHARED_LAYOUT = _tdm_gather_partitioned_layout(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, inner)
+    IDX_LAYOUT = _tdm_gather_partitioned_idx_layout(BLOCK_M, num_warps, idx_dist)
+
+    M_out = 512
+    N_out = dst_col_offset + BLOCK_N
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), dtype)
+    out = torch.zeros((M_out, N_out), dtype=dtype)
+    dst_row_indices = torch.randperm(M_out, dtype=torch.int32)[:BLOCK_M].to(index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    h = tdm_scatter_partitioned_kernel[(1, )](inp_d, out_d, dst_row_indices.cuda(), M_out=M_out, N_out=N_out,
+                                              stride_m=out_d.stride(0), BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+                                              DST_COL_OFFSET=dst_col_offset, SHARED_LAYOUT=SHARED_LAYOUT,
+                                              IDX_LAYOUT=IDX_LAYOUT, num_warps=num_warps)
+
+    expected = _tdm_gather_partitioned_num_instructions(BLOCK_M, NUM_PARTITIONS, NUM_GROUPS, num_warps, idx_dist,
+                                                        index_dtype)
+    actual = len(re.findall(r"tensor_store_from_lds", h.asm["amdgcn"]))
+    assert actual == expected, f"Expected {expected} tensor_store_from_lds instructions, found {actual}"
+
+    ref = torch.zeros_like(out)
+    ref[dst_row_indices.long(), dst_col_offset:] = inp
+    torch.testing.assert_close(out_d.cpu(), ref)
 
 
 @gluon.jit
