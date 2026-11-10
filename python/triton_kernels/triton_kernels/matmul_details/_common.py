@@ -162,6 +162,21 @@ def compute_offsets(
 
 
 @triton.jit
+def multiply_tensor_scales(x_scales, WTensorScale, cols, col_stride, mask_n):
+    """Combine optional X row scales and W column scales in (M, N) order."""
+    rows = x_scales if x_scales is not None else tl.full((1,), 1.0, tl.float32)
+    if WTensorScale is None:
+        return rows[:, None] * tl.full((), 1.0, tl.float32)
+    elif col_stride is None:
+        row_scales = rows * tl.load(WTensorScale)
+        # Padded columns have a zero W scale.
+        return tl.where(mask_n, row_scales[:, None], (rows * 0.0)[:, None])
+    else:
+        w_scales = tl.load(WTensorScale + cols * col_stride, mask=mask_n, other=0.0)
+        return rows[:, None] * w_scales[None, :]
+
+
+@triton.jit
 def load_output_tensor_scale(Scale: tl.tensor | None, group: tl.tensor, group_stride, rows: tl.tensor,
                              row_stride: int | None | tl.tensor, mask: tl.tensor) -> tl.tensor | None:
     """Load the FP32 divisor as a scalar or a (BLOCK_M, 1) column of destination-row scales. Return None if omitted."""

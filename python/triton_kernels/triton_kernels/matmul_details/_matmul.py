@@ -21,6 +21,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     load_output_tensor_scale,
+    multiply_tensor_scales,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
@@ -387,7 +388,6 @@ def _matmul(
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     if has_w_tensor_scale:
-        offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         WTensorScale += expt_id * stride_w_tensor_scale_e
     # compute output
     acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
@@ -524,23 +524,13 @@ def _matmul(
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
     if has_x_epilogue_scale or has_w_tensor_scale:
-        x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
-        w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+        x_tensor_scales = None
         if has_x_epilogue_scale:
             x_tensor_scales = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
                                                  mask=offs_x_m >= 0 if GatherIndx is not None else True, other=1.0)
-        if has_x_epilogue_scale and has_w_tensor_scale and stride_w_tensor_scale_n is None:
-            row_scales = x_tensor_scales * tl.load(WTensorScale)
-            input_scales = row_scales[:, None]
-            if not OUT_N_TILE_ALIGNED or ACTIVATION_REDUCTION_N != 1:
-                # Padded columns have a zero W scale.
-                input_scales = tl.where(offs_w_tensor_scale_n[None, :] < N, input_scales,
-                                        (x_tensor_scales * 0.0)[:, None])
-        else:
-            if has_w_tensor_scale:
-                w_tensor_scales = _load_tensor_scale(WTensorScale, offs_w_tensor_scale_n.to(index_type),
-                                                     stride_w_tensor_scale_n, mask=offs_w_tensor_scale_n < N, other=0.0)
-            input_scales = x_tensor_scales[:, None] * w_tensor_scales[None, :]
+        cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        mask_n = True if OUT_N_TILE_ALIGNED and ACTIVATION_REDUCTION_N == 1 else cols < N
+        input_scales = multiply_tensor_scales(x_tensor_scales, WTensorScale, cols.to(index_type), stride_w_tensor_scale_n, mask_n)
         acc *= input_scales.T if SWAP_XW else input_scales
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)

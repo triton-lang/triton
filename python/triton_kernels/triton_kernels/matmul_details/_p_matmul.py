@@ -28,6 +28,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     load_output_tensor_scale,
+    multiply_tensor_scales,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
@@ -577,26 +578,13 @@ def _p_matmul(
             w_outer = tl.load(WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e)
             input_outer_scale = x_outer * w_outer
         elif HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
-            x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
-            w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+            x_tensor_scales = None
             if HAS_X_EPILOGUE_SCALE:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
-            if WTensorScale is not None:
-                w_scale_ptr = WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-            if HAS_X_EPILOGUE_SCALE and WTensorScale is not None and stride_w_tensor_scale_n is None:
-                row_scales = x_tensor_scales * tl.load(w_scale_ptr)
-                input_scales = row_scales[:, None]
-                if not OUT_N_TILE_ALIGNED or ACTIVATION_REDUCTION_N != 1:
-                    # Padded columns have a zero W scale.
-                    input_scales = tl.where(offs_w_tensor_scale_n[None, :] < N, input_scales,
-                                            (x_tensor_scales * 0.0)[:, None])
-            else:
-                if WTensorScale is not None:
-                    stride_n = 0 if stride_w_tensor_scale_n is None else stride_w_tensor_scale_n
-                    w_tensor_scales = tl.load(w_scale_ptr + offs_w_tensor_scale_n.to(index_type) * stride_n,
-                                              mask=offs_w_tensor_scale_n < N, other=0.0)
-                input_scales = x_tensor_scales[:, None] * w_tensor_scales[None, :]
+            w_scale_ptr = None if WTensorScale is None else WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
+            cols = off_n + tl.arange(0, BLOCK_N)
+            mask_n = True if OUT_N_TILE_ALIGNED and ACTIVATION_REDUCTION_N == 1 else cols < N
+            input_scales = multiply_tensor_scales(x_tensor_scales, w_scale_ptr, cols.to(index_type), stride_w_tensor_scale_n, mask_n)
             if SWAP_XW:
                 input_scales = input_scales.T
             if not FUSE_TENSOR_SCALE:
