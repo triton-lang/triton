@@ -668,7 +668,8 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
     if (res == CUDA_SUCCESS)
       res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
                                 device);
-    if (res == CUDA_SUCCESS && (major == 10 || major == 12)) {
+    if (res == CUDA_SUCCESS &&
+        (major == 10 || major == 11 || major == 12)) {
       // NVIDIA's documented Blackwell workaround for virtual/non-dense tensors:
       // https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-595-91-07/index.html#known-issues
       // Large-allocation OOB address generation requires 128 KiB of accessible
