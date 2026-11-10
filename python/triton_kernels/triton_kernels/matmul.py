@@ -702,8 +702,8 @@ def matmul(a, b, bias,
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
     n_groups = b.shape[0] if b.ndim == 3 else 1
-    a_tensor_strides = _tensor_scale_strides(a_tensor_scale, n_groups, a.shape[-2], matmul_input=True)
-    b_tensor_strides = _tensor_scale_strides(b_tensor_scale, n_groups, b.shape[-1], matmul_input=True)
+    a_tensor_scale_strides = _tensor_scale_strides(a_tensor_scale, n_groups, a.shape[-2], matmul_input=True)
+    b_tensor_scale_strides = _tensor_scale_strides(b_tensor_scale, n_groups, b.shape[-1], matmul_input=True)
     y_tensor_scale = out_matmul_flex.expected_scale
     y_group_stride, y_row_stride = _tensor_scale_strides(y_tensor_scale if nvfp4_output else None,
                                                          n_groups if is_c_ragged else batch_size,
@@ -751,11 +751,11 @@ def matmul(a, b, bias,
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
                    a_scale_tensor_or_tma, *a_scale_strides,
-                   a_tensor_scale, *a_tensor_strides,
+                   a_tensor_scale, *a_tensor_scale_strides,
                    b_tensor_or_tma, b.storage.data, *b_strides, b_transpose,
                    flex.rhs_data.scale,
                    b_scale_tensor_or_tma, *b_scale_strides,
-                   b_tensor_scale, *b_tensor_strides,
+                   b_tensor_scale, *b_tensor_scale_strides,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
