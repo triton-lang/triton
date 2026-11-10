@@ -20,6 +20,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    is_zero_stride,
     load_output_tensor_scale,
     multiply_tensor_scales,
     output_mx_scale_store_ptr,
@@ -28,10 +29,10 @@ from ._common import (
 
 
 @triton.jit
-def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride: int | None | tl.tensor,
+def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride,
                        mask, other: tl.constexpr) -> tl.tensor:
     """Return one input scale per offset, broadcasting a scalar load when the stride is shared."""
-    if stride is None:
+    if is_zero_stride(stride):
         return tl.where(mask, tl.broadcast_to(tl.load(Scale), offsets.shape), other)
     else:
         return tl.load(Scale + offsets * stride, mask=mask, other=other)
@@ -374,7 +375,7 @@ def _matmul(
         XMxScalePtrs = None
     if has_x_tensor_scale:
         XTensorScale += expt_id * stride_x_tensor_scale_z
-        if GatherIndx is None and stride_x_tensor_scale_m is not None:
+        if GatherIndx is None:
             XTensorScale += start_m * stride_x_tensor_scale_m
 
     # Inactive rows have no source scales; neutral scales preserve their zero values.

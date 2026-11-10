@@ -161,13 +161,18 @@ def compute_offsets(
     )
 
 
+@triton.constexpr_function
+def is_zero_stride(stride):
+    return isinstance(stride, int) and stride == 0
+
+
 @triton.jit
 def multiply_tensor_scales(x_scales, WTensorScale, cols, col_stride, mask_n):
     """Combine optional X row scales and W column scales in (M, N) order."""
     rows = x_scales if x_scales is not None else tl.full((1,), 1.0, tl.float32)
     if WTensorScale is None:
         return rows[:, None] * tl.full((), 1.0, tl.float32)
-    elif col_stride is None:
+    elif is_zero_stride(col_stride):
         row_scales = rows * tl.load(WTensorScale)
         # Padded columns have a zero W scale.
         return tl.where(mask_n, row_scales[:, None], (rows * 0.0)[:, None])
@@ -178,13 +183,13 @@ def multiply_tensor_scales(x_scales, WTensorScale, cols, col_stride, mask_n):
 
 @triton.jit
 def load_output_tensor_scale(Scale: tl.tensor | None, group: tl.tensor, group_stride, rows: tl.tensor,
-                             row_stride: int | None | tl.tensor, mask: tl.tensor) -> tl.tensor | None:
+                             row_stride, mask: tl.tensor) -> tl.tensor | None:
     """Load the FP32 divisor as a scalar or a (BLOCK_M, 1) column of destination-row scales. Return None if omitted."""
     if Scale is None:
         return None
     else:
         Scale += group * group_stride
-        if row_stride is None:
+        if is_zero_stride(row_stride):
             return tl.load(Scale)
         else:
             return tl.load(Scale + rows * row_stride, mask=mask, other=1.0)[:, None]

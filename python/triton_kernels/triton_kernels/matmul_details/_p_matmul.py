@@ -27,6 +27,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    is_zero_stride,
     load_output_tensor_scale,
     multiply_tensor_scales,
     output_mx_scale_store_ptr,
@@ -169,9 +170,7 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
-    SHARED_INPUT_SCALES: tl.constexpr = stride_x_tensor_scale_m is None and stride_w_tensor_scale_n is None
-    # Fold shared X positions into the address used by masked activation loads.
-    stride_x_tensor_scale_m = 0 if stride_x_tensor_scale_m is None else stride_x_tensor_scale_m
+    SHARED_INPUT_SCALES: tl.constexpr = is_zero_stride(stride_x_tensor_scale_m) and is_zero_stride(stride_w_tensor_scale_n)
     HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
@@ -270,7 +269,7 @@ def _p_matmul(
     SCALAR_NVFP4_SCALES: tl.constexpr = (
         HAS_X_EPILOGUE_SCALE and WTensorScale is not None and SHARED_INPUT_SCALES
         and is_out_fp4 and YActualScale.dtype.element_ty == tl.float8e4nv
-        and YExpectedScale is not None and stride_y_tensor_scale_m is None
+        and YExpectedScale is not None and is_zero_stride(stride_y_tensor_scale_m)
         and not HAS_GATHER and not FUSE_TENSOR_SCALE
     )
     yN = N // ACTIVATION_REDUCTION_N
