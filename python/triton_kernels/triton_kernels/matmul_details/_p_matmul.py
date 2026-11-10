@@ -27,7 +27,6 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
-    is_zero_stride,
     load_output_tensor_scale,
     multiply_tensor_scales,
     output_mx_scale_store_ptr,
@@ -85,21 +84,21 @@ _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul(
-             Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
-             YExpectedScale, stride_y_tensor_scale_z, stride_y_tensor_scale_m,
+             Y, YPtr, stride_y_k: tl.constexpr, stride_y_z: tl.constexpr, stride_y_m: tl.constexpr, stride_y_n: tl.constexpr,
+             YExpectedScale, stride_y_tensor_scale_z: tl.constexpr, stride_y_tensor_scale_m: tl.constexpr,
              YActualScale, YChecksumScale,
-             stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
-             X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
+             stride_y_mx_k: tl.constexpr, stride_y_mx_z: tl.constexpr, stride_y_mx_m: tl.constexpr, stride_y_mx_n: tl.constexpr,
+             X, XPtr, stride_x_z: tl.constexpr, stride_x_m: tl.constexpr, stride_x_k: tl.constexpr, X_TRANSPOSE: tl.constexpr,
              XScale,
-             XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
-             W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
+             XMxScale, stride_x_mx_z: tl.constexpr, stride_x_mx_m: tl.constexpr, stride_x_mx_k: tl.constexpr,
+             XTensorScale, stride_x_tensor_scale_z: tl.constexpr, stride_x_tensor_scale_m: tl.constexpr,
+             W, WPtr, stride_w_e: tl.constexpr, stride_w_k: tl.constexpr, stride_w_n: tl.constexpr, W_TRANSPOSE: tl.constexpr,
              WScale,
-             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
-             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
-             OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
+             WMxScale, stride_w_mx_e: tl.constexpr, stride_w_mx_k: tl.constexpr, stride_w_mx_n: tl.constexpr,
+             WTensorScale, stride_w_tensor_scale_e: tl.constexpr, stride_w_tensor_scale_n: tl.constexpr,
+             OutAcc, stride_acc_z: tl.constexpr, stride_acc_m: tl.constexpr, stride_acc_n: tl.constexpr,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
-             B, stride_b_e, # Bias
+             B, stride_b_e: tl.constexpr, # Bias
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
@@ -170,7 +169,7 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
-    SHARED_INPUT_SCALES: tl.constexpr = is_zero_stride(stride_x_tensor_scale_m) and is_zero_stride(stride_w_tensor_scale_n)
+    SHARED_INPUT_SCALES: tl.constexpr = stride_x_tensor_scale_m == 0 and stride_w_tensor_scale_n == 0
     HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
@@ -269,7 +268,7 @@ def _p_matmul(
     SCALAR_NVFP4_SCALES: tl.constexpr = (
         HAS_X_EPILOGUE_SCALE and WTensorScale is not None and SHARED_INPUT_SCALES
         and is_out_fp4 and YActualScale.dtype.element_ty == tl.float8e4nv
-        and YExpectedScale is not None and is_zero_stride(stride_y_tensor_scale_m)
+        and YExpectedScale is not None and stride_y_tensor_scale_m == 0
         and not HAS_GATHER and not FUSE_TENSOR_SCALE
     )
     yN = N // ACTIVATION_REDUCTION_N

@@ -3,7 +3,6 @@
 from dataclasses import dataclass, replace
 import torch
 import triton
-import triton.language as tl
 from enum import Enum, auto
 import math
 from typing import Callable
@@ -692,7 +691,7 @@ def matmul(a, b, bias,
         if table is not None:
             group_stride = table.stride(0) if table.size(0) != 1 else 0
             position_stride = table.stride(1) if table.size(1) != 1 else 0
-        tensor_scale_strides.append((group_stride or tl.constexpr(0), position_stride or tl.constexpr(0)))
+        tensor_scale_strides.append((group_stride, position_stride))
     a_tensor_scale_strides, b_tensor_scale_strides, (y_group_stride, y_row_stride) = tensor_scale_strides
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
