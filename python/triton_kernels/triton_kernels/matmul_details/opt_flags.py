@@ -277,18 +277,13 @@ def make_default_opt_flags_nvidia(
                 block_m = 128
         else:
             block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
-    a_mx_scale_layout = None
-    if isinstance(precision_config.a_mx_scale, Tensor):
-        a_mx_scale_layout = precision_config.a_mx_scale.storage.layout
-    b_mx_scale_layout = None
-    if isinstance(precision_config.b_mx_scale, Tensor):
-        b_mx_scale_layout = precision_config.b_mx_scale.storage.layout
+    a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
+    b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
 
     def _is_layout_strided(layout: Layout | None) -> bool:
         return layout is None or isinstance(layout, StridedLayout)
 
     strided_mx_scales = _is_layout_strided(a_mx_scale_layout) and _is_layout_strided(b_mx_scale_layout)
-    requires_persistent = not strided_mx_scales and target_info.has_native_mxfp()
 
     # block n
     arch = None
@@ -320,6 +315,7 @@ def make_default_opt_flags_nvidia(
             raise InapplicableConstraint("cannot enforce `clc=True` constraint without persistent TMA support")
         if constraints.get("is_persistent", True) is False:
             raise InapplicableConstraint("`clc=True` requires `is_persistent=True`")
+    requires_persistent = not strided_mx_scales and target_info.has_native_mxfp()
     if clc:
         is_persistent = True
     elif constraints.get("is_persistent", None) is not None:

@@ -161,7 +161,6 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
         return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
-
 # ---------------------
 # Allocation
 # ---------------------
@@ -278,9 +277,9 @@ def matmul(a, b, bias,
 
     NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
     Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
-    is NVFP4 (packed FP4 values with E4M3 block scales). A scalar broadcasts globally.
-    For batched or ragged-M matmul, a scale of shape (E, 1) supplies one value per
-    batch or expert. Ragged-M selects the activation scale by the scheduled expert
+    is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
+    A scalar broadcasts globally. In batched or ragged-M matmul, (E, 1) supplies one
+    scale per batch or expert. Ragged-M selects the activation scale by the scheduled expert
     even when it gathers a token shared by several experts. A 1D input scale
     indexes positions, equivalent to (1, M_source) for X or (1, N) for W.
     An (E, M_source) scale uses both the scheduled expert and the source row.
@@ -382,21 +381,20 @@ def matmul(a, b, bias,
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
     x_is_nvfp4 = a_tensor_scale is not None
     w_is_mxfp4 = b.dtype == FP4 and b_scale is not None and b_scale.data.dtype == torch.uint8
-    if x_is_nvfp4 and w_is_mxfp4:
+    requantize_a = x_is_nvfp4 and w_is_mxfp4
+    if requantize_a:
         assert a.shape[-1] % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
         precision_config = replace(
             precision_config,
             out_dtype=precision_config.out_dtype or (c.dtype if c is not None else torch.bfloat16),
         )
-        dot_a_dtype = FP8_E4M3FN
-        dot_a_microblock_size = b_microblock_size
-    else:
-        dot_a_dtype = a.dtype
-        dot_a_microblock_size = a_microblock_size
-    mx_block_size = dot_a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
+    mx_block_size = (
+        b_microblock_size if requantize_a else
+        a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
+    )
     assert all(
         size is None or size == mx_block_size
-        for size in (dot_a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+        for size in (None if requantize_a else a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
     ), (
         "Microscaled operands/output must share a block size. "
         f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
@@ -462,6 +460,8 @@ def matmul(a, b, bias,
         a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
     else:
         a_uses_tma_when_persistent = has_gather_tma or not has_gather
+    # Select tiles for the operand consumed by the dot, not its packed input.
+    dot_a_dtype = FP8_E4M3FN if requantize_a else a.dtype
     opt_flags = make_opt_flags(out_dtype, dot_a_dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
@@ -1044,9 +1044,9 @@ def matmul_torch(a, b, bias,
     if scatter_indx is None:
         out = y
     else:
-        out = y.new_zeros((scatter_indx.numel(), y.size(-1)))
-        active = scatter_indx != -1
-        out[scatter_indx[active]] = y[active]
+        out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
+        msk = scatter_indx != -1
+        out[scatter_indx[msk], :] = y[msk, :]
     return finish_output(out)
 
 

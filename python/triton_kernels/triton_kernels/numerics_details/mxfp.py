@@ -161,9 +161,9 @@ def upcast_from_mxfp(
     axis = axis if axis >= 0 else axis + ndim
     assert tensor.ndim == scale.ndim, (f"Weight and scale must have the same number of dimensions. "
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
-    if tensor_scale is not None:
-        fiber_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
-        tensor_scale = broadcast_tensor_scale(tensor_scale, fiber_shape).unsqueeze(axis)
+    if tensor_scale is not None and tensor_scale.numel() != 1:
+        expected_tensor_scale_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
+        tensor_scale = broadcast_tensor_scale(tensor_scale, expected_tensor_scale_shape)
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -225,7 +225,8 @@ def upcast_from_mxfp(
         out = torch.empty(original_out_shape, dtype=target_dtype, device=tensor.device)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     if tensor_scale is not None:
-        out = out * tensor_scale.to(device=out.device)
+        tensor_scale_shape = (1,) * out.ndim if tensor_scale.numel() == 1 else (*tensor_scale.shape[:axis], 1, *tensor_scale.shape[axis:])
+        out = out * tensor_scale.to(device=out.device).reshape(tensor_scale_shape)
     return out
 
 
@@ -258,9 +259,9 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
          • For FP4, the size along the axis is halved, and the tensor is returned as a torch.uint8.
       scale: Scale tensor computed per microblock along the axis.
 
-    expected_scale broadcasts over the remaining axes in their original order,
-    with the same group-vector convention as upcast_from_mxfp. Precondition
-    the FP32 source with its reciprocal, as in float_to_flex.
+    If expected_scale is provided, apply the same preconditioning as float_to_flex
+    before microscaled output quantization by multiplying by its FP32 reciprocal.
+    It broadcasts over the remaining axes as in upcast_from_mxfp.
     """
     # This should probably be packed into its own tiny class
     ndim = src_tensor.ndim
@@ -289,8 +290,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
 
     src = src_tensor.to(torch.float32)
     if expected_scale is not None:
-        fiber_shape = src.shape[:axis] + src.shape[axis + 1:]
-        scale = broadcast_tensor_scale(expected_scale, fiber_shape).unsqueeze(axis)
+        expected_tensor_scale_shape = src.shape[:axis] + src.shape[axis + 1:]
+        scale = broadcast_tensor_scale(expected_scale, expected_tensor_scale_shape).unsqueeze(axis)
         src = src * scale.to(device=device, dtype=src.dtype).reciprocal()
     # Permute the tensor so that the contiguous axis becomes the last dimension.
     src = src.transpose(axis, -1)

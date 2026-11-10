@@ -762,8 +762,8 @@ def test_matmul_rejects_invalid_tensor_scale(matmul_fn, operand, dtype, scale_dt
     invalid = make_operand(dtype, scale_dtype, has_tensor_scale)
     (a, sa, a_tensor_scale), (b, sb, b_tensor_scale) = (invalid, valid) if operand == "a" else (valid, invalid)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb.T if sb is not None else None,
-                             a_mx_tensor_scale=a_tensor_scale, b_mx_tensor_scale=b_tensor_scale,
-                             a_microblock_size=16, b_microblock_size=16)
+                             a_microblock_size=16, b_microblock_size=16,
+                             a_mx_tensor_scale=a_tensor_scale, b_mx_tensor_scale=b_tensor_scale)
     with pytest.raises(ValueError, match="tensor scale must be set if and only if the operand is NVFP4"):
         matmul_fn(a, b.T, None, precision_config=config)
 
