@@ -920,20 +920,19 @@ def matmul_torch(a, b, bias,
         offs = [(0, n_rows)] * n_groups
 
     x_scale = precision_config.a_mx_tensor_scale
-    if x_scale is not None and a.ndim == 2 and b_ragged_metadata is None:
+    if x_scale is not None and x_scale.numel() > 1 and a.ndim == 2 and b_ragged_metadata is None:
         table = _input_scale_table(x_scale, n_groups, a.shape[-2])
-        if gather_indx is not None or table.stride(0) != 0:
-            # An activation may visit multiple experts with different outer scales.
-            x_scale = table.new_ones((1, n_rows))
-            for expert, (lo, hi) in enumerate(offs):
-                if gather_indx is None:
-                    x_scale[0, lo:hi] = table[expert, lo:hi]
-                else:
-                    rows = gather_indx[lo:hi]
-                    active = rows >= 0
-                    x_scale[0, lo:hi][active] = table[expert, rows[active]]
+        # Each routed row selects its expert's scale for the original activation row.
+        expert = torch.zeros(n_rows, device=table.device, dtype=torch.long)
+        for i, (lo, hi) in enumerate(offs):
+            expert[lo:hi] = i
+        if gather_indx is None:
+            x_scale = table[expert, torch.arange(n_rows, device=table.device)]
         else:
-            x_scale = table[:1]
+            rows = gather_indx.to(table.device)
+            active = rows >= 0
+            x_scale = table.new_ones(n_rows)
+            x_scale[active] = table[expert[active], rows[active]]
         precision_config = replace(precision_config, a_mx_tensor_scale=x_scale)
 
     if gather_indx is not None:
@@ -1035,19 +1034,13 @@ def matmul_torch(a, b, bias,
     for i, (lo, hi) in enumerate(offs):
         batch = i if is_input_batched else 0
         x = a[batch, lo:hi]
-        y[batch, lo:hi] = dot(x, b[i], i, lo, hi)
+        out = dot(x, b[i], i, lo, hi)
+        if y_scales is not None:
+            dest = slice(lo, hi) if scatter_indx is None else scatter_indx[lo:hi].clamp_min(0)
+            out = out.to(result_dtype) / y_scales[i, dest, None]
+        y[batch, lo:hi] = out
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
-    if y_scales is not None:
-        if is_input_batched:
-            y = y / y_scales[:, :, None]
-        else:
-            for expert, (lo, hi) in enumerate(offs):
-                if scatter_indx is None:
-                    dest = slice(lo, hi)
-                else:
-                    dest = scatter_indx[lo:hi].clamp_min(0)
-                y[lo:hi] /= y_scales[expert, dest, None]
     if scatter_indx is None:
         out = y
     else:
