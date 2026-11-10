@@ -5,7 +5,7 @@ import torch
 import triton
 from enum import Enum, auto
 import math
-from typing import Callable, Sequence
+from typing import Callable
 # utilities
 from triton_kernels import target_info
 from triton_kernels.meta import Closure
@@ -893,36 +893,6 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
     return maxvals / max_finite
 
 
-def _reference_output(out: torch.Tensor, precision_config: PrecisionConfig, n_groups: int,
-                      expert_slices: Sequence[tuple[int, int]] = (), scatter: torch.Tensor | None = None) -> torch.Tensor:
-    flex = precision_config.flex_ctx.out_data
-    expected_scale = flex.expected_scale
-    block_scale = precision_config.c_mx_scale
-    if expected_scale is not None and block_scale is not None and block_scale.data.dtype == torch.float8_e4m3fn:
-        n_rows = out.size(-2) if scatter is None else scatter.numel()
-        table = broadcast_tensor_scale(expected_scale, (n_groups, n_rows))
-        if out.ndim == 3:
-            out = out / table[:, :, None]
-        else:
-            # Scattered rows use the scale at their destination.
-            for expert, (lo, hi) in enumerate(expert_slices):
-                if scatter is None:
-                    dest = slice(lo, hi)
-                else:
-                    dest = scatter[lo:hi].clamp_min(0)
-                out[lo:hi] /= table[expert, dest, None]
-        expected_scale = None
-
-    if scatter is not None:
-        result = out.new_zeros((scatter.numel(), out.size(-1)))
-        active = scatter != -1
-        result[scatter[active]] = out[active]
-        out = result
-    if flex.actual_scale is not None:
-        flex.actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-    return scale(out, expected_scale)
-
-
 def matmul_torch(a, b, bias,
                  a_ragged_metadata: RaggedTensorMetadata | None = None,
                  b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -993,6 +963,20 @@ def matmul_torch(a, b, bias,
     if bias is not None and bias.ndim == 1:
         bias = bias[None, :]
 
+    flex = precision_config.flex_ctx.out_data
+    expected_scale = flex.expected_scale
+    y_scales = None
+    if nvfp4_output and expected_scale is not None:
+        output_groups = n_groups if b_ragged_metadata is None else b_ragged_metadata.slice_sizes.shape[0]
+        output_rows = n_rows if scatter_indx is None else scatter_indx.numel()
+        y_scales = broadcast_tensor_scale(expected_scale, (output_groups, output_rows))
+        expected_scale = None
+
+    def finish_output(out):
+        if flex.actual_scale is not None:
+            flex.actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
+        return scale(out, expected_scale)
+
     def dot(x, w, group, lo, hi):
         if round_x is not None:
             x = round_x(x, torch.arange(lo, hi, device=x.device))
@@ -1021,7 +1005,9 @@ def matmul_torch(a, b, bias,
             x_slice = a[:, x_start:x_start + k]
             w_slice = b[w_start:w_start + k, :]
             out[expt] = dot(x_slice, w_slice, 0, 0, m).to(result_dtype)
-        return _reference_output(out, precision_config, n_expts_tot)
+        if y_scales is not None:
+            out = out / y_scales[:, :, None]
+        return finish_output(out)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -1048,7 +1034,23 @@ def matmul_torch(a, b, bias,
         y[batch, lo:hi] = dot(x, b[i], i, lo, hi)
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
-    return _reference_output(y, precision_config, n_groups, offs, scatter_indx)
+    if y_scales is not None:
+        if is_input_batched:
+            y = y / y_scales[:, :, None]
+        else:
+            for expert, (lo, hi) in enumerate(offs):
+                if scatter_indx is None:
+                    dest = slice(lo, hi)
+                else:
+                    dest = scatter_indx[lo:hi].clamp_min(0)
+                y[lo:hi] /= y_scales[expert, dest, None]
+    if scatter_indx is None:
+        out = y
+    else:
+        out = y.new_zeros((scatter_indx.numel(), y.size(-1)))
+        active = scatter_indx != -1
+        out[scatter_indx[active]] = y[active]
+    return finish_output(out)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
