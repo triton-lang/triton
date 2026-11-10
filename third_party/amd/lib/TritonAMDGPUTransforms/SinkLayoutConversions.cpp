@@ -45,9 +45,8 @@ static void sinkLayoutConversions(triton::FuncOp funcOp) {
 } // namespace
 
 struct TritonAMDGPUSinkLayoutConversionsPass
-    : public impl::TritonAMDGPUSinkLayoutConversionsBase<
+    : impl::TritonAMDGPUSinkLayoutConversionsBase<
           TritonAMDGPUSinkLayoutConversionsPass> {
-
   void runOnOperation() override { sinkLayoutConversions(getOperation()); }
 };
 

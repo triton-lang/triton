@@ -55,7 +55,8 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
   auto nBlocks = product(triton::gpu::getCTASplitNum(
-      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout)));
+      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout),
+      convertType<int64_t>(llvm::to_vector(srcLayout.getOutDimSizes()))));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
@@ -101,6 +102,11 @@ unsigned getAtomicResultScratchSize(Value result) {
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op)) {
+    if (handoff.getSource().hasSameWarpAndBlock(handoff.getDestination()))
+      return 0;
+    return gpu::getSharedMemorySize(handoff.getType());
+  }
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
   }
@@ -149,10 +155,21 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
     return ws.getCaptureSize();
   }
+  if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+    // The default dispatcher stores one command byte per worker warp.
+    unsigned numWorkers = 0;
+    func.walk([&](gpu::WarpSpecializeOp ws) {
+      numWorkers = std::max(numWorkers, ws.getTotalPartitionWarps());
+    });
+    return numWorkers;
+  }
   return 0;
 }
 
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
+  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
+    return handoff.getSource().getBlock() &
+           ~handoff.getDestination().getBlock();
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
   if (op->getNumResults() == 0)
@@ -169,6 +186,9 @@ std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
 bool hasCrossCTAScratch(Operation *op) {
   if (gpu::lookupNumCTAs(op) == 1)
     return false;
+  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
+    return handoff.getSource().getBlock() !=
+           handoff.getDestination().getBlock();
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
@@ -187,20 +207,9 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty() &&
-           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
-  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
-    if (op->getNumResults() == 0)
-      return false;
-    Value result = op->getResult(0);
-    if (result.use_empty())
-      return false;
-    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
-    if (!resultTy)
-      return true;
-    auto block = StringAttr::get(op->getContext(), "block");
-    return gpu::toLinearLayout(resultTy).getFreeVariableMasks().lookup(block) !=
-           0;
-  }
+           getResultScratchBroadcastMask(op).value_or(0) != 0;
+  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op))
+    return atomicResultHasCTABroadcast(op);
   return false;
 }
 
@@ -317,17 +326,11 @@ private:
                                                           captureAlign);
       return;
     }
-    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
-      unsigned numWarpIndices = 0;
-      // Warp specialization communicates states over shared memory to each
-      // warp. Add space for an i8 for each warpgroup warp.
-      func.walk([&](gpu::WarpSpecializeOp op) {
-        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
-      });
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
+    unsigned bytes = scratchSizeGetter(op);
+    if (isa<FunctionOpInterface>(op)) {
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
       return;
     }
-    unsigned bytes = scratchSizeGetter(op);
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
   }

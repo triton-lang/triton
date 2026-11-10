@@ -135,6 +135,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     argmax
     argmin
     max

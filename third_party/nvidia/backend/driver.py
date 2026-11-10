@@ -10,7 +10,14 @@ from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    decompose_descriptor,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -123,13 +130,18 @@ class CudaUtils(object):
         self.get_default_stream = mod.get_default_stream
         self.is_stream_capturing = mod.is_stream_capturing
         self.get_device_capability = mod.get_device_capability
-        self.get_device_properties = mod.get_device_properties
+        self._get_device_properties = functools.lru_cache(maxsize=None)(mod.get_device_properties)
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
         self.fill_tma_descriptor_tiled = mod.fill_tma_descriptor_tiled
         self.fill_tma_descriptor_im2col = mod.fill_tma_descriptor_im2col
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
+
+    def get_device_properties(self, device):
+        # CUDA device attributes are immutable. Keep the cached dictionary private
+        # so callers can continue to mutate their results independently.
+        return self._get_device_properties(device).copy()
 
 
 # ------------------------
@@ -153,35 +165,14 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
 def annotate_arguments(signature):
@@ -206,6 +197,7 @@ TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
+TMA_B4X16_P64 = 14
 
 
 def make_tensordesc_arg(arg, metadata, _):
@@ -216,7 +208,6 @@ def make_tensordesc_arg(arg, metadata, _):
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
     block_size = metadata["block_size"]
-    fp4_padded = metadata["fp4_padded"]
     is_im2col = metadata.get("is_im2col", False)
 
     shape = arg.shape
@@ -224,7 +215,8 @@ def make_tensordesc_arg(arg, metadata, _):
     assert strides[-1] == 1
     padding = 1 if arg.padding == "nan" else 0
 
-    if fp4_padded:
+    if elem_type == TMA_B4X16_P64:
+        # CUDA counts FP4 values. The backing tensor stores two per byte.
         expanded_shape = list(shape)
         expanded_shape[-1] *= 2
     else:
@@ -273,13 +265,12 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
+        signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        tensordesc_abi = TensorDescABI.CUDA_TMA if tensordesc_meta else TensorDescABI.DECOMPOSED
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
+        self.gsan_profile_enabled = is_enabled(metadata, "gsan-profile")
         self.shared = metadata.shared
         max_occupancy = getattr(metadata, "max_occupancy", None)
         if max_occupancy is not None:
@@ -288,19 +279,24 @@ class CudaLauncher(object):
             active_driver = triton.runtime.driver.active
             device = active_driver.get_current_device()
             properties = active_driver.utils.get_device_properties(device)
-            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            # Budget for max_occupancy CTAs, including the driver reservation.
+            # Ampere and newer allocate shared memory in 128-byte units. Round
+            # down before subtracting the reservation so all CTAs still fit.
+            shared_per_cta = properties["max_shared_mem_per_multiprocessor"] // max_occupancy
+            min_shared = shared_per_cta // 128 * 128 - properties["reserved_shared_mem_per_block"]
             self.shared = max(self.shared, min_shared)
-        if self.gsan_enabled:
+        if self.gsan_enabled or self.gsan_profile_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_launch_table_ptr"] = "*i8"
             signature["_gsan_launch_index"] = "i64"
 
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
+        self.kernel_signature = utils.build_signature_metadata(
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
         self.num_ctas = getattr(metadata, "num_ctas", 1)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
@@ -335,7 +331,10 @@ class CudaLauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         kernel_args = args
-        if self.gsan_enabled:
+        if self.gsan_profile_enabled:
+            from triton.experimental.gsan.profile import _launch_state
+            kernel_args = (*args, _launch_state(), 0, 0)
+        elif self.gsan_enabled:
             if active_driver.utils.is_stream_capturing(stream):
                 raise RuntimeError("GSan does not support CUDA graph capture")
 

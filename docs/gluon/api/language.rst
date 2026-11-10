@@ -166,6 +166,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     reduce
     reduce_or
     sum

@@ -21,7 +21,6 @@
 // Below headers will allow registration to ROCm passes
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -137,7 +136,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUWarpPipeline();
   mlir::registerTritonAMDFoldTrueCmpI();
   mlir::registerTritonAMDGPUFpSanitizer();
-  mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
+  mlir::registerTritonAMDGPUOptimizeDotOperands();
   mlir::registerConSanAMDHooks();
 
   // NVWS passes

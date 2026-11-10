@@ -9,6 +9,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -712,7 +713,7 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
-// at the bounaries and give higher priority to memory clusters.
+// at the boundaries and give higher priority to memory clusters.
 // See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule.
 //
 // Notes
@@ -1051,7 +1052,7 @@ void Pingponger::getDotPingponged() {
   }
 
   if (numOfDotLikeOps == 2) {
-    if (numStages != 4)
+    if (numStages != 4 || dotOps.size() != 2)
       return;
 
     if (transformChainedDotSchedule(builder, loc).failed()) {
@@ -1082,7 +1083,7 @@ void Pingponger::getDotPingponged() {
     auto scaledDotType = scaledDotOps[0].getType();
     auto scaledDotShape = scaledDotType.getShape();
     auto aType = scaledDotOps[0].getA().getType();
-    auto elemWidth = aType.getElementTypeBitWidth();
+    unsigned elemWidth = getIntOrFloatOrPtrBitWidth(aType.getElementType());
 
     // MxN = 256x256
     if (scaledDotShape[0] == 256 && scaledDotShape[1] == 256 &&
@@ -1109,7 +1110,7 @@ void Pingponger::getDotPingponged() {
   auto dotShape = dotType.getShape();
   auto aType = dotOps[0].getA().getType();
   auto aShape = aType.getShape();
-  auto elemWidth = aType.getElementTypeBitWidth();
+  unsigned elemWidth = getIntOrFloatOrPtrBitWidth(aType.getElementType());
   int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
   const int64_t minTile = 262144;      // e.g. 32x128x64x16bit

@@ -135,7 +135,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
     result = inferLayout->inferReshapeOpEncoding(
         srcTy.getShape(), srcTy.getEncoding(), dstTy.getShape(), inferredEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
   }
 
   // We expect the reshape to succeed as long as the inputs have the same
@@ -160,7 +160,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
     Attribute inferredSrcEnc;
     auto result = inferLayout->inferReshapeOpEncoding(
         dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
-        /*allowReorder=*/false, UnknownLoc::get(ctx));
+        UnknownLoc::get(ctx));
     EXPECT_TRUE(succeeded(result))
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
@@ -285,6 +285,9 @@ INSTANTIATE_TEST_SUITE_P(
 
         {R"(T<2x1x2xf32, #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>>)",
          R"(T<2x2xf32, #ttg.slice<{dim = 1, parent = #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>}>>)"},
+
+        {R"(T<2xi32, #B<{spt=[1], tpw=[32], wpc=[4], ord=[0], CGALayout=[[1],[0]]}>>)",
+         "T<2x1xi32>"},
     })));
 
 class Fp4ToFpOpTest : public ::testing::Test {
@@ -363,6 +366,21 @@ TEST_F(ShapePerCTATest, ShapePerCTA) {
   EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 }
 
+TEST_F(ShapePerCTATest, CTASplitNumUsesTensorShape) {
+  auto cga = CGAEncodingAttr::fromSplitParams(&ctx, {2, 1}, {2, 1}, {0, 1});
+  auto blocked =
+      BlockedEncodingAttr::get(&ctx, {1, 1}, {4, 8}, {1, 4}, {1, 0}, cga);
+  auto linear = toLinearEncoding(blocked, {4, 16});
+  for (auto encoding : SmallVector<Attribute>{blocked, linear}) {
+    EXPECT_EQ(getCTASplitNum(encoding, {1, 16}), (SmallVector<unsigned>{1, 1}));
+    EXPECT_EQ(getCTASplitNum(encoding, {4, 16}), (SmallVector<unsigned>{2, 1}));
+  }
+  EXPECT_EQ(getCTASplitNum(linear, {2, 16}), (SmallVector<unsigned>{1, 1}));
+  EXPECT_EQ(getShapePerCTA(linear, {2, 16}), (SmallVector<int64_t>{1, 16}));
+  auto nvmma = NVMMASharedEncodingAttr::get(&ctx, 128, false, 32, false, cga);
+  EXPECT_EQ(getShapePerCTA(nvmma, {1, 32}), (SmallVector<int64_t>{1, 32}));
+}
+
 class JoinOpTest : public ::testing::Test {
 public:
   JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
@@ -430,8 +448,7 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       }
       Attribute reshapedEnc;
       result = inferLayout->inferReshapeOpEncoding(
-          transShape, transEnc, newShape, reshapedEnc,
-          /*allowReorder=*/false, std::nullopt);
+          transShape, transEnc, newShape, reshapedEnc, std::nullopt);
       assert(succeeded(result));
       // The layouts should be structurally the same
       // but reshapeEnc will likely be a LinearEncodingAttr

@@ -974,23 +974,31 @@ tt.func @partition_outside_alloc_interference() {
 }
 
 // expected-remark @below {{ptr_allocation_datalayout}}
-// expected-remark @below {{size = 8}}
+// expected-remark @below {{size = 12}}
+// expected-remark @below {{offset = 8, size = 4}}
 tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
   // expected-remark @below {{offset = 0, size = 8}}
   ttg.warp_specialize(%arg0)
   default {
     ttg.warp_yield
+  }
+  partition0(%ptr: !tt.ptr<i32>) num_warps(4) {
+    ttg.warp_return
   } : (!tt.ptr<i32>) -> ()
   tt.return
 }
 
 // expected-remark @below {{tightly_packed_captures}}
-// expected-remark @below {{size = 9}}
+// expected-remark @below {{size = 16}}
+// expected-remark @below {{offset = 12, size = 4}}
 tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
   // expected-remark @below {{offset = 0, size = 9}}
   ttg.warp_specialize(%arg0, %arg1)
   default {
     ttg.warp_yield
+  }
+  partition0(%value: i8, %address: i64) num_warps(4) {
+    ttg.warp_return
   } : (i8, i64) -> ()
   tt.return
 }

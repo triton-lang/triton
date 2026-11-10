@@ -2,37 +2,15 @@ from __future__ import annotations
 
 import functools
 import gc
-from enum import IntEnum
-from pathlib import Path
 from types import ModuleType
 from typing import Literal, overload
 
-from triton.runtime import driver as runtime_driver
-from triton.runtime.build import compile_module_from_file
-
-_THIS_DIR = Path(__file__).resolve().parent
-_GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
-
-
-class ShareableHandleType(IntEnum):
-    POSIX_FILE_DESCRIPTOR = 0x1
-    FABRIC = 0x8
+from ._allocator_common import ShareableHandleType, load_allocator
 
 
 @functools.lru_cache()
 def _load_gsan_module() -> ModuleType:
-    if runtime_driver.active.get_current_target().backend != "cuda":
-        raise RuntimeError("GSan allocator requires the CUDA backend.")
-
-    from triton.backends.nvidia.driver import library_dirs, include_dirs
-
-    return compile_module_from_file(
-        src_path=str(_GSAN_SOURCE_PATH),
-        name="gsan_allocator",
-        library_dirs=library_dirs(),
-        include_dirs=include_dirs,
-        libraries=["libcuda.so.1"],
-    )
+    return load_allocator("GSanAllocator.cc", "gsan_allocator")
 
 
 @functools.lru_cache()
@@ -85,7 +63,7 @@ def configure(
     """Configures the process-local GSan state.
 
     GSan keeps one allocator configuration per process. Call this before the
-    allocator initializes runtime state, or before calling :func:`freeze_config`.
+    first allocation, runtime-state initialization, or :func:`freeze_config`.
     Once frozen, later calls to :func:`configure` raise ``RuntimeError``.
 
     Args:

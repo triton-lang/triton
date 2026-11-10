@@ -14,6 +14,38 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
     return (base + offsets).reshape(array.shape)
 
 
+@pytest.mark.parametrize("dtype, prefix", [
+    (tl.float16, "fcmpO"),
+    (tl.float32, "fcmpO"),
+    (tl.float64, "fcmpO"),
+    (tl.float32, "fcmpU"),
+    (tl.int32, "icmpS"),
+    (tl.uint32, "icmpU"),
+    (tl.int1, "icmpU"),
+])
+@pytest.mark.parametrize("op, expected", [
+    ("LT", [True, False, False, False]),
+    ("LE", [True, True, False, True]),
+    ("GT", [False, False, True, False]),
+    ("GE", [False, True, True, True]),
+    ("EQ", [False, True, False, True]),
+    ("NE", [True, False, True, False]),
+])
+def test_compare_op_return_type(dtype, prefix, op, expected):
+    builder = interpreter.InterpreterBuilder()
+    np_dtype = interpreter._get_np_dtype(dtype)
+    lhs = interpreter.TensorHandle(np.array([0, 1, 2, 3], dtype=np_dtype), dtype)
+    rhs = interpreter.TensorHandle(np.array([1, 1, 0, 3], dtype=np_dtype), dtype)
+    if dtype.is_int() and op in ("EQ", "NE"):
+        prefix = "icmp"
+    result = getattr(builder, f"create_{prefix}{op}")(lhs, rhs)
+    assert result.dtype == tl.int1
+    assert result.data.dtype == np.bool_
+    np.testing.assert_array_equal(result.data, expected)
+    converted = builder.create_ui_to_fp(result, tl.float16)
+    np.testing.assert_array_equal(converted.data, np.array(expected, dtype=np.float16))
+
+
 def test_bf16_to_fp16_rounding_and_overflow():
     # Signed zeros, finite values, overflow, subnormal rounding, and infinities.
     bits = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x4781, 0xC781, 0x3300, 0x3301, 0x33C0, 0xB3C0, 0x7F80, 0xFF80],
@@ -45,6 +77,21 @@ def test_float_conversion_subnormal_rounding(src_dtype, dst_dtype, bits, expecte
     data = np.array(bits, dtype=uint_dtype).view(interpreter._get_np_dtype(src_dtype))
     result = interpreter._convert_float(data, src_dtype, dst_dtype, ir.ROUNDING_MODE.RTNE)
     np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("src_dtype, codes, expected", [
+    (tl.float8e4nv, [0x7F, 0xFF, 0x7E], [float('nan'), float('nan'), 448.0]),
+    (tl.float8e5, [0x7C, 0xFC, 0x7D], [float('inf'), float('-inf'), float('nan')]),
+    (tl.float8e4b8, [0x80, 0x7F], [float('nan'), 240.0]),
+    (tl.float8e5b16, [0x80, 0x7F], [float('nan'), 57344.0]),
+    (tl.float8e4b15, [0x7F], [1.875]),
+])
+def test_fp8_upcast_special_codes(src_dtype, codes, expected):
+    # The FP8 Inf/NaN encodings must decode as such, not as finite numbers.
+    data = np.array(codes, dtype=np.uint8)
+    result = interpreter._convert_float(data, src_dtype, tl.float32, ir.ROUNDING_MODE.RTNE)
+    for got, want in zip(result.view(np.float32).tolist(), expected):
+        assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
@@ -159,3 +206,40 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
+    import importlib.util
+    import torch
+
+    source = tmp_path / "core_helper.py"
+    source.write_text("import triton.language.core as core\n"
+                      "def helper(out, fail):\n"
+                      "    core.store(out, core.full((), 7, core.int32))\n"
+                      "    if fail:\n"
+                      "        raise ValueError('helper failed')\n")
+    spec = importlib.util.spec_from_file_location("core_helper", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    helper = interpreter.InterpretedFunction(module.helper)
+
+    def caller(out, helper: tl.constexpr, fail: tl.constexpr):
+        helper(out, fail)
+        tl.store(out, tl.load(out) + 1)
+
+    original = tl.core.full
+    # Restore module attributes even if the regression assertion fails.
+    for name, value in vars(tl.core).copy().items():
+        monkeypatch.setattr(tl.core, name, value)
+    output = torch.zeros((), dtype=torch.int32)
+    kernel = interpreter.InterpretedFunction(caller)
+    if fail:
+        with pytest.raises(interpreter.InterpreterError, match="helper failed"):
+            kernel[(1, )](output, helper, fail)
+    else:
+        kernel[(1, )](output, helper, fail)
+    assert output.item() == (7 if fail else 8)
+    assert tl.core.full is original
+    with pytest.raises(ValueError, match="_semantic"):
+        tl.core.full((), 7, tl.int32)

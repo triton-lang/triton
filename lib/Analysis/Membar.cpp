@@ -183,9 +183,10 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
                 ? ThreadSyncKind::CompletionNeedsSync
                 : ThreadSyncKind::Completion};
   }
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(op)) {
-    // Init and inval use the same full-mask election, or thread zero before
-    // SM90.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
+          ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp>(op)) {
+    // Each issuing CTA elects a lane in its partition's warp zero.
+    // Init and inval use thread zero before SM90.
     return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
   }
   if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
@@ -201,9 +202,10 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   }
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
-                                                : ThreadSyncKind::Publication};
+                                                : ThreadSyncKind::Publication,
+            ThreadIssuer::Warp0Leader};
   if (isa<ttng::TCGen5CommitOp>(op))
-    return {ThreadSyncKind::Publication};
+    return {ThreadSyncKind::Publication, ThreadIssuer::Warp0Leader};
   return {};
 }
 
@@ -273,11 +275,6 @@ ThreadIssuer getThreadIssuer(Operation *op) {
              : ThreadIssuer{kind, op->getParentRegion()};
 }
 
-bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
-  auto issuer = getThreadIssuer(lhs);
-  return issuer.kind != ThreadIssuer::Unknown && issuer == getThreadIssuer(rhs);
-}
-
 } // namespace
 
 bool IssuerSummary::hasSameKnownIssuer(const IssuerSummary &other) const {
@@ -322,8 +319,8 @@ bool MembarAnalysis::isRegionLocal(Value value) {
 
 bool MembarAnalysis::mayNotifyPeer(Operation *op) {
   // Nested operations are checked separately; region scratch is private.
-  if (isa<RegionBranchOpInterface, triton::AtomicLoadOp, triton::AtomicPollOp>(
-          op))
+  if (isa<RegionBranchOpInterface, triton::AtomicLoadOp, triton::AtomicPollOp,
+          triton::gpu::ThreadHandoffOp>(op))
     return false;
   auto effects = getEffectsRecursively(op);
   return !effects || llvm::any_of(*effects, [&](const auto &effect) {
@@ -357,20 +354,8 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
-  auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
-                     bool afterIsRead, Allocation *allocation,
-                     const AllocationSlice &beforeSlice,
-                     const AllocationSlice &afterSlice) {
-    // Effects issued by the same thread are ordered with respect to each other.
-    // A fixed thread-zero issuer and an elected warp-zero leader may differ.
-    return (!pending.threadSync.effectIssuers.empty() &&
-            !effects.threadSync.effectIssuers.empty() &&
-            haveSameThreadSyncIssuer(before, after)) ||
-           (filter && filter(before, after, beforeIsRead, afterIsRead,
-                             allocation, beforeSlice, afterSlice));
-  };
   if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+      !pending.isIntersected(effects, filter, &allocation, sliceFilter))
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
@@ -442,6 +427,8 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   }
 
   if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
+    if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
+      return stages;
     // Atomic result broadcast uses a scratch write, rendezvous, and read for
     // every memory semantic, including relaxed.
     return triton::getAtomicBarrierStages(atomic.getMemSemantic(),
@@ -484,6 +471,11 @@ triton::BarrierStages MembarAnalysis::getBarrierStages(Operation *op) {
 }
 
 bool MembarAnalysis::hasThreadEffects(Operation *op) {
+  // A handoff only accesses its private scratch, modeled separately below.
+  if (isa<triton::gpu::ThreadHandoffOp>(op))
+    return false;
+  // ThreadPredicateOp retains unknown effects so pending waits finish before
+  // entering its restricted region, while every enclosing thread participates.
   auto effects = getEffectsRecursively(op);
   return !effects || llvm::any_of(*effects, [](const auto &effect) {
     return !isa<triton::gpu::SharedMemory>(effect.getResource()) ||

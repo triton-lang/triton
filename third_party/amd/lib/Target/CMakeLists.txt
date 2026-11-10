@@ -1,1 +1,1 @@
-add_subdirectory(MIRDAG)
+add_subdirectory(MFMASchedule)

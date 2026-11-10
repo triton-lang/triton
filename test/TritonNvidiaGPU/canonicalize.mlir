@@ -24,7 +24,8 @@ tt.func @reinterpret_fold(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_m
 // CHECK-LABEL: @preserve_ld_acquire
 llvm.func @preserve_ld_acquire(%arg0: !llvm.ptr<1>) {
   // CHECK: nvg.ld_acquire acquire, gpu, %arg0 : (!llvm.ptr<1>) -> i32
-  %0 = nvg.ld_acquire acquire, gpu, %arg0 : (!llvm.ptr<1>) -> i32
+  %true = llvm.mlir.constant(true) : i1
+  %0 = nvg.ld_acquire acquire, gpu, %arg0, %true : (!llvm.ptr<1>) -> i32
   llvm.return
 }
 
@@ -55,6 +56,21 @@ tt.func @canonicalize_fromCTA(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mut
 #offsets = #ttg.slice<{dim = 0, parent = #offsets_parent}>
 #data = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+// BARRIER-LABEL: @true_barrier_predicates
+// BARRIER: %[[TRUE:.*]] = arith.constant true
+// BARRIER-NEXT: ttng.barrier_expect %arg0, 16, %[[TRUE]] :
+// BARRIER-NEXT: ttng.arrive_barrier %arg0, 1 :
+// BARRIER-NEXT: ttng.wait_barrier %arg0, %arg1 deps %arg2 :
+// BARRIER-NEXT: ttng.tc_gen5_commit %arg0 :
+tt.func @true_barrier_predicates(%bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>, %phase: i32, %mem: !ttg.memdesc<16x64xf16, #shared_tma, #smem, mutable>) {
+  %true = arith.constant true
+  ttng.barrier_expect %bar, 16, %true : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+  ttng.arrive_barrier %bar, 1, %true : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+  ttng.wait_barrier %bar, %phase, %true deps %mem : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared_tma, #smem, mutable>
+  ttng.tc_gen5_commit %bar, %true : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+  tt.return
+}
+
 // BARRIER-LABEL: @false_barrier_predicates
 // BARRIER-NEXT: %[[FALSE_WAIT:.*]] = arith.constant false
 // BARRIER-NEXT: %[[PHASE:.*]] = arith.constant 0 : i32

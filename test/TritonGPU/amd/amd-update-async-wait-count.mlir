@@ -454,7 +454,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Test async_copy_local_to_global on GFX1250
+// Test async_copy_local_to_global on CDNA5
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
@@ -504,7 +504,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Test mixing async_copy_global_to_local and async_copy_local_to_global on GFX1250
+// Test mixing async_copy_global_to_local and async_copy_local_to_global on CDNA5
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
@@ -617,10 +617,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ) {
     %c0_i32 = arith.constant 0 : i32
 
+    %memDesc_i32 = ttg.memdesc_subslice %memDesc [0, 0] : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128>
+
     // Gather with i32 indices: sizePerThread=16, 4 warps, maxPerInstr=8 => 2 instructions
-    %token1 = amdg.async_tdm_gather %tensorDesc[%row_indices_i32] to %memDesc : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %token1 = amdg.async_tdm_gather %tensorDesc[%row_indices_i32] to %memDesc_i32 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128> -> !tt.tensordesc<64x128xf16>
     // Scatter with i32 indices: 2 instructions
-    %token2 = amdg.async_tdm_scatter %tensorDesc[%row_indices_i32] from %memDesc : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+    %token2 = amdg.async_tdm_scatter %tensorDesc[%row_indices_i32] from %memDesc_i32 : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_i32_parent}>>, !ttg.memdesc<64x128xf16, #shared, #smem, mutable, 256x128> -> !tt.tensordesc<64x128xf16>
     // Gather with i16 indices: sizePerThread=64, 4 warps, maxPerInstr=16 => 4 instructions
     %token3 = amdg.async_tdm_gather %tensorDesc[%row_indices_i16] to %memDesc : tensor<256xi16, #ttg.slice<{dim = 0, parent = #idx_i16_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
     // Scatter with i16 indices: 4 instructions
@@ -715,6 +717,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Nothing in between => count = 0
     // CHECK: amdg.async_tdm_intrinsic_wait {{.*}} {count = 0
     %w2 = amdg.async_tdm_wait %2 {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// An op with a region that issues no async ops (here tt.map_elementwise) does
+// not change the outstanding count: the walk continues past it instead of
+// falling back to a conservative count of 0.
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_waitcnt_across_region_without_async_ops
+  tt.func public @tdm_waitcnt_across_region_without_async_ops(%memDesc: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %tensorDesc: !tt.tensordesc<128x16xf16>, %x: tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked> {
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %y = "tt.map_elementwise"(%x) <{pack = 1 : i32}> ({
+    ^bb0(%a: f32):
+      %sq = arith.mulf %a, %a : f32
+      tt.map_elementwise.return %sq : f32
+    }) : (tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked>
+    // Wait without a token, as Gluon emits it: one TDM op may stay outstanding
+    // => waitcnt 1
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 1
+    %w = amdg.async_tdm_wait {num = 1 : i32}
+    tt.return %y : tensor<128xf32, #blocked>
+  }
+}
+
+// -----
+
+// A TDM wait counts only TDM ops, so an async commit group nested in a region
+// op the walk does not analyze (here scf.index_switch) does not change the
+// outstanding count: the walk continues past it instead of falling back to a
+// conservative count of 0.
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_waitcnt_across_region_with_commit_group
+  tt.func public @tdm_waitcnt_across_region_with_commit_group(%memDesc: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %tensorDesc: !tt.tensordesc<128x16xf16>, %idx: index) {
+    %1 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %tensorDesc into %memDesc : !tt.tensordesc<128x16xf16> -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    scf.index_switch %idx
+    case 0 {
+      %c = ttg.async_commit_group
+      scf.yield
+    }
+    default {
+      scf.yield
+    }
+    // One TDM op may stay outstanding => waitcnt 1
+    // CHECK: amdg.async_tdm_intrinsic_wait {count = 1
+    %w = amdg.async_tdm_wait {num = 1 : i32}
     tt.return
   }
 }

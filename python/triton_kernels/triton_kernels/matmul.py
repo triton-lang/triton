@@ -1,6 +1,6 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import itertools
 import torch
 import triton
@@ -16,7 +16,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
@@ -32,7 +32,7 @@ from .matmul_details.opt_flags import (
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, UINT8, FP4, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
+from .tensor import Storage, Tensor, UINT8, FP4, FP8_E4M3FN, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
@@ -259,17 +259,33 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
+    maxabs_permute_sequence: tuple[int, ...] | None = None,
 ):
     """
     Y[:, :] = 0.
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
+    Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
+    is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
+
+    A gather index of -1 denotes an inactive input row: its values contribute
+    zero to the matmul without reading source values or scales. Bias and other
+    epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
+
     With gather_indx, BlackwellActMXScaleLayout activation scales must already
     follow the gathered row order; strided activation scales are gathered with
     the values. For ragged-M matmul, the Blackwell scale layout must use the same
     RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
     segmentation and padding without comparing metadata tensors on the device.
+
+    maxabs_permute_sequence optionally permutes equally sized dimensions of each
+    output tile before the persistent kernel computes its local absolute maximum.
+
+    On Blackwell, NVFP4 activation tiles are requantized to MXFP8 inside the
+    matmul kernel for MXFP4 weights. This can add rounding error.
+    That path defaults to BF16 output unless out_dtype or c is supplied.
 
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
@@ -331,6 +347,12 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    check_tensor_scale(a, a_scale, a_tensor_scale)
+    check_tensor_scale(b, b_scale, b_tensor_scale)
+    uses_nvfp4 = (a_tensor_scale is not None or b_tensor_scale is not None
+                  or epilogue.specs.name == FnName.QUANTIZE_NVFP4.name)
+    if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
+        raise ValueError("NVFP4 matmul requires NVIDIA Blackwell or newer (compute capability 10.0+)")
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
@@ -365,16 +387,23 @@ def matmul(a, b, bias,
     assert b_scale is None or b_microblock_size is not None, (
         "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
     )
-    if a_microblock_size is not None and b_microblock_size is not None:
-        assert a_microblock_size == b_microblock_size, (
-            f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
+    requantize_a = (a.dtype == FP4 and b.dtype == FP4 and a_microblock_size == 16
+                    and b_microblock_size == 32 and is_cuda()
+                    and target_info.cuda_capability_geq(10, 0))
+    if requantize_a:
+        assert a_scale_dtype == torch.float8_e4m3fn and b_scale_dtype == torch.uint8
+        assert a.shape[-1] % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
+        precision_config = replace(
+            precision_config,
+            out_dtype=precision_config.out_dtype or (c.dtype if c is not None else torch.bfloat16),
         )
     mx_block_size = (
+        b_microblock_size if requantize_a else
         a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
     )
     assert all(
         size is None or size == mx_block_size
-        for size in (a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+        for size in (None if requantize_a else a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
     ), (
         "Microscaled operands/output must share a block size. "
         f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
@@ -440,7 +469,9 @@ def matmul(a, b, bias,
         a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
     else:
         a_uses_tma_when_persistent = has_gather_tma or not has_gather
-    opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
+    # Select tiles for the operand consumed by the dot, not its packed input.
+    dot_a_dtype = FP8_E4M3FN if requantize_a else a.dtype
+    opt_flags = make_opt_flags(out_dtype, dot_a_dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         a_transpose, c_acc_in is not None,
@@ -640,7 +671,7 @@ def matmul(a, b, bias,
         if ragged_dimension == "M":
             assert scale_layout.ragged_metadata is a_ragged_metadata, \
                 "Blackwell activation scales must use the same RaggedTensorMetadata instance as the matmul"
-        scale_block_k = opt_flags.block_k // mx_block_size
+        scale_block_k = opt_flags.block_k // a_microblock_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
@@ -654,9 +685,7 @@ def matmul(a, b, bias,
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Tensor scales are row/fiber scales, not scalar broadcasts. They are
-    # expected to carry the non-reduction dimension, e.g. (E, N, 1) or
-    # (E, 1, N), before this path keeps the two strides needed by the kernels.
+    # Row and column scales keep their strides. A zero-dimensional scale broadcasts with two zero strides.
     a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
     a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
     b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
@@ -690,6 +719,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.is_persistent:
+        extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
@@ -708,7 +739,7 @@ def matmul(a, b, bias,
                    flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
-                   None if ragged_dimension == "M" else a.shape[-2],
+                   None if ragged_dimension == "M" else M,
                    N, K, K_W,
                    betas, gammas,
                    None if K == 0 else gather_indx,
@@ -737,13 +768,12 @@ def matmul(a, b, bias,
                    SWIZZLE_MX_VALUE=b.storage.layout.name,
                    SWIZZLE_MX_SCALE="STRIDED" if b_scale is None else b_scale.storage.layout.name,
                    MX_BLOCK_SIZE=mx_block_size,
+                   X_MX_BLOCK_SIZE=a_microblock_size or mx_block_size,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
                    TOKENS_PER_EXPT_FOR_ANNOTATION=None if a_ragged_metadata is None else a_ragged_metadata.expected_slice_size,
-                   # Preserve scale/bias contraction across the supported epilogues.
-                   enable_fp_fusion=True,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
@@ -752,7 +782,7 @@ def matmul(a, b, bias,
                    Y_TMA_MODE=c_tma_mode,
                    Y_MX_SCALE_LAYOUT=out_matmul_scale_layout,
                    OUT_N_TILE_ALIGNED=(N // matmul_fused_activation.specs.reduction_n) % out_tile_n == 0,
-                   SWAP_XW=get_swap_xw(precision_config, opt_flags, a.dtype, b.dtype),
+                   SWAP_XW=get_swap_xw(precision_config, opt_flags, dot_a_dtype, b.dtype),
                    IS_EPILOGUE_QUANT_MX=epilogue.specs.name in (
                        FnName.QUANTIZE_MXFP8.name,
                        FnName.QUANTIZE_MXFP4.name,
@@ -812,6 +842,8 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
+    check_tensor_scale(x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
+    check_tensor_scale(w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
@@ -949,7 +981,14 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+        if gather_indx is None:
+            x = a[batch, idx, :]
+        else:
+            # Inactive routing slots contribute zero, not Python's last row.
+            x = a.new_zeros((idx.numel(), a.shape[-1]))
+            active = idx >= 0
+            x[active] = a[batch, idx[active], :]
+        out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]

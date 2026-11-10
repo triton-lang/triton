@@ -466,25 +466,11 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTAsPerCGA");
 }
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout) {
-  // A generic linear encoding may not have a CGA layout
-  // as having a CGA layout implies being of the form cta_layout * cga_layout
+SmallVector<unsigned> getCTASplitNum(Attribute layout,
+                                     ArrayRef<int64_t> shape) {
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
-    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/true);
-  } else if (auto sharedLinearLayout =
-                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinearLayout.basesPerDim(kBlock);
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/true);
-    return cast<LayoutEncodingTrait>(sliceLayout)
-        .getCGALayout()
-        .getCTASplitNum();
-  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTASplitNum();
-  }
-  llvm_unreachable("Unimplemented usage of getCTASplitNum");
+  auto ll = toLinearLayoutIgnoringPadding(shape, layout);
+  return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -505,7 +491,7 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  return getShapePerCTA(getCGALayout(layout).getCTASplitNum(), shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
@@ -1685,8 +1671,8 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     llvm::ArrayRef<unsigned int> instrShape, bool isTransposed,
     mlir::triton::gpu::CGAEncodingAttr,
     llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned elementBitWidth) {
-  if (!(version >= 0 && version <= 4)) {
-    return emitError() << "version must be in the [0, 4] range";
+  if (!(version == 0 || (version >= 2 && version <= 4))) {
+    return emitError() << "version must be 0 or in the [2, 4] range";
   }
 
   auto mDim = instrShape[0];
@@ -2440,6 +2426,10 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     }
   }
 
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (!ll.removeZeroBasesAlongDim(kBlock).isInjective())
+    return emitError() << "Broadcasting across CTAs requires zero block bases.";
+
   return success();
 }
 
@@ -2552,6 +2542,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned swizzlingByteWidth;
   bool transposed = false;
   bool fp4Padded = false;
+  NVMmaPadding padding = NVMmaPadding::None;
   unsigned elementBitWidth;
   unsigned layoutRank;
   bool hasExplicitRank = false;
@@ -2567,6 +2558,16 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "elementBitWidth") {
       if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
         return {};
+    } else if (attr.getName() == "padding") {
+      auto value = dyn_cast<StringAttr>(attr.getValue());
+      auto mode =
+          value ? symbolizeNVMmaPadding(value.getValue()) : std::nullopt;
+      if (!mode || dict.get("fp4Padded")) {
+        parser.emitError(parser.getNameLoc(),
+                         "expected one NVIDIA shared padding mode");
+        return {};
+      }
+      padding = *mode;
     } else if (attr.getName() == "fp4Padded") {
       if (parseBool(parser, attr, fp4Padded, "fp4Padded").failed())
         return {};
@@ -2605,7 +2606,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<NVMMASharedEncodingAttr>(
       parser.getContext(), swizzlingByteWidth, transposed, elementBitWidth,
-      fp4Padded, *CGALayout);
+      fp4Padded ? NVMmaPadding::Fp4 : padding, *CGALayout);
 }
 
 void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -2613,7 +2614,9 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
           << "swizzlingByteWidth = " << getSwizzlingByteWidth() //
           << ", transposed = " << getTransposed()               //
           << ", elementBitWidth = " << getElementBitWidth();
-  if (getFp4Padded()) {
+  if (isPaddedFp6())
+    printer << ", padding = \"" << stringifyNVMmaPadding(getPadding()) << "\"";
+  if (isPaddedFp4()) {
     // Print only in this case to reduce the noise for the more common case.
     printer << ", fp4Padded = true";
   }
@@ -2631,8 +2634,11 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult
 NVMMASharedEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                 unsigned swizzlingByteWidth, bool transposed,
-                                unsigned elementBitWidth, bool fp4Padded,
+                                unsigned elementBitWidth, NVMmaPadding padding,
                                 CGAEncodingAttr CGALayout) {
+  if ((padding == NVMmaPadding::B6x16P32 || padding == NVMmaPadding::B6P2x16) &&
+      elementBitWidth != 8)
+    return emitError() << "FP6 shared layouts require byte storage";
   if (elementBitWidth == 0)
     return emitError() << "elementBitWidth must be non-zero";
   if (!llvm::is_contained({0, 32, 64, 128}, swizzlingByteWidth))
@@ -3155,7 +3161,7 @@ struct TritonGPUInferLayoutInterface
         CGAEncodingAttr cgaLayout = permuteCGALayout(enc.getCGALayout(), order);
         resultEncoding = NVMMASharedEncodingAttr::get(
             ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-            enc.getElementBitWidth(), enc.getFp4Padded(), cgaLayout);
+            enc.getElementBitWidth(), enc.getPadding(), cgaLayout);
         return success();
       }
     }
@@ -3290,13 +3296,29 @@ struct TritonGPUInferLayoutInterface
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
 
+    auto dotOp = cast<DotOpInterface>(op);
+
+    // With WMMA v2+, each instruction takes K from 2 lanes per row. If a lane's
+    // kWidth contiguous K elements exceed its share of one instruction, the
+    // chunk is split across consecutive instructions, so K must cover it.
+    if (auto wmmaEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
+        wmmaEnc && wmmaEnc.getVersion() >= 2) {
+      constexpr int64_t kLanesPerInstrK = 2;
+      int64_t chunkK = aEncoding.getKWidth() * kLanesPerInstrK;
+      int64_t kDim =
+          cast<RankedTensorType>(dotOp.getA().getType()).getShape().back();
+      if (chunkK > wmmaEnc.getInstrShape()[2] && kDim < chunkK)
+        return op->emitError("WMMA dot operand kWidth = ")
+               << aEncoding.getKWidth() << " requires K >= " << chunkK
+               << ", but K = " << kDim;
+    }
+
     // Check if we have already selected an MMA version for Nvidia. If so,
     // validate that the encodings are correct and compatible.
     auto mmaAEncoding =
         dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
     auto mmaBEncoding =
         dyn_cast_or_null<NvidiaMmaEncodingAttr>(bEncoding.getParent());
-    auto dotOp = cast<DotOpInterface>(op);
     auto resEnc = cast<RankedTensorType>(dotOp.getD().getType()).getEncoding();
     auto mmaResEncoding = dyn_cast<NvidiaMmaEncodingAttr>(resEnc);
     if (mmaAEncoding || mmaBEncoding || mmaResEncoding) {
@@ -3678,7 +3700,8 @@ struct TritonGPUInferLayoutInterface
     if (expected == got) {
       return success();
     }
-    if (!expected || !got)
+    if (!expected || !got || NVMMASharedEncodingAttr::isPackedFp6(expected) ||
+        NVMMASharedEncodingAttr::isPackedFp6(got))
       return failure();
 
     auto expectedLL =
@@ -3698,17 +3721,11 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
                          std::optional<Location> loc) const override {
     if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
     }
-    // If allowReorder is true, there are multiple valid encodings. Prefer the
-    // hint if it is set and valid.
-    if (allowReorder && dstEnc)
-      if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
-        return success();
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
@@ -4051,6 +4068,14 @@ struct TritonGPUVerifyTensorLayoutInterface
       return makeErr() << "Encoding not compatible with LinearEncodingAttr "
                        << "(e.g., swizzled warp bases or non-injective layout) "
                        << "is not supported on " << op->getName() << ".";
+    }
+    // Only the AMD backend supports generic linear encodings.
+    if (isGenericLinearEncoding(layout)) {
+      auto target = op->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
+          AttrTargetName);
+      if (target && !target.getValue().starts_with("hip:"))
+        return makeErr() << "Distributed layouts on non AMD targets should be "
+                         << "permutation matrices with zero columns.";
     }
     if (llvm::any_of(rankedTy.getShape(),
                      [](int64_t i) { return !llvm::isPowerOf2_64(i); })) {
@@ -4448,7 +4473,8 @@ struct TensorModel
     return cast<RankedTensorType>(pointer).getRank();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
+    return getIntOrFloatOrPtrBitWidth(
+        cast<RankedTensorType>(pointer).getElementType());
   }
 };
 
@@ -4468,7 +4494,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getShape().size();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
+    return cast<MemDescType>(pointer).getElementTypeBitWidth();
   }
 };
 } // namespace
@@ -4508,6 +4534,13 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     return op->emitOpError("has unexpected attribute ")
            << attr.getName()
            << " which is expected only on `module` or `tt.func` ops";
+  }
+  if (attr.getName() == AttrNumWarpsName || attr.getName() == AttrNumCTAsName) {
+    auto count = dyn_cast<IntegerAttr>(attr.getValue());
+    if (!count || !count.getValue().isStrictlyPositive() ||
+        !count.getValue().isPowerOf2())
+      return op->emitOpError("requires ")
+             << attr.getName() << " to be a positive power of two";
   }
 
   return success();
@@ -4598,6 +4631,11 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
                                        LayoutEncodingTrait lhs,
                                        LayoutEncodingTrait rhs) {
+  if (lhs == rhs)
+    return true;
+  if (NVMMASharedEncodingAttr::isPackedFp6(lhs) ||
+      NVMMASharedEncodingAttr::isPackedFp6(rhs))
+    return false;
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;

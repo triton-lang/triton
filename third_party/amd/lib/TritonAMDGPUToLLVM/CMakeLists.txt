@@ -16,9 +16,9 @@ add_triton_library(TritonAMDGPUToLLVM
     ElementwiseOpToLLVM.cpp
     FuncOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    GCNAsmFormat.cpp
     HistogramOpToLLVM.cpp
     Membar.cpp
+    ScheduleMembar.cpp
     TritonGPUToLLVM.cpp
     BuiltinFuncToLLVM.cpp
     Utility.cpp
@@ -26,7 +26,6 @@ add_triton_library(TritonAMDGPUToLLVM
     SPMDOpToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
     MembarUtility.cpp
-    ScalarizePackedFOps.cpp
     TDMUtility.cpp
     BarrierOpToLLVM.cpp
     WarpIdOpToLLVM.cpp

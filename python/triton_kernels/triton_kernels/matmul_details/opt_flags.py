@@ -96,6 +96,8 @@ def make_default_opt_flags_amd(
         block_m = 128
     elif get_rdna_version() in (3, 4) and m >= 512:
         block_m = 64
+    elif slice_size <= 8:
+        block_m = 16
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
@@ -329,6 +331,12 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (is_persistent and routing_data is None and constraints.get("block_n") is None
+            and cuda_capability_geq(10, 0) and grid_size_tma < n_sms
+            and not epilogue_effective_itemsize and epilogue_reduction_n == 1 and not has_y_acc_in
+            and opt_flags_nvidia.is_fp8_nvfp4(precision_config, lhs_dtype, rhs_dtype)):
+        # A narrower tile gives the decoded NVFP4 path more blocks to fill the GPU.
+        block_n = min(block_n, 128)
     if (is_persistent and constraints.get("block_n", None) is None
             and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)
             and not x_uses_tma_when_persistent):
@@ -409,34 +417,45 @@ def make_default_opt_flags_nvidia(
         num_warps = max(num_warps, 8)
 
     # Occupancy target and maxnreg (for Hopper)
+    threads_per_warp = 32
+    reg_per_sm = 64 * 1024
+    max_reg_per_thread = 256
     occupancy_target = 1
+    pipeline_occupancy_target = 1
     is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
     if is_hopper_scale:
         occupancy_target = 16 // num_warps
+        pipeline_occupancy_target = occupancy_target
+        if not is_persistent:
+            # Budget half the registers for FP32 accumulators, retaining
+            # headroom for operands, addressing and the epilogue. A large
+            # accumulator cannot meet the target without spilling.
+            accumulator_registers = block_m * block_n
+            register_limited_occupancy = max(1, (reg_per_sm // 2) // accumulator_registers)
+            grid_size = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n) * split_k
+            grid_limited_occupancy = max(1, grid_size // n_sms)
+            occupancy_target = min(occupancy_target, register_limited_occupancy, grid_limited_occupancy)
+            # Preserve the established pipeline depth even when a large tile
+            # or small grid makes the register occupancy target unhelpful.
         if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
             # Hopper MXFP4 RHS plus MX input/output needs more than the
             # 128-register cap implied by the default occupancy target.
             occupancy_target = 1
-    threads_per_warp = 32
-    reg_per_sm = 64 * 1024
-    max_reg_per_thread = 256
-    is_blackwell_or_newer = cuda_capability_geq(10, 0)
-    if is_persistent and not is_blackwell_or_newer:
-        maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
-        maxnreg = min(max_reg_per_thread, maxnreg)
-    else:
-        maxnreg = None
-
+            pipeline_occupancy_target = 1
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
     elif is_large_ragged_nvfp4:
         subtiles_to_check = [2]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
+        if precision_config.c_mx_scale is not None and split_k == 1:
+            # Each output subtile must contain a complete quantization group.
+            subtiles_to_check = [ep for ep in subtiles_to_check
+                                if block_n // ep // epilogue_reduction_n >= precision_config.c_microblock_size]
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target,
+                                                 occupancy_target=pipeline_occupancy_target,
                                                  swap_xw=swap_xw,
                                                  w_transpose=w_transpose, num_warps=num_warps)
         if ns > num_stages:
@@ -461,6 +480,29 @@ def make_default_opt_flags_nvidia(
     ):
         num_stages = 3 if epilogue_reduction_n == 1 else 2
     assert num_stages >= 1
+    if is_hopper_scale and not is_persistent and precision_config.a_mx_scale is not None:
+        # The scaled-input lowering stages both raw operands and materializes
+        # a BF16 RHS tile for WGMMA. That extra tile can make the shared-memory
+        # limit stricter than the register or grid limit. Capping registers for
+        # an impossible occupancy only introduces spills.
+        raw_stage_bytes = (block_m * block_k * lhs_dtype.bitwidth // 8
+                           + block_n * block_k * rhs_dtype.bitwidth // 8
+                           + block_n * triton.cdiv(block_k, mx_block_size or 32))
+        shared_bytes = max(1, num_stages - 1) * raw_stage_bytes + block_n * block_k * 2
+        shared_limit = torch.cuda.get_device_properties(0).shared_memory_per_multiprocessor
+        occupancy_target = min(occupancy_target, max(1, shared_limit // shared_bytes))
+
+    is_blackwell_or_newer = cuda_capability_geq(10, 0)
+    # Protect the 16-resident-warp target when the other resources can meet it.
+    # Otherwise leave the regular kernel to the compiler: a cap for an
+    # unattainable target introduces spills without providing that occupancy.
+    # Persistent kernels retain their existing register-budget policy.
+    if (is_persistent or (is_hopper_scale and occupancy_target == 16 // num_warps)) and not is_blackwell_or_newer:
+        maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
+        maxnreg = min(max_reg_per_thread, maxnreg)
+    else:
+        maxnreg = None
+
     ret = OptFlags(
         block_m=block_m,
         block_n=block_n,

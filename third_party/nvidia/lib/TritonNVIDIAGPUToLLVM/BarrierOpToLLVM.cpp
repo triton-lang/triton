@@ -27,9 +27,11 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/MathExtras.h"
 
 #include "Utility.h"
@@ -56,13 +58,10 @@ struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   LogicalResult
   matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    if constexpr (std::is_same_v<OpTy, triton::GridDependencyWaitOp>)
-      (*ptxBuilder.create("griddepcontrol.wait"))();
-    else
-      (*ptxBuilder.create("griddepcontrol.launch_dependents"))();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(rewriter.getContext()));
-    rewriter.eraseOp(op);
+    auto kind = std::is_same_v<OpTy, triton::GridDependencyWaitOp>
+                    ? NVVM::GridDepActionKind::wait
+                    : NVVM::GridDepActionKind::launch_dependents;
+    rewriter.replaceOpWithNewOp<NVVM::GriddepcontrolOp>(op, kind);
     return success();
   }
 };
@@ -580,18 +579,9 @@ struct CLCIsCanceledOpConversion
       return op.emitError("CLC operations require SM100+ (Blackwell)");
     }
 
-    auto loc = op.getLoc();
-    std::string ptxAsm =
-        "clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 $0, $1;";
-    PTXBuilder ptxBuilder;
-    auto &clcOp = *ptxBuilder.create(ptxAsm);
-    auto *resultOp = ptxBuilder.newOperand("=b");
-    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
-    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
-
-    Value result =
-        ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffects=*/false);
-    rewriter.replaceOp(op, result);
+    rewriter.replaceOpWithNewOp<NVVM::ClusterLaunchControlQueryCancelOp>(
+        op, NVVM::ClusterLaunchControlQueryType::IS_CANCELED,
+        adaptor.getClcResult());
 
     return success();
   }
@@ -615,33 +605,28 @@ struct CLCGetProgramIdOpConversion
 
     auto loc = op.getLoc();
 
-    const char *dimName = [&] {
-      switch (op.getDim()) {
-      case ProgramIDDim::X:
-        return "x";
-      case ProgramIDDim::Y:
-        return "y";
-      case ProgramIDDim::Z:
-        return "z";
-      }
-      llvm::llvm_unreachable_internal("Invalid program id dim");
-    }();
+    using namespace llvm::Intrinsic;
+    constexpr std::pair<ID, int> queries[] = {
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_x,
+         kMaxGriddimx},
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_y,
+         kMaxGriddimy},
+        {nvvm_clusterlaunchcontrol_query_cancel_get_first_ctaid_z,
+         kMaxGriddimz}};
+    auto [intrinsic, maxGridDim] = queries[static_cast<unsigned>(op.getDim())];
+    auto call = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, llvm::Intrinsic::getName(intrinsic), op.getType(),
+        adaptor.getClcResult());
+    // A successful cancellation returns a raw CTA coordinate in [0,
+    // maxGridDim).
+    auto range =
+        LLVM::ConstantRangeAttr::get(rewriter.getContext(), 32, 0, maxGridDim);
+    auto resultAttrs = rewriter.getDictionaryAttr(
+        rewriter.getNamedAttr(LLVM::LLVMDialect::getRangeAttrName(), range));
+    call.setResAttrsAttr(rewriter.getArrayAttr(resultAttrs));
+    Value result = call.getResult(0);
 
-    auto ptxAsm = ("clusterlaunchcontrol.query_cancel.get_first_ctaid::" +
-                   llvm::Twine(dimName) + ".b32.b128 $0, $1;")
-                      .str();
-
-    PTXBuilder ptxBuilder;
-    auto &clcOp = *ptxBuilder.create(ptxAsm);
-    auto *resultOp = ptxBuilder.newOperand("=r");
-    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
-    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
-
-    Value result =
-        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
-
-    // Convert ctaid to clusterid, which is the real program id
-    // Note that all cluster CTAs are distributed in the X dim
+    // Cluster CTAs are distributed along X.
     if (op.getDim() == ProgramIDDim::X) {
       auto numCTAs = ttg::lookupNumCTAs(op);
       if (numCTAs > 1) {
