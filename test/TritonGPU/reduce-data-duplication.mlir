@@ -115,3 +115,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A transposed operand is read through a transposed view of its source, so it
+// allocates the same buffer as the untransposed operand and CSE can merge them.
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+//       CHECK-LABEL: transposed_operand_shares_source_alloc
+//       CHECK:   ttg.local_alloc %arg0 : (tensor<128x64xf16, #{{.*}}>) -> !ttg.memdesc<128x64xf16, #[[$SHARED]], #smem>
+//       CHECK:   %[[ALLOC:.*]] = ttg.local_alloc %arg0 : (tensor<128x64xf16, #{{.*}}>) -> !ttg.memdesc<128x64xf16, #[[$SHARED]], #smem>
+//       CHECK:   %[[TRANS:.*]] = ttg.memdesc_trans %[[ALLOC]] {order = array<i32: 1, 0>}
+//       CHECK:   ttg.local_load %[[TRANS]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @transposed_operand_shares_source_alloc(%arg0: tensor<128x64xf16, #blocked>) {
+    %0 = ttg.convert_layout %arg0 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %1 = tt.trans %arg0 {order = array<i32: 1, 0>} : tensor<128x64xf16, #blocked> -> tensor<64x128xf16, #blocked1>
+    %2 = ttg.convert_layout %1 : tensor<64x128xf16, #blocked1> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    tt.return
+  }
+}
