@@ -1102,29 +1102,32 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       %values: tensor<4x32xi32, #scatter_blocked>) {
     %dst = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
-    // CHECK: %[[DESTINATION:.*]] = ttg.local_alloc
-    // Poison initialization uses the target's native cluster barrier.
-    // CHECK: ttg.local_store {{.*}}, %[[DESTINATION]]
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: llvm.fence syncscope("cluster") release
     // CHECK-NEXT: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: amdg.cluster_barrier_wait{{$}}
+    // CHECK-NEXT: ttg.barrier none
+    // CHECK-NEXT: llvm.fence syncscope("cluster") acquire
+    // CHECK: %[[DESTINATION:.*]] = ttg.local_alloc
+    // A CTA cannot access another CTA's shared memory. A CTA-local barrier is
+    // sufficient after poison initialization.
+    // CHECK: ttg.local_store {{.*}}, %[[DESTINATION]]
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NOT: amdg.cluster_barrier
     // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: tti.experimental_lock_release
     // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
-    // CHECK-NEXT: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
-    // CHECK-NEXT: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tti.experimental_lock_acquire
     ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
         : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
         tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
     // CHECK: tti.experimental_lock_release
     // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
-    // CHECK-NEXT: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
-    // CHECK-NEXT: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tti.experimental_lock_acquire
     ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
         : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
         tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
@@ -1134,6 +1137,137 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         {axis = 1 : i32} : (!ttg.memdesc<4x32xi32, #scatter_shared,
         #ttg.shared_memory, mutable>, tensor<4x32xi32, #scatter_blocked>,
         tensor<4x32xi32, #scatter_blocked>) -> tensor<4x32xi32, #scatter_blocked>
+    amdg.cluster_barrier_arrive
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
+// The startup wait covers the worker warps; scatter checks stay CTA-local.
+#scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @amd_multi_cta_ws_startup_and_scatter
+  // CHECK: llvm.fence syncscope("cluster") release
+  // CHECK-NEXT: amdg.cluster_barrier_arrive
+  // CHECK-NEXT: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+  // CHECK-NEXT: default {
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: ttg.warp_yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: partition0() num_warps(4) {
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: ttg.warp_return
+  // CHECK-NEXT: } : () -> ()
+  // CHECK-NEXT: llvm.fence syncscope("cluster") acquire
+  // CHECK-NOT: amdg.cluster_barrier
+  // CHECK: ttg.warp_specialize
+  // CHECK: partition0
+  // CHECK-NOT: amdg.cluster_barrier
+  // CHECK: ttg.local_scatter
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @__triton_consan_verify_local_scatter_destinations
+  // CHECK-NEXT: ttg.warp_return
+  // CHECK-NOT: amdg.cluster_barrier
+  // CHECK: amdg.cluster_barrier_arrive
+  // CHECK-NEXT: amdg.cluster_barrier_wait{{$}}
+  // CHECK-NEXT: tt.return
+  tt.func public @amd_multi_cta_ws_startup_and_scatter() {
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
+    ttg.warp_specialize(%dst) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 0 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>) num_warps(4) {
+      %indices = arith.constant dense<0> : tensor<4x32xi32, #scatter_blocked>
+      %values = arith.constant dense<1> : tensor<4x32xi32, #scatter_blocked>
+      ttg.local_scatter %arg0[%indices], %values {axis = 1 : i32}
+          : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
+          tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
+      ttg.warp_return
+    } : (!ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>) -> ()
+    amdg.cluster_barrier_arrive
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
+// The startup wait must cover all 12 worker warps, including the 2 padding
+// warps that AllocateWarpGroups adds after the 8- and 2-warp partitions.
+// Each partition's warp count must be a power of two. To include all 12
+// worker warps in the startup wait, ConSan creates partitions of 8 and 4 warps.
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 16 : i32} {
+  // CHECK-LABEL: @amd_multi_cta_startup_split_workers
+  // CHECK: tti.experimental_lock_release
+  // CHECK-NEXT: llvm.fence syncscope("cluster") release
+  // CHECK-NEXT: amdg.cluster_barrier_arrive
+  // CHECK-NEXT: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4, 12>}
+  // CHECK-NEXT: default {
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: ttg.warp_yield
+  // CHECK-NEXT: }
+  // CHECK-NEXT: partition0() num_warps(8) {
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: ttg.warp_return
+  // CHECK-NEXT: }
+  // CHECK-NEXT: partition1() num_warps(4) {
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: ttg.warp_return
+  // CHECK-NEXT: } : () -> ()
+  // CHECK-NEXT: llvm.fence syncscope("cluster") acquire
+  tt.func public @amd_multi_cta_startup_split_workers() {
+    ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4, 12, 14>}
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(8) {
+      ttg.warp_return
+    }
+    partition1() num_warps(2) {
+      ttg.warp_return
+    }
+    // Padding added by AllocateWarpGroups.
+    partition2() num_warps(2) {
+      ttg.warp_return
+    } : () -> ()
+    amdg.cluster_barrier_arrive
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
+// Poisoning an allocation inside a worker partition requires only a local
+// barrier.
+#partition_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @amd_multi_cta_poison_in_partition
+  // CHECK: llvm.fence syncscope("cluster") acquire
+  // CHECK: partition0(
+  // CHECK: %[[BUFFER:.*]] = ttg.local_alloc
+  // CHECK: ttg.local_store {{.*}}, %[[BUFFER]]
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: amdg.cluster_barrier
+  // CHECK-NOT: ttg.warp_specialize
+  // CHECK: ttg.warp_return
+  tt.func public @amd_multi_cta_poison_in_partition() {
+    ttg.warp_specialize() attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 0 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      %buffer = ttg.local_alloc {allocation.offset = 0 : i32}
+          : () -> !ttg.memdesc<4x32xi32, #partition_shared, #ttg.shared_memory, mutable>
+      ttg.warp_return
+    } : () -> ()
     amdg.cluster_barrier_arrive
     amdg.cluster_barrier_wait
     tt.return
@@ -1713,8 +1847,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-COUNT-2: call {{.*}}fill_global_tensor{{.*}}%c0_i8
   // CHECK: %[[LOCK:.*]] = ttg.global_scratch_alloc {alignment = 4 : i32, nbytes = 4 : i32
   // CHECK: tti.experimental_lock_release %[[LOCK]], %{{.*}} : !tt.ptr<i32>
+  // CHECK-NEXT: llvm.fence syncscope("cluster") release
   // CHECK-NEXT: amdg.cluster_barrier_arrive
-  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NEXT: amdg.cluster_barrier_wait{{$}}
+  // CHECK-NEXT: ttg.barrier none
+  // CHECK-NEXT: llvm.fence syncscope("cluster") acquire
   // CHECK-NOT: ttg.global_scratch_alloc
   // CHECK-NOT: fill_global_tensor
   // CHECK: tt.return
