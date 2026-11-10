@@ -13,7 +13,7 @@ class _Kernel:
     num_stages = 4
 
 
-def _matmul_name(signature):
+def _matmul_name(signature, **strides):
     constants = {
         "stride_y_n": 1,
         "stride_x_k": 1,
@@ -23,6 +23,7 @@ def _matmul_name(signature):
         "BLOCK_K": 128,
         "SPLIT_K": 1,
     }
+    constants.update(strides)
     specialization = SimpleNamespace(signature=signature, constants=constants)
     return make_matmul_repr("_matmul", [0, 1, 2])(specialization)
 
@@ -51,6 +52,11 @@ def _matmul_name(signature):
 def test_matmul_repr_names_operand_dtypes(signature, expected_dtypes):
     name = _matmul_name(signature)
     assert name == f"_matmul_NNN_{expected_dtypes}_128x256x128x1"
+
+
+def test_matmul_repr_names_transposed_weight_with_constexpr_stride():
+    signature = {"Y": "*bf16", "X": "*bf16", "W": "*bf16"}
+    assert _matmul_name(signature, stride_w_n=128).startswith("_matmul_NNT_")
 
 
 def _old_flops_and_bytes(args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size):

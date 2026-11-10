@@ -249,7 +249,7 @@ def make_matmul_repr(base_name, order):
         signature = specialization.signature
         constants = specialization.constants
         reorder = lambda L: [L[i] for i in order]
-        layout = lambda stride: "N" if stride in constants else "T"
+        layout = lambda stride: "N" if constants.get(stride) == 1 else "T"
 
         def convert_dtype(i):
             dtype = signature[i]

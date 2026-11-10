@@ -36,20 +36,20 @@ _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _matmul(
-             Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
+             Y, YPtr, stride_y_k: tl.constexpr, stride_y_z: tl.constexpr, stride_y_m: tl.constexpr, stride_y_n: tl.constexpr,
              YExpectedScale, YActualScale, YChecksumScale,
-             stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
-             X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
+             stride_y_mx_k: tl.constexpr, stride_y_mx_z: tl.constexpr, stride_y_mx_m: tl.constexpr, stride_y_mx_n: tl.constexpr,
+             X, XPtr, stride_x_z: tl.constexpr, stride_x_m: tl.constexpr, stride_x_k: tl.constexpr, X_TRANSPOSE: tl.constexpr,
              XScale,
-             XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
-             W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
+             XMxScale, stride_x_mx_z: tl.constexpr, stride_x_mx_m: tl.constexpr, stride_x_mx_k: tl.constexpr,
+             XTensorScale, stride_x_tensor_scale_z: tl.constexpr, stride_x_tensor_scale_m: tl.constexpr,
+             W, WPtr, stride_w_e: tl.constexpr, stride_w_k: tl.constexpr, stride_w_n: tl.constexpr, W_TRANSPOSE: tl.constexpr,
              WScale,
-             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
-             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
-             OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
+             WMxScale, stride_w_mx_e: tl.constexpr, stride_w_mx_k: tl.constexpr, stride_w_mx_n: tl.constexpr,
+             WTensorScale, stride_w_tensor_scale_e: tl.constexpr, stride_w_tensor_scale_n: tl.constexpr,
+             OutAcc, stride_acc_z: tl.constexpr, stride_acc_m: tl.constexpr, stride_acc_n: tl.constexpr,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
-             B, stride_b_e, # Bias
+             B, stride_b_e: tl.constexpr, # Bias
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
@@ -104,24 +104,6 @@ def _matmul(
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
              ):
-    tl.assume(stride_y_k >= 0)
-    tl.assume(stride_y_z >= 0)
-    tl.assume(stride_y_m >= 0)
-    tl.assume(stride_y_n >= 0)
-    tl.assume(stride_x_z >= 0)
-    tl.assume(stride_x_m >= 0)
-    tl.assume(stride_x_k >= 0)
-    tl.assume(stride_w_e >= 0)
-    tl.assume(stride_w_k >= 0)
-    tl.assume(stride_w_n >= 0)
-    if stride_w_mx_e is not None:
-        tl.assume(stride_w_mx_e >= 0)
-    if stride_w_mx_k is not None:
-        tl.assume(stride_w_mx_k >= 0)
-    if stride_w_mx_n is not None:
-        tl.assume(stride_w_mx_n >= 0)
-    if B is not None:
-        tl.assume(stride_b_e >= 0)
     tl.assume(batch_size >= 0)
     tl.assume(grid_m >= 0)
     tl.assume(grid_n >= 0)
