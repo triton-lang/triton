@@ -1,12 +1,13 @@
 import collections
 import functools
+import inspect
 import itertools
 import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton._filecheck import filecheck_test, run_filecheck, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
@@ -41,6 +42,54 @@ def doesnt_compile(kernel):
 @triton.jit
 def anchor(v):
     pass
+
+
+def test_function_argument_hints_scalar_and_pointer():
+
+    @triton.jit(do_not_specialize=["stride"], do_not_specialize_on_alignment=["output"])
+    def kernel(output, stride):
+        # CHECK-DAG: [[PTR:%.*]] = tt.annotate %arg0 {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<i32>
+        # CHECK-DAG: [[STRIDE:%.*]] = tt.annotate %arg1 {tt.divisibility = dense<8> : tensor<1xi32>} : i32
+        # CHECK: [[BEFORE:%.*]] = arith.addi [[STRIDE]],
+        before = stride + 1
+        tl.multiple_of(stride, 4)
+        tl.multiple_of(stride, 8)
+        tl.multiple_of(output, 16)
+        # CHECK: [[AFTER:%.*]] = arith.addi [[STRIDE]],
+        after = stride + 2
+        # CHECK: tt.call @{{.*}}anchor{{.*}}([[BEFORE]])
+        anchor(before)
+        # CHECK: tt.store [[PTR]], [[AFTER]]
+        tl.store(output, after)
+
+    module = run_parser(kernel, args=(MockTensor(tl.int32), 40))
+    assert module.verify()
+    assert module.str_nodebug().count("tt.annotate") == 2
+    run_filecheck("kernel", module.str_nodebug(), inspect.getsource(kernel.fn))
+
+
+def test_function_argument_hints_tensor():
+
+    @triton.jit
+    def helper(offsets, repeated):
+        # CHECK-LABEL: tt.func private @{{.*}}helper
+        # CHECK-DAG: [[OFFSETS:%.*]] = tt.annotate %arg0 {tt.contiguity = dense<8> : tensor<1xi32>, tt.divisibility = dense<8> : tensor<1xi32>} : tensor<128xi32>
+        # CHECK-DAG: [[REPEATED:%.*]] = tt.annotate %arg1 {tt.constancy = dense<8> : tensor<1xi32>} : tensor<128xi32>
+        tl.max_contiguous(tl.multiple_of(offsets, 8), 8)
+        tl.max_constancy(repeated, 8)
+        # CHECK: [[RESULT:%.*]] = arith.addi [[OFFSETS]], [[REPEATED]]
+        # CHECK: tt.return [[RESULT]]
+        return offsets + repeated
+
+    @triton.jit
+    def kernel(output):
+        offsets = tl.arange(0, 128)
+        values = helper(offsets, tl.full((128, ), 4, tl.int32))
+        tl.store(output + offsets, values)
+
+    module = run_parser(kernel, args=(MockTensor(tl.int32), ))
+    assert module.verify()
+    run_filecheck("helper", module.str_nodebug(), inspect.getsource(helper.fn))
 
 
 @pytest.mark.parametrize("op", ["min", "max"])
