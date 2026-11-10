@@ -25,8 +25,12 @@ def check_tensor_scale(operand: Tensor | torch.Tensor, block_scale: Tensor | tor
 
 
 def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.Tensor, ...], *,
-                           output: bool = False) -> torch.Tensor | None:
-    """View a scale over the axes outside the microblock dimension, typically (group, position)."""
+                           matmul_input: bool = False) -> torch.Tensor | None:
+    """Broadcast over the axes outside the microblocks, typically (group, position).
+
+    A length-E vector selects groups for standalone conversions and matmul outputs.
+    Matmul input vectors always select positions and may cover padded storage.
+    """
     if scale is None:
         return None
     # Collapse zero-stride views before interpreting the caller's shape.
@@ -35,15 +39,15 @@ def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.
             scale = scale.narrow(dim, 0, 1)
     if scale.numel() == 1:
         scale = scale.reshape(())
-    elif output and len(shape) == 2 and scale.shape == (shape[0],):
-        scale = scale[:, None]  # A length-E output vector selects groups.
+    elif not matmul_input and len(shape) == 2 and scale.shape == (shape[0],):
+        scale = scale[:, None]
     elif len(shape) == 1 and scale.ndim == 2:
         scale = scale.squeeze(0)  # Dense operands also accept (1, position).
 
     if shape and not isinstance(shape[-1], int):
         shape = (*shape[:-1], scale.size(-1) if scale.ndim else 1)  # Avoid reading a device-side row count.
-    elif not output and shape and scale.ndim and scale.size(-1) > shape[-1]:
-        scale = scale[..., :shape[-1]]  # Input scales may cover padded storage.
+    elif matmul_input and shape and scale.ndim and scale.size(-1) > shape[-1]:
+        scale = scale[..., :shape[-1]]
     try:
         return scale.expand(shape)
     except RuntimeError as exc:
@@ -138,6 +142,9 @@ def upcast_from_mxfp(
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
     The function assumes that the tensors were quantized along the given axis.
+    tensor_scale broadcasts over the remaining axes in their original order.
+    For two remaining axes (E, M), a length-E vector selects groups. Use
+    (1, M) for shared position scales when E == M.
     It permutes the tensor so that the quantized axis is last, reshapes to 2D,
     launches the Triton upcast kernel, and then unpermutes back to the original order.
     """
@@ -245,8 +252,9 @@ def downcast_to_mxfp_torch(
          • For FP4, the size along the axis is halved, and the tensor is returned as a torch.uint8.
       scale: Scale tensor computed per microblock along the axis.
 
-    If expected_scale is provided, apply the same preconditioning as float_to_flex
-    before microscaled output quantization by dividing the source tensor by it.
+    expected_scale broadcasts over the remaining axes in their original order,
+    with the same group-vector convention as upcast_from_mxfp. Precondition
+    the FP32 source with its reciprocal, as in float_to_flex.
     """
     # This should probably be packed into its own tiny class
     ndim = src_tensor.ndim
@@ -273,11 +281,13 @@ def downcast_to_mxfp_torch(
         axis_shape = src_tensor.size(axis)
         assert axis_shape % 2 == 0, "For mxfp4 conversion the contiguous axis length must be even."
 
-    # Permute the tensor so that the contiguous axis becomes the last dimension.
-    src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
+    src = src_tensor.to(torch.float32)
     if expected_scale is not None:
-        scale = broadcast_tensor_scale(expected_scale, src.shape[:-1], output=True)
-        src = src / scale.to(device=device, dtype=src.dtype)[..., None]
+        fiber_shape = src.shape[:axis] + src.shape[axis + 1:]
+        scale = broadcast_tensor_scale(expected_scale, fiber_shape).unsqueeze(axis)
+        src = src * scale.to(device=device, dtype=src.dtype).reciprocal()
+    # Permute the tensor so that the contiguous axis becomes the last dimension.
+    src = src.transpose(axis, -1)
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by the microblock size, in case it is not.

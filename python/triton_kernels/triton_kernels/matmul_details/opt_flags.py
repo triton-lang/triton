@@ -224,6 +224,7 @@ def make_default_opt_flags_nvidia(
     w_transpose=False,
     mx_block_size=None,
     epilogue_reduction_n=1,
+    has_gather=False,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
@@ -282,7 +283,8 @@ def make_default_opt_flags_nvidia(
     def _is_layout_strided(layout: Layout | None) -> bool:
         return layout is None or isinstance(layout, StridedLayout)
 
-    requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
+    strided_mx_scales = _is_layout_strided(a_mx_scale_layout) and _is_layout_strided(b_mx_scale_layout)
+    requires_persistent = not strided_mx_scales and target_info.has_native_mxfp()
 
     # block n
     arch = None
@@ -295,10 +297,11 @@ def make_default_opt_flags_nvidia(
         block_n, block_n_tma = 256, 256
     else:
         block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
-        if (is_ragged_nvfp4 and batch_size == 1 and block_m == 128 and not requires_persistent
+        if (is_ragged_nvfp4 and has_gather and block_m == 128 and strided_mx_scales
                 and out_dtype == FP4 and precision_config.c_microblock_size == int(NVFP_BLOCK_SIZE)
-                and epilogue_reduction_n == 1):
-            # Narrower persistent tiles improve throughput for routed NVFP4 input and output with strided scales.
+                and epilogue_reduction_n == 1 and constraints.get("epilogue_subtile") in (None, 1, 2)):
+            # Gathered NVFP4 benefits from a narrower tile. TMA scatter needs
+            # 32 packed bytes per subtile, so a 128-value tile fits at most two.
             block_n_tma = min(block_n_tma, 128)
     # is_persistent
     grid_size_tma = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n_tma)
@@ -616,6 +619,7 @@ def make_opt_flags(
     w_transpose=False,
     rhs_layout=None,
     epilogue_reduction_n=1,
+    has_gather=False,
 ):
     # Empty outputs do not launch a kernel, so persistent TMA constraints are vacuous.
     can_use_persistent_tma = can_use_persistent_tma or batch_size * m * n == 0
@@ -662,5 +666,6 @@ def make_opt_flags(
             w_transpose=w_transpose,
             mx_block_size=mx_block_size,
             epilogue_reduction_n=epilogue_reduction_n,
+            has_gather=has_gather,
         )
     assert False

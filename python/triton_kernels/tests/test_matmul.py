@@ -599,37 +599,19 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             raise
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     # --- torch implementation ---
-    # Fused NVFP4 output quantizes the float32 activation result and applies
-    # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
-    # float32 until that final downcast instead of letting matmul_torch
-    # return bf16 and apply the output scale early.
-    reference_a = a.float() if c_dtype.is_nvfp4 and not a_dtype.is_nvfp4 else a
-    reference_b = b.float() if c_dtype.is_nvfp4 and not b_dtype.is_nvfp4 else b
-    reference_precision = (
-        PrecisionConfig(
-            a_mx_scale=a_scales,
-            a_mx_tensor_scale=precision_opt.a_mx_tensor_scale,
-            a_microblock_size=a_dtype.microblock_size,
-            b_mx_scale=b_scale_tri,
-            b_mx_tensor_scale=precision_opt.b_mx_tensor_scale,
-            b_microblock_size=b_dtype.microblock_size,
-        ) if c_dtype.is_nvfp4 else precision_opt
-    )
+    reference_precision = precision_opt
     if c_dtype.is_nvfp4:
-        # Decode first: apply_precision returns BF16 for microscaled operands,
-        # and matmul_torch uses the decoded lhs dtype for its output buffer.
-        reference_a, reference_b = apply_precision(reference_a, reference_b, reference_precision)
-        reference_a, reference_b = reference_a.float(), reference_b.float()
-        reference_precision = PrecisionConfig()
+        # The fused activation runs before the output scale is applied by the quantizer below.
+        reference_precision = replace(precision_opt, flex_ctx=replace(precision_opt.flex_ctx, out_data=OutFlexData()))
     if is_compile_warmup():
-        apply_precision(reference_a, reference_b, reference_precision)
+        apply_precision(a, b, reference_precision)
         reference_dtype = (torch.float32 if c_dtype.is_nvfp4 or inner_expt_opt is not None
                            else torch.bfloat16 if a_dtype.has_mx_scale else a_dtype.torch_dtype)
         ref_y = torch.empty(c_shape[:-1] + (n,), dtype=reference_dtype, device=device)
     else:
         ref_y = matmul_torch(
-            reference_a,
-            reference_b,
+            a,
+            b,
             bias,
             a_ragged_metadata,
             b_ragged_metadata,
@@ -814,6 +796,7 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
     ("plain", "expanded_global_positions", "global", "global"),
     ("plain", "position", "global", "position_vector"),
     ("batched", "table", "table", "group_vector"),
+    ("batched", "position_vector", "global", "group_vector"),
     ("batched", "group", "position", "position"),
     ("batched", "position", "expanded_group", "table"),
     ("routed", "position", "global", "expanded_global_groups"),
@@ -886,14 +869,19 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
     b_scale, w_scales = make_scale(w_kind, n)
     c_scale, y_scales = make_scale(y_kind, groups.size(-1))
     blocks = torch.empty((*groups.shape, n // 16), device=device, dtype=torch.float8_e4m3fn)
+    output = None
+    if scatter is not None:
+        output = torch.full((scatter.numel(), n // 2), 0xA5, device=device, dtype=torch.uint8)
+        blocks.view(torch.uint8).fill_(0x5A)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
                              a_mx_tensor_scale=a_scale, b_mx_tensor_scale=b_scale, out_dtype=torch.uint8,
                              c_mx_scale=blocks, c_microblock_size=16,
                              flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=c_scale)))
     epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.)
-    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=persistent, block_m=128, block_n=128, block_k=128)):
+    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=persistent, block_m=128, block_n=128, block_k=128,
+                                                     epilogue_subtile=2 if persistent and scatter is not None else 1)):
         packed = matmul(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter,
-                        precision_config=config, epilogue=epilogue)
+                        precision_config=config, epilogue=epilogue, c=output)
 
     rows = torch.arange(groups.size(-1), device=device)
     source = rows if gather is None else gather.clamp_min(0)
@@ -915,9 +903,49 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
     written = slice(None) if scatter is None else scatter[active]
     assert torch.equal(packed[written], ref_packed[written])
     assert torch.equal(blocks.view(torch.uint8)[written], ref_blocks.view(torch.uint8)[written])
+    if scatter is not None:
+        skipped = torch.ones_like(rows, dtype=torch.bool)
+        skipped[written] = False
+        assert (output[skipped] == 0xA5).all()
+        assert (blocks.view(torch.uint8)[skipped] == 0x5A).all()
 
 
-def test_nvfp4_uniform_scale_rounding(device):
+def test_nvfp4_gathered_swizzled_scales(device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    m, n, k = 32, 128, 128
+    sizes = torch.tensor([m, m], device=device, dtype=torch.int32)
+    meta = make_ragged_tensor_metadata(sizes, 2 * m)
+    route = torch.arange(2 * m, device=device)
+    source = m - 1 - route % m
+    gather = source.to(torch.int32)
+    gather[::11] = -1
+
+    # Each source visits both experts. Values and outer scales use source rows,
+    # while the swizzled block scales have already been placed in route order.
+    value = 1 + torch.arange(m, device=device) % 2
+    a = (value[:, None] * 0x22).to(torch.uint8).expand(m, k // 2).contiguous()
+    b = torch.full((2, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT
+    outer = torch.stack((value.float(), 4 * value.float()))
+    block = 1 + route % 3
+    a_blocks = block.float().masked_fill(gather < 0, float("nan"))
+    a_blocks = a_blocks[:, None].expand(-1, k // 16).to(torch.float8_e4m3fn)
+    bias = torch.ones((2, n), device=device)
+    config = PrecisionConfig(
+        a_mx_scale=convert_layout(wrap_torch_tensor(a_blocks), layout.BlackwellActMXScaleLayout(meta)),
+        a_mx_tensor_scale=outer, a_microblock_size=16,
+        b_mx_scale=torch.ones((2, k // 16, n), device=device, dtype=torch.float8_e4m3fn),
+        b_mx_tensor_scale=torch.ones((), device=device), b_microblock_size=16, out_dtype=torch.float32)
+    expected = k * value[source] * block * outer[route // m, source]
+    expected = torch.where(gather >= 0, expected, 0.) + 1
+    for fn in (matmul, matmul_torch):
+        actual = fn(a, b, bias, a_ragged_metadata=meta, gather_indx=gather, precision_config=config)
+        torch.testing.assert_close(actual, expected[:, None].expand(-1, n), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("ragged", [False, True])
+@pytest.mark.parametrize("x_outer,w_outer,expected_block", [(1.08, 1., 1.125), (0.51, 0.51, 1.)])
+def test_nvfp4_uniform_scale_rounding(ragged, x_outer, w_outer, expected_block, device):
     if not cuda_capability_geq(10, 0):
         pytest.skip("NVFP4 requires Blackwell or newer")
     e, m, n, k = 2, 32, 128, 128
@@ -926,22 +954,46 @@ def test_nvfp4_uniform_scale_rounding(device):
     a[:, 1:, 0] = 0x05  # Each dot product is 3 except on row zero.
     w[:, 0, :] = 0x02
     blocks = torch.empty((e, m, n // 16), device=device, dtype=torch.float8_e4m3fn)
+    a_blocks = torch.ones((e, m, k // 16), device=device, dtype=torch.float8_e4m3fn)
+    meta = None
+    if ragged:
+        meta = make_ragged_tensor_metadata(torch.full((e,), m, device=device, dtype=torch.int32), e * m)
+        a, a_blocks, blocks = (v.flatten(0, 1) for v in (a, a_blocks, blocks))
+    x_scale = torch.tensor([[x_outer], [-x_outer]], device=device)
+    w_scale = torch.tensor(w_outer, device=device)
+    y_scale = (x_scale[0, 0] * w_scale) / 2
     config = PrecisionConfig(
-        a_mx_scale=torch.ones((e, m, k // 16), device=device, dtype=torch.float8_e4m3fn),
+        a_mx_scale=a_blocks,
         b_mx_scale=torch.ones((e, k // 16, n), device=device, dtype=torch.float8_e4m3fn),
-        a_mx_tensor_scale=torch.tensor([[1.08], [-1.08]], device=device), b_mx_tensor_scale=torch.ones((), device=device),
+        a_mx_tensor_scale=x_scale, b_mx_tensor_scale=w_scale,
         a_microblock_size=16, b_microblock_size=16, c_microblock_size=16, c_mx_scale=blocks, out_dtype=torch.uint8,
-        flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=torch.tensor(0.54, device=device))),
+        flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=y_scale.repeat(e) if ragged else y_scale)),
     )
     epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.)
     with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=True, block_m=128, block_n=128, block_k=128)):
-        packed = matmul(a, w, None, precision_config=config, epilogue=epilogue)
-    # (3 * 1.08f) * (1 / 0.54f) rounds just above 6, selecting the next E4M3 block scale.
-    assert (blocks[:, 1:].float() == 1.125).all()
+        packed = matmul(a, w, None, a_ragged_metadata=meta, precision_config=config, epilogue=epilogue)
+    ref = matmul_torch(a, w, None, a_ragged_metadata=meta, precision_config=config)
+    ref_packed, ref_blocks = downcast_to_mxfp_torch(ref, torch.uint8, -1, torch.float8_e4m3fn, 16)
+    assert torch.equal(packed, ref_packed)
+    assert torch.equal(blocks.view(torch.uint8), ref_blocks.view(torch.uint8))
+    packed, blocks = packed.reshape(e, m, -1), blocks.reshape(e, m, -1)
+    # (3 * (X * W)) * reciprocal(Y) can land on either side of the E4M3 rounding boundary.
+    assert (blocks[:, 1:].float() == expected_block).all()
     assert (blocks[:, 0].float() == 0).all()
     assert (packed[:, 0] == 0).all()  # Both output zero rows encode positive zero.
     assert (packed[0, 1:] == 0x77).all()
     assert (packed[1, 1:] == 0xFF).all()
+
+
+def test_nvfp4_reference_preserves_bf16_accumulator():
+    a = torch.tensor([[3., 2. ** -9]], dtype=torch.bfloat16)
+    b = torch.ones((2, 16), dtype=torch.bfloat16)
+    config = PrecisionConfig(out_dtype=torch.uint8, c_microblock_size=16,
+                             c_mx_scale=torch.empty((1, 1), dtype=torch.float8_e4m3fn),
+                             flex_ctx=FlexCtx(out_data=OutFlexData(expected_scale=torch.tensor(0.5))))
+    result = matmul_torch(a, b, None, precision_config=config)
+    # Rounding the accumulator to BF16 first would give exactly 6 and an E4M3 block scale of 1.
+    torch.testing.assert_close(result, torch.full((1, 16), 6. + 2. ** -8), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("swizzled", [False, True])
@@ -1315,6 +1367,8 @@ def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
     expected_error = nullcontext() if scale_slice_sizes is None else pytest.raises(
         AssertionError, match="same RaggedTensorMetadata instance")
     constraints = {"block_m": 128, "block_k": 128, "is_persistent": True, "split_k": 1}
+    config = PrecisionConfig(a_mx_scale=gathered_scales, a_microblock_size=MXFP_BLOCK_SIZE.value,
+                             out_dtype=torch.bfloat16)
     with opt_flags.scoped_opt_flags_constraints(constraints), expected_error:
         actual = matmul(
             wrap_torch_tensor(values),
@@ -1322,16 +1376,14 @@ def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
             None,
             metadata,
             gather_indx=gather_indx,
-            precision_config=PrecisionConfig(
-                a_mx_scale=gathered_scales,
-                a_microblock_size=MXFP_BLOCK_SIZE.value,
-                out_dtype=torch.bfloat16,
-            ),
+            precision_config=config,
         )
 
     if scale_slice_sizes is None:
         expected = upcast_from_mxfp_torch(values, scales, torch.bfloat16, axis=-1)[gather_indx.long()]
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        ref = matmul_torch(values, weights, None, metadata, gather_indx=gather_indx, precision_config=config)
+        torch.testing.assert_close(ref, expected, rtol=0, atol=0)
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
@@ -1589,3 +1641,31 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_nvfp4_ragged_large_block_scale_stride(persistent, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    if torch.cuda.mem_get_info(device)[0] < 5 << 30:
+        pytest.skip("requires 4 GiB for a guarded block-scale table")
+
+    m, n, k = 3, 128, 128
+    row_stride = 1 << 30
+    # Expert 1 starts at row 2. A signed 32-bit offset wraps into the guard.
+    storage = torch.empty(4 * row_stride + k // 16, device=device, dtype=torch.float8_e4m3fn)
+    storage[:k // 16].fill_(7)
+    x_blocks = storage.as_strided((m, k // 16), (row_stride, 1), storage_offset=2 * row_stride)
+    x_blocks.copy_(torch.arange(1, m + 1, device=device)[:, None])
+    a = torch.full((m, k // 2), 0x22, device=device, dtype=torch.uint8)
+    b = torch.full((2, n, k // 2), 0x22, device=device, dtype=torch.uint8).mT
+    unit = torch.ones((), device=device)
+    w_blocks = torch.ones((2, k // 16, n), device=device, dtype=x_blocks.dtype)
+    config = PrecisionConfig(a_mx_scale=x_blocks, b_mx_scale=w_blocks,
+                             a_mx_tensor_scale=unit, b_mx_tensor_scale=unit,
+                             a_microblock_size=16, b_microblock_size=16, out_dtype=torch.float32)
+    meta = make_ragged_tensor_metadata(torch.tensor([2, 1], dtype=torch.int32, device=device), m)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": persistent, "split_k": 1}):
+        actual = matmul(a, b, None, a_ragged_metadata=meta, precision_config=config)
+    expected = torch.arange(1, m + 1, dtype=torch.float32, device=device)[:, None] * k
+    torch.testing.assert_close(actual, expected.expand_as(actual), rtol=0, atol=0)
