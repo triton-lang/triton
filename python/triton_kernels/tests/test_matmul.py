@@ -844,8 +844,8 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
     meta = gather = scatter = None
     if mode in ("ragged", "routed"):
         routed = mode == "routed"
-        sizes = torch.tensor([47, 0, 84 if routed else m - 47], device=device, dtype=torch.int32)
         n_rows = 131 if routed else m
+        sizes = torch.tensor([47, 0, n_rows - 47], device=device, dtype=torch.int32)
         meta = make_ragged_tensor_metadata(sizes, n_rows)
         groups = torch.repeat_interleave(torch.arange(e, device=device), sizes.long(), output_size=n_rows)
         if routed:
@@ -912,9 +912,12 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
         scaled = expected
     ref = matmul_torch(a, b, None, a_ragged_metadata=meta, gather_indx=gather, scatter_indx=scatter, precision_config=config)
     torch.testing.assert_close(ref, scaled, rtol=0, atol=0)
-    ref_packed, ref_blocks = downcast_to_mxfp_torch(unscaled if meta is None else scaled, torch.uint8, -1,
-                                                    scale_dtype=torch.float8_e4m3fn, microblock_size=16,
-                                                    expected_scale=c_scale if meta is None else None)
+    if meta is None:
+        quant_input, expected_scale = unscaled, c_scale
+    else:
+        quant_input, expected_scale = scaled, None
+    ref_packed, ref_blocks = downcast_to_mxfp_torch(quant_input, torch.uint8, -1, scale_dtype=torch.float8_e4m3fn,
+                                                    microblock_size=16, expected_scale=expected_scale)
     written = slice(None) if scatter is None else scatter[active]
     assert torch.equal(packed[written], ref_packed[written])
     assert torch.equal(blocks.view(torch.uint8)[written], ref_blocks.view(torch.uint8)[written])

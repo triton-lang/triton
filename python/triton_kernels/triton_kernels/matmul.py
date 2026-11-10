@@ -376,13 +376,15 @@ def matmul(a, b, bias,
             precision_config,
             out_dtype=precision_config.out_dtype or (c.dtype if c is not None else torch.bfloat16),
         )
-    mx_block_size = (
-        b_microblock_size if x_is_nvfp4 and w_is_mxfp4 else
-        a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
-    )
+        dot_a_dtype = FP8_E4M3FN
+        dot_a_microblock_size = b_microblock_size
+    else:
+        dot_a_dtype = a.dtype
+        dot_a_microblock_size = a_microblock_size
+    mx_block_size = dot_a_microblock_size or b_microblock_size or precision_config.c_microblock_size or int(MXFP_BLOCK_SIZE)
     assert all(
         size is None or size == mx_block_size
-        for size in (None if x_is_nvfp4 and w_is_mxfp4 else a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
+        for size in (dot_a_microblock_size, b_microblock_size, precision_config.c_microblock_size)
     ), (
         "Microscaled operands/output must share a block size. "
         f"Got a={a_microblock_size}, b={b_microblock_size}, c={precision_config.c_microblock_size}"
@@ -448,8 +450,6 @@ def matmul(a, b, bias,
         a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
     else:
         a_uses_tma_when_persistent = has_gather_tma or not has_gather
-    # Select tiles for the operand consumed by the dot, not its packed input.
-    dot_a_dtype = FP8_E4M3FN if x_is_nvfp4 and w_is_mxfp4 else a.dtype
     opt_flags = make_opt_flags(out_dtype, dot_a_dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
@@ -667,11 +667,12 @@ def matmul(a, b, bias,
     b_scale_strides = pad_strides(b_scale_strides, 3)
     n_groups = b.shape[0] if b.ndim == 3 else 1
     y_tensor_scale = out_matmul_flex.expected_scale
+    y_scale_shape = (n_groups if is_c_ragged else batch_size, out_matmul.size(-2))
     tensor_scale_strides = []
     for scale, shape, matmul_input in (
         (a_tensor_scale, (n_groups, a.shape[-2]), True),
         (b_tensor_scale, (n_groups, b.shape[-1]), True),
-        (y_tensor_scale if nvfp4_output else None, (n_groups if is_c_ragged else batch_size, out_matmul.size(-2)), False),
+        (y_tensor_scale if nvfp4_output else None, y_scale_shape, False),
     ):
         group_stride = position_stride = 0
         if scale is not None and scale.numel() != 1:
@@ -832,7 +833,9 @@ def matmul(a, b, bias,
 # -----------------------------------------------------------------------------
 
 def _strided_reference_data(x: Tensor | torch.Tensor, axis: int) -> torch.Tensor:
-    return convert_layout(x, StridedLayout(major_dim=axis)).data if isinstance(x, Tensor) else x
+    if isinstance(x, Tensor):
+        return convert_layout(x, StridedLayout(major_dim=axis)).data
+    return x
 
 
 def _gather_reference_rows(values: torch.Tensor, indices: torch.Tensor, fill: float = 0) -> torch.Tensor:
@@ -849,7 +852,9 @@ def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool
                flex_scale: torch.Tensor | None, axis: int) -> torch.Tensor:
         values = _strided_reference_data(x, axis)
         if block_scale is None:
-            return values.clone() if flex_scale is None else values.float() * flex_scale
+            if flex_scale is None:
+                return values.clone()
+            return values.float() * flex_scale
         blocks = _strided_reference_data(block_scale, axis)
         if tensor_scale is not None:
             fiber_shape = values.shape[:axis] + values.shape[axis + 1:]
@@ -901,7 +906,10 @@ def _reference_output(out: torch.Tensor, precision_config: PrecisionConfig, n_gr
         else:
             # Apply the FP32 reciprocal used by float_to_flex before scattering.
             for expert, (lo, hi) in enumerate(expert_slices):
-                dest = slice(lo, hi) if scatter is None else scatter[lo:hi].clamp_min(0)
+                if scatter is None:
+                    dest = slice(lo, hi)
+                else:
+                    dest = scatter[lo:hi].clamp_min(0)
                 out[lo:hi] *= table[expert, dest, None].float().reciprocal()
         expected_scale = None
 
@@ -952,8 +960,11 @@ def matmul_torch(a, b, bias,
     def dot(x, w, group, lo, hi):
         x_scale = None
         if x_scales is not None:
-            x_scale = (x_scales[group, lo:hi] if gather_indx is None else
-                       _gather_reference_rows(x_scales[group], gather_indx[lo:hi], fill=1))[:, None]
+            if gather_indx is None:
+                x_scale = x_scales[group, lo:hi]
+            else:
+                x_scale = _gather_reference_rows(x_scales[group], gather_indx[lo:hi], fill=1)
+            x_scale = x_scale[:, None]
         if x_is_nvfp4 and w_is_mxfp4:
             from .numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
             # NVFP4 activations absorb their outer scale before rounding to MXFP8 for MXFP4 weights.
@@ -965,11 +976,17 @@ def matmul_torch(a, b, bias,
         acc = torch.matmul(x.to(compute_dtype), w.to(compute_dtype))
         if x_scale is not None or w_scales is not None:
             # Native NVFP4 applies the rounded product of both outer scales after the dot.
-            acc *= (1.0 if x_scale is None else x_scale) * (1.0 if w_scales is None else w_scales[group])
+            if x_scale is None:
+                x_scale = 1.0
+            w_scale = 1.0 if w_scales is None else w_scales[group]
+            acc *= x_scale * w_scale
             if bias is None:
                 acc += 0.0  # The implicit zero bias normalizes zeros after a negative scale.
         if bias is not None:
-            acc += bias[group] if betas is None else bias[group] * betas[lo:hi, None]
+            group_bias = bias[group]
+            if betas is not None:
+                group_bias = group_bias * betas[lo:hi, None]
+            acc += group_bias
         if gammas is not None:
             acc *= gammas[lo:hi, None]
         return round_y(acc) if round_y is not None else acc
@@ -1014,8 +1031,10 @@ def matmul_torch(a, b, bias,
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=result_dtype)
     for i, (lo, hi) in enumerate(offs):
         batch = i if is_input_batched else 0
-        x = (a[batch, lo:hi] if gather_indx is None or gathered_blocks else
-             _gather_reference_rows(a[batch], gather_indx[lo:hi]))
+        if gather_indx is None or gathered_blocks:
+            x = a[batch, lo:hi]
+        else:
+            x = _gather_reference_rows(a[batch], gather_indx[lo:hi])
         y[batch, lo:hi] = dot(x, b[i], i, lo, hi)
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])

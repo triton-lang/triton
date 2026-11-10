@@ -581,7 +581,9 @@ def _p_matmul(
             x_tensor_scales = None
             if HAS_X_EPILOGUE_SCALE:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
-            w_scale_ptr = None if WTensorScale is None else WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
+            w_scale_ptr = None
+            if WTensorScale is not None:
+                w_scale_ptr = WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
             cols = off_n + tl.arange(0, BLOCK_N)
             mask_n = True if OUT_N_TILE_ALIGNED and ACTIVATION_REDUCTION_N == 1 else cols < N
             input_scales = multiply_tensor_scales(x_tensor_scales, w_scale_ptr, cols.to(index_type), stride_w_tensor_scale_n, mask_n)
