@@ -306,6 +306,12 @@ void replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback = nullptr);
 
+/// Return true if `replaceUsesWithLocalLoad` forwards a buffer with shared
+/// encoding `bufferEnc` into `userAlloc`, a `ttg.local_alloc` user of the
+/// replaced value, instead of keeping `userAlloc` as a separate allocation.
+bool canForwardToLocalAlloc(triton::gpu::LocalAllocOp userAlloc,
+                            Attribute bufferEnc);
+
 /// Replace all uses of `old` with a local load from `alloc` unless the use is a
 /// `ttg.local_alloc` with a matching shared encoding, in which case the shared
 /// memory is forwarded directly into the use. Returns the `ttg.local_load` if
