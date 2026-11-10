@@ -46,9 +46,7 @@ def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.
         return None
     # An expanded axis repeats its first entry. Keep that entry so the same
     # scale can broadcast to a different number of groups or positions.
-    strides = scale.stride()
-    if 0 in strides:
-        scale = scale[tuple(slice(1) if stride == 0 else slice(None) for stride in strides)]
+    scale = scale[tuple(slice(1) if stride == 0 else slice(None) for stride in scale.stride())]
 
     if scale.numel() == 1:
         scale = scale.reshape(())
