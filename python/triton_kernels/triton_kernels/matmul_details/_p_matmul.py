@@ -153,7 +153,7 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
-             stride_y_tensor_scale=None, stride_y_tensor_scale_m=None,
+             stride_y_tensor_scale=0, stride_y_tensor_scale_m=None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -168,6 +168,9 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    # Keep masked vector loads and fold broadcast positions into their addresses.
+    stride_x_tensor_scale_m = 0 if stride_x_tensor_scale_m is None else stride_x_tensor_scale_m
+    stride_w_tensor_scale_n = 0 if stride_w_tensor_scale_n is None else stride_w_tensor_scale_n
     HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE

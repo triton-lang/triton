@@ -23,23 +23,29 @@ def check_tensor_scale(operand, block_scale, tensor_scale):
         raise ValueError("A tensor scale must be set if and only if the operand is NVFP4 (packed FP4 with E4M3 block scales)")
 
 
-def compact_tensor_scale(scale):
-    """Return a view with singleton broadcast axes, or a scalar for one global value."""
+def broadcast_tensor_scale(scale, shape, *, output=False):
+    """View a scale over the axes outside the microblock dimension, typically (group, position)."""
+    if scale is None:
+        return None
+    # Collapse zero-stride views before interpreting the caller's shape.
     for dim, stride in enumerate(scale.stride()):
         if stride == 0 and scale.size(dim) > 1:
             scale = scale.narrow(dim, 0, 1)
-    return scale.reshape(()) if scale.numel() == 1 else scale
+    if scale.numel() == 1:
+        scale = scale.reshape(())
+    elif output and len(shape) == 2 and scale.shape == (shape[0],):
+        scale = scale[:, None]  # A length-E output vector selects groups.
+    elif len(shape) == 1 and scale.ndim == 2:
+        scale = scale.squeeze(0)  # Dense operands also accept (1, position).
 
-
-def output_tensor_scale(scale, n_groups, n_rows):
-    """Return a (group, destination row) view. A length-E vector denotes groups."""
-    scale = compact_tensor_scale(scale)
-    if scale.ndim == 1 and scale.size(0) == n_groups:
-        scale = scale[:, None]
-    scale = torch.atleast_2d(scale)
-    if scale.ndim != 2 or scale.size(0) not in (1, n_groups) or scale.size(1) not in (1, n_rows):
-        raise ValueError(f"Output tensor scale must broadcast to ({n_groups}, {n_rows})")
-    return scale
+    if shape and not isinstance(shape[-1], int):
+        shape = (*shape[:-1], scale.size(-1) if scale.ndim else 1)  # Avoid reading a device-side row count.
+    elif not output and shape and scale.ndim and scale.size(-1) > shape[-1]:
+        scale = scale[..., :shape[-1]]  # Input scales may cover padded storage.
+    try:
+        return scale.expand(shape)
+    except RuntimeError as exc:
+        raise ValueError(f"Tensor scale {tuple(scale.shape)} must broadcast to {tuple(shape)}") from exc
 
 
 class DequantScaleRoundingMode(Enum):
@@ -140,10 +146,7 @@ def upcast_from_mxfp(
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
     if tensor_scale is not None:
         fiber_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
-        tensor_scale = compact_tensor_scale(tensor_scale)
-        if len(fiber_shape) == 1 and tensor_scale.ndim == 2:
-            tensor_scale = tensor_scale.squeeze(0)
-        tensor_scale = tensor_scale.expand(fiber_shape).unsqueeze(axis)
+        tensor_scale = broadcast_tensor_scale(tensor_scale, fiber_shape).unsqueeze(axis)
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -269,16 +272,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     # Permute the tensor so that the contiguous axis becomes the last dimension.
     src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
     if expected_scale is not None:
-        n_groups = src.shape[0] if src.ndim == 3 else 1
-        n_rows = src.shape[-2] if src.ndim >= 2 else 1
-        expected_scale = output_tensor_scale(expected_scale, n_groups, n_rows)
-        if src.ndim == 1:
-            expected_scale = expected_scale.reshape(())
-        elif src.ndim == 3:
-            expected_scale = expected_scale[:, :, None]
-        else:
-            expected_scale = expected_scale[0, :, None]
-        src = src / expected_scale.to(device=device, dtype=src.dtype)
+        scale = broadcast_tensor_scale(expected_scale, src.shape[:-1], output=True)
+        src = src / scale.to(device=device, dtype=src.dtype)[..., None]
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by the microblock size, in case it is not.

@@ -810,21 +810,21 @@ def test_matmul_rejects_nvfp4_on_unsupported_gpu(nvfp4_operand, device):
 
 @pytest.mark.parametrize("persistent", [False, True])
 @pytest.mark.parametrize("mode,x_kind,w_kind,y_kind", [
-    ("plain", "global", "row", "global"),
-    ("plain", "row", "global", "row"),
-    ("batched", "table", "table", "group"),
-    ("batched", "group", "row", "row"),
-    ("batched", "row", "group", "table"),
-    ("routed", "row", "global", "global"),
-    ("routed", "row", "table", "global"),
-    ("routed", "group", "global", "global"),
-    ("routed", "global", "group", "group"),
-    ("routed", "group", "group", "group"),
-    ("routed", "table", "row", "global"),
-    ("routed", "table", "group", "table"),
-    ("routed", "row", "table", "row"),
+    ("plain", "expanded_global_positions", "position", "global"),
+    ("plain", "position", "global", "position_vector"),
+    ("batched", "table", "table", "group_vector"),
+    ("batched", "group", "position", "position"),
+    ("batched", "position", "expanded_group", "table"),
+    ("routed", "position", "global", "expanded_global_groups"),
+    ("routed", "position", "table", "expanded_global_groups"),
+    ("routed", "group", "global", "expanded_global_groups"),
+    ("routed", "global", "expanded_group", "group_vector"),
+    ("routed", "group", "expanded_group", "group"),
+    ("routed", "table", "position", "expanded_global_groups"),
+    ("routed", "table", "expanded_group", "table"),
+    ("routed", "position", "table", "position"),
     ("routed", "group", "global", "table"),
-    ("ragged", "table", "group", "table"),
+    ("ragged", "table", "expanded_group", "table"),
 ])
 def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, device):
     if not cuda_capability_geq(10, 0):
@@ -863,30 +863,26 @@ def test_nvfp4_compact_tensor_scales(mode, x_kind, w_kind, y_kind, persistent, d
         group = torch.arange(e, device=device)[:, None]
         position = torch.arange(2 * width + 1, device=device)[None, :]
         values = (2. ** ((group + position // 2) % 5 - 2))[:, 1::2]
-        if kind == "global":
-            compact = values[0, 0]
-        elif kind == "group":
-            compact = values[:, :1]
-        elif kind == "row":
-            compact = values[:1]
-        else:
-            assert kind == "table"
-            compact = values
-        return compact, compact.expand(e, width)
+        scalar = values[0, 0]
+        per_group = values[:, :1]
+        per_position = values[:1]
+        # Each entry pairs the caller's view with its canonical (group, position) layout.
+        arg, canonical = {
+            "global": (scalar, scalar),
+            "expanded_global_positions": (scalar.expand(width), scalar),
+            "expanded_global_groups": (scalar.expand(e), scalar),
+            "group": (per_group, per_group),
+            "group_vector": (values[:, 0], per_group),
+            "expanded_group": (per_group.expand(e, width), per_group),
+            "position": (per_position, per_position),
+            "position_vector": (values[0], per_position),
+            "table": (values, values),
+        }[kind]
+        return arg, canonical.expand(e, width)
 
     a_scale, x_scales = make_scale(x_kind, m)
     b_scale, w_scales = make_scale(w_kind, n)
     c_scale, y_scales = make_scale(y_kind, groups.size(-1))
-    if w_kind == "group":
-        b_scale = b_scale.expand(e, n)
-    if y_kind == "group" and x_kind != "group":
-        c_scale = c_scale[:, 0]
-    if mode == "routed" and y_kind == "global":
-        c_scale = c_scale.expand(e)
-    if mode == "plain" and x_kind == "global":
-        a_scale = a_scale.expand(m)
-    if mode == "plain" and y_kind == "row":
-        c_scale = c_scale[0]
     blocks = torch.empty((*groups.shape, n // 16), device=device, dtype=torch.float8_e4m3fn)
     config = PrecisionConfig(a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
                              a_mx_tensor_scale=a_scale, b_mx_tensor_scale=b_scale, out_dtype=torch.uint8,

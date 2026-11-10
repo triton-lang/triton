@@ -166,8 +166,7 @@ def load_output_tensor_scale(Scale, group, group_stride, rows, row_stride, mask)
     if Scale is None:
         return None
     else:
-        if group_stride is not None:
-            Scale += group * group_stride
+        Scale += group * group_stride
         if row_stride is None:
             return tl.load(Scale)
         else:

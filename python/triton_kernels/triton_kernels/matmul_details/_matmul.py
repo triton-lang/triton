@@ -112,7 +112,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
-             stride_y_tensor_scale=None, stride_y_tensor_scale_m=None,
+             stride_y_tensor_scale=0, stride_y_tensor_scale_m=None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -370,8 +370,7 @@ def _matmul(
     else:
         XMxScalePtrs = None
     if has_x_tensor_scale:
-        if stride_x_tensor_scale_z is not None:
-            XTensorScale += expt_id * stride_x_tensor_scale_z
+        XTensorScale += expt_id * stride_x_tensor_scale_z
         if GatherIndx is None and stride_x_tensor_scale_m is not None:
             XTensorScale += start_m * stride_x_tensor_scale_m
 
@@ -387,8 +386,7 @@ def _matmul(
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     if has_w_tensor_scale:
         offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        if stride_w_tensor_scale_e is not None:
-            WTensorScale += expt_id * stride_w_tensor_scale_e
+        WTensorScale += expt_id * stride_w_tensor_scale_e
     # compute output
     acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
