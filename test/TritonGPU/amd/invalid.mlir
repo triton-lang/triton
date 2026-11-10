@@ -460,19 +460,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// TDM scatter does not read from partitioned layouts.
+// TDM scatter only supports partitioning along rows.
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 #inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_scatter_partitioned(
+  tt.func @tdm_scatter_partitioned_cols(
     %tensorDesc: !tt.tensordesc<16x64xf16, #partitioned>,
     %memDesc: !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable>,
     %row_indices: tensor<16xi32, #slice>
   ) {
-    // expected-error @+1 {{Invalid shared memory layout for TDM}}
+    // expected-error @+1 {{NYI: TDM scatter only supports partitioning along rows (partitionDim 0)}}
     %token = amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<16x64xf16, #partitioned>
     tt.return
   }

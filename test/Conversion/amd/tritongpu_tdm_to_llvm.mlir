@@ -587,6 +587,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Row-partitioned scatter: 8-row pieces cap the 32 i16 indices at 4
+// instructions, each reading from its partition's base.
+#blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#inner = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [8, 64]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_scatter_partitioned_rows
+  // CHECK: llvm.extractelement %{{.*}}[%{{.*}} : i32] : vector<2x!llvm.ptr<3>>
+  // CHECK-COUNT-4: "llvm.amdgcn.tensor.store.from.lds"
+  // CHECK-NOT: "llvm.amdgcn.tensor.store.from.lds"
+  tt.func public @tdm_scatter_partitioned_rows(
+    %tensorDesc: !tt.tensordesc<32x64xf16, #partitioned>,
+    %memDesc: !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable>,
+    %row_indices: tensor<32xi16, #slice>
+  ) {
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<32xi16, #slice>, !ttg.memdesc<32x64xf16, #partitioned, #smem, mutable> -> !tt.tensordesc<32x64xf16, #partitioned>
+    tt.return
+  }
+}
+
+// -----
+
 // Row-partitioned TDM store: each warp's 16-row tile lies in one 64-row piece,
 // so one instruction per warp reads from its partition's base.
 #inner = #ttg.padded_shared<[256:+16] {order = [1, 0], shape = [64, 256]}>
