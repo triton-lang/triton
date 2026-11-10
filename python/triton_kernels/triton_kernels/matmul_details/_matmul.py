@@ -28,7 +28,7 @@ from ._common import (
 
 @triton.jit
 def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride: int | None | tl.tensor,
-                       mask: "bool | tl.tensor", other: tl.constexpr) -> tl.tensor:
+                       mask, other: tl.constexpr) -> tl.tensor:
     """Return one input scale per offset, broadcasting a scalar load when the stride is shared."""
     if stride is None:
         return tl.where(mask, tl.broadcast_to(tl.load(Scale), offsets.shape), other)
@@ -48,7 +48,8 @@ _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
-             YExpectedScale, YActualScale, YChecksumScale,
+             YExpectedScale, stride_y_tensor_scale_z, stride_y_tensor_scale_m,
+             YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
@@ -114,7 +115,6 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
-             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: int | None | tl.tensor = None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -619,7 +619,7 @@ def _matmul(
         tl.static_assert(EPILOGUE_FN is not None)
         output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
         scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
-        expected_scale = load_output_tensor_scale(YExpectedScale, scale_group.to(index_type), stride_y_tensor_scale,
+        expected_scale = load_output_tensor_scale(YExpectedScale, scale_group.to(index_type), stride_y_tensor_scale_z,
                                                  output_scale_rows.to(index_type), stride_y_tensor_scale_m, mask_m)
         out = float_to_flex(out, expected_scale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)

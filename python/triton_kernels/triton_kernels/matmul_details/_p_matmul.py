@@ -84,7 +84,8 @@ _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
-             YExpectedScale, YActualScale, YChecksumScale,
+             YExpectedScale, stride_y_tensor_scale_z, stride_y_tensor_scale_m,
+             YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
@@ -153,7 +154,6 @@ def _p_matmul(
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
              MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
-             stride_y_tensor_scale: "int | tl.tensor" = 0, stride_y_tensor_scale_m: int | None | tl.tensor = None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -703,7 +703,7 @@ def _p_matmul(
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
             scale_group = expt_id1 if RAGGED_DIMENSION == "M" else start_z1
-            ExpectedScale = load_output_tensor_scale(ExpectedScale, scale_group.to(index_type), stride_y_tensor_scale,
+            ExpectedScale = load_output_tensor_scale(ExpectedScale, scale_group.to(index_type), stride_y_tensor_scale_z,
                                                      offs_y_m.to(index_type), stride_y_tensor_scale_m, mask_m)
 
         for a_i in tl.static_range(len(accs)):
