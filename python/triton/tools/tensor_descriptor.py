@@ -11,6 +11,9 @@ class TensorDescriptor:
     block_shape: List[int]
     padding: str = "zero"
     round_f32_to_tf32: bool = False
+    # Virtual shapes need not describe the size of the underlying allocation.
+    # Request the safe TMA out-of-bounds address-generation mode in that case.
+    force_small_allocation: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)

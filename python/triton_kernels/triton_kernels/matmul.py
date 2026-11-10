@@ -584,10 +584,7 @@ def matmul(a, b, bias,
         c_acc_strides = (None, None, None)
 
     a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
-    # Bound A loads by its physical shape. Ragged TMA loads can fault at the
-    # allocation boundary, even when the out-of-slice rows should be zero-filled.
-    # Rows loaded past a slice are independent and masked from the output.
-    a_tma_mode = "dense" if a_has_tma else None
+    a_tma_mode = None if not a_has_tma else "ragged" if ragged_dimension == "M" and not has_gather_tma else "dense"
     a_tensor_or_tma = make_tma(a, a_tma_block_size, a_tma_mode) if a_has_tma else a.storage.data
     if a_has_tma and precision_config.allow_tf32 and a.storage.data.dtype == torch.float32:
         a_tensor_or_tma.round_f32_to_tf32 = True

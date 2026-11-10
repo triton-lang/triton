@@ -571,9 +571,11 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   PyObject *shape;
   PyObject *strides;
   int padding;
+  int force_small_allocation = 0;
 
-  if (!PyArg_ParseTuple(args, "KiiiOOOi", &global_address, &swizzle, &elemSize,
-                        &elemType, &blockSize, &shape, &strides, &padding)) {
+  if (!PyArg_ParseTuple(args, "KiiiOOOi|p", &global_address, &swizzle, &elemSize,
+                        &elemType, &blockSize, &shape, &strides, &padding,
+                        &force_small_allocation)) {
     return NULL;
   }
 
@@ -659,6 +661,26 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
       &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,
       stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B, fill);
+  if (res == CUDA_SUCCESS && force_small_allocation) {
+    CUdevice device;
+    int major;
+    res = cuCtxGetDevice(&device);
+    if (res == CUDA_SUCCESS)
+      res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                                device);
+    if (res == CUDA_SUCCESS && (major == 10 || major == 12)) {
+      // NVIDIA's documented Blackwell workaround for virtual/non-dense tensors:
+      // https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-595-91-07/index.html#known-issues
+      // Large-allocation OOB address generation requires 128 KiB of accessible
+      // memory from the base, even when the loaded elements are zero-filled.
+      // Use memcpy rather than type-punning the opaque descriptor.
+      uint64_t word;
+      char *bytes = (char *)&desc->tensorMap;
+      memcpy(&word, bytes + sizeof(word), sizeof(word));
+      word &= ~((uint64_t)1 << 21);
+      memcpy(bytes + sizeof(word), &word, sizeof(word));
+    }
+  }
   if (res != CUDA_SUCCESS) {
     const char *str;
     cuGetErrorString(res, &str);

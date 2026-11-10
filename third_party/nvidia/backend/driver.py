@@ -252,6 +252,7 @@ def make_tensordesc_arg(arg, metadata, _):
             expanded_shape,
             strides,
             padding,
+            getattr(arg, "force_small_allocation", False),
         )
 
     return [cu_tensor_map, *shape, *strides]
