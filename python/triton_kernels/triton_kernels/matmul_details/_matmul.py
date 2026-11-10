@@ -271,15 +271,15 @@ def _matmul(
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
+    pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
-        Y += pid_k.to( index_type) * stride_y_k
+        Y += pid_k * stride_y_k
         if is_out_microscaled:
-            YActualScale += pid_k.to(index_type) * stride_y_mx_k
+            YActualScale += pid_k * stride_y_mx_k
 
     expt_id, off_m = expt_id.to(index_type), off_m.to(index_type)
     start_m, start_z = start_m.to(index_type), start_z.to(index_type)
-    pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
     # A pointers
     offs_x_m = off_m + tl.arange(0, BLOCK_M)
     offs_x_m = tl.max_contiguous(tl.multiple_of(offs_x_m % eM, BLOCK_M), BLOCK_M)
@@ -352,7 +352,7 @@ def _matmul(
     offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % packed_n_w, PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
-        XMxScale += start_z.to(index_type) * stride_x_mx_z
+        XMxScale += start_z * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
         offs_x_k_scale = off_k_x // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
@@ -360,7 +360,7 @@ def _matmul(
     else:
         XMxScalePtrs = None
     if has_x_tensor_scale:
-        XTensorScale += start_z.to(index_type) * stride_x_tensor_scale_z
+        XTensorScale += start_z * stride_x_tensor_scale_z
         if GatherIndx is None:
             XTensorScale += start_m * stride_x_tensor_scale_m
         XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m

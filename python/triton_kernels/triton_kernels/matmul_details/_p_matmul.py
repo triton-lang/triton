@@ -319,6 +319,9 @@ def _p_matmul(
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
         )
 
+        # Descriptor coordinates are int32. Widen the slice start once for pointer arithmetic.
+        slice_start = slice_off_m.to(index_type)
+
         # TODO: if RAGGED_DIMENSION == "M"
         if RAGGED_DIMENSION == "M":
             shape_m = tl.load(XSliceSizes + off_w_z)
@@ -334,35 +337,36 @@ def _p_matmul(
         if USE_GATHER_TMA:
             offs_m = tile_offs_m
             if XBlockSchedule is None:
-                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m)
+                offs_x_m = tl.load(GatherIndx + slice_start + offs_m, mask=mask_m)
                 # Bump rows to account for the Z offset.
                 offs_x_m += off_x_z * (stride_x_z // stride_x_m)
                 offs_x_m = tl.where(mask_m, offs_x_m, -1)
             else:
-                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m, other=-1)
+                offs_x_m = tl.load(GatherIndx + slice_start + offs_m, mask=mask_m, other=-1)
         if X_TMA_MODE is None:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
             # Wrapping bounds the gather-array position, not the gathered row index.
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
-                offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
+                offs_m = tl.load(GatherIndx + slice_start + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
 
+        x_batch = off_x_z.to(index_type)
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
             if X_TMA_MODE is not None:
                 offs_m = off_m + tl.arange(0, BLOCK_M)
-            XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
+            XMxScalePtrs = XMxScale + x_batch * stride_x_mx_z
             if GatherIndx is None:
-                XMxScalePtrs += slice_off_m.to(index_type) * stride_x_mx_m
+                XMxScalePtrs += slice_start * stride_x_mx_m
             offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
             mx_scale_offs_m = offs_x_m if USE_GATHER_TMA else offs_m
             XMxScalePtrs += mx_scale_offs_m.to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
         if XTensorScale is not None:
-            XTensorScalePtrs = XTensorScale + off_x_z.to(index_type) * stride_x_tensor_scale_z
+            XTensorScalePtrs = XTensorScale + x_batch * stride_x_tensor_scale_z
             if USE_GATHER_TMA:
                 scale_offs_m = offs_x_m
             elif X_TMA_MODE is None:
@@ -370,7 +374,7 @@ def _p_matmul(
             else:
                 scale_offs_m = tile_offs_m
             if GatherIndx is None:
-                XTensorScalePtrs += slice_off_m.to(index_type) * stride_x_tensor_scale_m
+                XTensorScalePtrs += slice_start * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
         # Inactive rows have no source scales; neutral scales preserve their zero values.
@@ -422,7 +426,7 @@ def _p_matmul(
                             + ki.to(index_type) * (BLOCK_K // block_div) * SPLIT_K
                             + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
                 # Keep the aligned base pointer outside the flattened loop's conditional prologue.
-                XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
+                XPtrs = X + (x_batch * stride_x_z + offs_x_m + offs_x_k)
                 mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
                 # Without a gather, row offsets are nonnegative by construction.
                 # Negative gather indices (including -1) mark inactive input rows.
@@ -598,6 +602,7 @@ def _p_matmul(
             tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
             _, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
 
+        y_batch_offset = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z
         offs_m = off_m1 + tl.arange(0, BLOCK_M)
         mask_m = offs_m < eM1
         if USE_SCATTER_TMA:
@@ -721,7 +726,7 @@ def _p_matmul(
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                     mask_n = offs_y_n < yN
 
-                    AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                    AccPtrs = YPtr + y_batch_offset + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     acc = tl.load(AccPtrs, mask=mask, other=0.0)
                 if Gammas is not None:
@@ -852,7 +857,7 @@ def _p_matmul(
                         offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
                         mask_n = offs_y_n < tl.cdiv(yN, 2)
                     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
-                    offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                    offs_kzmn = y_batch_offset + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
                 tl.static_assert(not is_out_fp4, "FP4 outputs are not supported with fused comms")
@@ -866,8 +871,7 @@ def _p_matmul(
                     out_off_n, offs_y_n,
                     *map_dst_coord.captured)
                 offs_kzmn = (
-                    pid_k1.to(index_type) * stride_y_k +
-                    start_z1.to(index_type) * stride_y_z +
+                    y_batch_offset +
                     dst_y_n[None, :] * stride_y_n +
                     (dst_y_m.to(index_type)[:, None] * n_reduce_shards + reduce_rank) * stride_y_m
                 )
