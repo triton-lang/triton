@@ -838,13 +838,6 @@ def _strided_reference_data(x: Tensor | torch.Tensor, axis: int) -> torch.Tensor
     return x
 
 
-def _gather_reference_rows(values: torch.Tensor, indices: torch.Tensor, fill: float = 0) -> torch.Tensor:
-    gathered = values.new_full((indices.numel(), *values.shape[1:]), fill)
-    active = indices >= 0
-    gathered[active] = values[indices[active]]
-    return gathered
-
-
 def apply_precision(x_tri, w_tri, precision_config, *, apply_tensor_scales: bool = True):
     from .numerics_details.mxfp import upcast_from_mxfp
 
@@ -941,7 +934,10 @@ def matmul_torch(a, b, bias,
     w_scales = broadcast_tensor_scale(precision_config.b_mx_tensor_scale, (n_groups, b.shape[-1]), matmul_input=True)
     if gathered_blocks:
         # Blackwell activation block scales already follow the routing order.
-        a = _gather_reference_rows(_strided_reference_data(a, a.ndim - 1), gather_indx)
+        values = _strided_reference_data(a, a.ndim - 1)
+        active = gather_indx >= 0
+        a = values.new_zeros((gather_indx.numel(), *values.shape[1:]))
+        a[active] = values[gather_indx[active]]
     x_is_nvfp4 = x_scales is not None
     w_is_mxfp4 = (b.dtype in (FP4, torch.uint8) and precision_config.b_mx_scale is not None
                   and precision_config.b_mx_scale.data.dtype == torch.uint8)
@@ -963,7 +959,10 @@ def matmul_torch(a, b, bias,
             if gather_indx is None:
                 x_scale = x_scales[group, lo:hi]
             else:
-                x_scale = _gather_reference_rows(x_scales[group], gather_indx[lo:hi], fill=1)
+                rows = gather_indx[lo:hi]
+                active = rows >= 0
+                x_scale = x_scales.new_ones(rows.shape)
+                x_scale[active] = x_scales[group, rows[active]]
             x_scale = x_scale[:, None]
         if x_is_nvfp4 and w_is_mxfp4:
             from .numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
@@ -1034,7 +1033,10 @@ def matmul_torch(a, b, bias,
         if gather_indx is None or gathered_blocks:
             x = a[batch, lo:hi]
         else:
-            x = _gather_reference_rows(a[batch], gather_indx[lo:hi])
+            rows = gather_indx[lo:hi]
+            active = rows >= 0
+            x = a.new_zeros((rows.numel(), a.shape[-1]))
+            x[active] = a[batch, rows[active]]
         y[batch, lo:hi] = dot(x, b[i], i, lo, hi)
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
