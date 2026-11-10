@@ -7825,7 +7825,7 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl
 def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, VEC_SIZE: ttgl.constexpr,
                                    block_layout_c: ttgl.constexpr, a_scale_layout_tmem: ttgl.constexpr,
                                    b_scale_layout_tmem: ttgl.constexpr, ctas_per_cga: ttgl.constexpr,
-                                   multicast: ttgl.constexpr):
+                                   multicast: ttgl.constexpr, early_a_release: ttgl.constexpr = False):
     A_IS_FP4: ttgl.constexpr = a_desc.dtype == ttgl.uint8
     B_IS_FP4: ttgl.constexpr = b_desc.dtype == ttgl.uint8
     A_ELEM_PER_BYTE: ttgl.constexpr = 2 if A_IS_FP4 else 1
@@ -7859,6 +7859,9 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     mma_bar_count: ttgl.constexpr = tcgen05_mma_barrier_count([a_smem, b_smem], multicast=multicast,
                                                               two_ctas=acc_tmem.type.layout.two_ctas)
     mbarrier.init(mma_bar, count=mma_bar_count)
+    if early_a_release:
+        a_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(a_bar, count=mma_bar_count)
 
     phase_tma = 0
     phase_mma = 0
@@ -7901,13 +7904,27 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
         a_format: ttgl.constexpr = "e2m1" if A_IS_FP4 else "e4m3"
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
-        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                           use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
+        if early_a_release:
+            tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
+                               use_acc=(k != 0), multicast=multicast)
+            descs = (a_smem, b_smem) if multicast else ()
+            tcgen05_commit(a_bar, descs=descs, early_a_release=True)
+            tcgen05_commit(mma_bar, descs=descs)
+            mbarrier.wait(a_bar, phase_mma, deps=[a_smem])
+            # Zero A before the full wait to test safe early A release.
+            a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
+                                                          cga_layout=a_desc.layout.cga_layout)
+            a_smem.store(ttgl.full(a_smem.shape, 0, a_desc.dtype, a_layout))
+        else:
+            tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
+                               use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
         mbarrier.wait(mma_bar, phase_mma)
         phase_mma ^= 1
 
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
+    if early_a_release:
+        mbarrier.invalidate(a_bar)
     acc = acc_tmem.load()
     if multi_cta:
         acc = ttgl.convert_layout(acc, block_layout_c)
@@ -7919,7 +7936,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
-                            out_dtype=torch.float16, return_kernel=False):
+                            out_dtype=torch.float16, return_kernel=False, early_a_release=False):
     from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
@@ -7962,7 +7979,7 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
     compiled = mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE,
                                                     block_layout_c, a_scale_layout_tmem, b_scale_layout_tmem,
                                                     ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas,
-                                                    multicast=multicast)
+                                                    multicast=multicast, early_a_release=early_a_release)
     return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
@@ -7976,8 +7993,12 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 ])
 @pytest.mark.parametrize("ctas_per_cga", [(1, 1), (2, 1), (4, 1), (2, 2), (4, 2), (4, 4)])
 @pytest.mark.parametrize("multicast", [True, False])
+@pytest.mark.parametrize("early_a_release", [False, True])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast):
+def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast,
+                                 early_a_release):
+    if early_a_release and not is_rubin():
+        pytest.skip("Early A release requires Rubin")
     skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     BLOCK_M = 128 * ctas_per_cga[0]
     BLOCK_N = 128 * ctas_per_cga[1]
@@ -7987,8 +8008,11 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     A_scale = swizzle_scales_packed_block(A_scale, VEC_SIZE)
     B_scale = swizzle_scales_packed_block(B_scale, VEC_SIZE)
     C_ref = A_ref @ B_ref.T
-    C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
+    C, compiled = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga,
+                                          multicast, return_kernel=True, early_a_release=early_a_release)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+    if early_a_release:
+        assert "sync_restrict::shared::read::mma::a" in compiled.asm["ptx"]
 
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA")

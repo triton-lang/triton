@@ -1156,8 +1156,9 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
-              std::vector<Value> &descs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
+              std::vector<Value> &descs, bool earlyARelease) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs,
+                                               earlyARelease);
            })
 
       .def(

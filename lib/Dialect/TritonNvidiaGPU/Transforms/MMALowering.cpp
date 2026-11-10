@@ -133,6 +133,9 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
+      // Do not merge or reorder early A release.
+      if (commit.getEarlyARelease())
+        break;
       // If the mma predicate is true, or mma and commit ops use the same
       // predicate, it is safe to merge them. Otherwise, keep commit order by
       // not merging later commits across this one.

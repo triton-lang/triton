@@ -80,6 +80,7 @@ public:
   }
   bool supportsReuseB() const { return computeCapability == 107; }
   bool supportsMbarMulticast() const { return computeCapability == 107; }
+  bool supportsEarlyARelease() const { return computeCapability == 107; }
 
 private:
   static constexpr char kTargetPrefix[] = "cuda:";
