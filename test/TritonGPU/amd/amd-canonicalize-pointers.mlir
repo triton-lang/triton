@@ -1610,3 +1610,50 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_6:.*]] = tt.load %[[VAL_5]] : tensor<1024x32x!tt.ptr<f32>>
 // CHECK:           tt.return %[[VAL_6]] : tensor<1024x32xf32>
 // CHECK:         }
+
+// -----
+// A hint on a pointer argument (offset 0) stays on the base pointer.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_pointer_arg(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: tensor<1024xf32>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.annotate %arg0 {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<f32>
+    %1 = tt.get_program_id x : i32
+    %2 = arith.muli %1, %c1024_i32 : i32
+    %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %4 = tt.addptr %0, %2 : !tt.ptr<f32>, i32
+    %5 = tt.splat %4 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %6 = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    tt.store %6, %arg1 : tensor<1024x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_pointer_arg(
+// CHECK-SAME:                                  %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: tensor<1024xf32>) {
+// CHECK:           %[[BASE:.*]] = tt.annotate %[[ARG0]] {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<f32>
+// CHECK:           %[[OFFSET:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32>
+// CHECK:           %[[SPLAT:.*]] = tt.splat %[[BASE]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[SPLAT]], %[[OFFSET]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.store %[[PTR]], %[[ARG1]] : tensor<1024x!tt.ptr<f32>>
+
+// -----
+
+// A hint on a pointer with a non-zero offset does not apply to the base and is
+// dropped.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_pointer_tensor(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: tensor<1024xf32>) {
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %2 = tt.addptr %1, %0 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %3 = tt.annotate %2 {tt.contiguity = dense<1024> : tensor<1xi32>} : tensor<1024x!tt.ptr<f32>>
+    tt.store %3, %arg1 : tensor<1024x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_pointer_tensor(
+// CHECK-SAME:                                     %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: tensor<1024xf32>) {
+// CHECK-NOT:       tt.annotate
+// CHECK:           %[[SPLAT:.*]] = tt.splat %[[ARG0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[SPLAT]], %{{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.store %[[PTR]], %[[ARG1]] : tensor<1024x!tt.ptr<f32>>
