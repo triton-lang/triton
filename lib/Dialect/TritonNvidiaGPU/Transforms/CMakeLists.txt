@@ -19,6 +19,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   PromoteLHSToTMem.cpp
   ProxyFenceInsertion.cpp
   RemoveTMEMTokens.cpp
+  ReorderTMAScaleLoads.cpp
   TMemBarrierInsertion.cpp
   TensorMemoryAllocation.cpp
   TMALowering.cpp

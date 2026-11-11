@@ -205,6 +205,11 @@ def TritonNvidiaGPUFuseTMEMLoadReducePass : Pass<"triton-nvidia-tmem-load-reduce
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonNvidiaGPUReorderTMAScaleLoadsPass
+    : Pass<"triton-nvidia-reorder-tma-scale-loads", "mlir::ModuleOp"> {
+  let summary = "Read TMA scales before their dot operands";
+}
+
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 

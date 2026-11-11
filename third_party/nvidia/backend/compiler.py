@@ -367,6 +367,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
         nvidia.passes.ttnvgpuir.add_tmem_load_reduce(pm)
         if capability // 10 >= 9:
+            nvidia.passes.ttnvgpuir.add_reorder_tma_scale_loads(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         if capability // 10 >= 10:
             nvidia.passes.ttnvgpuir.add_lower_clc(pm)
