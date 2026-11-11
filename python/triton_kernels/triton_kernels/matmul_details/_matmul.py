@@ -32,6 +32,14 @@ def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.const
         packed_n_w = tl.cdiv(packed_n_w, 64) * 64
     return packed_n_w
 
+@triton.jit
+def _row_offset(rows, stride, ALIGNED_8: tl.constexpr):
+    offset = rows * stride
+    if ALIGNED_8:
+        return tl.multiple_of(offset, 8)
+    return offset
+
+
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
@@ -103,6 +111,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
+             X_ALIGNED_8: tl.constexpr = False, W_ALIGNED_8: tl.constexpr = False, Y_ALIGNED_8: tl.constexpr = False,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -294,7 +303,8 @@ def _matmul(
         offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
     else:
         offs_k_x = off_k_x + tl.arange(0, BLOCK_K)
-    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k_x.to(index_type)[None, :] * stride_x_k
+    x_row = _row_offset(offs_x_m.to(index_type), stride_x_m, X_ALIGNED_8)
+    XPtrs = X + x_row[:, None] + offs_k_x.to(index_type)[None, :] * stride_x_k
 
 
     # TODO: refactor if/else when triton front end improves
@@ -375,7 +385,8 @@ def _matmul(
 
     offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
-    WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
+    w_row = _row_offset(offs_w_n.to(index_type), stride_w_n, W_ALIGNED_8)
+    WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + w_row[None, :])
     if has_w_tensor_scale:
         offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         WTensorScalePtrs = (
@@ -410,6 +421,10 @@ def _matmul(
             else:
                 mask_k_x = offs_k_x < x_k_limit
             mask_k_w = offs_w_k < w_k_limit
+            if X_ALIGNED_8 and BLOCK_K % (16 if is_x_fp4 else 8) == 0:
+                mask_k_x = tl.max_constancy(mask_k_x, 8)
+            if W_ALIGNED_8 and PACKED_BLOCK_K_W % 8 == 0:
+                mask_k_w = tl.max_constancy(mask_k_w, 8)
             if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 # dividing by W_K_DIVISOR because w_k_limit is also already
                 # divided by W_K_DIVISOR (2 for mxfp4 wehre 2 fp4 values are
@@ -535,6 +550,8 @@ def _matmul(
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
     mask_m = offs_m < eM
     mask_n = offs_y_n < N
+    if Y_ALIGNED_8 and BLOCK_N % 8 == 0:
+        mask_n = tl.max_constancy(mask_n, 8)
     if B is not None:
         BPtrs = B + expt_id * stride_b_e + offs_y_n
         if pid_k == 0:
@@ -589,7 +606,8 @@ def _matmul(
         YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n_store.to(index_type)[None, :] * stride_y_n
         mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & (offs_y_n_store[None, :] < tl.cdiv(yN, 2))
     else:
-        YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+        y_row = _row_offset(offs_y_m.to(index_type), stride_y_m, Y_ALIGNED_8)
+        YPtrs = Y + y_row[:, None] + offs_y_n.to(index_type)[None, :] * stride_y_n
         mask_store = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
 

@@ -245,6 +245,13 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     set_idle_sms(num_idle_sms)
 
+def _has_8_element_rows(row_stride, inner_stride, width, pack_factor=1):
+    # Strides divisible by 16 already carry a JIT alignment hint. Check the
+    # logical width separately: padded rows can end in a partial group of eight.
+    return (inner_stride == 1 and row_stride % 16 == 8 and
+            isinstance(width, int) and width % (8 * pack_factor) == 0)
+
+
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
     b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -721,6 +728,15 @@ def matmul(a, b, bias,
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
     if opt_flags.is_persistent:
         extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
+    elif (target_info.cuda_capability_geq(8) and a.ndim == b.ndim == 2 and ragged_dimension is None
+          and not has_gather and not has_scatter and fused_comm is None
+          and isinstance(a.storage.layout, StridedLayout) and isinstance(b.storage.layout, StridedLayout)):
+        extra_kernel_kwargs.update(
+            X_ALIGNED_8=_has_8_element_rows(a.stride(-2), a.stride(-1), K, 2 if a.dtype == FP4 else 1),
+            W_ALIGNED_8=_has_8_element_rows(b.stride(-1), b.stride(-2), K_W, 2 if b.dtype == FP4 else 1),
+            Y_ALIGNED_8=(not (a_has_mx or b_has_mx or out_matmul_has_mx) and matmul_fused_activation.specs.fn is None
+                         and _has_8_element_rows(out_matmul.stride(-2), out_matmul.stride(-1), N)),
+        )
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices

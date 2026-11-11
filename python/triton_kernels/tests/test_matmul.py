@@ -685,6 +685,24 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("k, n", [(40, 40), (39, 40), (40, 39), (39, 39)])
+def test_dense_matmul_padded_rows(k, n, device):
+    if not cuda_capability_geq(8, 0):
+        pytest.skip("requires CUDA SM80 or newer")
+    m, pitch = 67, 40
+    a = torch.randint(-2, 3, (m, pitch), device=device).to(torch.bfloat16)
+    w = torch.randint(-2, 3, (n, pitch), device=device).to(torch.bfloat16)
+    a[:, k:] = 11
+    w[:, k:] = 13
+    out = torch.full((m, pitch), 73, dtype=torch.bfloat16, device=device)
+    expected = out.clone()
+    a, b = a[:, :k], w[:, :k].T
+    expected[:, :n] = a.float() @ b.float()
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
+        matmul(a, b, None, c=out[:, :n])
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("is_persistent", [False, True])
 @pytest.mark.parametrize("split_k", [1, 2])
 @pytest.mark.parametrize("k", [64, 80])
