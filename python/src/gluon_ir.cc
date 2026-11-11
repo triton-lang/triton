@@ -907,11 +907,11 @@ void init_gluon_ir(py::module_ &m) {
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
              tt::AMD::TargetInfo targetInfo(arch->str());
-             int numBanks = targetInfo.getSharedMemoryBanks();
              auto cvt = regLayout.invertAndCompose(smemLayout);
              auto [elemsPerVec, perm] =
                  tt::largestVectorisation(mod.getContext(), cvt, bitwidth);
              auto vecBitwidth = std::max(32, elemsPerVec * bitwidth);
+             int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              (void)srcTile;

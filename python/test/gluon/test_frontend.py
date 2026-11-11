@@ -2684,6 +2684,11 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
                            k_width=4), ttgl.SwizzledSharedLayout(4, 1, 8, order=[1, 0]), [256, 64], 16, 1),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=4), ttgl.SwizzledSharedLayout(4, 1, 16, order=[1, 0]), [256, 64], 16, 0),
+    # ds_read_b32
+    (ttgl.BlockedLayout([1, 1], [64, 1], [2, 2], [1, 0]), ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]), [128, 2], 32, 1),
+    (ttgl.BlockedLayout([1, 1], [16, 4], [2, 2], [1, 0]), ttgl.SwizzledSharedLayout(1, 1, 8, [1, 0]), [128, 8], 32, 0),
+    (ttgl.DistributedLinearLayout([[4, 0]], [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0], [1, 0]], [[0, 0], [0, 0]], [],
+                                  [8, 16]), ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]), [8, 16], 32, 1),
 ])
 def test_bank_conflicts_amd(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
     dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
