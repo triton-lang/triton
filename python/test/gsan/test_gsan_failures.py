@@ -19,7 +19,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
-from triton.experimental.gsan import create_mem_pool
+from triton.experimental.gsan import configure, create_mem_pool
 from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -1066,6 +1066,85 @@ def test_atomic_load_store_semantic_mismatch_read_after_write(producer_sem, cons
                       runner=_run_atomic_load_store_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_atomic_load_store_cross_sm_sync_kernel.fn,
                       marker="result = tl.load(payload_ptr)", error="Read after write race detected")
+
+
+@triton.jit
+def _atomic_acquire_expired_snapshot_kernel(flag, scratch, out, KIND: tl.constexpr, RMW: tl.constexpr):
+    tl.atomic_store(flag, 1, sem="release", scope="sys")
+    for epoch in range(8):
+        if RMW:
+            tl.atomic_xchg(scratch, epoch, sem="release", scope="sys")
+        else:
+            tl.atomic_store(scratch, epoch, sem="release", scope="sys")
+    if KIND == "poll":
+        value = tl.atomic_poll(flag, 1, sem="acquire", scope="sys")
+    else:
+        value = tl.atomic_load(flag, sem="acquire", scope="sys")
+    tl.store(out, value)
+
+
+def _run_atomic_acquire_expired_snapshot(kind, rmw):
+    configure(clock_buffer_size=4)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+        scratch = torch.zeros_like(flag)
+        out = torch.empty_like(flag)
+        _atomic_acquire_expired_snapshot_kernel[(1, )](flag, scratch, out, kind, rmw, num_warps=4)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind", ["load", "poll"])
+@pytest.mark.parametrize("rmw", [False, True])
+def test_atomic_acquire_expired_snapshot(kind, rmw):
+    _run_failure_case("atomic_acquire_expired_snapshot", runner=_run_atomic_acquire_expired_snapshot,
+                      runner_args=(kind, rmw), source_function=_atomic_acquire_expired_snapshot_kernel.fn,
+                      marker=f"value = tl.atomic_{kind}(flag", error="GSan clock buffer token overwritten")
+
+
+@triton.jit
+def _atomic_acquire_reuse_race_kernel(flag, entered, scratch, payload, out, KIND: tl.constexpr):
+    if tl.program_id(0) == 0:
+        tl.atomic_poll(entered, 1, sem="relaxed", scope="sys")
+        tl.atomic_store(flag, 1, sem="release", scope="sys")
+        # This write is not released by flag. Importing a recycled snapshot
+        # from scratch must not make it appear ordered with the consumer.
+        tl.store(payload, 1000)
+        for epoch in range(8):
+            tl.atomic_store(scratch, epoch, sem="release", scope="sys")
+    else:
+        tl.atomic_store(entered, 1, sem="relaxed", scope="sys")
+        if KIND == "poll":
+            tl.atomic_poll(flag, 1, sem="acquire", scope="sys")
+        else:
+            value = tl.atomic_load(flag, sem="acquire", scope="sys")
+            while value != 1:
+                value = tl.atomic_load(flag, sem="acquire", scope="sys")
+        tl.store(out, tl.load(payload))
+
+
+def _run_atomic_acquire_reuse_race(kind):
+    configure(clock_buffer_size=4)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        cells = [torch.zeros(1, dtype=torch.int32, device="cuda") for _ in range(5)]
+        _atomic_acquire_reuse_race_kernel[(2, )](*cells, kind, num_warps=4)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind", ["load", "poll"])
+def test_atomic_acquire_concurrent_reuse_reports_race(kind):
+    result = run_in_process(_run_atomic_acquire_reuse_race, args=(kind, ))
+    assert isinstance(result.exc, RuntimeError), (result.exc, result.driver_stderr_output)
+    # Depending on scheduling, the race can be detected by either participant,
+    # or the acquire can find that its original snapshot has already expired.
+    assert any(message in result.driver_stderr_output for message in (
+        "Read after write race detected",
+        "Write after read race detected",
+        "GSan clock buffer token overwritten",
+    )), result.driver_stderr_output
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)

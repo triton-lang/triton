@@ -10,8 +10,8 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
-from triton.experimental.gsan import create_mem_pool
+from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x, run_in_process
+from triton.experimental.gsan import configure, create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
@@ -1007,6 +1007,58 @@ def _cross_sm_atomic_load_store_sync_kernel(payload_ptr, flag_ptr, out_ptr, scop
             ready = tl.atomic_load(flag_ptr, sem="acquire", scope=scope)
         result = tl.load(payload_ptr)
         tl.store(out_ptr, result)
+
+
+@triton.jit
+def _atomic_acquire_wraparound_kernel(payload, ready, ack, out, KIND: tl.constexpr, SCOPE: tl.constexpr,
+                                      READERS: tl.constexpr, ROUNDS: tl.constexpr):
+    pid = tl.program_id(0)
+    readers = tl.arange(0, READERS)
+    for epoch in range(1, ROUNDS + 1):
+        if pid == 0:
+            tl.store(payload, epoch + 1000)
+            tl.atomic_store(ready, epoch, sem="release", scope=SCOPE)
+            tl.atomic_poll(ack + readers, epoch, sem="acquire", scope=SCOPE)
+        else:
+            if KIND == "poll":
+                tl.atomic_poll(ready, epoch, sem="acquire", scope=SCOPE)
+            else:
+                value = tl.atomic_load(ready, sem="acquire", scope=SCOPE)
+                while value != epoch:
+                    value = tl.atomic_load(ready, sem="acquire", scope=SCOPE)
+            value = tl.load(payload)
+            tl.store(out + (epoch - 1) * READERS + pid - 1, value)
+            tl.atomic_store(ack + pid - 1, epoch, sem="release", scope=SCOPE)
+
+
+def _run_atomic_acquire_wraparound(kind, scope, buffer_size):
+    configure(clock_buffer_size=buffer_size)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    readers, rounds = 4, 32
+    with torch.cuda.use_mem_pool(pool):
+        payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+        ready = torch.zeros_like(payload)
+        ack = torch.zeros(readers, dtype=torch.int32, device="cuda")
+        out = torch.empty((rounds, readers), dtype=torch.int32, device="cuda")
+        _atomic_acquire_wraparound_kernel[(readers + 1, )](payload, ready, ack, out, kind, scope, readers, rounds,
+                                                           num_warps=4)
+        expected = torch.arange(1001, 1001 + rounds, dtype=torch.int32, device="cuda")
+        torch.testing.assert_close(out, expected[:, None].expand_as(out))
+        # Acknowledgements keep each token live until its import ends, while
+        # both the publisher and the readers repeatedly reuse their slots.
+        token = shadow_cell_from_address(ready.data_ptr()).write_clock.epoch
+        assert token >= rounds
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("kind", ["load", "poll"])
+@pytest.mark.parametrize("scope", ["gpu", "sys"])
+@pytest.mark.parametrize("buffer_size", [2, 4])
+def test_atomic_acquire_clock_buffer_wraparound(kind, scope, buffer_size):
+    result = run_in_process(_run_atomic_acquire_wraparound, args=(kind, scope, buffer_size))
+    assert result.exc is None, (result.exc, result.driver_stderr_output)
+    assert not result.driver_stderr_output
 
 
 @triton.jit

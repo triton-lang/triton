@@ -98,13 +98,19 @@ struct ThreadState {
 
   uint32_t gdcWaitCalled : 1;
 
-  // Index to head of the circular clock buffer, plus a bit to mark if the
-  // vector clock has changed since the last clock buffer write (to allow reuse)
+  // Whether the vector clock changed since the last snapshot (to allow reuse).
   uint32_t clockBufferDirty : 1;
-  uint32_t clockBufferHead : 30;
 
-  // Reader-writer lock controlling access to the vector clock and clock buffer
+  // Keep the head separate from flags modified without the clock-buffer lock.
+  uint32_t clockBufferHead;
+
+  // Per-SM lock serializing vector-clock changes and snapshot publication.
+  // Remote snapshot readers use clockBufferLock instead.
   uint32_t lock;
+
+  // System-scope reader-writer lock. Readers pin snapshots while importing
+  // without a shadow lock; writers hold it only while publishing a snapshot.
+  uint32_t clockBufferLock;
 
   thread_id_t threadId;
 

@@ -78,6 +78,46 @@ GSAN_DEVICE void rwLockReleaseWrite(uint32_t &lock) {
                             __MEMORY_SCOPE_WRKGRP);
 }
 
+// Unlike the per-SM state lock, snapshot protection must include peer GPUs.
+// Close admission before draining readers so a publisher cannot starve behind
+// a continuous stream of acquires. No shadow or state locks may be acquired
+// while holding this lock.
+template <bool Write> struct ClockBufferLockGuard {
+  uint32_t &lock;
+
+  GSAN_DEVICE ClockBufferLockGuard(ThreadState *state)
+      : lock(state->clockBufferLock) {
+    uint32_t current =
+        __scoped_atomic_load_n(&lock, __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
+    while (true) {
+      if (current & kWriterFlag) {
+        current = __scoped_atomic_load_n(&lock, __ATOMIC_RELAXED,
+                                         __MEMORY_SCOPE_SYSTEM);
+        continue;
+      }
+      uint32_t desired = Write ? current | kWriterFlag : current + 1;
+      if (__scoped_atomic_compare_exchange_n(&lock, &current, desired, true,
+                                             __ATOMIC_ACQUIRE, __ATOMIC_RELAXED,
+                                             __MEMORY_SCOPE_SYSTEM))
+        break;
+    }
+    if constexpr (Write) {
+      while (__scoped_atomic_load_n(&lock, __ATOMIC_ACQUIRE,
+                                    __MEMORY_SCOPE_SYSTEM) != kWriterFlag) {
+      }
+    }
+  }
+
+  GSAN_DEVICE ~ClockBufferLockGuard() {
+    if constexpr (Write)
+      __scoped_atomic_store_n(&lock, 0, __ATOMIC_RELEASE,
+                              __MEMORY_SCOPE_SYSTEM);
+    else
+      __scoped_atomic_fetch_sub(&lock, 1, __ATOMIC_RELEASE,
+                                __MEMORY_SCOPE_SYSTEM);
+  }
+};
+
 GSAN_DEVICE void clusterLockAcquire(uint32_t &lock) {
   uint32_t actual = 0;
   while (!__scoped_atomic_compare_exchange_n(&lock, &actual, 1, true,
@@ -159,6 +199,7 @@ GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
 }
 
 GSAN_DEVICE epoch_t publishClockBuffer(ThreadState *state, Location loc) {
+  ClockBufferLockGuard<true> guard(state);
   auto *globals = getGlobalState(state);
   uint32_t nextHead = state->clockBufferHead + 1;
   assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
@@ -394,6 +435,7 @@ GSAN_DEVICE void releaseShadow(ShadowCell *cell) {
 GSAN_DEVICE epoch_t appendClockBufferSnapshot(ThreadState *state,
                                               const epoch_t *snapshot,
                                               Location loc) {
+  ClockBufferLockGuard<true> guard(state);
   auto *globals = getGlobalState(state);
   assert_msg(loc, globals->clockBufferSize != 0,
              "GSan clock buffer size must be non-zero");
@@ -430,6 +472,7 @@ GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
 GSAN_DEVICE epoch_t publishCurrentVectorClockWithPriorRelease(
     ThreadState *state, const ScalarClock &previousWrite, Location loc) {
   const auto *previousSnapshot = getSnapshotForWrite(state, previousWrite, loc);
+  ClockBufferLockGuard<true> guard(state);
   auto *globals = getGlobalState(state);
   assert_msg(loc, globals->clockBufferSize != 0,
              "GSan clock buffer size must be non-zero");
@@ -521,15 +564,24 @@ GSAN_DEVICE void assertOrderedOrCompatible(ThreadState *state,
 }
 
 GSAN_DEVICE void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
-                                   const ScalarClock &prior, Location loc) {
+                                   const ScalarClock &prior, Location loc,
+                                   bool pinSnapshot = false) {
   if (!prior.isRelease)
     return;
   if (!areAtomicScopesCompatible(currentScope, state->threadId, prior.scope,
                                  prior.threadId, getGlobalState(state))) {
     return;
   }
-  auto *snapshot = getSnapshotForWrite(state, prior, loc);
-  mergeVectorClock(state, snapshot);
+  if (pinSnapshot) {
+    auto *writerState =
+        getThreadStateById(getGlobalState(state), prior.threadId);
+    ClockBufferLockGuard<false> guard(writerState);
+    // Validate after pinning: the slot may have been reused since we copied
+    // the shadow's token. It cannot be reused between validation and import.
+    mergeVectorClock(state, getClockBufferSlot(writerState, prior.epoch, loc));
+  } else {
+    mergeVectorClock(state, getSnapshotForWrite(state, prior, loc));
+  }
 }
 
 GSAN_DEVICE epoch_t publishClusterClock(ThreadState *state, Location loc) {
@@ -1201,8 +1253,8 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
                                    AtomicEventState *event, bool pred,
                                    uintptr_t address, int nBytes,
                                    int bytesPerElem, bool doesRead,
-                                   uint32_t semRaw, uint32_t scopeRaw,
-                                   Location loc) {
+                                   [[maybe_unused]] uint32_t semRaw,
+                                   uint32_t scopeRaw, Location loc) {
   initAtomicEventState(event);
   if (!pred)
     return;
@@ -1212,7 +1264,6 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
   if (event->threadState == nullptr)
     return;
 
-  auto sem = decodeAtomicSem(semRaw);
   auto scope = decodeAtomicScope(scopeRaw);
   if (doesRead) {
     for (uint8_t i = 0; i < event->numCells; ++i) {
@@ -1221,12 +1272,6 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
       assertOrderedOrCompatible(state, scope, write, loc,
                                 "Read after write race detected");
       recordRead(state, cell, scope);
-    }
-    if (hasAcquire(sem)) {
-      for (uint8_t i = 0; i < event->numCells; ++i) {
-        auto write = event->cells[i]->writeClock;
-        maybeMergeAcquire(state, scope, write, loc);
-      }
     }
   }
 }
@@ -1240,6 +1285,28 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
   auto *state = event->threadState;
   auto sem = decodeAtomicSem(semRaw);
   auto scope = decodeAtomicScope(scopeRaw);
+
+  if (hasAcquire(sem)) {
+    if (!isRmw && !didWrite) {
+      ScalarClock writes[kMaxAtomicShadowCells];
+      uint8_t numCells = event->numCells;
+      for (uint8_t i = 0; i < numCells; ++i)
+        writes[i] = event->cells[i]->writeClock;
+      for (uint8_t i = 0; i < numCells; ++i)
+        releaseShadow(event->cells[i]);
+      event->numCells = 0;
+      // The actual read and its race bookkeeping are complete. Keep the SM
+      // state locked until every import finishes, but let other SMs acquire
+      // the same shadow cells while we read the publisher's snapshots.
+      for (uint8_t i = 0; i < numCells; ++i)
+        maybeMergeAcquire(state, scope, writes[i], loc, /*pinSnapshot=*/true);
+    } else {
+      // RMWs still hold the shadow locks while importing, checking the write,
+      // and publishing a release snapshot that may include the acquire.
+      for (uint8_t i = 0; i < event->numCells; ++i)
+        maybeMergeAcquire(state, scope, event->cells[i]->writeClock, loc);
+    }
+  }
 
   if (didWrite) {
     for (uint8_t i = 0; i < event->numCells; ++i) {
