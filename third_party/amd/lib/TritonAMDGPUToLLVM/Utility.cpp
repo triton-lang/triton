@@ -985,11 +985,8 @@ static Value resolveLoopBackedge(BlockArgument bbArg) {
   return yieldOp.getOperand(iterArgIdx);
 }
 
-// Two regions count as part of the same chain-dot pattern if they are the same
-// region or related by exactly one level of scf.if nesting (either direction).
-// This lets isChainDotHead/isChainDotTail see a chain where the second dot is
-// wrapped in an scf.if within the first dot's region (e.g. a P@V dot under
-// `if not all_skip: ...`).
+// True if `a` and `b` are the same region, or one is nested in the other
+// through exactly one scf.if.
 static bool isSameOrAcrossOneIfLevel(Region *a, Region *b) {
   if (a == b)
     return true;
@@ -1001,13 +998,9 @@ static bool isSameOrAcrossOneIfLevel(Region *a, Region *b) {
   return nestedViaIf(a, b) || nestedViaIf(b, a);
 }
 
-// True if `head`'s result reaches `operandDef` by SSA data flow.
-// getForwardSlice recurses into regions, so when `head` feeds only an scf.if
-// *condition* it drags the whole branch body into the slice -- so `head` would
-// be reported as a chain head even though nothing of it reaches the inner dot's
-// operands. A branch condition is an i1 that never feeds a dot operand, so
-// confirming reachability from the operand's backward slice rejects exactly
-// that case.
+// True if `head`'s result reaches `operandDef`. A forward slice that enters an
+// scf.if through its condition also contains the branch body, so slice
+// membership alone does not mean `head` feeds a dot there.
 static bool headFeedsDotOperand(Operation *head, Operation *operandDef) {
   BackwardSliceOptions bwdOpt;
   bwdOpt.omitBlockArguments = true;
@@ -1031,9 +1024,7 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
                                            : dOp.getB().getDefiningOp();
       if (dotOperand && fwdSlices.contains(dotOperand)) {
-        // When dOp is nested in an scf.if, the forward slice may contain it
-        // only because the head feeds the branch condition; require that the
-        // head actually feeds the dot's data operand before calling it a chain.
+        // Across an scf.if, require that dotOp feeds the operand itself.
         bool sameRegion = dOp->getParentRegion() == dotOp->getParentRegion();
         if (sameRegion || headFeedsDotOperand(dotOp, dotOperand))
           return true;

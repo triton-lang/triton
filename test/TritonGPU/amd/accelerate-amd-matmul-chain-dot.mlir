@@ -219,11 +219,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Chain-dot across one level of scf.if: the tail dot is nested in an scf.if
-// within the head dot's region (e.g. a P@V dot under `if not all_skip`). The
-// recovered layout must match the unwrapped mfma_chain_dot_BM64 case exactly.
-// BLOCK_M = 64, not 128: at 128 the generic and chain-dot layouts are both
-// [4, 1] and the check could not tell detection from fallback.
+// Second dot inside an scf.if: same layouts as mfma_chain_dot_BM64.
+// BLOCK_M = 64 because at 128 the generic layout is [4, 1] too.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
@@ -259,12 +256,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// Negative case: the first dot feeds only the scf.if *condition*, not the dot
-// inside the branch, so this is not a chain. getForwardSlice recurses into the
-// branch body, which puts the inner dot in the first dot's slice; without the
-// operand check the first dot is taken for a chain head and gets [4, 1]. Only
-// mfma32 shows it: there the unchained layout is [2, 2], under mfma16 both are
-// [4, 1].
+// First dot feeds only the scf.if condition, so this is not a chain. A false
+// match would give the first dot [4, 1]; only mfma32 tells, as [2, 2] otherwise.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
