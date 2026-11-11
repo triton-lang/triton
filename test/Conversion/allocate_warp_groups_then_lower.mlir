@@ -1,6 +1,7 @@
 // RUN: triton-opt %s --tritongpu-allocate-warp-groups | FileCheck %s --check-prefix=ALLOC
 // RUN: triton-opt %s --tritongpu-allocate-warp-groups --convert-warp-specialize-to-llvm | FileCheck %s --check-prefix=LOWER \
-// RUN:   --implicit-check-not='nvvm.setmaxregister {{.*}} 16' --implicit-check-not='nvvm.setmaxregister increase 24'
+// RUN:   --implicit-check-not='nvvm.setmaxregister {{.*}} 16' --implicit-check-not='nvvm.setmaxregister increase 24' \
+// RUN:   --implicit-check-not='nvvm.setmaxregister increase 80' --implicit-check-not='nvvm.setmaxregister decrease 24'
 
 module attributes {
   ttg.maxnreg = 80 : i32,
@@ -39,17 +40,15 @@ module attributes {
       ttg.warp_return
     } : () -> ()
 
-    // The one-warp worker and its two padding partitions share one cap change.
-    // The other quartet stays at the idle cap of 24.
-    // LOWER: llvm.switch {{.*}} : i8
-    // LOWER: 2: [[SPLIT:\^bb[0-9]+]]
-    // LOWER: [[SPLIT]]:
-    // LOWER-NEXT: nvvm.setmaxregister increase 80
-    // LOWER-NEXT: llvm.switch {{.*}} : i32
+    // The eight-warp worker and the second site's one-warp worker and two
+    // padding partitions share one acquire and one restore.
+    // LOWER: nvvm.setmaxregister decrease 24
+    // LOWER: nvvm.setmaxregister increase 80
+    // LOWER: llvm.switch
     // LOWER: [[RESTORE:\^bb[0-9]+]]:
     // LOWER: nvvm.barrier
     // LOWER-NEXT: nvvm.setmaxregister decrease 24
-    // LOWER-COUNT-3: llvm.br [[RESTORE]]
+    // LOWER-COUNT-4: llvm.br [[RESTORE]]
     // LOWER: llvm.return
     llvm.return
   }
