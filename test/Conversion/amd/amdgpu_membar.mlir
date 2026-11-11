@@ -1001,7 +1001,7 @@ tt.func @completion_scope_shared_global_read(%desc: !tt.tensordesc<512xf32>, %bi
   // CHECK-NEXT: {{.*}} = tt.load
   // CHECK: ttg.barrier local
   // CHECK-NEXT: {{.*}} = ttg.local_load
-  %wait = amdg.async_tdm_intrinsic_wait %copy {count = 0 : i32, ttg.amdg.completion_scope = "shared"}
+  %wait = amdg.async_tdm_intrinsic_wait %copy {amdg.completion_scope = "shared", count = 0 : i32}
   %sum = tt.load %bias : !tt.ptr<f32>
   %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
   %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>
@@ -1025,7 +1025,7 @@ tt.func @completion_scope_all_global_read(%desc: !tt.tensordesc<512xf32>, %bias:
   // CHECK-NEXT: {{.*}} = tt.load
   // CHECK-NOT: ttg.barrier local
   // CHECK: ttg.local_load
-  %wait = amdg.async_tdm_intrinsic_wait %copy {count = 0 : i32, ttg.amdg.completion_scope = "all"}
+  %wait = amdg.async_tdm_intrinsic_wait %copy {amdg.completion_scope = "all", count = 0 : i32}
   %sum = tt.load %bias : !tt.ptr<f32>
   %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
   %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>
@@ -1052,7 +1052,7 @@ tt.func @completion_scope_retained_ttg_wait(%ptr: !tt.ptr<f32>, %bias: !tt.ptr<f
   // CHECK-NEXT: {{.*}} = tt.load
   // CHECK-NOT: ttg.barrier local
   // CHECK: ttg.local_load
-  %wait = ttg.async_wait %group {num = 0 : i32, ttg.amdg.completion_scope = "all"}
+  %wait = ttg.async_wait %group {amdg.completion_scope = "all", num = 0 : i32}
   %sum = tt.load %bias : !tt.ptr<f32>
   %v = ttg.local_load %buf token %wait : !ttg.memdesc<512xf32, #shared, #smem, mutable> -> tensor<512xf32, #cross>
   %bcast = tt.splat %sum : f32 -> tensor<512xf32, #cross>

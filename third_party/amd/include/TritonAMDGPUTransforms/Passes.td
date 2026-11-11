@@ -298,12 +298,19 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
 }
 
 def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count", "mlir::ModuleOp"> {
-  let summary = "Adjust async wait count to allow prefetching over multiple loop iterations";
+  let summary = "Lower async wait counts and infer completion scope";
 
   let description = [{
-    GFX9:
-      LLVM cannot see the dependency across loop iterations between AsyncCopy and local_reads. So we
-      compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
+    Lower ordinary and TDM async waits to hardware instruction counts using
+    token dependencies or outstanding operation counts. On asyncmark targets,
+    preserve ordinary commit-group counts for LLVM lowering.
+
+    Annotate waits with amdg.completion_scope for AMD Membar. Targets without
+    async stores use Shared directly. Otherwise, track pending async global
+    writes separately for ordinary and TDM queues through control flow. Full
+    hardware waits clear their queue's state after classifying the wait;
+    partial waits retain it. Unknown producers and unsupported control flow
+    retain All scope.
   }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];

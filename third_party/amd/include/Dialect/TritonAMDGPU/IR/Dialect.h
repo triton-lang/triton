@@ -41,11 +41,12 @@ struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
 
 namespace mlir::triton::amdgpu {
 /// Internal wait annotation computed by UpdateAsyncWaitCount and consumed by
-/// AMD Membar. "shared" rules out pending explicit async global writes
-/// for the waited queue; "all" retains conservative ordering. The annotation
-/// neither replaces the hardware wait nor proves that accesses are warp-local.
+/// AMD Membar. "shared" rules out pending async global writes for the waited
+/// queue using target capabilities or dataflow; "all" retains conservative
+/// ordering. The annotation neither replaces the hardware wait nor proves
+/// that accesses are warp-local.
 inline constexpr llvm::StringLiteral kAsyncCompletionScopeAttrName =
-    "ttg.amdg.completion_scope";
+    "amdg.completion_scope";
 
 /// Returns the number of dwords for a TDM tensor descriptor based on rank.
 /// 2D tensors: group0 (4) + group1 (8) = 12 dwords

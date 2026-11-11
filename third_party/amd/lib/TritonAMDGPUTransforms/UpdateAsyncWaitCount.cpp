@@ -28,10 +28,10 @@
 // waits more conservatively, while a larger count could leave required work
 // incomplete.
 //
-// After count lowering, a direct forward scan tracks possible async global
-// writes through the existing IR's control flow. Scope is evaluated before a
-// full hardware wait clears its queue's bit; partial waits conservatively
-// retain it.
+// After count lowering, targets without async stores get Shared scope directly.
+// Otherwise, a forward scan tracks possible async global writes through the
+// existing IR's control flow. Scope is evaluated before a full hardware wait
+// clears its queue's bit; partial waits conservatively retain it.
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
@@ -209,15 +209,27 @@ public:
   }
 };
 
-// Scan final waits after count lowering. Calls retain conservative
-// module-wide scope because a callee can wait on work issued by its caller.
-static void annotateCompletionScopes(ModuleOp module) {
-  bool hasCalls =
-      module.walk([](CallOpInterface) { return WalkResult::interrupt(); })
-          .wasInterrupted();
+// Scan final waits after count lowering. On targets with async stores, calls
+// retain conservative module-wide scope because callees can wait on caller work.
+static void annotateCompletionScopes(ModuleOp module,
+                                     const TargetFeatures &targetFeatures) {
   auto *ctx = module.getContext();
   auto name = StringAttr::get(ctx, amdgpu::kAsyncCompletionScopeAttrName);
   auto shared = StringAttr::get(ctx, "shared");
+  // Without ordinary or TDM async stores, even unknown producers cannot write
+  // global memory. Skip dataflow and its conservative fallbacks on these targets.
+  if (!targetFeatures.supportsDirectFromLdsStoreBitWidth(32) &&
+      !targetFeatures.supportsTDM()) {
+    module.walk([&](Operation *op) {
+      if (isAsyncWait(op))
+        op->setAttr(name, shared);
+    });
+    return;
+  }
+
+  bool hasCalls =
+      module.walk([](CallOpInterface) { return WalkResult::interrupt(); })
+          .wasInterrupted();
   auto all = StringAttr::get(ctx, "all");
   module.walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (auto function = dyn_cast<FunctionOpInterface>(op)) {
@@ -713,7 +725,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       IRRewriter builder(waitOp->getContext());
       updateWaitCount(waitOp, countTDMInstructions, builder);
     }
-    annotateCompletionScopes(m);
+    annotateCompletionScopes(m, targetFeatures);
   }
 };
 

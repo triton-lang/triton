@@ -497,8 +497,10 @@ BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
   BlockInfo effects;
   effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
   effects.threadSync.completion = getCompletionSync(op);
-  if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op))
-    effects.threadSync.peerWaitNeedsSync = !isRegionLocal(wait.getAlloc());
+  auto sync = getThreadSyncInfo(op);
+  effects.threadSync.peerWaitNeedsSync =
+      sync.kind == ThreadSyncKind::MBarrierWait &&
+      !isRegionLocal(cast<ttng::WaitBarrierOp>(op).getAlloc());
   return effects;
 }
 

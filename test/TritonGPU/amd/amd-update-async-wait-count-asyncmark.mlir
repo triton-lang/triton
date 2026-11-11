@@ -5,8 +5,8 @@
 //   - By block-pingpong, num computed within the pass.
 //   - By gluon, num filled by user.
 //
-// On CDNA3/CDNA4, since PR #9883, UpdateAsyncWaitCount preserves the counts for all 3
-// cases. It now also annotates the completion scope.
+// On CDNA3/CDNA4, UpdateAsyncWaitCount preserves the counts for all three
+// sources and annotates waits as Shared because these targets have no async stores.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
@@ -15,7 +15,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: single_token_two_crossed
   // Wait on %1 with %3 and %5 between - derivation would yield num=2; sentinel
   // num=7 must survive.
-  // CHECK: ttg.async_wait %{{[^,]+}} {num = 7 : i32, ttg.amdg.completion_scope = "shared"}
+  // CHECK: ttg.async_wait %{{[^,]+}} {amdg.completion_scope = "shared", num = 7 : i32}
   tt.func public @single_token_two_crossed(%arg0: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %arg1: tensor<128x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
     %0 = ttg.async_copy_global_to_local %arg1, %arg0 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %1 = ttg.async_commit_group tokens %0
@@ -37,7 +37,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tokenless_wait_preserved
   // Tokenless wait carries a producer-authored num that derivation cannot
   // recover from a def chain - num=3 stays put.
-  // CHECK: ttg.async_wait {num = 3 : i32, ttg.amdg.completion_scope = "shared"}
+  // CHECK: ttg.async_wait {amdg.completion_scope = "shared", num = 3 : i32}
   tt.func public @tokenless_wait_preserved(%arg0: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %arg1: tensor<128x16x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>}) {
     %0 = ttg.async_copy_global_to_local %arg1, %arg0 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %1 = ttg.async_commit_group tokens %0
