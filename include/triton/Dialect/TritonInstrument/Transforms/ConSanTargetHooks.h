@@ -164,6 +164,9 @@ public:
   virtual SmallVector<Operation *>
   createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
 
+  // Whether shared-memory accesses may target another CTA of the cluster.
+  virtual bool supportsCrossCTASharedMemory() const { return true; }
+
   // A call-frame summary cannot represent target-specific synchronization or
   // compiler scratch that crosses CTA boundaries.
   virtual bool hasUnsummarizableCalleeState(Operation *op) const {

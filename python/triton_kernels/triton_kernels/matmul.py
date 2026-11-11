@@ -16,7 +16,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
@@ -266,6 +266,10 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
+    Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
+    is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
+
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
     epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
@@ -343,6 +347,12 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    check_tensor_scale(a, a_scale, a_tensor_scale)
+    check_tensor_scale(b, b_scale, b_tensor_scale)
+    uses_nvfp4 = (a_tensor_scale is not None or b_tensor_scale is not None
+                  or epilogue.specs.name == FnName.QUANTIZE_NVFP4.name)
+    if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
+        raise ValueError("NVFP4 matmul requires NVIDIA Blackwell or newer (compute capability 10.0+)")
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
             and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
@@ -675,9 +685,7 @@ def matmul(a, b, bias,
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Tensor scales are row/fiber scales, not scalar broadcasts. They are
-    # expected to carry the non-reduction dimension, e.g. (E, N, 1) or
-    # (E, 1, N), before this path keeps the two strides needed by the kernels.
+    # Row and column scales keep their strides. A zero-dimensional scale broadcasts with two zero strides.
     a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
     a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
     b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
@@ -834,6 +842,8 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
+    check_tensor_scale(x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
+    check_tensor_scale(w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):

@@ -1732,4 +1732,61 @@ std::optional<bool> getBoolFromConstant(Value cst) {
   return std::nullopt;
 }
 
+static int getNumWorkerWarps(Operation *op) {
+  int defaultNumWarps = gpu::lookupNumWarps(op);
+  auto mod = op->getParentOfType<ModuleOp>();
+  auto totalNumWarps = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  return totalNumWarps ? totalNumWarps.getInt() - defaultNumWarps : 0;
+}
+
+void emitClusterSyncForAllWarps(OpBuilder &builder, Location loc,
+                                Operation *anchor,
+                                function_ref<void(OpBuilder &)> emit,
+                                bool joinWarps) {
+  int workerNumWarps = getNumWorkerWarps(anchor);
+  if (workerNumWarps == 0) {
+    emit(builder);
+    if (joinWarps)
+      gpu::BarrierOp::create(builder, loc, gpu::AddrSpace::None);
+    return;
+  }
+  // warp_specialize joins all warps when it ends, which satisfies `joinWarps`.
+
+  OpBuilder::InsertionGuard guard(builder);
+  SmallVector<int32_t> partitionNumWarps;
+  for (int remainingWarps = workerNumWarps; remainingWarps > 0;) {
+    int32_t partitionWarps =
+        llvm::bit_floor(static_cast<uint32_t>(remainingWarps));
+    partitionNumWarps.push_back(partitionWarps);
+    remainingWarps -= partitionWarps;
+  }
+
+  auto wsOp = gpu::WarpSpecializeOp::create(builder, loc, TypeRange{},
+                                            partitionNumWarps);
+  SmallVector<int32_t> startIds;
+  int startId = gpu::lookupNumWarps(anchor);
+  for (int32_t partitionWarps : partitionNumWarps) {
+    startIds.push_back(startId);
+    startId += partitionWarps;
+  }
+  wsOp.setWarpGroupStartIds(startIds);
+
+  Block *defaultBlock = builder.createBlock(&wsOp.getDefaultRegion());
+  builder.setInsertionPointToEnd(defaultBlock);
+  emit(builder);
+  gpu::WarpYieldOp::create(builder, loc, TypeRange(), ValueRange());
+
+  Block *partitionHolder = builder.createBlock(&wsOp.getPartitionOpHolder());
+  builder.setInsertionPointToStart(partitionHolder);
+  auto partitions = gpu::WarpSpecializePartitionsOp::create(
+      builder, loc, ValueRange(),
+      /*numPartitionRegions=*/partitionNumWarps.size());
+  for (Region &partitionRegion : partitions.getPartitionRegions()) {
+    Block *partitionBlock = builder.createBlock(&partitionRegion);
+    builder.setInsertionPointToEnd(partitionBlock);
+    emit(builder);
+    gpu::WarpReturnOp::create(builder, loc);
+  }
+}
+
 } // namespace mlir::triton

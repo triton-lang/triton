@@ -708,11 +708,14 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
                   smemTy.getShape(), numWarps, smemTy.getEncoding());
           return numInstr;
-        } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
-          auto rowIndicesType =
-              cast<RankedTensorType>(op->getOperandTypes()[1]);
+        } else if (auto scatterOp = dyn_cast<AsyncTDMScatterOp>(op)) {
           return mlir::LLVM::AMD::getTDMGatherScatterIntrinsicCount(
-              rowIndicesType);
+              cast<RankedTensorType>(scatterOp.getDstRowIndices().getType()),
+              scatterOp.getSrc().getType());
+        } else if (auto gatherOp = dyn_cast<AsyncTDMGatherOp>(op)) {
+          return mlir::LLVM::AMD::getTDMGatherScatterIntrinsicCount(
+              cast<RankedTensorType>(gatherOp.getSrcRowIndices().getType()),
+              gatherOp.getDst().getType());
         } else {
           return 0;
         }

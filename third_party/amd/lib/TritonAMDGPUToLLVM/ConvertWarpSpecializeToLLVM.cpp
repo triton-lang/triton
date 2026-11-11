@@ -148,17 +148,14 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   LLVM::CondBrOp::create(b, b.getLoc(), isDefault, entry, switchLoop);
 
   WarpSpecializeCallbacks callbacks;
-  callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned) {
+  callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b) {
     Location loc = b.getLoc();
     ROCDL::BarrierOp::create(b, loc);
   };
 
-  callbacks.reallocRegisters = [](TritonLLVMIRRewriter &, WarpSpecializeOp,
-                                  RegisterReallocPhase, unsigned) {};
-
   return lowerWarpSpecializeCommon(func, wsOps, direct, switchLoop, wid,
                                    defaultNumWarps, totalNumWarpsAttr.getInt(),
-                                   targetInfo, callbacks, 0);
+                                   targetInfo, callbacks);
 }
 
 //===----------------------------------------------------------------------===//

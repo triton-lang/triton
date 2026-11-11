@@ -607,12 +607,9 @@ class CUDABackend(BaseBackend):
             if (not knobs.nvidia.disable_ptxas_opt and any(is_enabled(opt, mode) for mode in ["consan", "fpsan"])):
                 ptx_extra_options += ["--opt-level", "1"]
 
-            # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
-            reg_alloc = ['--regAllocOptLevel=2']
-
             ptxas_cmd = [
-                ptxas, *debug_info, *fmad, '-v', *disable_opt, *reg_alloc, *ptx_extra_options, f'--gpu-name={arch}',
-                fsrc.name, '-o', fbin
+                ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
+                '-o', fbin
             ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)

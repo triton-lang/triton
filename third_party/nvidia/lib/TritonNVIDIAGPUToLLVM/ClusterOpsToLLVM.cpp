@@ -29,6 +29,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 
@@ -114,52 +115,6 @@ static Value getClusterBarrierMbarPtr(Location loc, RewriterBase &rewriter,
                b.i32_val(offset));
 }
 
-template <typename EmitFn>
-void lowerClusterSyncForAllWarps(Location loc, OpBuilder &rewriter,
-                                 int defaultNumWarps, int totalNumWarps,
-                                 EmitFn emit) {
-  int workerNumWarps = totalNumWarps - defaultNumWarps;
-  if (workerNumWarps == 0) {
-    emit(rewriter);
-    return;
-  }
-
-  SmallVector<int32_t> partitionNumWarps;
-  for (int remainingWarps = workerNumWarps; remainingWarps > 0;) {
-    int32_t partitionWarps =
-        llvm::bit_floor(static_cast<uint32_t>(remainingWarps));
-    partitionNumWarps.push_back(partitionWarps);
-    remainingWarps -= partitionWarps;
-  }
-
-  auto wsOp = triton::gpu::WarpSpecializeOp::create(rewriter, loc, TypeRange{},
-                                                    partitionNumWarps);
-  SmallVector<int32_t> startIds;
-  int startId = defaultNumWarps;
-  for (int32_t partitionWarps : partitionNumWarps) {
-    startIds.push_back(startId);
-    startId += partitionWarps;
-  }
-  wsOp.setWarpGroupStartIds(startIds);
-
-  Block *defaultBlock = rewriter.createBlock(&wsOp.getDefaultRegion());
-  rewriter.setInsertionPointToEnd(defaultBlock);
-  emit(rewriter);
-  triton::gpu::WarpYieldOp::create(rewriter, loc, TypeRange(), ValueRange());
-
-  Block *partitionHolder = rewriter.createBlock(&wsOp.getPartitionOpHolder());
-  rewriter.setInsertionPointToStart(partitionHolder);
-  auto partitions = triton::gpu::WarpSpecializePartitionsOp::create(
-      rewriter, loc, ValueRange(),
-      /*numPartitionRegions=*/partitionNumWarps.size());
-  for (Region &partitionRegion : partitions.getPartitionRegions()) {
-    Block *partitionBlock = rewriter.createBlock(&partitionRegion);
-    rewriter.setInsertionPointToEnd(partitionBlock);
-    emit(rewriter);
-    triton::gpu::WarpReturnOp::create(rewriter, loc);
-  }
-}
-
 struct ClusterBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ClusterBarrierOp> {
   ClusterBarrierOpConversion(LLVMTypeConverter &typeConverter,
@@ -174,19 +129,11 @@ struct ClusterBarrierOpConversion
     auto mbarOffset = op->getAttrOfType<IntegerAttr>(
         triton::nvidia_gpu::kClusterBarrierMbarOffsetAttrName);
     if (!mbarOffset) {
-      auto mod = op->getParentOfType<ModuleOp>();
-      int defaultNumWarps = triton::gpu::lookupNumWarps(op);
-      int totalNumWarps = defaultNumWarps;
-      if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-        totalNumWarps = attr.getInt();
-
       rewriter.setInsertionPoint(op);
-      lowerClusterSyncForAllWarps(op.getLoc(), rewriter, defaultNumWarps,
-                                  totalNumWarps, [&](OpBuilder &b) {
-                                    createClusterArrive(b, op.getLoc(),
-                                                        op.getRelaxed());
-                                    createClusterWait(b, op.getLoc());
-                                  });
+      emitClusterSyncForAllWarps(rewriter, op.getLoc(), op, [&](OpBuilder &b) {
+        createClusterArrive(b, op.getLoc(), op.getRelaxed());
+        createClusterWait(b, op.getLoc());
+      });
       rewriter.eraseOp(op);
       return success();
     }
@@ -296,16 +243,10 @@ struct InitializeWSClusterBarriers
     }
 
     NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, initPred);
-    int defaultNumWarps = triton::gpu::lookupNumWarps(kernel);
-    int totalNumWarps = defaultNumWarps;
-    if (auto attr = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
-      totalNumWarps = attr.getInt();
-    lowerClusterSyncForAllWarps(loc, rewriter, defaultNumWarps, totalNumWarps,
-                                [&](OpBuilder &b) {
-                                  createClusterArrive(b, loc,
-                                                      /*relaxed=*/true);
-                                  createClusterWait(b, loc);
-                                });
+    emitClusterSyncForAllWarps(rewriter, loc, kernel, [&](OpBuilder &b) {
+      createClusterArrive(b, loc, /*relaxed=*/true);
+      createClusterWait(b, loc);
+    });
   }
 };
 } // namespace

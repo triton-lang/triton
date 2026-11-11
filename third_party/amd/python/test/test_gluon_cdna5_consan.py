@@ -543,6 +543,19 @@ def test_async_copy_mbarrier_pipeline_drain(mode, message):
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("shape", ["no_ws", "three_workers"])
+def test_multi_cta_startup(shape):
+    """
+    Exercise ConSan's startup synchronization in multi-CTA kernels with and
+    without warp specialization. The kernels must complete without ConSan errors
+    and produce the expected output with ConSan enabled and disabled.
+    """
+    stderr_str = _run_consan_subprocess("multi_cta_startup", shape)
+    assert "device assertion failed" not in stderr_str, \
+        f"Unexpected ConSan violation in stderr:\n{stderr_str}"
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_consan_tdm_store(FAILURE):
     """
