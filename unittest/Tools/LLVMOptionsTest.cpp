@@ -1,7 +1,10 @@
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Target/TargetMachine.h"
 
 #include <atomic>
 #include <chrono>
@@ -29,6 +32,20 @@ llvm::cl::opt<std::string> stringOption("triton-test-string-option",
                                         llvm::cl::Hidden);
 
 using Settings = std::vector<ScopedLLVMOptions::Setting>;
+
+class TestTargetMachine : public llvm::TargetMachine {
+public:
+  explicit TestTargetMachine(const llvm::Target &target)
+      : TargetMachine(target, "", llvm::Triple(), "", "",
+                      llvm::TargetOptions()) {}
+};
+
+struct CodeGenPipeline {
+  llvm::Target target;
+  TestTargetMachine targetMachine{target};
+  llvm::legacy::PassManager passManager;
+  llvm::TargetPassConfig config{targetMachine, passManager};
+};
 
 // Runs `body` on another thread so tests can check that it blocks.
 class BackgroundTask {
@@ -80,17 +97,17 @@ TEST(LLVMOptions, LastSettingWins) {
 }
 
 TEST(LLVMOptions, LibraryOptionsApplyAndRestore) {
-  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+  EXPECT_FALSE(CodeGenPipeline().config.hasLimitedCodeGenPipeline());
   {
     ScopedLLVMOptions scope(Settings{{"start-before", "machine-scheduler"},
                                      {"stop-after", "machine-scheduler"},
                                      {"triton-test-bool-option", "true"}});
-    EXPECT_TRUE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
-    EXPECT_FALSE(llvm::TargetPassConfig::willCompleteCodeGenPipeline());
+    EXPECT_TRUE(CodeGenPipeline().config.hasLimitedCodeGenPipeline());
+    EXPECT_FALSE(CodeGenPipeline().config.willCompleteCodeGenPipeline());
     EXPECT_TRUE(boolOption.getValue());
   }
-  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
-  EXPECT_TRUE(llvm::TargetPassConfig::willCompleteCodeGenPipeline());
+  EXPECT_FALSE(CodeGenPipeline().config.hasLimitedCodeGenPipeline());
+  EXPECT_TRUE(CodeGenPipeline().config.willCompleteCodeGenPipeline());
   EXPECT_FALSE(boolOption.getValue());
 }
 
@@ -190,7 +207,7 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
     // must not underflow the child's freshly reset user count.
     parentScope.reset();
     bool succeeded = !boolOption.getValue() &&
-                     !llvm::TargetPassConfig::hasLimitedCodeGenPipeline();
+                     !CodeGenPipeline().config.hasLimitedCodeGenPipeline();
     {
       ScopedLLVMOptions childScope(
           Settings{{"triton-test-bool-option", "true"}});
@@ -207,10 +224,10 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
   // The child reset must not affect the parent's registry.
   EXPECT_TRUE(boolOption.getValue());
-  EXPECT_TRUE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+  EXPECT_TRUE(CodeGenPipeline().config.hasLimitedCodeGenPipeline());
   parentScope.reset();
   EXPECT_FALSE(boolOption.getValue());
-  EXPECT_FALSE(llvm::TargetPassConfig::hasLimitedCodeGenPipeline());
+  EXPECT_FALSE(CodeGenPipeline().config.hasLimitedCodeGenPipeline());
 }
 #endif
 
