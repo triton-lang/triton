@@ -14,7 +14,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
-from .matmul_details._matmul import _matmul
+from .matmul_details._matmul import _dense_matmul, _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
@@ -82,7 +82,7 @@ class FusedComm:
     n_reduce_shards: int = 1
 
 specializations = SpecializationModule("matmul",
-    kernels=[("_matmul", _matmul), ("_p_matmul", _p_matmul)],
+    kernels=[("_dense_matmul", _dense_matmul), ("_matmul", _matmul), ("_p_matmul", _p_matmul)],
     closure_args={
         "epilogue": ClosureArg("EPILOGUE_FN", "epilogue_fn_args"), #
         "activation": ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
@@ -244,13 +244,6 @@ def matmul_set_idle_sms(num_idle_sms):
     persistent kernels will leave `num_idle_sms` idle
     """
     set_idle_sms(num_idle_sms)
-
-def _has_8_element_rows(row_stride, inner_stride, width, pack_factor=1):
-    # Strides divisible by 16 already carry a JIT alignment hint. Check the
-    # logical width separately: padded rows can end in a partial group of eight.
-    return (inner_stride == 1 and row_stride % 16 == 8 and
-            isinstance(width, int) and width % (8 * pack_factor) == 0)
-
 
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -726,21 +719,20 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
+    kernel = kernels._matmul
     if opt_flags.is_persistent:
+        kernel = kernels._p_matmul
         extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
     elif (target_info.cuda_capability_geq(8) and a.ndim == b.ndim == 2 and ragged_dimension is None
           and not has_gather and not has_scatter and fused_comm is None
           and isinstance(a.storage.layout, StridedLayout) and isinstance(b.storage.layout, StridedLayout)):
-        extra_kernel_kwargs.update(
-            X_ALIGNED_8=_has_8_element_rows(a.stride(-2), a.stride(-1), K, 2 if a.dtype == FP4 else 1),
-            W_ALIGNED_8=_has_8_element_rows(b.stride(-1), b.stride(-2), K_W, 2 if b.dtype == FP4 else 1),
-            Y_ALIGNED_8=(not (a_has_mx or b_has_mx or out_matmul_has_mx) and matmul_fused_activation.specs.fn is None
-                         and _has_8_element_rows(out_matmul.stride(-2), out_matmul.stride(-1), N)),
-        )
+        kernel = kernels._dense_matmul
+        n_valid_slices = 1  # A two-dimensional weight has one matrix; its first axis is K.
+        extra_kernel_kwargs["DENSE_ROWS"] = True
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
-    n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
-    (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
+    kernel[(grid,)](
                    c_tensor_or_tma, c_data, *out_matmul.stride(),
                    *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
