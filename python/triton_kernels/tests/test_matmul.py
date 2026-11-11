@@ -703,7 +703,7 @@ def test_dense_matmul_padded_rows(k, n, device):
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn, torch.float32])
 def test_dense_matmul_runtime_alignment(dtype, device, monkeypatch):
     if not cuda_capability_geq(8, 0) or (dtype == torch.float8_e4m3fn and not cuda_capability_geq(9, 0)):
         pytest.skip("requires CUDA tensor core support for the input dtype")
@@ -736,7 +736,7 @@ def test_dense_matmul_runtime_alignment(dtype, device, monkeypatch):
             w.copy_(torch.randint(-2, 3, w.shape, device=device))
             expected = out_storage.clone()
             expected[:, y.storage_offset():y.storage_offset() + n] = x.float() @ w.float().T
-            matmul(x, w.T, None, c=y)
+            matmul(x, w.T, None, c=y, precision_config=PrecisionConfig(allow_tf32=False))
             torch.testing.assert_close(out_storage, expected, rtol=0, atol=0)
     assert len(hashes) == 1
 
