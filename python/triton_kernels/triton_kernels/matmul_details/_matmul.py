@@ -443,6 +443,11 @@ def _matmul(
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
 
+    check_both: tl.constexpr = (DENSE_ROWS
+                                and BLOCK_K // (2 if is_x_fp4 else 1) * x_type.primitive_bitwidth >= 8 * max_bytes
+                                and PACKED_BLOCK_K_W * w_type.primitive_bitwidth >= 8 * max_bytes)
+    if check_both:
+        both_aligned = ((x_alignment | w_alignment) & (max_bytes - 1)) == 0
     for ki in range(k_tiles):
         x_k_limit -= BLOCK_K * SPLIT_K
         w_k_limit -= PACKED_BLOCK_K_W * SPLIT_K
@@ -477,8 +482,15 @@ def _matmul(
         if DENSE_ROWS:
             x_cols = offs_k_x.to(index_type) + ki.to(index_type) * (BLOCK_K // (2 if is_x_fp4 else 1) * SPLIT_K)
             w_cols = offs_w_k.to(index_type) + ki.to(index_type) * (PACKED_BLOCK_K_W * SPLIT_K)
-            x = _access_rows(x_rows, x_cols, stride_x_k, None if EVEN_K else x_width, True, None, x_alignment, "", max_bytes)
-            w = _access_rows(w_rows, w_cols, stride_w_k, None if EVEN_K else K_W, True, None, w_alignment, W_CACHE_MODIFIER, max_bytes).T
+            if check_both:
+                x = _access_row_group(x_rows, x_cols, stride_x_k, None if EVEN_K else x_width, both_aligned, None, "", max_bytes)
+                w = _access_row_group(w_rows, w_cols, stride_w_k, None if EVEN_K else K_W, both_aligned, None, W_CACHE_MODIFIER, max_bytes).T
+                if not both_aligned:
+                    x = _access_rows(x_rows, x_cols, stride_x_k, None if EVEN_K else x_width, True, None, x_alignment, "", max_bytes)
+                    w = _access_rows(w_rows, w_cols, stride_w_k, None if EVEN_K else K_W, True, None, w_alignment, W_CACHE_MODIFIER, max_bytes).T
+            else:
+                x = _access_rows(x_rows, x_cols, stride_x_k, None if EVEN_K else x_width, True, None, x_alignment, "", max_bytes)
+                w = _access_rows(w_rows, w_cols, stride_w_k, None if EVEN_K else K_W, True, None, w_alignment, W_CACHE_MODIFIER, max_bytes).T
         else:
             x = tl.load(XPtrs, mask=(offs_x_m[:, None] >= 0 if GatherIndx is not None else True) & mask_k_x[None, :], other=0.0)
             w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
