@@ -487,9 +487,9 @@ SmallVector<Value> convertLayoutViaSharedMemory(
   // At this point we have a type that's at least 8-bit
   // and we don't have broadcasting in the registers
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-  int numBanks = targetInfo.getSharedMemoryBanks();
   int32_t vecBitwidth =
       triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+  int numBanks = targetInfo.getSharedMemoryBanks(vecBitwidth);
   auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
   auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanks,
                                    srcTile, dstTile);

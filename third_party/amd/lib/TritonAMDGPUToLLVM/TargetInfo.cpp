@@ -129,11 +129,14 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(getArch());
 }
 
-int TargetInfo::getSharedMemoryBanks() const {
+int TargetInfo::getSharedMemoryBanks(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA5:
-  case ISAFamily::CDNA4:
     return 64;
+  case ISAFamily::CDNA4:
+    // ds_read_b64 and ds_read_b128 read 256 bytes per cycle from 64 banks.
+    // Other LDS instructions only access 128 bytes per cycle from 32 banks.
+    return vecBitwidth >= 64 ? 64 : 32;
   default:
     return 32;
   }

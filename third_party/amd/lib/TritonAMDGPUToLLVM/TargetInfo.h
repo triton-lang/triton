@@ -30,7 +30,7 @@ public:
     return targetFeatures.getSharedMemorySize();
   }
 
-  int getSharedMemoryBanks() const override;
+  int getSharedMemoryBanks(int32_t vecBitwidth) const override;
 
   size_t getSharedMemoryPartitionSize() const override {
     return targetFeatures.getSharedMemoryPartitionSize();

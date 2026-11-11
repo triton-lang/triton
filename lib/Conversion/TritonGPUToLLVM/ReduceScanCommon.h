@@ -139,8 +139,8 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
               triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
           auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
           return getNumScratchElemsSwizzledCvt(
-              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
-              dstTile);
+              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(vecBitwidth),
+              srcTile, dstTile);
         });
   auto baseOffsetAttr =
       op->template getAttrOfType<IntegerAttr>("allocation.offset");

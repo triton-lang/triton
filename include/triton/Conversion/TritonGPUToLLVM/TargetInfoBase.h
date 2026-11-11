@@ -141,7 +141,7 @@ public:
   // assertion. Only called if |requiresAssertTrap| returns true.
   virtual void assertTrap(RewriterBase &rewriter, Location loc) const = 0;
 
-  virtual int getSharedMemoryBanks() const { return 32; }
+  virtual int getSharedMemoryBanks(int32_t vecBitwidth) const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
 
