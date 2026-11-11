@@ -54,6 +54,7 @@ static PyObject *u64_str = nullptr;
 static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
 static PyObject *D_str = nullptr;
+static PyObject *divisible_by_8_str = nullptr;
 static PyObject *constexpr_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
@@ -126,6 +127,7 @@ void init_interned_strings() {
   fp32_str = intern_from_string("fp32");
   u1_str = intern_from_string("u1");
   D_str = intern_from_string("D");
+  divisible_by_8_str = intern_from_string("8");
   constexpr_str = intern_from_string("constexpr");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
@@ -294,6 +296,16 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   return {std::move(type_str_result), py::none()};
 }
 
+PyObject *integer_alignment_key(uint64_t value, bool align) {
+  if (!align)
+    return empty_str;
+  if (value % 16 == 0)
+    return D_str;
+  if (value % 8 == 0)
+    return divisible_by_8_str;
+  return empty_str;
+}
+
 std::pair<py::object, py::object> handle_long_type(PyObject *backend,
                                                    PyObject *arg, bool is_const,
                                                    bool specialize_value,
@@ -313,7 +325,7 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
   if (overflow == 0) {
     type_str = (val >= INT32_MIN && val <= INT32_MAX) ? i32_str : i64_str;
     if (specialize_value) {
-      key_obj = (align && ((val & 15) == 0)) ? D_str : empty_str;
+      key_obj = integer_alignment_key(val, align);
     }
   } else {
     unsigned long long val_64 = PyLong_AsUnsignedLongLong(arg);
@@ -329,7 +341,7 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
     }
     type_str = u64_str;
     if (specialize_value) {
-      key_obj = (align && ((val_64 & 15) == 0)) ? D_str : empty_str;
+      key_obj = integer_alignment_key(val_64, align);
     }
   }
   if (!key_obj) {

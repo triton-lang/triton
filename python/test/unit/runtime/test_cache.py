@@ -427,8 +427,8 @@ def test_specialize(mode, device, fresh_triton_cache):
     triton.knobs.runtime.jit_cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
     function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
-    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
-    for i in [1, 2, 4, 8, 16, 32]:
+    target = {'enable': 4, 'disable': 1, 'disable_on_alignment': 2}[mode]
+    for i in [1, 2, 4, 8, 16, 24, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
 
@@ -443,10 +443,11 @@ def test_annotation(device):
 
     device = getattr(torch, device).current_device()
     kernel[(1, )](x, 1)
-    kernel[(1, )](x, 8)
+    compiled = kernel[(1, )](x, 8)
+    assert "tt.divisibility = 8 : i32" in compiled.asm["ttir"]
     kernel[(1, )](x, 16)
     kernel[(1, )](x, 17)
-    assert len(kernel.device_caches[device][0]) == 3
+    assert len(kernel.device_caches[device][0]) == 4
 
 
 GLOBAL_DEFAULT_ARG = 1

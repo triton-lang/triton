@@ -78,12 +78,17 @@ class BaseBackend(metaclass=ABCMeta):
         ret = []
         if "D" in desc:
             ret += [["tt.divisibility", 16]]
+        elif desc == "8":
+            ret += [["tt.divisibility", 8]]
         return ret
 
     @staticmethod
     def get_int_specialization(arg, **kwargs):
-        if arg % 16 == 0 and kwargs.get("align", False):
-            return "D"
+        if kwargs.get("align", False):
+            if arg % 16 == 0:
+                return "D"
+            if arg % 8 == 0:
+                return "8"
         return ""
 
     @staticmethod

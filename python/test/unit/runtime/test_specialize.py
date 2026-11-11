@@ -102,6 +102,7 @@ def native_inputs_to_specialize():
         1,
         0,
         -1,
+        -8,
         16,
         17,
         2**31 - 1,
@@ -110,6 +111,7 @@ def native_inputs_to_specialize():
         2**63 - 1,
         2**63,
         2**63 + 1,
+        2**63 + 8,
         2**64 - 1,
     ]
 
