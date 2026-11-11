@@ -1104,17 +1104,22 @@ def test_atomic_acquire_expired_snapshot(kind, rmw):
 
 
 @triton.jit
-def _atomic_acquire_reuse_race_kernel(flag, entered, scratch, payload, out, KIND: tl.constexpr):
+def _atomic_acquire_reuse_race_kernel(flag, entered, start, scratch, payload, out, KIND: tl.constexpr,
+                                      PUBLICATIONS: tl.constexpr):
     if tl.program_id(0) == 0:
         tl.atomic_poll(entered, 1, sem="relaxed", scope="sys")
         tl.atomic_store(flag, 1, sem="release", scope="sys")
         # This write is not released by flag. Importing a recycled snapshot
         # from scratch must not make it appear ordered with the consumer.
         tl.store(payload, 1000)
-        for epoch in range(8):
+        # Ensure the payload write exists before the reader starts importing.
+        # This relaxed handshake does not release that write to the reader.
+        tl.atomic_store(start, 1, sem="relaxed", scope="sys")
+        for epoch in range(PUBLICATIONS):
             tl.atomic_store(scratch, epoch, sem="release", scope="sys")
     else:
         tl.atomic_store(entered, 1, sem="relaxed", scope="sys")
+        tl.atomic_poll(start, 1, sem="relaxed", scope="sys")
         if KIND == "poll":
             tl.atomic_poll(flag, 1, sem="acquire", scope="sys")
         else:
@@ -1124,19 +1129,21 @@ def _atomic_acquire_reuse_race_kernel(flag, entered, scratch, payload, out, KIND
         tl.store(out, tl.load(payload))
 
 
-def _run_atomic_acquire_reuse_race(kind):
-    configure(clock_buffer_size=4)
+def _run_atomic_acquire_reuse_race(kind, buffer_size, publications):
+    configure(clock_buffer_size=buffer_size)
     triton.knobs.compilation.instrumentation_mode = "gsan"
     pool = create_mem_pool()
     with torch.cuda.use_mem_pool(pool):
-        cells = [torch.zeros(1, dtype=torch.int32, device="cuda") for _ in range(5)]
-        _atomic_acquire_reuse_race_kernel[(2, )](*cells, kind, num_warps=4)
+        cells = [torch.zeros(1, dtype=torch.int32, device="cuda") for _ in range(6)]
+        _atomic_acquire_reuse_race_kernel[(2, )](*cells, kind, publications, num_warps=4)
         torch.cuda.synchronize()
 
 
 @pytest.mark.parametrize("kind", ["load", "poll"])
-def test_atomic_acquire_concurrent_reuse_reports_race(kind):
-    result = run_in_process(_run_atomic_acquire_reuse_race, args=(kind, ))
+@pytest.mark.parametrize("buffer_size", [2, 4])
+@pytest.mark.parametrize("publications", [8, 64])
+def test_atomic_acquire_concurrent_reuse_reports_race(kind, buffer_size, publications):
+    result = run_in_process(_run_atomic_acquire_reuse_race, args=(kind, buffer_size, publications))
     assert isinstance(result.exc, RuntimeError), (result.exc, result.driver_stderr_output)
     # Depending on scheduling, the race can be detected by either participant,
     # or the acquire can find that its original snapshot has already expired.

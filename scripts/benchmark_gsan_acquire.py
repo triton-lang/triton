@@ -13,6 +13,7 @@ import json
 import os
 import statistics
 from datetime import timedelta
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -48,6 +49,7 @@ def main():
     parser.add_argument("--kinds", nargs="+", default=["poll", "load"])
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--measure-publication", action="store_true")
+    parser.add_argument("--dump-dir", type=Path)
     args = parser.parse_args()
     rank = int(os.environ["LOCAL_RANK"])
     world = int(os.environ["WORLD_SIZE"])
@@ -55,6 +57,13 @@ def main():
     dist.init_process_group("gloo", timeout=timedelta(minutes=10))
     triton.knobs.compilation.instrumentation_mode = "gsan"
     symmetric_memory.configure(dist.group.WORLD, clock_buffer_size=1024)
+
+    def dump(compiled, name):
+        if rank == 0 and args.dump_dir is not None:
+            args.dump_dir.mkdir(parents=True, exist_ok=True)
+            for suffix in ("llir", "ptx"):
+                (args.dump_dir / f"{name}.{suffix}").write_text(compiled.asm[suffix])
+
     if rank == 0:
         properties = torch.cuda.get_device_properties(rank)
         print(
@@ -74,7 +83,8 @@ def main():
         data_ptrs = flag_ptrs + 4 * flags
         expected = torch.tensor([1000 + peer * flags + i for i, peer in enumerate(sources)], dtype=torch.int32,
                                 device=f"cuda:{rank}")
-        publish[(1, )](state, rank, flags, num_warps=4)
+        published = publish[(1, )](state, rank, flags, num_warps=4)
+        dump(published, f"publish-{flags}")
         torch.cuda.synchronize()
         dist.barrier()
         if args.measure_publication:
@@ -89,7 +99,8 @@ def main():
                 end.synchronize()
                 samples.append(start.elapsed_time(end))
             row = dict(label=args.label, rank=rank, world=world, ctas=1, flags=flags, kind="publish",
-                       samples_ms=samples, median_ms=statistics.median(samples))
+                       samples_ms=samples, median_ms=statistics.median(samples), registers=published.n_regs,
+                       spills=published.n_spills)
             rows = [None] * world
             dist.all_gather_object(rows, row)
             if rank == 0:
@@ -102,6 +113,7 @@ def main():
                     return acquire[(ctas, )](flag_ptrs, data_ptrs, out, flags, kind, num_warps=4)
 
                 compiled = launch()
+                dump(compiled, f"{kind}-{flags}")
                 torch.cuda.synchronize()
                 torch.testing.assert_close(out, expected.expand_as(out))
                 samples = []

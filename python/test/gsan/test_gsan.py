@@ -1062,6 +1062,51 @@ def test_atomic_acquire_clock_buffer_wraparound(kind, scope, buffer_size):
 
 
 @triton.jit
+def _atomic_acquire_live_snapshot_kernel(payload, ready, scratch, entered, out, KIND: tl.constexpr,
+                                         SCOPE: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload, 1234)
+        tl.atomic_store(ready, 1, sem="release", scope=SCOPE)
+        tl.atomic_poll(entered, 1, sem="relaxed", scope=SCOPE)
+        # Advance the head while readers import the original snapshot, but
+        # never retire its slot. Validation must allow unrelated publications.
+        for epoch in range(32):
+            tl.atomic_store(scratch, epoch, sem="release", scope=SCOPE)
+    else:
+        tl.atomic_store(entered, 1, sem="relaxed", scope=SCOPE)
+        for i in range(64):
+            if KIND == "poll":
+                tl.atomic_poll(ready, 1, sem="acquire", scope=SCOPE)
+            else:
+                value = tl.atomic_load(ready, sem="acquire", scope=SCOPE)
+                while value != 1:
+                    value = tl.atomic_load(ready, sem="acquire", scope=SCOPE)
+            tl.store(out + (pid - 1) * 64 + i, tl.load(payload))
+
+
+def _run_atomic_acquire_live_snapshot(kind, scope):
+    configure(clock_buffer_size=64)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        cells = [torch.zeros(1, dtype=torch.int32, device="cuda") for _ in range(4)]
+        out = torch.empty((4, 64), dtype=torch.int32, device="cuda")
+        _atomic_acquire_live_snapshot_kernel[(5, )](*cells, out, kind, scope, num_warps=4)
+        torch.testing.assert_close(out, torch.full_like(out, 1234))
+        assert shadow_cell_from_address(cells[2].data_ptr()).write_clock.epoch >= 33
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("kind", ["load", "poll"])
+@pytest.mark.parametrize("scope", ["gpu", "sys"])
+def test_atomic_acquire_allows_unrelated_publications(kind, scope):
+    result = run_in_process(_run_atomic_acquire_live_snapshot, args=(kind, scope))
+    assert result.exc is None, (result.exc, result.driver_stderr_output)
+    assert not result.driver_stderr_output
+
+
+@triton.jit
 def _masked_atomic_load_store_kernel(ptr, out_ptr, stride: tl.constexpr):
     indices = tl.arange(0, 4)
     offsets = indices * stride
