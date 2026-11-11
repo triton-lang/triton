@@ -1154,6 +1154,130 @@ tt.func @slot_index_add_pow2_modulus_same_slot(%x: i32, %v: tensor<128x32xf16, #
   ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
   tt.return
 }
+
+// i % 3 and (i + 1) % 3 on an scf.for induction variable with an unflagged
+// addition, as Triton emits it. The body runs only while i < %ub, so i is at
+// most INT_MAX - 1 there and i + 1 cannot wrap: the slots differ.
+// CHECK-LABEL: loop_iv_add_guarded_by_bound
+tt.func @loop_iv_add_guarded_by_bound(%ub: i32, %v: tensor<128x32xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+    %a = arith.addi %i, %c1_i32 : i32
+    %r = arith.remsi %i, %c3_i32 : i32
+    %w = arith.remsi %a, %c3_i32 : i32
+    %sr = ttg.memdesc_index %alloc[%r] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    %sw = ttg.memdesc_index %alloc[%w] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    %ld = ttg.local_load %sr : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    ttg.local_store %v, %sw : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+
+// i % 3 and (i + 4) % 3 in the same loop. The bound only keeps i + 1 from
+// wrapping: with %ub = INT_MAX, i = 2147483646 makes both slot 0. The WAR
+// barrier must stay.
+// CHECK-LABEL: loop_iv_add_beyond_bound
+tt.func @loop_iv_add_beyond_bound(%ub: i32, %v: tensor<128x32xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+    %a = arith.addi %i, %c4_i32 : i32
+    %r = arith.remsi %i, %c3_i32 : i32
+    %w = arith.remsi %a, %c3_i32 : i32
+    %sr = ttg.memdesc_index %alloc[%r] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    %sw = ttg.memdesc_index %alloc[%w] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    %ld = ttg.local_load %sr : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    ttg.local_store %v, %sw : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+
+// x % 3 and (x + 1) % 3 under scf.if (x < n): the guard bounds x as the loop
+// bound does, so the slots differ.
+// CHECK-LABEL: if_guarded_add
+tt.func @if_guarded_add(%x: i32, %n: i32, %v: tensor<128x32xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %lt = arith.cmpi slt, %x, %n : i32
+  scf.if %lt {
+    %a = arith.addi %x, %c1_i32 : i32
+    %r = arith.remsi %x, %c3_i32 : i32
+    %w = arith.remsi %a, %c3_i32 : i32
+    %sr = ttg.memdesc_index %alloc[%r] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    %sw = ttg.memdesc_index %alloc[%w] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    %ld = ttg.local_load %sr : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    ttg.local_store %v, %sw : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+
+// The same guard reached through the false edge: !(x >= n) bounds x too.
+// CHECK-LABEL: if_else_guarded_add
+tt.func @if_else_guarded_add(%x: i32, %n: i32, %v: tensor<128x32xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %ge = arith.cmpi sge, %x, %n : i32
+  scf.if %ge {
+  } else {
+    %a = arith.addi %x, %c1_i32 : i32
+    %r = arith.remsi %x, %c3_i32 : i32
+    %w = arith.remsi %a, %c3_i32 : i32
+    %sr = ttg.memdesc_index %alloc[%r] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    %sw = ttg.memdesc_index %alloc[%w] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_store
+    %ld = ttg.local_load %sr : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    ttg.local_store %v, %sw : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
+
+// A guard on another value says nothing about x; the barrier stays.
+// CHECK-LABEL: guard_on_other_value
+tt.func @guard_on_other_value(%x: i32, %y: i32, %n: i32, %v: tensor<128x32xf16, #AL>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %lt = arith.cmpi slt, %y, %n : i32
+  scf.if %lt {
+    %a = arith.addi %x, %c1_i32 : i32
+    %r = arith.remsi %x, %c3_i32 : i32
+    %w = arith.remsi %a, %c3_i32 : i32
+    %sr = ttg.memdesc_index %alloc[%r] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    %sw = ttg.memdesc_index %alloc[%w] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    %ld = ttg.local_load %sr : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    ttg.local_store %v, %sw : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
+  tt.return
+}
 }
 
 // -----

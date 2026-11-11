@@ -3,6 +3,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
@@ -166,22 +167,115 @@ getSignedRange(Value v, llvm::SmallPtrSetImpl<Value> &visiting,
   return range;
 }
 
+/// The predicate that holds with the operands swapped: a < b iff b > a.
+arith::CmpIPredicate swapCmpIPredicate(arith::CmpIPredicate pred) {
+  using P = arith::CmpIPredicate;
+  switch (pred) {
+  case P::slt:
+    return P::sgt;
+  case P::sle:
+    return P::sge;
+  case P::sgt:
+    return P::slt;
+  case P::sge:
+    return P::sle;
+  case P::ult:
+    return P::ugt;
+  case P::ule:
+    return P::uge;
+  case P::ugt:
+    return P::ult;
+  case P::uge:
+    return P::ule;
+  default:
+    return pred; // eq, ne
+  }
+}
+
+/// Narrows `range`, the signed range of `x`, with the branch conditions that
+/// must hold to reach `op`. Walks up the chain of single-predecessor blocks;
+/// each edge out of a cf.cond_br contributes its condition (negated on the
+/// false edge) when it compares `x` signed against a value with a known range.
+/// A loop induction variable in cf form is the typical case: the body is
+/// entered only when `iv slt ub` holds, so `iv <= INT_MAX - 1` there and
+/// `iv + 1` cannot overflow, whatever `ub` is.
+void narrowByDominatingGuards(Value x, Operation *op, SignedRange &range,
+                              unsigned maxEdges = 8) {
+  Block *block = op->getBlock();
+  for (unsigned edges = 0; block && edges < maxEdges; ++edges) {
+    Block *pred = block->getSinglePredecessor();
+    if (!pred)
+      return;
+    auto br = dyn_cast<cf::CondBranchOp>(pred->getTerminator());
+    bool onTrue = br && br.getTrueDest() == block;
+    bool onFalse = br && br.getFalseDest() == block;
+    // Both edges into one block say nothing about the condition.
+    auto cmp = onTrue != onFalse
+                   ? br.getCondition().getDefiningOp<arith::CmpIOp>()
+                   : arith::CmpIOp();
+    if (cmp && (cmp.getLhs() == x) != (cmp.getRhs() == x)) {
+      arith::CmpIPredicate cmpPred = cmp.getPredicate();
+      if (onFalse)
+        cmpPred = arith::invertPredicate(cmpPred);
+      Value other = cmp.getRhs();
+      if (cmp.getRhs() == x) {
+        cmpPred = swapCmpIPredicate(cmpPred);
+        other = cmp.getLhs();
+      }
+      // `x cmpPred other`; bound x by the extreme values `other` can take.
+      llvm::SmallPtrSet<Value, 8> visiting;
+      unsigned width = x.getType().getIntOrFloatBitWidth();
+      SignedRange o = getSignedRange(other, visiting)
+                          .value_or(SignedRange{
+                              APInt::getSignedMinValue(width).getSExtValue(),
+                              APInt::getSignedMaxValue(width).getSExtValue()});
+      using P = arith::CmpIPredicate;
+      switch (cmpPred) {
+      case P::slt:
+        if (auto hi = llvm::checkedSub(o.second, int64_t(1)))
+          range.second = std::min(range.second, *hi);
+        break;
+      case P::sle:
+        range.second = std::min(range.second, o.second);
+        break;
+      case P::sgt:
+        if (auto lo = llvm::checkedAdd(o.first, int64_t(1)))
+          range.first = std::max(range.first, *lo);
+        break;
+      case P::sge:
+        range.first = std::max(range.first, o.first);
+        break;
+      case P::eq:
+        range.first = std::max(range.first, o.first);
+        range.second = std::min(range.second, o.second);
+        break;
+      default:
+        break; // ne and unsigned predicates do not bound a signed value
+      }
+    }
+    block = pred;
+  }
+}
+
 /// True if `x + c` (the given addi) cannot overflow its signed integer type:
-/// either the op says so (nsw), or the range of `x` proves it.
+/// either the op says so (nsw), or the range of `x` proves it. That range comes
+/// from how `x` is computed and the branch conditions guarding the add.
 bool isAddWithoutSignedOverflow(arith::AddIOp addOp, Value x, int64_t c) {
   if (arith::bitEnumContainsAny(addOp.getOverflowFlags(),
                                 arith::IntegerOverflowFlags::nsw))
     return true;
-  llvm::SmallPtrSet<Value, 8> visiting;
-  auto range = getSignedRange(x, visiting);
   auto intTy = dyn_cast<IntegerType>(addOp.getType());
-  if (!range || !intTy || intTy.getWidth() > 64)
+  if (!intTy || intTy.getWidth() > 64)
     return false;
-  auto lo = llvm::checkedAdd(range->first, c);
-  auto hi = llvm::checkedAdd(range->second, c);
-  return lo && hi &&
-         *lo >= APInt::getSignedMinValue(intTy.getWidth()).getSExtValue() &&
-         *hi <= APInt::getSignedMaxValue(intTy.getWidth()).getSExtValue();
+  int64_t typeMin = APInt::getSignedMinValue(intTy.getWidth()).getSExtValue();
+  int64_t typeMax = APInt::getSignedMaxValue(intTy.getWidth()).getSExtValue();
+  llvm::SmallPtrSet<Value, 8> visiting;
+  SignedRange range =
+      getSignedRange(x, visiting).value_or(SignedRange{typeMin, typeMax});
+  narrowByDominatingGuards(x, addOp, range);
+  auto lo = llvm::checkedAdd(range.first, c);
+  auto hi = llvm::checkedAdd(range.second, c);
+  return lo && hi && *lo >= typeMin && *hi <= typeMax;
 }
 
 bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
