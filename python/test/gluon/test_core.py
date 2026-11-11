@@ -7908,7 +7908,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
             tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
                                use_acc=(k != 0), multicast=multicast)
             descs = (a_smem, b_smem) if multicast else ()
-            tcgen05_commit(a_bar, descs=descs, early_a_release=True)
+            tcgen05_commit(a_bar, descs=descs, completion="a_read")
             tcgen05_commit(mma_bar, descs=descs)
             mbarrier.wait(a_bar, phase_mma, deps=[a_smem])
             # Zero A before the full wait to test safe early A release.

@@ -702,13 +702,13 @@ def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
 
 
 @builtin
-def tcgen05_commit(barrier, pred=True, descs=(), *, early_a_release=False, _semantic=None):
+def tcgen05_commit(barrier, pred=True, descs=(), *, completion="all", _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when prior async tcgen05 operations issued by the thread are complete.
 
     By default, this operation tracks completion of all prior asynchronous
-    tcgen05 operations. On Rubin, `early_a_release` modifies the operation
+    tcgen05 operations. On Rubin, ``completion="a_read"`` modifies the operation
     to track only the completion of the A operand read from shared memory for
     a tcgen05 MMA operation.
 
@@ -721,10 +721,12 @@ def tcgen05_commit(barrier, pred=True, descs=(), *, early_a_release=False, _sema
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
             the preceding multiplication inputs. Defaults to ().
-        early_a_release (bool): Enable early A release on Rubin. Unsupported by ConSan. Defaults to False.
+        completion (str): "all" (default) or "a_read" (Rubin only; unsupported by ConSan).
     """
     pred = _semantic.to_tensor(pred)
     descs = _unwrap_if_constexpr(descs)
     descs = [d.handle for d in descs]
-    early_a_release = _unwrap_if_constexpr(early_a_release)
-    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs, early_a_release)
+    completion = _unwrap_if_constexpr(completion)
+    if completion not in ("all", "a_read"):
+        raise ValueError("completion must be 'all' or 'a_read'")
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs, completion == "a_read")
