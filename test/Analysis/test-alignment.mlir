@@ -40,6 +40,44 @@ tt.func @cast() {
 
 // -----
 
+tt.func @int_to_ptr_alignment(
+    %aligned: i64 {tt.divisibility = 16 : i32}, %unknown: i64,
+    %tensor_addresses: tensor<4xi64> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32}) {
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %byte = tt.int_to_ptr %aligned : i64 -> !tt.ptr<i8>
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %word = tt.int_to_ptr %aligned : i64 -> !tt.ptr<f32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %unaligned = tt.int_to_ptr %unknown : i64 -> !tt.ptr<i8>
+  %constant_address = arith.constant 16 : i64
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %constant_ptr = tt.int_to_ptr %constant_address : i64 -> !tt.ptr<i8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %tensor_ptrs = tt.int_to_ptr %tensor_addresses : tensor<4xi64> -> tensor<4x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @ptr_to_int_alignment(
+    %byte_ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+    %word_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %unknown: !tt.ptr<i8>,
+    %tensor_ptrs: tensor<4x!tt.ptr<f32>> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32}) {
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %byte_address = tt.ptr_to_int %byte_ptr : !tt.ptr<i8> -> i64
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %word_address = tt.ptr_to_int %word_ptr : !tt.ptr<f32> -> i64
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %unknown_address = tt.ptr_to_int %unknown : !tt.ptr<i8> -> i64
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %round_trip = tt.int_to_ptr %byte_address : i64 -> !tt.ptr<i8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %tensor_addresses = tt.ptr_to_int %tensor_ptrs : tensor<4x!tt.ptr<f32>> -> tensor<4xi64>
+  tt.return
+}
+
+// -----
+
 tt.func @integer_cast_constants() {
   %minus_one = arith.constant -1 : i8
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 255}}
