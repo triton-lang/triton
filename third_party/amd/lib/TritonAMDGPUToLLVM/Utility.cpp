@@ -985,23 +985,35 @@ static Value resolveLoopBackedge(BlockArgument bbArg) {
   return yieldOp.getOperand(iterArgIdx);
 }
 
-// isChainDotHead/isChainDotTail normally require the two dots to sit in the
-// same MLIR region, so they can't see a chain-dot pattern where one dot is
-// nested inside an scf.if within the other dot's region (e.g. a P@V dot
-// wrapped in `if all_skip: ...`). When
-// TRITON_HIP_FORCE_CHAIN_DOT_ACROSS_IF is set, also accept regions related by
-// exactly one level of scf.if nesting, in either direction.
+// Two regions count as part of the same chain-dot pattern if they are the same
+// region or related by exactly one level of scf.if nesting (either direction).
+// This lets isChainDotHead/isChainDotTail see a chain where the second dot is
+// wrapped in an scf.if within the first dot's region (e.g. a P@V dot under
+// `if not all_skip: ...`).
 static bool isSameOrAcrossOneIfLevel(Region *a, Region *b) {
   if (a == b)
     return true;
-  if (!mlir::triton::tools::getBoolEnv("TRITON_HIP_FORCE_CHAIN_DOT_ACROSS_IF"))
-    return false;
   auto nestedViaIf = [](Region *inner, Region *outer) {
     Operation *parentOp = inner->getParentOp();
     return isa_and_nonnull<scf::IfOp>(parentOp) &&
            parentOp->getParentRegion() == outer;
   };
   return nestedViaIf(a, b) || nestedViaIf(b, a);
+}
+
+// True if `head`'s result reaches `operandDef` by SSA data flow.
+// getForwardSlice recurses into regions, so when `head` feeds only an scf.if
+// *condition* it drags the whole branch body into the slice -- so `head` would
+// be reported as a chain head even though nothing of it reaches the inner dot's
+// operands. A branch condition is an i1 that never feeds a dot operand, so
+// confirming reachability from the operand's backward slice rejects exactly
+// that case.
+static bool headFeedsDotOperand(Operation *head, Operation *operandDef) {
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  SetVector<Operation *> bwdSlices;
+  (void)getBackwardSlice(operandDef, &bwdSlices, bwdOpt);
+  return bwdSlices.contains(head);
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
@@ -1019,7 +1031,12 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
                                            : dOp.getB().getDefiningOp();
       if (dotOperand && fwdSlices.contains(dotOperand)) {
-        return true;
+        // When dOp is nested in an scf.if, the forward slice may contain it
+        // only because the head feeds the branch condition; require that the
+        // head actually feeds the dot's data operand before calling it a chain.
+        bool sameRegion = dOp->getParentRegion() == dotOp->getParentRegion();
+        if (sameRegion || headFeedsDotOperand(dotOp, dotOperand))
+          return true;
       }
     }
   }
