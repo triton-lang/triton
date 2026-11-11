@@ -13,7 +13,7 @@
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
-      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=6a604523" />
       <link rel="stylesheet" type="text/css" href="../../_static/myst_sphinx_gallery.css?v=92de7a9e" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/custom.css" />
 
@@ -24,7 +24,7 @@
       <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
       <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
       <script src="../../_static/sg-tags.js?v=d80f6fa4"></script>
-      <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+      <script data-sd-tabs-storage-prefix="sphinx-design-tab-id-" src="../../_static/design-tabs.js?v=fcb327ea"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -136,15 +136,15 @@ of gemms. The scheduling is static and we do it on device.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>group-gemm-performance:
         N  cuBLAS (runtime(ms))  Triton (runtime(ms))
 0   128.0              0.022528              0.012288
-1   256.0              0.025600              0.013312
-2   512.0              0.033792              0.018432
+1   256.0              0.024576              0.013312
+2   512.0              0.032768              0.018432
 3  1024.0              0.073728              0.060416
 group-gemm-performance-m-8192-k-8192:
         M  cuBLAS (runtime(ms))  Triton (runtime(ms))
-0   128.0              0.458752              0.446464
+0   128.0              0.459776              0.445440
 1   256.0              0.726016              0.728064
-2   512.0              2.084864              1.474560
-3  1024.0              2.701312              2.860032
+2   512.0              2.053120              1.482752
+3  1024.0              2.642944              2.869248
 </pre></div>
 </div>
 <div class="line-block">
@@ -709,7 +709,7 @@ group-gemm-performance-m-8192-k-8192:
 </span><span class="n">benchmark_square_matrices</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
 </span><span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
 </span></pre></div></div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.480 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.498 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>
