@@ -210,14 +210,14 @@ public:
 };
 
 // Scan final waits after count lowering. On targets with async stores, calls
-// retain conservative module-wide scope because callees can wait on caller work.
+// retain All scope module-wide: callees can wait on work issued by callers.
 static void annotateCompletionScopes(ModuleOp module,
                                      const TargetFeatures &targetFeatures) {
   auto *ctx = module.getContext();
   auto name = StringAttr::get(ctx, amdgpu::kAsyncCompletionScopeAttrName);
   auto shared = StringAttr::get(ctx, "shared");
   // Without ordinary or TDM async stores, even unknown producers cannot write
-  // global memory. Skip dataflow and its conservative fallbacks on these targets.
+  // global memory. Skip dataflow and its conservative fallbacks.
   if (!targetFeatures.supportsDirectFromLdsStoreBitWidth(32) &&
       !targetFeatures.supportsTDM()) {
     module.walk([&](Operation *op) {
