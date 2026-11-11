@@ -71,6 +71,9 @@ arbitrary LLVM version.
 
 For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
+The LLVM build scripts require `jq` to read the pinned revision from
+`cmake/llvm-info.json`.
+
 ```shell
 make dev-install-llvm                 # Core LLVM (default)
 make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
