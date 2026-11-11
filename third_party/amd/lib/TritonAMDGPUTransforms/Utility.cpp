@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include <limits>
@@ -540,4 +541,75 @@ Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
       /*set_bounds=*/ValueRange{}, pred);
   updateOp.setClampBounds(true);
   return updateOp.getResult();
+}
+
+int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
+                               ttg::PaddedSharedEncodingAttr padded,
+                               int32_t bitwidth, int32_t numBanks,
+                               ttg::LocalMemOpTile laneTile) {
+  auto *ctx = padded.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
+
+  // Like the lowering, a vector does not cross a padding interval and keeps
+  // the register order. Instructions access at most 128 bits per lane.
+  auto regNoBroadcast = actionRemoveBroadcastedRegs(reg).apply(reg);
+  auto cvt = regNoBroadcast.invertAndCompose(padded.getLinearComponent());
+  auto [elemsPerVec, permutation] = tt::largestVectorisation(
+      ctx, cvt, bitwidth,
+      std::min<int>(padded.getMinInterval(), 128 / bitwidth));
+  cvt = permutation.apply(cvt);
+  int vecDwords = std::max(1, elemsPerVec * bitwidth / 32);
+
+  // The lanes that access shared memory in the same cycle form a group. The
+  // group of lane 0 is spanned by the lane masks of the tile, or else by the
+  // lowest lane bits, like in getLaneTile.
+  int numLanes = cvt.getInDimSize(kLane);
+  int log2Lanes = llvm::Log2_32(numLanes);
+  int log2Phase = std::max<int>(0, llvm::Log2_32(vecDwords) + log2Lanes -
+                                       llvm::Log2_32(numBanks));
+  SmallVector<int32_t> masks(laneTile.laneMask);
+  if (masks.empty())
+    for (int i = 0; i < log2Lanes - log2Phase; i++)
+      masks.push_back(1 << i);
+  assert(static_cast<int>(masks.size()) == log2Lanes - log2Phase &&
+         "lane masks must span one group of lanes");
+  SmallVector<int32_t> span = {0};
+  for (int32_t mask : masks)
+    for (int i = 0, n = span.size(); i < n; i++)
+      span.push_back(span[i] ^ mask);
+  SmallVector<int32_t> leaders;
+  for (int lane = 0; lane < numLanes; lane++)
+    if (llvm::all_of(span, [&](int32_t s) { return (lane ^ s) >= lane; }))
+      leaders.push_back(lane);
+
+  // Padding is not linear, so visit each vector of each group, pad the offset
+  // of each lane, and count the different dwords that each bank serves. The
+  // inputs are flattened into (register, lane, rest).
+  auto toOffset =
+      cvt.sublayout(to_vector(cvt.getInDimNames()), {kOffset}).flattenIns();
+  int numRegs = cvt.getInDimSize(kReg);
+  int numRest = toOffset.getTotalInDimSize() / (numRegs * numLanes);
+  int maxWays = 1;
+  for (int rest = 0; rest < numRest; rest++)
+    for (int r = 0; r < numRegs; r += elemsPerVec)
+      for (int32_t leader : leaders) {
+        llvm::DenseSet<int64_t> dwords;
+        for (int32_t s : span) {
+          int in = r + numRegs * ((leader ^ s) + numLanes * rest);
+          int64_t offset = toOffset.apply({{kReg, in}})[0].second;
+          int64_t paddedOffset = offset;
+          for (auto [interval, padding] :
+               llvm::zip_equal(padded.getIntervals(), padded.getPaddings()))
+            paddedOffset += offset / interval * padding;
+          int64_t dword = paddedOffset * bitwidth / 32;
+          for (int d = 0; d < vecDwords; d++)
+            dwords.insert(dword + d);
+        }
+        SmallVector<int> ways(numBanks, 0);
+        for (int64_t dword : dwords)
+          maxWays = std::max(maxWays, ++ways[dword % numBanks]);
+      }
+  return maxWays - 1;
 }

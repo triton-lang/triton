@@ -897,7 +897,8 @@ void init_gluon_ir(py::module_ &m) {
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
-             auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
+             auto smemLayout =
+                 ttg::toLinearLayoutIgnoringPadding(shape, sharedLayoutAttr);
              auto mod = self.getBuilder()
                             .getInsertionBlock()
                             ->getParentOp()
@@ -908,15 +909,23 @@ void init_gluon_ir(py::module_ &m) {
                                                 bitwidth);
              tt::AMD::TargetInfo targetInfo(arch->str());
              int numBanks = targetInfo.getSharedMemoryBanks();
+             auto padded =
+                 dyn_cast<ttg::PaddedSharedEncodingAttr>(sharedLayoutAttr);
+             std::optional<int> maxVecElems;
+             if (padded)
+               maxVecElems =
+                   std::min<int>(padded.getMinInterval(), 128 / bitwidth);
              auto cvt = regLayout.invertAndCompose(smemLayout);
-             auto [elemsPerVec, perm] =
-                 tt::largestVectorisation(mod.getContext(), cvt, bitwidth);
+             auto [elemsPerVec, perm] = tt::largestVectorisation(
+                 mod.getContext(), cvt, bitwidth, maxVecElems);
              auto vecBitwidth = std::max(32, elemsPerVec * bitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
-             (void)srcTile;
              assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
                     "srcTile should be empty");
+             if (padded)
+               return bankConflictsMemDescPadded(regLayout, padded, bitwidth,
+                                                 numBanks, dstTile);
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks, dstTile);
            })
