@@ -1006,6 +1006,11 @@ public:
     auto blockM = dotOp.getA().getType().getShape()[0];
     bool hasMNMajorFp4Operand =
         isFp4MMA && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack());
+    if (isFp4MMA && !hasMNMajorFp4Operand && blockK < 64) {
+      return rewriter.notifyMatchFailure(dotOp,
+                                         "K-packed FP4 MMAv5 requires K >= 64");
+    }
+
     auto aScaleType = dotOp.getAScale().getType();
     auto bScaleType = dotOp.getBScale().getType();
     auto aScaleElemType = aScaleType.getElementType();

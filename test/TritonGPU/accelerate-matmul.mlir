@@ -1186,6 +1186,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true} : tensor<64x128xi8, #blocked3_2>, tensor<64x16xf8E4M3FN, #blocked3_1> * tensor<128x128xi8, #blocked3>, tensor<128x16xf8E4M3FN, #blocked3_1> -> tensor<64x128xf32, #blocked3>
     tt.return %d : tensor<64x128xf32, #blocked3>
   }
+
+  // CHECK-LABEL: @sm100_mxfp4_k32_fallback
+  // CHECK-COUNT-2: ttg.fp4_to_fp
+  // CHECK: ttng.tc_gen5_mma {{.*}}
+  // CHECK: tt.return
+  tt.func public @sm100_mxfp4_k32_fallback(
+    %a: tensor<128x16xi8, #blocked3_2>,
+    %scale_a: tensor<128x1xi8, #blocked3_1>,
+    %b: tensor<16x32xi8, #blocked3>,
+    %scale_b: tensor<32x1xi8, #blocked3_1>
+  ) -> tensor<128x32xf32, #blocked3> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf32, #blocked3>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false}
+      : tensor<128x16xi8, #blocked3_2>, tensor<128x1xi8, #blocked3_1>
+        * tensor<16x32xi8, #blocked3>, tensor<32x1xi8, #blocked3_1>
+        -> tensor<128x32xf32, #blocked3>
+    tt.return %d : tensor<128x32xf32, #blocked3>
+  }
 }
 
 // -----
