@@ -1,11 +1,14 @@
 import numpy
 import pytest
 import torch
+import triton
 import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable
+from triton.runtime.jit import MockTensor, JITCallable, create_function_from_signature
+from triton import knobs
 from triton._utils import canonicalize_dtype
+from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
@@ -102,7 +105,10 @@ def native_inputs_to_specialize():
         1,
         0,
         -1,
+        -2,
+        -4,
         -8,
+        -32,
         16,
         17,
         2**31 - 1,
@@ -111,7 +117,10 @@ def native_inputs_to_specialize():
         2**63 - 1,
         2**63,
         2**63 + 1,
+        2**63 + 2,
+        2**63 + 4,
         2**63 + 8,
+        2**63 + 32,
         2**64 - 1,
     ]
 
@@ -176,6 +185,37 @@ def test_specialize_gluon_fp4_descriptor_without_active_target(monkeypatch):
 
 def mock_tensors_to_specialize():
     return [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize()]
+
+
+@pytest.mark.parametrize("arch,divisor", [(80, 16), (90, 16), (100, 32), (103, 32), (107, 32)])
+def test_target_alignment_cap(arch, divisor):
+
+    @triton.jit
+    def kernel(x, strides):
+        pass
+
+    backend = CUDABackend(GPUTarget("cuda", arch, 32))
+    bind = create_function_from_signature(kernel.signature, kernel.params, backend)
+    x = torch.empty(64, dtype=torch.uint8)
+    x = x[-x.data_ptr() % 32:]
+    _, ((_, ptr_key), (_, stride_keys)), _ = bind(x, (32, 48, 64))
+    expected = (divisor, divisor, 16, divisor)
+    assert [backend.parse_attr(key) for key in (ptr_key, *stride_keys)] == [[["tt.divisibility", n]] for n in expected]
+
+
+@pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
+def test_tensor_view_alignment(backend, monkeypatch):
+    monkeypatch.setattr(knobs.amd, "use_buffer_ops", True)
+    storage = torch.empty(128, dtype=torch.uint8)
+    base = -storage.data_ptr() % 32
+    ptr_range = [["tt.pointer_range", 32]] if backend is HIPBackend else []
+    for offset, divisor in [(1, None), (2, 2), (4, 4), (8, 8), (16, 16), (32, 16), (64, 16)]:
+        view = storage[base + offset:]
+        _, key = native_specialize_impl(backend, view, False, True, True)
+        alignment = [["tt.divisibility", divisor]] if divisor else []
+        assert backend.parse_attr(key) == alignment + ptr_range
+        _, key = native_specialize_impl(backend, view, False, True, False)
+        assert backend.parse_attr(key) == ptr_range
 
 
 @pytest.mark.parametrize("handle", [1, 7, 16])

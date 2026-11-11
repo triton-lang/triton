@@ -80,6 +80,7 @@ ALL_MULTICTA_TARGETS = [HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_CDNA5]
 def anonymize_ir(ir):
     ir = TARGET_PAT.sub('ttg.target = "..."', ir)
     ir = PTRRANGE_PAT.sub('', ir)
+    ir = re.sub(r"(!tt\.ptr<[^>]+> \{tt\.divisibility = )(16|32) : i32", r"\1... : i32", ir)
     ir = LIBDEVICE_PAT.sub('{libname = "", libpath = "", pure = true, symbol = "..."}', ir)
     return ir
 
@@ -219,7 +220,7 @@ def test_simple_ops(target):
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @simple_ops_kernel(%arg0: i32) attributes {noinline = false} {
+  tt.func public @simple_ops_kernel(%arg0: i32 {tt.divisibility = 4 : i32}) attributes {noinline = false} {
     %c1_i32 = arith.constant 1 : i32
     %0 = arith.cmpi sgt, %arg0, %c1_i32 : i32
     llvm.intr.assume %0 : i1
@@ -2352,7 +2353,7 @@ def test_reduce(target):
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #linear = #ttg.linear<{register = [[64], [128]], lane = [[1], [2], [4], [8], [0]], warp = [[16], [32]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @reduce_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f32
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked>
     %cst_1 = arith.constant 2.000000e+00 : f32
@@ -2839,7 +2840,7 @@ def test_load(target):
         anonymize_ir(mod.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) attributes {noinline = false} {
+  tt.func public @load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}, %arg1: i32 {tt.divisibility = 4 : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
     %1 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked>
     %2 = arith.cmpi slt, %0, %1 : tensor<128xi32, #blocked>
@@ -3080,7 +3081,7 @@ def test_async_copy(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @async_copy_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) attributes {noinline = false} {
+  tt.func public @async_copy_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}, %arg1: i32 {tt.divisibility = 4 : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128xf16, #shared, #smem, mutable>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
     %2 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked>
@@ -3582,7 +3583,7 @@ def test_amd_async_copy_global_to_shared(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_async_copy_global_to_shared(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_async_copy_global_to_shared(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
@@ -3657,7 +3658,7 @@ def test_amd_async_copy_shared_to_global(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_async_copy_shared_to_global(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_async_copy_shared_to_global(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
@@ -3759,7 +3760,7 @@ def test_amd_global_load_to_shared(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @amd_global_load_to_shared(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_global_load_to_shared(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
@@ -3843,7 +3844,7 @@ def test_buffer_load_to_shared(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @buffer_load_to_shared_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @buffer_load_to_shared_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
     %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
@@ -3914,7 +3915,7 @@ def test_buffer_load_store():
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @buffer_load_store_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @buffer_load_store_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 4096 : i32, start = 0 : i32} : tensor<4096xi32, #gluon.auto_encoding>
     %1 = tt.reshape %0 : tensor<4096xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #gluon.auto_encoding>
     %2 = ttg.convert_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
@@ -3972,7 +3973,7 @@ def test_buffer_load_store_with_broadcast():
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @buffer_load_store_with_broadcast_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @buffer_load_store_with_broadcast_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 4096 : i32, start = 0 : i32} : tensor<4096xi32, #gluon.auto_encoding>
     %1 = tt.reshape %0 : tensor<4096xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #gluon.auto_encoding>
     %2 = ttg.convert_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
@@ -4865,7 +4866,7 @@ def test_buffer_atomic_rmw(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel(%arg0: !tt.ptr<i32> {tt.divisibility = ... : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = ... : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = ... : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = ... : i32}, %arg4: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
@@ -4946,7 +4947,7 @@ def test_buffer_atomic_rmw_bf16(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel(%arg0: !tt.ptr<bf16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
     %1 = tt.call @triton.experimental.gluon.language._standard.zeros__Tc1T_cbf16_cAL() : () -> tensor<1xbf16, #gluon.auto_encoding>
     %c0_i32 = arith.constant 0 : i32
@@ -5028,7 +5029,7 @@ def test_amd_sched_barrier_placement(target):
     expecttest.assert_expected_inline(
         ir_str, """\
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = ... : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     rocdl.sched.barrier none
     %1 = tt.load %arg1 : !tt.ptr<f32>
@@ -5215,7 +5216,7 @@ def test_amd_tdm_load(target):
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_load_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_load_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5298,7 +5299,7 @@ def test_amd_tdm_store(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_store_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_store_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5348,7 +5349,7 @@ def test_amd_tdm_gather(target):
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_gather_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_gather_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5395,7 +5396,7 @@ def test_amd_tdm_scatter(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_scatter_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_scatter_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5491,7 +5492,7 @@ def test_amd_tdm_load_pred(target):
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_load_pred_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_load_pred_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c64_i32 = arith.constant 64 : i32
     %c64_i32_0 = arith.constant 64 : i32
     %c64_i64 = arith.constant 64 : i64
@@ -5569,7 +5570,7 @@ def test_amd_async_copy_mbarrier(target):
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_async_copy_mbarrier_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_async_copy_mbarrier_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     amdg.async_copy_mbarrier_arrive %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
@@ -5643,7 +5644,7 @@ def test_amd_tdm_load_mbarrier(target):
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_load_mbarrier_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_load_mbarrier_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5692,7 +5693,7 @@ def test_nv_tma_descriptor_load_kernel(target):
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @nv_tma_descriptor_load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @nv_tma_descriptor_load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c128_i32 = arith.constant 128 : i32
     %c128_i32_0 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5739,7 +5740,7 @@ def test_nv_tma_descriptor_store_kernel(target):
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @nv_tma_descriptor_store_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @nv_tma_descriptor_store_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %c128_i32 = arith.constant 128 : i32
     %c128_i32_0 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -5833,7 +5834,7 @@ def test_auto_layout_convert_store_val():
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #gluon.auto_encoding>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #gluon.auto_encoding>
     %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #gluon.auto_encoding> -> tensor<128x1xi32, #gluon.auto_encoding>
@@ -5887,7 +5888,7 @@ def test_auto_layout_convert_store_ptr():
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = ... : i32}) attributes {noinline = false} {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #gluon.auto_encoding>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #gluon.auto_encoding>
     %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #gluon.auto_encoding> -> tensor<128x1xi32, #gluon.auto_encoding>

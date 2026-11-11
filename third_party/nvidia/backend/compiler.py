@@ -220,6 +220,7 @@ class CUDABackend(BaseBackend):
             target = GPUTarget(target.backend, arch, warp_size)
 
         super().__init__(target)
+        self.specialize_on_32_byte_alignment = arch >= 100
         self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:

@@ -413,6 +413,7 @@ def create_function_from_signature(sig, kparams, backend):
     assert len(sig.parameters) == len(kparams)
     # Create the function argument list and the dict entries for the return statement
     specialization = []
+    supports_32 = backend.specialize_on_32_byte_alignment
     # signature
     for name, kp in zip(sig.parameters.keys(), kparams):
         if kp.is_constexpr:
@@ -421,7 +422,7 @@ def create_function_from_signature(sig, kparams, backend):
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
+            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align}, {supports_32})"
             if kp.annotation_type:
                 if isinstance(kp.annotation_type, str):
                     if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
@@ -1081,7 +1082,7 @@ class MockTensor:
 
     @staticmethod
     def data_ptr():
-        return 0  # optimistically assumes multiple of 16
+        return 0  # Assume the strongest supported alignment for dtype-only warmup.
 
     @staticmethod
     def ptr_range():

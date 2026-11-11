@@ -23,6 +23,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+from triton.compiler import make_backend
 
 
 @pytest.mark.parametrize("backend, options_type, arch", [
@@ -427,8 +428,9 @@ def test_specialize(mode, device, fresh_triton_cache):
     triton.knobs.runtime.jit_cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
     function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
-    target = {'enable': 4, 'disable': 1, 'disable_on_alignment': 2}[mode]
-    for i in [1, 2, 4, 8, 16, 24, 32]:
+    backend = make_backend(triton.runtime.driver.active.get_current_target())
+    target = {'enable': 6 + backend.specialize_on_32_byte_alignment, 'disable': 1, 'disable_on_alignment': 2}[mode]
+    for i in [1, 3, 2, 4, 8, 16, 32, 48, 64, -4, 0]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
 
@@ -443,11 +445,13 @@ def test_annotation(device):
 
     device = getattr(torch, device).current_device()
     kernel[(1, )](x, 1)
-    compiled = kernel[(1, )](x, 8)
-    assert "tt.divisibility = 8 : i32" in compiled.asm["ttir"]
-    kernel[(1, )](x, 16)
+    backend = make_backend(triton.runtime.driver.active.get_current_target())
+    divisors = (2, 4, 8, 16, 32) if backend.specialize_on_32_byte_alignment else (2, 4, 8, 16)
+    for divisor in divisors:
+        compiled = kernel[(1, )](x, divisor)
+        assert f": i32 {{tt.divisibility = {divisor} : i32}}" in compiled.asm["ttir"]
     kernel[(1, )](x, 17)
-    assert len(kernel.device_caches[device][0]) == 4
+    assert len(kernel.device_caches[device][0]) == len(divisors) + 2
 
 
 GLOBAL_DEFAULT_ARG = 1
@@ -1169,7 +1173,7 @@ def test_function_arguments(device):
     def func4(x, y):
         return x + y
 
-    @triton.jit
+    @triton.jit(do_not_specialize_on_alignment=["Y"])
     def kernel(Y, fn: tl.constexpr, fn_args):
         tl.store(Y, fn(*fn_args))
 

@@ -295,7 +295,10 @@ def alloc_rand(shape, device, dtype, requires_grad=False):
     return ret
 
 
-def _make_slice_sizes(n_slices, total_size, device, generator=None):
+def _make_slice_sizes(n_slices, total_size):
+    # The padded shapes must agree between compile warmup and execution.
+    device = "cpu"
+    generator = torch.Generator(device=device).manual_seed(0)
     dtype = torch.int32
     if total_size < 0:
         raise ValueError("total_size must be non-negative")
@@ -320,14 +323,12 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
         from torch._subclasses.fake_tensor import unset_fake_temporarily
 
         with unset_fake_temporarily():
-            generator = torch.Generator(device="cpu").manual_seed(0)
-            values = _make_slice_sizes(n_slices, total_size, "cpu", generator).tolist()
+            values = _make_slice_sizes(n_slices, total_size).tolist()
         result = torch.empty((max(n_slices, 0), ), dtype=torch.int32, device=device)
         result._triton_warmup_values = values
         return result
 
-    torch.manual_seed(0)
-    return _make_slice_sizes(n_slices, total_size, device)
+    return _make_slice_sizes(n_slices, total_size).to(device)
 
 
 def pad_rows_to_multiples(A, indices, multiple=128, pad_value=float('nan')):

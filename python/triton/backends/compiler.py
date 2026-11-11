@@ -22,6 +22,7 @@ class Language(Enum):
 
 class BaseBackend(metaclass=ABCMeta):
     supports_native_tensor_specialization = True
+    specialize_on_32_byte_alignment = False
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
@@ -78,21 +79,20 @@ class BaseBackend(metaclass=ABCMeta):
         ret = []
         if "D" in desc:
             ret += [["tt.divisibility", 16]]
-        elif desc == "8":
-            ret += [["tt.divisibility", 8]]
+        elif desc in ("2", "4", "8", "32"):
+            ret += [["tt.divisibility", int(desc)]]
         return ret
 
     @staticmethod
     def get_int_specialization(arg, **kwargs):
         if kwargs.get("align", False):
-            if arg % 16 == 0:
-                return "D"
-            if arg % 8 == 0:
-                return "8"
+            if kwargs.get("specialize_on_32_byte_alignment", False) and arg % 32 == 0:
+                return "32"
+            for divisor in (16, 8, 4, 2):
+                if arg % divisor == 0:
+                    return "D" if divisor == 16 else str(divisor)
         return ""
 
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
-        if arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
-            return "D"
-        return ""
+        return BaseBackend.get_int_specialization(arg.data_ptr(), **kwargs)

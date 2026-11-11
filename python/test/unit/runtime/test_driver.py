@@ -56,7 +56,7 @@ def test_compile_warmup_only_intercepts_launches():
         assert is_compile_warmup()
         assert view.data_ptr() == tensor.data_ptr() + tensor.element_size()
         assert CUDABackend.get_tensor_specialization(tensor, align=True) == "D"
-        assert CUDABackend.get_tensor_specialization(view, align=True) == ""
+        assert CUDABackend.get_tensor_specialization(view, align=True) == "4"
         assert MXFP4Tensor(size=(16, ), device="cuda").random().to(torch.float32).shape == (16, )
         assert MXScaleTensor(torch.rand(16, device="cuda")).to(torch.float32).shape == (16, )
 

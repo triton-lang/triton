@@ -27,14 +27,20 @@ using DtypePtr2Str =
     std::unordered_map<DTypePtrKey, PyObject *, DTypePtrKeyHash>;
 using Dtype2Str = std::unordered_map<DTypeKey, PyObject *>;
 
+struct AlignmentPolicy {
+  bool enabled;
+  bool supports_32;
+};
+
 using TypeHandler = std::pair<py::object, py::object> (*)(PyObject *,
                                                           PyObject *, bool,
-                                                          bool, bool);
+                                                          bool,
+                                                          AlignmentPolicy);
 using TypeHandlerCache = std::unordered_map<PyTypeObject *, TypeHandler>;
 
 static std::pair<py::object, py::object>
 specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
-               bool specialize_value, bool align);
+               bool specialize_value, AlignmentPolicy align);
 
 static bool init_called = false;
 
@@ -48,13 +54,19 @@ static PyObject *canonicalize_dtype_fn = nullptr;
 static PyObject *canonicalize_ptr_dtype_fn = nullptr;
 static PyObject *torch_tensor_cls = nullptr;
 
+struct AlignmentKey {
+  unsigned divisor;
+  const char *name;
+  PyObject *key = nullptr;
+};
+static AlignmentKey alignment_keys[] = {
+    {32, "32"}, {16, "D"}, {8, "8"}, {4, "4"}, {2, "2"}};
+
 static PyObject *i32_str = nullptr;
 static PyObject *i64_str = nullptr;
 static PyObject *u64_str = nullptr;
 static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
-static PyObject *D_str = nullptr;
-static PyObject *divisible_by_8_str = nullptr;
 static PyObject *constexpr_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
@@ -126,8 +138,8 @@ void init_interned_strings() {
   u64_str = intern_from_string("u64");
   fp32_str = intern_from_string("fp32");
   u1_str = intern_from_string("u1");
-  D_str = intern_from_string("D");
-  divisible_by_8_str = intern_from_string("8");
+  for (auto &entry : alignment_keys)
+    entry.key = intern_from_string(entry.name);
   constexpr_str = intern_from_string("constexpr");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
@@ -296,20 +308,22 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   return {std::move(type_str_result), py::none()};
 }
 
-PyObject *integer_alignment_key(uint64_t value, bool align) {
-  if (!align)
+PyObject *alignment_key(uint64_t value, AlignmentPolicy align) {
+  if (!align.enabled)
     return empty_str;
-  if (value % 16 == 0)
-    return D_str;
-  if (value % 8 == 0)
-    return divisible_by_8_str;
+  for (const auto &entry : alignment_keys) {
+    if (entry.divisor == 32 && !align.supports_32)
+      continue;
+    if ((value & (entry.divisor - 1)) == 0)
+      return entry.key;
+  }
   return empty_str;
 }
 
 std::pair<py::object, py::object> handle_long_type(PyObject *backend,
                                                    PyObject *arg, bool is_const,
                                                    bool specialize_value,
-                                                   bool align) {
+                                                   AlignmentPolicy align) {
   int overflow;
   long long val = PyLong_AsLongLongAndOverflow(arg, &overflow);
   if (PyErr_Occurred()) {
@@ -325,7 +339,7 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
   if (overflow == 0) {
     type_str = (val >= INT32_MIN && val <= INT32_MAX) ? i32_str : i64_str;
     if (specialize_value) {
-      key_obj = integer_alignment_key(val, align);
+      key_obj = alignment_key(val, align);
     }
   } else {
     unsigned long long val_64 = PyLong_AsUnsignedLongLong(arg);
@@ -341,7 +355,7 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
     }
     type_str = u64_str;
     if (specialize_value) {
-      key_obj = integer_alignment_key(val_64, align);
+      key_obj = alignment_key(val_64, align);
     }
   }
   if (!key_obj) {
@@ -353,7 +367,7 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
 std::pair<py::object, py::object> handle_tensor(PyObject *backend,
                                                 PyObject *arg, bool is_const,
                                                 bool specialize_value,
-                                                bool align) {
+                                                AlignmentPolicy align) {
   // handle type_str specialization of a tensor
   auto dtype = from_new_ref(PyObject_GetAttr(arg, dtype_attr));
   if (!dtype)
@@ -405,10 +419,9 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
     if (PyErr_Occurred())
       return {};
 
-    auto key_obj = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
-    key = from_borrowed_ref(key_obj);
+    key = from_borrowed_ref(alignment_key(data_ptr, align));
   } else {
-    PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
+    PyObject *args[3] = {backend, arg, align.enabled ? Py_True : Py_False};
     PyObject *kwnames = align_kwarg;
     key = from_new_ref(
         PyObject_VectorcallMethod(get_tensor_spec_attr, args, 2, kwnames));
@@ -422,37 +435,37 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
 std::pair<py::object, py::object> handle_bool_type(PyObject *backend,
                                                    PyObject *arg, bool is_const,
                                                    bool specialize_value,
-                                                   bool align) {
+                                                   AlignmentPolicy align) {
   return {from_borrowed_ref(u1_str), py::none()};
 }
 
 std::pair<py::object, py::object>
 handle_float_type(PyObject *backend, PyObject *arg, bool is_const,
-                  bool specialize_value, bool align) {
+                  bool specialize_value, AlignmentPolicy align) {
   return {from_borrowed_ref(fp32_str), py::none()};
 }
 
 std::pair<py::object, py::object>
 handle_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
-                         bool specialize_value, bool align) {
+                         bool specialize_value, AlignmentPolicy align) {
   return specialize_tensordesc(arg, false);
 }
 
 std::pair<py::object, py::object>
 handle_gluon_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
-                               bool specialize_value, bool align) {
+                               bool specialize_value, AlignmentPolicy align) {
   return specialize_tensordesc(arg, true);
 }
 
 std::pair<py::object, py::object>
 handle_constexpr_type(PyObject *backend, PyObject *arg, bool is_const,
-                      bool specialize_value, bool align) {
+                      bool specialize_value, AlignmentPolicy align) {
   return {from_borrowed_ref(constexpr_str), from_borrowed_ref(arg)};
 }
 
 std::pair<py::object, py::object>
 handle_jit_callable(PyObject *backend, PyObject *arg, bool is_const,
-                    bool specialize_value, bool align) {
+                    bool specialize_value, AlignmentPolicy align) {
   auto cache_key = from_new_ref(PyObject_GetAttr(arg, cache_key_attr));
   if (!cache_key)
     return {};
@@ -498,7 +511,7 @@ bool get_unspecialized_fields(PyObject *arg, py::object &fields,
 std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
                                                bool is_const,
                                                bool specialize_value,
-                                               bool align) {
+                                               AlignmentPolicy align) {
   Py_ssize_t size = PyTuple_Size(arg);
   if (size < 0)
     return {};
@@ -534,8 +547,8 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
         return {};
       specialize_field = !skip;
     }
-    auto [type, key] =
-        specialize_arg(backend, item, false, specialize_field, true);
+    auto [type, key] = specialize_arg(backend, item, false, specialize_field,
+                                      {true, align.supports_32});
     if (!type || !key)
       return {};
     // Steals references on success.
@@ -607,7 +620,7 @@ void init_type_handler_cache() {
 std::pair<py::object, py::object> specialize_arg(PyObject *backend,
                                                  PyObject *arg, bool is_const,
                                                  bool specialize_value,
-                                                 bool align) {
+                                                 AlignmentPolicy align) {
   // fast-path for default types
   PyTypeObject *arg_type = Py_TYPE(arg);
   auto it = type_handler_cache.find(arg_type);
@@ -675,9 +688,9 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
     }
   }
 
-  if (nargs != 5) {
+  if (nargs != 5 && nargs != 6) {
     PyErr_SetString(PyExc_TypeError,
-                    "native_specialize_impl expected 5 arguments");
+                    "native_specialize_impl expected 5 or 6 arguments");
     return nullptr;
   }
 
@@ -693,9 +706,12 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
+  bool supports_32 = nargs == 6 && Py_IsTrue(args[5]);
+
   // Tuple fields specialize independently of the top-level parameter.
-  auto [type, key] = specialize_arg(
-      backend, arg, is_const, specialize_value || PyTuple_Check(arg), align);
+  auto [type, key] = specialize_arg(backend, arg, is_const,
+                                    specialize_value || PyTuple_Check(arg),
+                                    {align != 0, supports_32});
 
   // check if specialization failed
   if (!type || !key) {
