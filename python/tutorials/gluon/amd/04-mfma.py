@@ -107,6 +107,7 @@ if __name__ == "__main__":
     mfma_layout = gl.amd.AMDMFMALayout(  #
         version=4, instr_shape=[16, 16, 32], transposed=False, warps_per_cta=[1, 1])
     print(gl.DotOperandLayout(0, mfma_layout, 8).format_tensor_view([16, 32]))
+    print(mfma_layout.format_tensor_view([16, 16]))
 
 # %%
 # ```
@@ -120,11 +121,7 @@ if __name__ == "__main__":
 # consecutive elements along K. Lanes 0-15 hold K 0-7, lanes 16-31 hold K 8-15,
 # and so on. Operand B uses the same pattern, with lane `i` holding column
 # `i % 16`.
-
-if __name__ == "__main__":
-    print(mfma_layout.format_tensor_view([16, 16]))
-
-# %%
+#
 # ```
 # [[ T0:0,  T1:0,  T2:0, ..., T15:0]
 # [  T0:1,  T1:1,  T2:1, ..., T15:1]
@@ -176,7 +173,9 @@ if __name__ == "__main__":
 # which exactly match the transposed accumulator layout.
 
 if __name__ == "__main__":
-    print(gl.DotOperandLayout(0, transposed_layout, 4).format_tensor_view([16, 32]))
+    a_view = gl.DotOperandLayout(0, transposed_layout, 4).format_tensor_view([16, 32])
+    print(a_view)
+    assert a_view == transposed_layout.format_tensor_view([16, 32])
 
 # %%
 # ```
@@ -185,10 +184,6 @@ if __name__ == "__main__":
 # ...
 # [ T15:0, T15:1, T15:2, T15:3, T31:0, ..., T63:3, T15:4, ..., T63:7]]
 # ```
-
-if __name__ == "__main__":
-    acc_view = transposed_layout.format_tensor_view([16, 32])
-    assert acc_view == gl.DotOperandLayout(0, transposed_layout, 4).format_tensor_view([16, 32])
 
 # %%
 # Now we can chain two MFMAs together without any layout conversion.
