@@ -1793,3 +1793,412 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     tt.return
   }
 }
+
+// -----
+
+// tcgen05.mma reads shared memory through the async proxy, and PTX states no
+// implicit generic-async proxy fence at its completion. A later generic access
+// to the same bytes needs a fence after the completion wait.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!smem_t = !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+!tmem_t = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+!bar_t = !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tcgen05_mma_read_then_reused_store_requires_proxy_fence
+  tt.func @tcgen05_mma_read_then_reused_store_requires_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: ttng.tc_gen5_mma
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    // A different allocation that reuses the bytes of %a.
+    %reuse = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    ttg.local_store %value, %reuse : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // CHECK-LABEL: @tcgen05_mma_read_then_disjoint_store_does_not_require_proxy_fence
+  tt.func @tcgen05_mma_read_then_disjoint_store_does_not_require_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    %other = ttg.local_alloc {allocation.offset = 98304 : i32} : () -> !smem_t
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: tt.return
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    ttg.local_store %value, %other : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // CHECK-LABEL: @tcgen05_mma_read_then_generic_read_does_not_require_proxy_fence
+  tt.func @tcgen05_mma_read_then_generic_read_does_not_require_proxy_fence() {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: tt.return
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    %v = ttg.local_load %a : !smem_t -> tensor<128x128xf16, #blocked>
+    "test.keep"(%v) : (tensor<128x128xf16, #blocked>) -> ()
+    tt.return
+  }
+
+  // The first fence may execute before the second MMA completes, so it does
+  // not order that MMA's read of %c. Each reuse needs its own fence, which
+  // checks that a fence only clears the accesses it conflicts with.
+  // CHECK-LABEL: @tcgen05_mma_fence_covers_only_completed_reads
+  tt.func @tcgen05_mma_fence_covers_only_completed_reads(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %c = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar0 = ttg.local_alloc {allocation.offset = 98304 : i32} : () -> !bar_t
+    %bar1 = ttg.local_alloc {allocation.offset = 98320 : i32} : () -> !bar_t
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar0[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.tc_gen5_mma %c, %b, %d, %true, %true, %bar1[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    ttng.wait_barrier %bar0, %c0 : !bar_t
+    %reuse_a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    ttg.local_store %value, %reuse_a : tensor<128x128xf16, #blocked> -> !smem_t
+    ttng.wait_barrier %bar1, %c0 : !bar_t
+    %reuse_c = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !smem_t
+    ttg.local_store %value, %reuse_c : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // A fence issued before the MMA completes does not order its read.
+  // CHECK-LABEL: @proxy_fence_before_tcgen05_completion_does_not_cover_reuse
+  tt.func @proxy_fence_before_tcgen05_completion_does_not_cover_reuse(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: ttng.tc_gen5_mma
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.fence_async_shared {bCluster = false}
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    %reuse = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    ttg.local_store %value, %reuse : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // A fence directly before the generic access is where this pass would place
+  // one, so it already orders the completed read and no fence is added.
+  // CHECK-LABEL: @proxy_fence_before_reuse_covers_tcgen05_read
+  tt.func @proxy_fence_before_reuse_covers_tcgen05_read(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: ttng.tc_gen5_mma
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    %reuse = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    ttng.fence_async_shared {bCluster = false}
+    ttg.local_store %value, %reuse : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // The store in iteration i+1 overwrites bytes the MMA read in iteration i.
+  // The analysis cannot distinguish the first iteration, so the store is
+  // fenced on every iteration; the fence before the MMA is the existing
+  // generic-to-async fence.
+  // CHECK-LABEL: @tcgen05_mma_read_in_previous_iteration_requires_proxy_fence
+  tt.func @tcgen05_mma_read_in_previous_iteration_requires_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: scf.for
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.tc_gen5_mma
+    %phase_out = scf.for %i = %c0 to %c4 step %c1 iter_args(%phase = %c0) -> (i32) : i32 {
+      ttg.local_store %value, %a : tensor<128x128xf16, #blocked> -> !smem_t
+      ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+      ttng.wait_barrier %bar, %phase : !bar_t
+      %next = arith.xori %phase, %c1 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: @tcgen05_mma_read_on_one_path_requires_proxy_fence
+  tt.func @tcgen05_mma_read_on_one_path_requires_proxy_fence(%value: tensor<128x128xf16, #blocked>, %cond: i1) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: scf.if
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: }
+    // CHECK-NEXT: ttg.local_alloc
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    scf.if %cond {
+      ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+      ttng.wait_barrier %bar, %c0 : !bar_t
+    }
+    %reuse = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    ttg.local_store %value, %reuse : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+}
+
+// -----
+
+// tcgen05.cp (ttng.tmem_copy) also reads shared memory through the async proxy
+// without an implicit fence at completion.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_copy_read_then_store_requires_proxy_fence
+  tt.func @tmem_copy_read_then_store_requires_proxy_fence(%value: tensor<128x4xi8, #blocked>,
+      %dst: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+    %c0 = arith.constant 0 : i32
+    %src = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<128x4xi8, #shared1, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // CHECK: ttng.tmem_copy
+    // CHECK-NEXT: ttng.tc_gen5_commit
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x4xi8, #shared1, #smem, mutable>, !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttg.local_store %value, %src : tensor<128x4xi8, #blocked> -> !ttg.memdesc<128x4xi8, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// cp.async.bulk completion carries an implicit generic-async proxy fence, so
+// reusing a TMA destination after the wait needs no explicit fence.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @tma_load_then_store_does_not_require_proxy_fence
+  tt.func @tma_load_then_store_does_not_require_proxy_fence(%desc: !tt.tensordesc<64x64xf32, #shared>, %value: tensor<64x64xf32, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    // CHECK: ttng.wait_barrier
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: tt.return
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttg.local_store %value, %dst : tensor<64x64xf32, #blocked> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Unfenced tcgen05 async accesses across call boundaries.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!smem_t = !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+!tmem_t = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+!bar_t = !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tcgen05_mma_in_callee
+  // CHECK-NOT: ttng.fence_async_shared
+  // CHECK: tt.return
+  tt.func private @tcgen05_mma_in_callee(%a: !smem_t, %b: !smem_t, %d: !tmem_t, %bar: !bar_t) {
+    %true = arith.constant true
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    tt.return
+  }
+
+  // The callee leaves its read of %a unfenced, so the caller's store needs a
+  // fence after the wait.
+  // CHECK-LABEL: @callee_tcgen05_read_then_caller_store_requires_proxy_fence
+  tt.func @callee_tcgen05_read_then_caller_store_requires_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: tt.call @tcgen05_mma_in_callee
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttg.local_store
+    tt.call @tcgen05_mma_in_callee(%a, %b, %d, %bar) : (!smem_t, !smem_t, !tmem_t, !bar_t) -> ()
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    ttg.local_store %value, %a : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // CHECK-LABEL: @store_in_callee
+  // CHECK-NOT: ttng.fence_async_shared
+  // CHECK: tt.return
+  tt.func private @store_in_callee(%value: tensor<128x128xf16, #blocked>, %dst: !smem_t) {
+    ttg.local_store %value, %dst : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // The callee overwrites bytes the caller's MMA read, so the caller fences
+  // before the call.
+  // CHECK-LABEL: @caller_tcgen05_read_then_callee_store_requires_proxy_fence
+  tt.func @caller_tcgen05_read_then_callee_store_requires_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: tt.call @store_in_callee
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    tt.call @store_in_callee(%value, %a) : (tensor<128x128xf16, #blocked>, !smem_t) -> ()
+    tt.return
+  }
+
+  // Called only with bytes disjoint from the caller's MMA operands. A separate
+  // callee keeps its argument region from being joined with @store_in_callee's
+  // call site, which passes the MMA operand.
+  // CHECK-LABEL: @store_in_disjoint_callee
+  // CHECK-NOT: ttng.fence_async_shared
+  // CHECK: tt.return
+  tt.func private @store_in_disjoint_callee(%value: tensor<128x128xf16, #blocked>, %dst: !smem_t) {
+    ttg.local_store %value, %dst : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // CHECK-LABEL: @caller_tcgen05_read_then_disjoint_callee_store_does_not_require_proxy_fence
+  tt.func @caller_tcgen05_read_then_disjoint_callee_store_does_not_require_proxy_fence(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    %other = ttg.local_alloc {allocation.offset = 98304 : i32} : () -> !smem_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: tt.call @store_in_disjoint_callee
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    tt.call @store_in_disjoint_callee(%value, %other) : (tensor<128x128xf16, #blocked>, !smem_t) -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @fenced_store_in_callee
+  // CHECK: ttng.fence_async_shared {bCluster = false}
+  // CHECK-NEXT: ttg.local_store
+  tt.func private @fenced_store_in_callee(%value: tensor<128x128xf16, #blocked>, %dst: !smem_t) {
+    ttng.fence_async_shared {bCluster = false}
+    ttg.local_store %value, %dst : tensor<128x128xf16, #blocked> -> !smem_t
+    tt.return
+  }
+
+  // The callee's own fence directly precedes its store, so the caller adds none.
+  // CHECK-LABEL: @callee_fence_covers_caller_tcgen05_read
+  tt.func @callee_fence_covers_caller_tcgen05_read(%value: tensor<128x128xf16, #blocked>) {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !smem_t
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !smem_t
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tmem_t
+    %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !bar_t
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: tt.call @fenced_store_in_callee
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true, %bar[%true] {is_async} : !smem_t, !smem_t, !tmem_t, !bar_t
+    ttng.wait_barrier %bar, %c0 : !bar_t
+    tt.call @fenced_store_in_callee(%value, %a) : (tensor<128x128xf16, #blocked>, !smem_t) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+// wgmma completion carries an implicit generic-async proxy fence, so
+// overwriting a wgmma operand after the wait needs no explicit fence.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: @wgmma_read_then_store_does_not_require_proxy_fence
+  tt.func @wgmma_read_then_store_does_not_require_proxy_fence(%value: tensor<128x64xf16, #blocked>, %acc: tensor<128x128xf32, #mma>) {
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<64x128xf16, #shared, #smem, mutable>
+    %r = ttng.warp_group_dot %a, %b, %acc {isAsync = true} : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> * !ttg.memdesc<64x128xf16, #shared, #smem, mutable> -> tensor<128x128xf32, #mma>
+    // CHECK: ttng.warp_group_dot_wait
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: tt.return
+    %w = ttng.warp_group_dot_wait %r {pendings = 0 : i32} : tensor<128x128xf32, #mma>
+    ttg.local_store %value, %a : tensor<128x64xf16, #blocked> -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
+    "test.keep"(%w) : (tensor<128x128xf32, #mma>) -> ()
+    tt.return
+  }
+}
