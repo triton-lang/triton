@@ -575,35 +575,27 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   // Every group of lanes in every instruction reads the same pattern of
   // offsets (ys, the offsets of lane 0's group), just XORed with a different
   // starting offset t.
-  auto toOffset = cvt.sublayout(to_vector(cvt.getInDimNames()), {kOffset});
-  auto offsetsOf = [&](StringAttr dim, int skip) {
-    const auto &bases = toOffset.getBases().find(dim)->second;
-    SmallVector<uint32_t> offsets;
-    for (const auto &basis : llvm::drop_begin(bases, skip))
-      offsets.push_back(basis[0]);
-    return offsets;
-  };
-  auto laneOffsets = offsetsOf(kLane, 0);
-  // Two starting offsets that differ by an element of ys read the same group
-  // of offsets. reduce() picks one representative for them, using the
-  // generators of ys stored so that each has a different highest bit.
+  //
+  // Starting offsets that differ by an element of ys read the same group of
+  // offsets, so we only need one of them. basis holds offsets that each have a
+  // different highest bit, and reduce() removes from x every part that the
+  // basis can build. Two values that differ by a combination of the basis
+  // reduce to the same value.
+  auto laneToOffset = cvt.sublayout({kLane}, {kOffset});
   SmallVector<uint32_t> ys = {0};
-  SmallVector<uint32_t> groupBasis;
+  SmallVector<uint32_t> basis;
   auto reduce = [&](uint32_t x) {
-    for (uint32_t b : groupBasis)
+    for (uint32_t b : basis)
       x = std::min(x, x ^ b);
     return x;
   };
   for (int32_t mask : masks) {
-    uint32_t y = 0;
-    for (auto [i, offset] : llvm::enumerate(laneOffsets))
-      if (mask >> i & 1)
-        y ^= offset;
+    uint32_t y = laneToOffset.apply({{kLane, mask}})[0].second;
     for (int i = 0, n = ys.size(); i < n; i++)
       ys.push_back(ys[i] ^ y);
     if (uint32_t b = reduce(y)) {
-      groupBasis.push_back(b);
-      llvm::sort(groupBasis, std::greater<uint32_t>());
+      basis.push_back(b);
+      llvm::sort(basis, std::greater<uint32_t>());
     }
   }
 
@@ -617,26 +609,26 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   for (uint32_t y : ys)
     groupBits |= y;
   uint32_t keyBits = groupBits;
-  for (int k = 0; k < toOffset.getOutDimSizeLog2(kOffset); k++)
+  for (int k = 0; k < cvt.getOutDimSizeLog2(kOffset); k++)
     if (applyPadding(1u << k, shifts) * bitwidth % 32 != 0)
       keyBits |= 1u << k;
 
   // Collect every distinct value of t & keyBits that can occur, up to the
-  // group itself. t is built by XORing lane, register, warp and block offsets,
-  // so XOR combinations of these offsets (masked by keyBits) give all of them.
-  SmallVector<uint32_t> generators(laneOffsets);
-  for (auto dim : cvt.getInDimNames())
-    if (dim != kLane)
-      llvm::append_range(
-          generators,
-          offsetsOf(dim, dim == kReg ? llvm::Log2_32(elemsPerVec) : 0));
-  llvm::DenseSet<uint32_t> seen = {0};
+  // group itself. t is built by XORing lane, register, warp and block offsets
+  // (registers above the vector). An offset that the basis can already build
+  // adds nothing new; any other offset doubles the keys.
   SmallVector<uint32_t> keys = {0};
-  for (uint32_t generator : generators) {
-    uint32_t g = reduce(generator & keyBits);
-    for (int i = 0, n = keys.size(); i < n; i++)
-      if (seen.insert(keys[i] ^ g).second)
-        keys.push_back(keys[i] ^ g);
+  for (auto dim : cvt.getInDimNames()) {
+    int first = dim == kReg ? llvm::Log2_32(elemsPerVec) : 0;
+    for (int i = first; i < cvt.getInDimSizeLog2(dim); i++) {
+      uint32_t g = reduce(cvt.getBasis(dim, i, kOffset) & keyBits);
+      if (!g)
+        continue;
+      basis.push_back(g);
+      llvm::sort(basis, std::greater<uint32_t>());
+      for (int j = 0, n = keys.size(); j < n; j++)
+        keys.push_back(keys[j] ^ g);
+    }
   }
 
   // For each of them, count how many different dwords each bank must serve.
