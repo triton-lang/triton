@@ -431,8 +431,7 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
       return stages;
     // Atomic result broadcast uses a scratch write, rendezvous, and read for
     // every memory semantic, including relaxed.
-    return triton::getAtomicBarrierStages(atomic.getMemSemantic(),
-                                          hasScratchBarrier);
+    return triton::getAtomicBarrierStages(atomic, hasScratchBarrier);
   }
 
   // Scratch-backed operations contain a rendezvous between their scratch
