@@ -918,7 +918,9 @@ void init_gluon_ir(py::module_ &m) {
              auto cvt = regLayout.invertAndCompose(smemLayout);
              auto [elemsPerVec, perm] = tt::largestVectorisation(
                  mod.getContext(), cvt, bitwidth, maybeMaxVecElems);
-             auto vecBitwidth = std::clamp(elemsPerVec * bitwidth, 32, 128);
+             constexpr int maxVecBitwidth = 128;
+             auto vecBitwidth =
+                 std::clamp(elemsPerVec * bitwidth, 32, maxVecBitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&

@@ -555,8 +555,9 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   auto cvt = reg.invertAndCompose(padded.getLinearComponent());
   auto [elemsPerVec, perm] =
       tt::largestVectorisation(ctx, cvt, bitwidth, padded.getMinInterval());
-  elemsPerVec = std::min(elemsPerVec, 128 / bitwidth);
-  int vecDwords = std::max(1, elemsPerVec * bitwidth / 32);
+  constexpr int maxVecBitwidth = 128;
+  elemsPerVec = std::min(elemsPerVec, maxVecBitwidth / bitwidth);
+  auto dwordsPerVec = std::max(1, elemsPerVec * bitwidth / 32);
 
   // Find the offsets read by the lanes that are served together with lane 0
   // in one cycle. For example, for ds_read_b128 on CDNA4 these are lanes 1, 2,
@@ -567,36 +568,48 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   auto phase =
       ttg::getLaneTile(laneTile, laneOffsets, elemsPerVec, bitwidth, numBanks);
 
-  // Every group of lanes in every instruction reads the same pattern of
-  // offsets (`ys`, the offsets of lane 0's group), just XORed with a
-  // different starting offset `t`.
-  //
-  // Starting offsets that differ by an element of `ys` read the same group of
-  // offsets, so we only need one of them. `basis` holds offsets that each have
-  // a different highest bit, and `reduce(x)` removes from `x` every part that
-  // `basis` can build. Two values that differ by a combination of `basis`
-  // reduce to the same value.
+  // ys is the set containing all XOR combinations from phase. It means all
+  // the offsets read by the first group. Offsets in other groups can be
+  // obtained by their first offset t with t XOR ys.
   SmallVector<uint32_t> ys = {0};
+  // basis is a different form of phase where each element has distinct
+  // leading bits. The same ys can also be constructed from basis using all
+  // XOR combinations.
   SmallVector<uint32_t> basis;
-  auto reduce = [&](uint32_t x) {
+  // dedup(x) XORs x with the elements of basis, from the largest down,
+  // whenever that makes x smaller. It returns 0 when x is in ys.
+  auto dedup = [&](uint32_t x) {
     for (uint32_t b : llvm::reverse(basis))
       x = std::min(x, x ^ b);
     return x;
   };
+  // For example, if phase is (2, 3), then
+  // - ys is (0, 1, 2, 3)
+  // - basis is (1, 2) - 3 is reduced to 3 ^ 2 = 1
+  // phase and basis build the same ys, but basis has distinct leading bits.
+  // We need to use this property of basis to make dedup correct. With basis,
+  // dedup(1) = 1 ^ 1 = 0, so 1 is found in ys. With phase, each single XOR
+  // makes 1 larger (1 ^ 3 = 2, 1 ^ 2 = 3), so dedup(1) stays 1, although
+  // 1 = 2 ^ 3 is in ys.
   for (uint32_t y : phase) {
     for (int i = 0, n = ys.size(); i < n; i++)
       ys.push_back(ys[i] ^ y);
-    if (uint32_t b = reduce(y)) {
+
+    uint32_t b = dedup(y);
+    if (b != 0) {
       basis.push_back(b);
       llvm::sort(basis);
     }
   }
 
-  // Most bits of `t` do not matter. A bit that never changes inside a group
-  // moves every lane of the group by the same distance, which just rotates
-  // which banks are used, unless that distance is not a whole number of
-  // dwords. `keyBits` holds the bits that change inside a group, and the bits
-  // whose distance is not a whole number of dwords.
+  // As mentioned above, a group reads the offsets t XOR ys, and t can be
+  // obtained from cvt. Not every bit of t changes the bank conflicts. Take a
+  // bit position i that is 0 in every element of ys. Setting bit i in t adds
+  // 2^i to every offset of the group, so after padding every offset moves by
+  // the same applyPadding(2^i). If that is a whole number of dwords, every
+  // lane moves by the same number of banks, and the conflicts do not change.
+  // keyBits holds the other bit positions: those that are 1 in some element of
+  // ys and those whose applyPadding(2^i) is not a whole number of dwords.
   auto shifts =
       getPaddedSharedShifts(padded, bitwidth, /*offsetInBytes=*/false);
   uint32_t groupBits = 0;
@@ -607,37 +620,43 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
     if (applyPadding(1u << k, shifts) * bitwidth % 32 != 0)
       keyBits |= 1u << k;
 
-  // Collect every distinct value of `t & keyBits` that can occur, up to the
-  // group itself, skipping the register bits inside the vector. An offset that
-  // `basis` can already build adds nothing new; any other offset doubles
-  // `keys`.
-  SmallVector<uint32_t> keys = {0};
+  // Now collect the groups to check. Only t & keyBits matters, so each group
+  // is represented by a value of t & keyBits. t is a XOR combination of the
+  // bases of cvt, except the register bases inside the vector, which are
+  // elements of one access. Define ts as the XOR combinations of these bases
+  // masked by keyBits. Build ts one base at a time. If dedup(base & keyBits)
+  // is 0, the base only moves t to a group that ts already has, so skip it.
+  // Otherwise it reaches new groups, so add it to basis and double ts with it.
+  SmallVector<uint32_t> ts = {0};
   for (auto dim : cvt.getInDimNames()) {
     int first = dim == kReg ? llvm::Log2_32(elemsPerVec) : 0;
     for (int i = first; i < cvt.getInDimSizeLog2(dim); i++) {
-      uint32_t g = reduce(cvt.getBasis(dim, i, kOffset) & keyBits);
+      uint32_t g = dedup(cvt.getBasis(dim, i, kOffset) & keyBits);
       if (!g)
         continue;
       basis.push_back(g);
       llvm::sort(basis);
-      for (int j = 0, n = keys.size(); j < n; j++)
-        keys.push_back(keys[j] ^ g);
+      for (int j = 0, n = ts.size(); j < n; j++)
+        ts.push_back(ts[j] ^ g);
     }
   }
 
-  // For the group of each `t` in `keys`, count how many different dwords each
-  // bank must serve.
+  // Finally, check each group. Every value in ts is a start offset t of one
+  // group, which reads the offsets t XOR ys. Pad these offsets and collect
+  // the dwords they cover, dwordsPerVec per lane. Lanes that read the same
+  // dword share one access, so count the different dwords in each bank.
   int maxWays = 1;
-  for (uint32_t t : keys) {
+  for (uint32_t t : ts) {
     llvm::DenseSet<int64_t> dwords;
     for (uint32_t y : ys) {
       int64_t dword = applyPadding(t ^ y, shifts) * bitwidth / 32;
-      for (int d = 0; d < vecDwords; d++)
+      for (int d = 0; d < dwordsPerVec; d++)
         dwords.insert(dword + d);
     }
     SmallVector<int> ways(numBanks, 0);
     for (int64_t dword : dwords)
       maxWays = std::max(maxWays, ++ways[dword % numBanks]);
   }
+
   return maxWays - 1;
 }
