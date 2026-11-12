@@ -559,9 +559,9 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   cvt = permutation.apply(cvt);
   int vecDwords = std::max(1, elemsPerVec * bitwidth / 32);
 
-  // Find which lanes are served together with lane 0 in one cycle. The tile
-  // tells us for ds_read_b128 on CDNA4 (lanes 1, 2, 12 and 20 and their XOR
-  // combinations); otherwise it is simply the first lanes that cover all banks.
+  // Find which lanes are served together with lane 0 in one cycle. For
+  // example, for ds_read_b128 on CDNA4 these are lanes 1, 2, 12 and 20 and
+  // their XOR combinations.
   int numLanes = cvt.getInDimSize(kLane);
   SmallVector<int32_t> masks(laneTile.laneMask);
   if (masks.empty()) {
