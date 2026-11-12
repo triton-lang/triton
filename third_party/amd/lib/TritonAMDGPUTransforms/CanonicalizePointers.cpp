@@ -527,6 +527,10 @@ private:
 // attributes are propagated starting from a tt.ptr.
 void FatPointers::collectFatPointerAttributes(const KeyT &k) {
   auto [base, offset] = k;
+  // The hints of a tt.annotate base describe the base alone; do not copy them
+  // onto pointers derived from it.
+  while (auto annotateOp = base.getDefiningOp<tt::AnnotateOp>())
+    base = annotateOp.getSrc();
   // If it is the i-th block argument, then look if the operation defined some
   // _argi attribute and add it to the fat pointer attributes
   if (auto arg = dyn_cast<BlockArgument>(base)) {
@@ -1670,6 +1674,45 @@ public:
   }
 };
 
+/// tt.annotate attaches compiler hints to its operand. The hints describe the
+/// whole pointer (base + offset), so they carry over to the base only while
+/// the offset is zero and the annotated value is the scalar base itself, e.g.
+/// tl.multiple_of on a pointer argument. Otherwise forward the fat pointer and
+/// drop the hints.
+class ConvertAnnotateOp
+    : public PointerCanonicalizationPattern<tt::AnnotateOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::AnnotateOp annotateOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2) {
+      // Some prior op materialized the pointer; the hints still apply to it.
+      auto newOp = tt::AnnotateOp::create(rewriter, annotateOp.getLoc(),
+                                          remappedOperands[0]);
+      newOp->setAttrs(annotateOp->getAttrDictionary());
+      rewriter.replaceOpWithMultiple(annotateOp, {{newOp}});
+      return success();
+    }
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
+    if (annotateOp.getType() != fatPtrBase.getType() ||
+        !isIntZero(fatPtrOffset)) {
+      rewriter.replaceOpWithMultiple(annotateOp, {{fatPtrBase, fatPtrOffset}});
+      return success();
+    }
+
+    auto newBase =
+        tt::AnnotateOp::create(rewriter, annotateOp.getLoc(), fatPtrBase);
+    newBase->setAttrs(annotateOp->getAttrDictionary());
+    rewriter.replaceOpWithMultiple(annotateOp, {{newBase, fatPtrOffset}});
+    fatPtrs[{newBase, fatPtrOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+    return success();
+  }
+};
+
 template <typename SourceOp, int PtrLikeIdx = 0>
 class MaterializeFatPointer : public PointerCanonicalizationPattern<SourceOp> {
 public:
@@ -2093,9 +2136,9 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
   RewritePatternSet patterns(&getContext());
   patterns.add<
-      ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-      ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
-      MaterializeFatPointer<tt::AtomicLoadOp>,
+      ConvertFuncOpArgsUnrealizedCasts, ConvertAnnotateOp, ConvertBroadcastOp,
+      ConvertSplatOp, ConvertConvertLayoutOp, ConvertAddPtrOp,
+      ConvertExtractSliceOp, MaterializeFatPointer<tt::AtomicLoadOp>,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,

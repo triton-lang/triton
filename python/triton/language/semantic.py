@@ -6,6 +6,8 @@ from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+from triton._instrumentation import is_enabled
+from triton._utils import validate_fp6_box
 
 from .._C.libtriton import ir
 from . import core as tl
@@ -1108,6 +1110,8 @@ class TritonSemantic(Generic[TensorTy]):
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
+        if desc.type.fp6_format:
+            raise ValueError("packed FP6 descriptors only support stores")
         x = self.builder.create_descriptor_load(desc.handle, offsets, cache_policy._to_ir(self.builder))
         return self.make_tensor(x, desc.block_type)
 
@@ -1121,6 +1125,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def descriptor_store(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> TensorTy:
         self.validate_store_like(desc, value, offsets)
+        if desc.type.fp6_format and value.dtype != tl.uint8:
+            raise ValueError("FP6 stores require one uint8 code per element")
         # implicitly cast to the descriptor's type
         value = self.cast(value, desc.dtype)
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
@@ -1509,26 +1515,28 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(self.builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope),
                                 val.type)
 
-    def atomic_and(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'and')
+    def _atomic_bitwise(self, op: ir.ATOMIC_OP, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str,
+                        scope: str) -> TensorTy:
+        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, op.name.lower())
+        dtype = val.type.scalar
+        if dtype.is_floating():
+            bits_ty = tl.get_int_dtype(dtype.primitive_bitwidth, signed=False)
+            ptr = self.bitcast(ptr, tl.pointer_type(bits_ty, ptr.type.scalar.address_space))
+            val = self.bitcast(val, bits_ty)
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        old = self.make_tensor(self.builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope),
+                               val.type)
+        return self.bitcast(old, dtype)
+
+    def atomic_and(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+        return self._atomic_bitwise(ir.ATOMIC_OP.AND, ptr, val, mask, sem, scope)
 
     def atomic_or(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'or')
-        sem = self._str_to_sem(sem)
-        scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        return self._atomic_bitwise(ir.ATOMIC_OP.OR, ptr, val, mask, sem, scope)
 
     def atomic_xor(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
-        ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'xor')
-        sem = self._str_to_sem(sem)
-        scope = self._str_to_scope(scope)
-        return self.make_tensor(
-            self.builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
+        return self._atomic_bitwise(ir.ATOMIC_OP.XOR, ptr, val, mask, sem, scope)
 
     def atomic_xchg(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'xchg')
@@ -1925,6 +1933,33 @@ class TritonSemantic(Generic[TensorTy]):
     def debug_barrier(self) -> TensorTy:
         return self.make_tensor(self.builder.create_barrier(), tl.void)
 
+    def fpsan_barrier(self, input: TensorTy) -> TensorTy:
+        if not input.dtype.is_floating():
+            raise ValueError(f"fpsan.barrier requires a floating-point input, got {input.dtype}")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return input
+        return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
+
+    def fpsan_homomorphic_cast(self, input: TensorTy, dst_ty: tl.dtype,
+                               fp_downcast_rounding: Optional[str] = None) -> TensorTy:
+        dst_ty = dst_ty.scalar
+        if not input.dtype.is_floating() or not dst_ty.is_floating():
+            raise ValueError("fpsan.homomorphic_cast requires floating-point input and destination types")
+        src_width = input.dtype.primitive_bitwidth
+        dst_width = dst_ty.primitive_bitwidth
+        if dst_width > src_width:
+            raise ValueError("fpsan.homomorphic_cast destination must not be wider than input")
+        if input.dtype == dst_ty:
+            return input
+        self._str_to_rounding_mode(fp_downcast_rounding)
+        if fp_downcast_rounding is not None and dst_width == src_width:
+            raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return self.cast(input, dst_ty, fp_downcast_rounding)
+        result_ty = input.type.with_element_ty(dst_ty)
+        handle = self.builder.create_fpsan_homomorphic_cast(input.handle, result_ty.to_ir(self.builder))
+        return self.make_tensor(handle, result_ty)
+
     def grid_dependency_wait(self) -> None:
         self.builder.create_grid_dependency_wait()
 
@@ -2014,7 +2049,8 @@ class TritonSemantic(Generic[TensorTy]):
             self.device_assert(self.equal(rem, zero), "Tensor descriptor strides must be 16-byte aligned", None)
 
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
-                               block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
+                               block_shape: List[tl.constexpr], padding_option: str = "zero",
+                               fp6_format=None) -> tl.tensor_descriptor:
         ndim = len(shape)
         if not (1 <= ndim <= 5):
             raise ValueError(f"Expected 1 <= ndim <= 5 but got {ndim} dimensions")
@@ -2035,6 +2071,11 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
         self._check_tensor_descriptor_alignment_static(strides, elem_size)
+        if fp6_format is not None:
+            if fp6_format not in ("e2m3", "e3m2") or base.dtype.element_ty != tl.uint8:
+                raise ValueError("FP6 descriptors require uint8 storage and format 'e2m3' or 'e3m2'")
+            validate_fp6_box(contig_dim_size, tl._unwrap_if_constexpr(shape[-1]),
+                             [tl._unwrap_if_constexpr(s) for s in strides[:-1]], padding_option)
 
         stride_sources = strides
         shape = [self.make_scalar(x, tl.int32) for x in shape]
@@ -2047,16 +2088,13 @@ class TritonSemantic(Generic[TensorTy]):
         block_shape = tl._unwrap_shape(block_shape)
 
         assert isinstance(base.type, tl.pointer_type), f"base must be a pointer type, got {base.type}"
-        type = tl.block_type(base.type.element_ty, block_shape)
-        base_handle = base.handle
-        is_signed_int = base.type.element_ty.is_int_signed()
-
         padding = self._str_to_padding_option(padding_option)
 
         if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
             raise ValueError("Padding option `nan` is not supported for integer blocks")
 
-        handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
-                                                            [s.handle for s in strides], block_shape, is_signed_int,
-                                                            padding)
-        return tl.tensor_descriptor(handle, shape, strides, type)
+        block_type = tl.block_type(base.type.element_ty, block_shape)
+        desc_ty = tl.tensor_descriptor_base_type(block_type, fp6_format)._to_ir(self.builder)
+        handle = self.builder.create_make_tensor_descriptor(desc_ty, base.handle, [s.handle for s in shape],
+                                                            [s.handle for s in strides], padding)
+        return tl.tensor_descriptor(handle, shape, strides, block_type, fp6_format)

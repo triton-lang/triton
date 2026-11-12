@@ -431,6 +431,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
   bool hasTMA = false;
   bool hasTC = false;
   bool hasCLC = false;
+  bool hasAsyncCopyMbarrierArrive = false;
 
   entryPoint.walk([&](Operation *op) {
     if (auto wsOp = dyn_cast<WarpSpecializeOp>(op))
@@ -442,6 +443,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
     hasCLC |= hooks.isCLCOp(op);
+    hasAsyncCopyMbarrierArrive |= hooks.usesAsyncCopyMbarrierArriveThread(op);
   });
 
   assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
@@ -458,6 +460,10 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
   }
   if (hasCLC) {
     layout.clcThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
+  if (hasAsyncCopyMbarrierArrive) {
+    layout.asyncCopyMbarrierArriveThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
   }
   layout.totalNumThreads = nextThread;
@@ -514,8 +520,14 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(entryPoint, hooks);
-  entryPoint.walk(
-      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
+  entryPoint.walk([&](Operation *op) {
+    std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
+    if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
+          return barrier.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies;
+        }))
+      hasAsyncCopyMbarriers = true;
+  });
   int frontierBitWidth = threadLayout.totalNumThreads <= 32 ? 32 : 64;
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
@@ -638,27 +650,6 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     }
   }
 
-  // Create lock variable allocation
-  Value lockVal = createLockVariable(b);
-  // Initialize the shared-cluster lock once, then synchronize before any CTA
-  // can enter the first instrumented critical section.
-  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-  Value zero = arith::ConstantIntOp::create(b, 0, 32);
-  Value isCTA0 =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
-  if (numCTAs > 1) {
-    SmallVector<Operation *> clusterBarriers =
-        hooks.createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
-  } else {
-    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
-  }
-  lock.insert(entryRegion, {lockVal, lockVal.getType()});
-  passValueToWarpSpecialize(lock.at(entryRegion), lock);
-
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
     unsigned numLanes = bufferStatePlans[(int)MemType::SHARED_MEM].numLanes;
     int numBufs = numLanes == 0 ? 0 : llvm::NextPowerOf2(numLanes - 1);
@@ -682,6 +673,23 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     if (commits[kind].empty())
       createCommitTensor(kind);
 
+  // Create lock variable allocation
+  Value lockVal = createLockVariable(b);
+  // Initialize the shared-cluster lock once, then synchronize before any CTA
+  // can enter the first instrumented critical section. Other CTAs may use the
+  // state as soon as they pass the barrier, so CTA0 must fill all of it above.
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  if (numCTAs > 1)
+    startupClusterBarrierAnchor = lockRelease;
+  else
+    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
+  lock.insert(entryRegion, {lockVal, lockVal.getType()});
+  passValueToWarpSpecialize(lock.at(entryRegion), lock);
+
   // Verify the actual capture count matches the expected one.
   if (captureCounter > 0) {
     int numActiveMemTypes = 0;
@@ -701,6 +709,18 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             captureBytes)))
     return failure();
   return success();
+}
+
+void AuxDataMap::createStartupClusterBarrier(const ConSanTargetHooks &hooks) {
+  if (!startupClusterBarrierAnchor)
+    return;
+  ImplicitLocOpBuilder b(startupClusterBarrierAnchor->getLoc(),
+                         startupClusterBarrierAnchor);
+  b.setInsertionPointAfter(startupClusterBarrierAnchor);
+  startupClusterBarrierAnchor = nullptr;
+  SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+  assert(!barriers.empty() &&
+         "target must provide a cluster initialization barrier");
 }
 
 namespace {

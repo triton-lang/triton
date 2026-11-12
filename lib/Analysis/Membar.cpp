@@ -183,9 +183,10 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
                 ? ThreadSyncKind::CompletionNeedsSync
                 : ThreadSyncKind::Completion};
   }
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(op)) {
-    // Init and inval use the same full-mask election, or thread zero before
-    // SM90.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
+          ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp>(op)) {
+    // Each issuing CTA elects a lane in its partition's warp zero.
+    // Init and inval use thread zero before SM90.
     return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
   }
   if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
@@ -201,9 +202,10 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   }
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
-                                                : ThreadSyncKind::Publication};
+                                                : ThreadSyncKind::Publication,
+            ThreadIssuer::Warp0Leader};
   if (isa<ttng::TCGen5CommitOp>(op))
-    return {ThreadSyncKind::Publication};
+    return {ThreadSyncKind::Publication, ThreadIssuer::Warp0Leader};
   return {};
 }
 
@@ -271,11 +273,6 @@ ThreadIssuer getThreadIssuer(Operation *op) {
   return kind == ThreadIssuer::Unknown
              ? ThreadIssuer{}
              : ThreadIssuer{kind, op->getParentRegion()};
-}
-
-bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
-  auto issuer = getThreadIssuer(lhs);
-  return issuer.kind != ThreadIssuer::Unknown && issuer == getThreadIssuer(rhs);
 }
 
 } // namespace
@@ -357,20 +354,8 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
-  auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
-                     bool afterIsRead, Allocation *allocation,
-                     const AllocationSlice &beforeSlice,
-                     const AllocationSlice &afterSlice) {
-    // Effects issued by the same thread are ordered with respect to each other.
-    // A fixed thread-zero issuer and an elected warp-zero leader may differ.
-    return (!pending.threadSync.effectIssuers.empty() &&
-            !effects.threadSync.effectIssuers.empty() &&
-            haveSameThreadSyncIssuer(before, after)) ||
-           (filter && filter(before, after, beforeIsRead, afterIsRead,
-                             allocation, beforeSlice, afterSlice));
-  };
   if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+      !pending.isIntersected(effects, filter, &allocation, sliceFilter))
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
@@ -499,14 +484,20 @@ bool MembarAnalysis::hasThreadEffects(Operation *op) {
   });
 }
 
+CompletionSync MembarAnalysis::getCompletionSync(Operation *op) {
+  auto sync = getThreadSyncInfo(op);
+  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
+    return CompletionSync::All;
+  if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
+    return CompletionSync::Shared;
+  return CompletionSync::None;
+}
+
 BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
   BlockInfo effects;
   effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
+  effects.threadSync.completion = getCompletionSync(op);
   auto sync = getThreadSyncInfo(op);
-  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
-    effects.threadSync.completion = CompletionSync::All;
-  else if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
-    effects.threadSync.completion = CompletionSync::Shared;
   effects.threadSync.peerWaitNeedsSync =
       sync.kind == ThreadSyncKind::MBarrierWait &&
       !isRegionLocal(cast<ttng::WaitBarrierOp>(op).getAlloc());

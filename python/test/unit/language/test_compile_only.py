@@ -41,6 +41,29 @@ def test_topk_valid_k(k):
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
 
 
+@pytest.mark.parametrize("arch", [90, 100, 103])
+@pytest.mark.parametrize("rows", [2, 4096])
+def test_tensor_descriptor_template_compile_only(arch, rows):
+
+    @triton.jit
+    def kernel(src, dst, ROWS: tl.constexpr):
+        desc = tl.make_tensor_descriptor(src, [ROWS, 64], [64, 1], [1, 64])
+        tile = desc.load([0, 0])
+        tl.store(dst + tl.arange(0, 64), tile.reshape((64, )))
+
+    source = ASTSource(kernel, {"src": "*fp16", "dst": "*fp16", "ROWS": "constexpr"}, constexprs={"ROWS": rows})
+    compiled = triton.compile(source, target=GPUTarget("cuda", arch, 32))
+    ptx = compiled.asm["ptx"]
+    assert f".target sm_{arch}a" in ptx
+    version = re.search(r"(?m)^\.version (\d+)\.(\d+)$", ptx)
+    assert version is not None
+    ptx_version = tuple(map(int, version.groups()))
+    uses_large_alloc = arch in (100, 103) and ptx_version >= (9, 5) and rows == 4096
+    assert ("tensormap.replace.tile.global_address.alloc_same" in ptx) == uses_large_alloc
+    replaced = re.findall(r"tensormap\.replace\.tile\.(\w+)", ptx)
+    assert replaced == ["global_address"]
+
+
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:
 
     @triton.jit
@@ -220,11 +243,14 @@ module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tar
     ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
     pattern = re.compile(
         rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
-        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+        r"(?P<output>%\w+),\s*(?P<inputs>[^;]+);", re.MULTILINE)
     emitted_operations = list(pattern.finditer(ptx))
     assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
     for previous, current in zip(emitted_operations, emitted_operations[1:]):
-        assert current.group("input") == previous.group("output")
+        inputs = re.findall(r"%\w+", current.group("inputs"))
+        # Subtraction keeps its operand order; FMA only commutes multiplicands.
+        input_count = 1 if current.group("operation") == "sub" else 2
+        assert previous.group("output") in inputs[:input_count]
     assert "prmt.b32" not in ptx
 
 

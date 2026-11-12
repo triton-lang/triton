@@ -400,6 +400,23 @@ public:
   }
 };
 
+template <typename OpTy>
+class PointerCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    if (isa<RankedTensorType>(op.getSrc().getType()))
+      return AxisInfo::getPessimisticValueState(op.getResult());
+    // Scalar pointer casts preserve byte alignment.
+    const AxisInfo &info = operands[0]->getValue();
+    return AxisInfo(/*contiguity=*/{1}, info.getDivisibility(),
+                    /*constancy=*/{1});
+  }
+};
+
 class BitcastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::BitcastOp> {
 public:
@@ -1223,6 +1240,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
+                  PointerCastOpAxisInfoVisitor<triton::IntToPtrOp>,
+                  PointerCastOpAxisInfoVisitor<triton::PtrToIntOp>,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

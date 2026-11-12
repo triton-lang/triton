@@ -1656,7 +1656,7 @@ struct AsyncTDMScatterOpConversion
 
     auto srcMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
-    Value srcPtr = srcMemObj.getBase();
+    SmallVector<Value> srcPtrs = llvm::to_vector(srcMemObj.getBases());
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1679,8 +1679,7 @@ struct AsyncTDMScatterOpConversion
         cast<RankedTensorType>(op.getDstRowIndices().getType());
 
     // Extract padding information if present
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto paddedEnc = getPaddedEncoding(smemTy.getEncoding());
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
@@ -1691,12 +1690,8 @@ struct AsyncTDMScatterOpConversion
     }
 
     // Create the CGA layout
-    triton::LinearLayout sharedLayout;
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
-    }
+    triton::LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
@@ -1705,8 +1700,8 @@ struct AsyncTDMScatterOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, srcPtr, /*multicastMask=*/{}, elementType, barrierPtr,
-            cgaLayout, ctaId, dstRowIndices,
+            padAmount, srcPtrs, /*multicastMask=*/{}, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, dstRowIndices,
             /*isGather=*/false, numWarps, dstRowIndicesType, *auxBits)))
       return failure();
 
@@ -1738,8 +1733,7 @@ struct AsyncTDMGatherOpConversion
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getDst().getType();
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto paddedEnc = getPaddedEncoding(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
@@ -1753,7 +1747,7 @@ struct AsyncTDMGatherOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getDst(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1776,17 +1770,15 @@ struct AsyncTDMGatherOpConversion
         cast<RankedTensorType>(op.getSrcRowIndices().getType());
 
     // Create the CGA layout
-    triton::LinearLayout sharedLayout;
+    triton::LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
       assert(paddedEnc.getIntervals().size() == 1 &&
              paddedEnc.getPaddings().size() == 1);
-      sharedLayout = paddedEnc.getLinearComponent();
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
 
     auto kBlock = rewriter.getStringAttr("block");
@@ -1800,8 +1792,8 @@ struct AsyncTDMGatherOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, dstPtr, multicastMask, elementType, barrierPtr,
-            cgaLayout, ctaId, srcRowIndices,
+            padAmount, dstPtrs, multicastMask, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, srcRowIndices,
             /*isGather=*/true, numWarps, srcRowIndicesType, *auxBits)))
       return failure();
 

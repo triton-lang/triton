@@ -403,7 +403,8 @@ Value emitThreadPredicate(ThreadDomainAttr domain,
                           ConversionPatternRewriter &rewriter, Location loc,
                           const TargetInfoBase &targetInfo);
 
-// Thread-local memory operations already execute in their owner's branch.
+// Inside an owner's branch, only redundant CTAs need a predicate.
+// An empty value means all participating threads can execute the operation.
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
@@ -825,6 +826,14 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
+
+// Use storePred is supplied to skip selected producer lanes.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,

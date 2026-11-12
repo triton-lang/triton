@@ -3,8 +3,10 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=86' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=107 ptx-version=94' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=86' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=95' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=95' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=95' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --test-print-buffer-region -verify-diagnostics=only-expected -o /dev/null
+// RUN: split-file %s %t
+// RUN: triton-opt %t/async-shared-store.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=ASYNC-STORE-PTX
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -212,8 +214,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: %[[CTA_ID:.*]] = nvg.cluster_id
   // CHECK: nvvm.mapa {{.*}}, %[[CTA_ID]]
   // CHECK: nvvm.mapa {{.*}}, %[[CTA_ID]]
-  // CHECK: "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
-  // CHECK-SAME: "r,r,r"
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
   tt.func @async_shared_store(%src: tensor<128xi32, #blocked>, %dst: !ttg.memdesc<128xi32, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared1, #smem, mutable>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>
     tt.return
@@ -284,7 +285,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr
-  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
   tt.func @async_shared_store_two_cta_barrier(%src: tensor<128xi32, #blocked>, %dst: !ttg.memdesc<128xi32, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #blocked> -> !ttg.memdesc<128xi32, #shared1, #smem, mutable>, !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
@@ -300,7 +301,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_shared_store_f16
   // CHECK: llvm.bitcast {{.*}} : vector<2xf16> to i32
-  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
   tt.func @async_shared_store_f16(%src: tensor<256xf16, #blocked>, %dst: !ttg.memdesc<256xf16, #shared1, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #shared0, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #blocked> -> !ttg.memdesc<256xf16, #shared1, #smem, mutable>, !ttg.memdesc<2xi64, #shared0, #smem, mutable>
     tt.return
@@ -623,18 +624,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256_i32 = arith.constant 256 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
+    // The box size of 256 is encoded as 0xff in the high byte of word 13.
+    // CHECK: llvm.mlir.constant(-16777216 : i32)
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br
     // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
-    // CHECK-NOT: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
-    // CHECK: nvvm.tensormap.replace field = elemtype
-    // CHECK-NOT: nvvm.tensormap.replace field = interleave_layout
-    // CHECK: nvvm.tensormap.replace field = swizzle_mode
-    // CHECK-NOT: nvvm.tensormap.replace field = fill_mode
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
     ttng.tensormap_create %arg1, %arg0, [%c256_i32], [%arg2], [], [%c1_i32] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
     tt.return
@@ -644,32 +642,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 // CHECK-LABEL: device_tensormap_create2d
+// RUBIN-LABEL: device_tensormap_create2d
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @device_tensormap_create2d(%arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1024_i64 = arith.constant 1024 : i64
+    // The fallback initializes all words to zero and then sets the rank.
+    // RUBIN-NOT: llvm.select
+    // RUBIN: st.shared::cta.b32
+    // RUBIN: nvvm.tensormap.replace field = rank
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br {{.*}}, ^{{bb[0-9]+}}, ^[[COPY:bb[0-9]+]]
     // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
-    // CHECK: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
-    // CHECK: nvvm.tensormap.replace field = box_dim[1]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = global_dim[1]
-    // CHECK: nvvm.tensormap.replace field = global_stride[0]{{.*}} : !llvm.ptr<3>, i64
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[1]
-    // CHECK: nvvm.tensormap.replace field = elemtype
-    // CHECK: nvvm.tensormap.replace field = interleave_layout
-    // CHECK: nvvm.tensormap.replace field = swizzle_mode
-    // CHECK: nvvm.tensormap.replace field = fill_mode
+    // CHECK-NEXT: nvvm.tensormap.replace field = global_dim[1]
+    // CHECK-NOT: nvvm.tensormap.replace
     // CHECK: ^[[COPY]]:
     // CHECK: bar.warp.sync
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
     ttng.tensormap_create %arg1, %arg0, [%c256_i32, %c256_i32], [%arg2, %arg2], [%c1024_i64], [%c1_i32, %c1_i32] {elem_type = 3 : i32, fill_mode = 1 : i32, interleave_layout = 1 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CANONICALIZE-SM100-LABEL: llvm.func @device_tensormap_alloc_class(
+  // CANONICALIZE-SM100-SAME: %[[ROWS:[^:]+]]: i32, %[[STRIDE:[^:]+]]: i64
+  tt.func public @device_tensormap_alloc_class(%src: !tt.ptr<i8>, %desc: !tt.ptr<i8>, %rows: i32, %stride: i64) {
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    // For UINT8 with 16 columns, the last element starts at byte
+    // (rows - 1) * stride + 15. Blackwell uses the large allocation class when
+    // this offset reaches 128 KiB - 1 and the tensor is nonempty.
+    // CANONICALIZE-SM100-DAG: %[[LIMIT:.*]] = llvm.mlir.constant(131071 : i64)
+    // CANONICALIZE-SM100-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+    // CANONICALIZE-SM100-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+    // CANONICALIZE-SM100: st.shared::cta.b32
+    // CANONICALIZE-SM100: bar.warp.sync
+    // CANONICALIZE-SM100: nvvm.tensormap.replace field = global_address
+    // CANONICALIZE-SM100: %[[ROWS_NONZERO:.*]] = llvm.icmp "ne" %[[ROWS]], %[[ZERO]] : i32
+    // CANONICALIZE-SM100: %[[NONEMPTY:.*]] = llvm.and %{{.*}}, %[[ROWS_NONZERO]] : i1
+    // CANONICALIZE-SM100: %[[LAST_ROW:.*]] = llvm.sub %[[ROWS]], %[[ONE]] : i32
+    // CANONICALIZE-SM100: %[[LAST_ROW64:.*]] = llvm.zext %[[LAST_ROW]] : i32 to i64
+    // CANONICALIZE-SM100: %[[CAPPED_STRIDE:.*]] = llvm.intr.umin(%[[STRIDE]], %[[LIMIT]]) : (i64, i64) -> i64
+    // CANONICALIZE-SM100: %[[ROW_OFFSET:.*]] = llvm.mul %[[LAST_ROW64]], %[[CAPPED_STRIDE]] : i64
+    // CANONICALIZE-SM100: %[[LAST_BYTE:.*]] = llvm.add %{{.*}}, %[[ROW_OFFSET]] : i64
+    // CANONICALIZE-SM100: %[[LARGE:.*]] = llvm.icmp "uge" %[[LAST_BYTE]], %[[LIMIT]] : i64
+    // CANONICALIZE-SM100: %[[USE_LARGE:.*]] = llvm.and %[[NONEMPTY]], %[[LARGE]] : i1
+    // CANONICALIZE-SM100: "@$1 tensormap.replace.tile.alloc_large.shared::cta.b1024{{.*}}"{{.*}} %[[USE_LARGE]]
+    ttng.tensormap_create %desc, %src, [%c16, %c1], [%c16, %rows], [%stride], [%c1, %c1] {elem_type = 0 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 0 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i8>, i32, i32, i32, i32, i64, i32, i32) -> ()
     tt.return
   }
 }
@@ -1248,5 +1275,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %combined : f32
     }) {allocation.offset = 0 : i32} : (tensor<64xf32, #blocked>) -> f32
     tt.return %r : f32
+  }
+}
+
+// -----
+
+//--- async-shared-store.mlir
+
+#scalar = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @async_shared_store_scalar_widths
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i64, !llvm.ptr<7>) -> ()
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_scalar_widths(
+  // ASYNC-STORE-PTX: st.async.shared::cluster.mbarrier::complete_tx::bytes.b32
+  // ASYNC-STORE-PTX: st.async.shared::cluster.mbarrier::complete_tx::bytes.b64
+  tt.func public @async_shared_store_scalar_widths(%src32: tensor<128xi32, #scalar>, %src64: tensor<128xi64, #scalar>, %dst32: !ttg.memdesc<128xi32, #shared, #smem, mutable>, %dst64: !ttg.memdesc<128xi64, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src32, %dst32, %mbarrier : tensor<128xi32, #scalar> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src64, %dst64, %mbarrier : tensor<128xi64, #scalar> -> !ttg.memdesc<128xi64, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector
+  // CHECK: llvm.bitcast {{.*}} : vector<2xi32> to i64
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i64, !llvm.ptr<7>) -> ()
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector(
+  // ASYNC-STORE-PTX: st.async.shared::cluster.mbarrier::complete_tx::bytes.b64
+  tt.func public @async_shared_store_vector(%src: tensor<256xi32, #vector>, %dst: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xi32, #vector> -> !ttg.memdesc<256xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_128
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_128(
+  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  tt.func public @async_shared_store_vector_128(%src32: tensor<512xi32, #vector4>, %src64: tensor<256xf64, #vector>, %dst32: !ttg.memdesc<512xi32, #shared, #smem, mutable>, %dst64: !ttg.memdesc<256xf64, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src32, %dst32, %mbarrier : tensor<512xi32, #vector4> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src64, %dst64, %mbarrier : tensor<256xf64, #vector> -> !ttg.memdesc<256xf64, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_predicated
+  // CHECK-NOT: llvm.call_intrinsic "llvm.nvvm.st.async"
+  // CHECK: "@$4 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_predicated(
+  // ASYNC-STORE-PTX: @%p{{[0-9]+}} st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  tt.func public @async_shared_store_vector_predicated(%src: tensor<128xi32, #vector>, %dst: !ttg.memdesc<128xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #vector> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
   }
 }

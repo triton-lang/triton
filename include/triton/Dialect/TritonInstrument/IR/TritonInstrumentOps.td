@@ -240,7 +240,7 @@ def TTI_ExperimentalGSanMBarrierWaitOp
 
 def TTI_ExperimentalGSanTensorDescAccessOp
     : TTI_Op<"experimental_gsan_tensordesc_access",
-             [AttrSizedOperandSegments]> {
+             [AttrSizedOperandSegments, FoldTruePredicate]> {
   let summary = "Instrument a TMA tensor descriptor access for GSan";
   let description = [{
     Passes the native tensor descriptor and its coordinates directly to the
@@ -255,7 +255,7 @@ def TTI_ExperimentalGSanTensorDescAccessOp
 }
 
 def TTI_ExperimentalGSanIndexedTensorDescAccessOp
-    : TTI_Op<"experimental_gsan_indexed_tensordesc_access"> {
+    : TTI_Op<"experimental_gsan_indexed_tensordesc_access", [FoldTruePredicate]> {
   let summary = "Instrument an indexed TMA gather or scatter for GSan";
   let description = [{
     Passes a native tensor descriptor and its row indices directly to the GSan
@@ -287,7 +287,7 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
 
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+             [FoldTruePredicate, TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
                              "getI1SameShape(getPointeeType($_self))",
                              "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "Instrument a tensor load/store access for GSan";
@@ -305,6 +305,7 @@ def TTI_ExperimentalGSanTensorAccessOp
 def TTI_ExperimentalGSanAtomicLoadOp
     : TTI_Op<"experimental_gsan_atomic_load", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   TypesMatchWith<"result matches ptr type", "ptr", "result",
@@ -330,6 +331,7 @@ def TTI_ExperimentalGSanAtomicLoadOp
 def TTI_ExperimentalGSanAtomicStoreOp
     : TTI_Op<"experimental_gsan_atomic_store", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
@@ -376,6 +378,7 @@ def TTI_ExperimentalGSanAtomicPollOp
 
 def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
@@ -428,7 +431,8 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
 // ===== Critical section lock ops =====
 
 
-def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
@@ -440,7 +444,8 @@ def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryE
 }
 
 
-def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.

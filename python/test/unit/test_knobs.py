@@ -455,6 +455,27 @@ def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
     assert "s_endpgm" in assembly
 
 
+def test_mir_swap_knobs_invalidate_cache_key(monkeypatch):
+    from triton._C.libtriton import get_cache_invalidating_env_vars
+
+    for var in ("TRITON_SWAP_MIR", "TRITON_SWAP_MIR_ENABLE_MISCHED"):
+        monkeypatch.delenv(var, raising=False)
+    unswapped = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR", "/mir/a")
+    swapped_a = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR", "/mir/b")
+    swapped_b = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR_ENABLE_MISCHED", "1")
+    misched = get_cache_invalidating_env_vars()
+
+    # Compared the way get_cache_key() consumes them.
+    keys = {str(sorted(env.items())) for env in (unswapped, swapped_a, swapped_b, misched)}
+    assert len(keys) == 4
+
+
 def _loop_strength_reduction_kernel():
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler
@@ -531,11 +552,13 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.use_buffer_atomics
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+    fresh_knobs.amd.use_buffer_ops = True
 
     with fresh_knobs.amd.scope():
         # Use the environment
@@ -548,18 +571,38 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_atomics
     assert fresh_knobs.amd.use_buffer_ops
 
-    # Just to prove that use_buffer_ops is coming from env
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
-    assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    # Just to prove that buffer_ops_analyze_small_tensor_range is coming from env
+    monkeypatch.setenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE", "1")
+    assert fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+    monkeypatch.delenv("AMDGCN_ANALYZE_SMALL_TENSOR_RANGE")
+    assert not fresh_knobs.amd.buffer_ops_analyze_small_tensor_range
+
+
+def test_use_buffer_ops_is_read_once(fresh_knobs, monkeypatch):
+    # use_buffer_ops is read at import time, only refresh_knobs() re-reads it
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS", raising=False)
+    triton.knobs.refresh_knobs()
     assert fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+    assert fresh_knobs.amd.use_buffer_ops
+    triton.knobs.refresh_knobs()
+    assert not fresh_knobs.amd.use_buffer_ops
+
+    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
+    triton.knobs.refresh_knobs()
+    assert fresh_knobs.amd.use_buffer_ops
+
+    # Explicit assignment still wins
+    fresh_knobs.amd.use_buffer_ops = False
+    assert not fresh_knobs.amd.use_buffer_ops
 
 
 def test_env_updated(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.use_buffer_ops = False
-    assert os.getenv("AMDGCN_USE_BUFFER_OPS") == "0"
+    fresh_knobs.amd.use_buffer_atomics = False
+    assert os.getenv("AMDGCN_USE_BUFFER_ATOMICS") == "0"
     # Just triple checking both APIs give us what we expect
-    assert os.environ["AMDGCN_USE_BUFFER_OPS"] == "0"
+    assert os.environ["AMDGCN_USE_BUFFER_ATOMICS"] == "0"
 
     fresh_knobs.cache.home_dir = "/foo/bar"
     assert os.getenv("TRITON_HOME") == "/foo/bar"

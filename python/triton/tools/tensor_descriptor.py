@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Any
-from triton._utils import validate_block_shape, canonicalize_dtype
+from triton._utils import validate_block_shape, canonicalize_dtype, fp6_logical_shape, validate_fp6_box
 
 
 @dataclass
@@ -11,6 +11,7 @@ class TensorDescriptor:
     block_shape: List[int]
     padding: str = "zero"
     round_f32_to_tf32: bool = False
+    fp6_format: str | None = None
     # Virtual shapes need not describe the size of the underlying allocation.
     # Request the safe TMA out-of-bounds address-generation mode in that case.
     use_small_tma_allocation_class: bool = False
@@ -25,6 +26,10 @@ class TensorDescriptor:
         if ty.__name__ not in ("FakeTensor", "FunctionalTensor"):
             assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)
+        if self.fp6_format is not None:
+            if self.fp6_format not in ("e2m3", "e3m2") or canonicalize_dtype(self.base.dtype) != "u8":
+                raise ValueError("FP6 descriptors require uint8 storage and format 'e2m3' or 'e3m2'")
+            validate_fp6_box(self.block_shape[-1], self.shape[-1], self.strides[:-1], self.padding, host=True)
         elem_bytes = self.base.dtype.itemsize
         for stride in self.strides[:-1]:
             assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
@@ -39,5 +44,7 @@ class TensorDescriptor:
             assert dtype_name == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False):
-        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding, round_f32_to_tf32)
+    def from_tensor(tensor: Any, block_shape: List[int], padding="zero", round_f32_to_tf32=False, fp6_format=None):
+        """For packed FP6 storage, block_shape and descriptor offsets count logical FP6 values."""
+        shape = fp6_logical_shape(tensor.shape) if fp6_format is not None else tensor.shape
+        return TensorDescriptor(tensor, shape, tensor.stride(), block_shape, padding, round_f32_to_tf32, fp6_format)
