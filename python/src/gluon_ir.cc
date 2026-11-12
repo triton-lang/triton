@@ -907,6 +907,7 @@ void init_gluon_ir(py::module_ &m) {
              if (!arch.has_value())
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
+
              tt::AMD::TargetInfo targetInfo(arch->str());
              int numBanks = targetInfo.getSharedMemoryBanks();
              auto padded =
@@ -923,6 +924,7 @@ void init_gluon_ir(py::module_ &m) {
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
                     "srcTile should be empty");
+
              if (padded)
                return bankConflictsMemDescPadded(regLayout, padded, bitwidth,
                                                  numBanks, dstTile);
