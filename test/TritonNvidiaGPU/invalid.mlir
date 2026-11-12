@@ -2043,6 +2043,39 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#tma_rank3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, rank = 3}>
+#tma_rank2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_rank3_i32 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, rank = 3}>
+#tma_rank2_i32 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_load_rejects_merged_leading_dims(%desc: !tt.tensordesc<2x128x64xf16, #tma_rank3>, %dst: !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) {
+    // expected-error @below {{descriptor block shape [2, 128, 64] and tensor shape [256, 64] must match up to leading unit dimensions}}
+    ttng.async_tma_copy_global_to_local %desc[%x, %x, %x] %dst, %bar, %pred : !tt.tensordesc<2x128x64xf16, #tma_rank3>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_store_rejects_merged_leading_dims(%desc: !tt.tensordesc<2x128x64xf16, #tma_rank3>, %src: !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>, %x: i32) {
+    // expected-error @below {{descriptor block shape [2, 128, 64] and tensor shape [256, 64] must match up to leading unit dimensions}}
+    ttng.async_tma_copy_local_to_global %desc[%x, %x, %x] %src : !tt.tensordesc<2x128x64xf16, #tma_rank3>, !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_reduce_rejects_merged_leading_dims(%desc: !tt.tensordesc<2x128x32xi32, #tma_rank3_i32>, %src: !ttg.memdesc<256x32xi32, #tma_rank2_i32, #smem, mutable>, %x: i32) {
+    // expected-error @below {{descriptor block shape [2, 128, 32] and tensor shape [256, 32] must match up to leading unit dimensions}}
+    ttng.async_tma_reduce add, %desc[%x, %x, %x] %src : !tt.tensordesc<2x128x32xi32, #tma_rank3_i32>, !ttg.memdesc<256x32xi32, #tma_rank2_i32, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_load_drops_leading_unit_dim(%desc: !tt.tensordesc<1x256x64xf16, #tma_rank3>, %dst: !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x, %x] %dst, %bar, %pred : !tt.tensordesc<1x256x64xf16, #tma_rank3>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<256x64xf16, #tma_rank2, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #padded = #ttg.padded_shared<[1:+1] {order = [0], shape = [2]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

@@ -1918,17 +1918,21 @@ LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
            << tensor.getElementType();
   }
 
+  // The tensor must have the block's shape, except that rank-reducing accesses
+  // may drop leading unit dimensions of the block.
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
-  unsigned blockNumels = product(blockShape);
-  unsigned tensorNumels = product(tensorShape);
-  if (blockNumels != tensorNumels) {
-    return op->emitOpError("descriptor block and tensor must have the same "
-                           "number of elements, but got descriptor block "
-                           "with ")
-           << blockNumels << " elements tensor with " << tensorNumels
-           << " elements";
+  ArrayRef<int64_t> keptBlockShape = blockShape;
+  if (blockShape.size() > tensorShape.size()) {
+    size_t numDropped = blockShape.size() - tensorShape.size();
+    if (llvm::all_of(blockShape.take_front(numDropped),
+                     [](int64_t size) { return size == 1; }))
+      keptBlockShape = blockShape.drop_front(numDropped);
   }
+  if (keptBlockShape != tensorShape)
+    return op->emitOpError("descriptor block shape [")
+           << blockShape << "] and tensor shape [" << tensorShape
+           << "] must match up to leading unit dimensions of the block";
   return success();
 }
 

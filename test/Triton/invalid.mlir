@@ -577,7 +577,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<16x16xf32>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
+  // expected-error @below {{descriptor block shape [16, 16] and tensor shape [16] must match up to leading unit dimensions}}
   tt.descriptor_load %arg0[%c, %c] : !tt.tensordesc<16x16xf32> -> tensor<16xf32>
   tt.return
 }
@@ -595,7 +595,7 @@ tt.func @invalid_desc_load(%arg0: !tt.tensordesc<16x16xf32>) {
 
 tt.func @invalid_desc_store(%arg0: !tt.tensordesc<16x16xf32>, %arg1: tensor<32x16xf32>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{descriptor block and tensor must have the same number of elements}}
+  // expected-error @below {{descriptor block shape [16, 16] and tensor shape [32, 16] must match up to leading unit dimensions}}
   tt.descriptor_store %arg0[%c, %c], %arg1 : !tt.tensordesc<16x16xf32>, tensor<32x16xf32>
   tt.return
 }
