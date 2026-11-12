@@ -171,12 +171,16 @@ struct AuxDataMap {
     int tmaThreadOffset = -1;
     int tcThreadOffset = -1;
     int clcThreadOffset = -1;
+    int asyncCopyMbarrierArriveThreadOffset = -1;
     int totalNumThreads = 1;
     int numThreadSlots = 1;
 
     bool hasTMAThreads() const { return tmaThreadOffset >= 0; }
     bool hasTCThreads() const { return tcThreadOffset >= 0; }
     bool hasCLCThreads() const { return clcThreadOffset >= 0; }
+    bool hasAsyncCopyMbarrierArriveThreads() const {
+      return asyncCopyMbarrierArriveThreadOffset >= 0;
+    }
   };
 
   struct RegionToValueMap {
@@ -289,8 +293,9 @@ struct AuxDataMap {
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // ConSan inserts a cluster barrier to publish lock initialization. It runs
-  // before the lock and rendezvous state are ready, so do not instrument it.
+  // Cluster barriers that ConSan inserts for its own checks during
+  // instrumentation. They do not synchronize the program, so do not instrument
+  // them.
   SmallVector<Operation *> internalClusterBarriers;
 
   // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
@@ -320,6 +325,11 @@ struct AuxDataMap {
                                                 FunctionBuilder &funcBuilder,
                                                 const ConSanTargetHooks &hooks);
 
+  // Insert cluster synchronization at startup to make initialized ConSan state
+  // visible to all CTAs. Call after instrumentation so ConSan does not
+  // instrument the generated operations.
+  void createStartupClusterBarrier(const ConSanTargetHooks &hooks);
+
   int getClusterBarrierSlot(Operation *op) const;
 
   // Resolve a registered access to its candidate index and shared state mask.
@@ -328,6 +338,11 @@ struct AuxDataMap {
                        const BufferStateCandidates &candidates) const;
 
 private:
+  // Cluster synchronization at startup is inserted after this operation.
+  // Null for single-CTA kernels. For multi-CTA kernels, cleared once the
+  // synchronization has been inserted.
+  Operation *startupClusterBarrierAnchor = nullptr;
+
   LogicalResult
   getBuffersAndBarriers(ModuleOp module, triton::FuncOp entryPoint,
                         SmallVector<triton::BufferRegion> &barrierRegions,

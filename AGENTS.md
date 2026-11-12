@@ -4,7 +4,8 @@
 - Triton and Gluon programs operate on logical blocks, not independent hardware threads. Scalar values, scalar control flow, and memory descriptor origins are uniform within a logical block or warp-specialized execution region. Per-element variation must be represented by tensors with valid layouts. Membar inserts the required intra-CTA barriers so shared-memory operations obey this block-level model from the user's perspective.
 - Do not introduce hidden lane- or warp-varying scalars through inline assembly, hardware IDs, or other backdoors. Such programs violate the programming model and must not be used as reproducers or as justification for compiler guards. Hardware IDs used by compiler lowerings to implement layouts are different from source-level scalar values.
 - Block-uniform does not mean loop-invariant or identical across warp-specialized regions. Preserve physical alias, execution-region, and iteration-boundary checks when reasoning about synchronization, as well as the documented waits for asynchronous operations.
-- Regression tests must be expressible as valid Triton/Gluon block programs. Targeted PTX delays may expose an existing race, but must not change values, memory effects, synchronization, or thread participation, or introduce divergence.
+- Scope compiler changes and hand-written MLIR tests to IR patterns reachable from Triton or Gluon Python programs, either directly from the frontend or through compiler passes.
+- Regression tests must respect the block programming model. Targeted PTX delays may expose an existing race, but must not change values, memory effects, synchronization, or thread participation, or introduce divergence. For example, a test may use inline PTX `nanosleep` to expose a race, but must not read the thread ID.
 
 ## Descriptor Memory Effects
 - Synchronization footprints conservatively include storage reserved by zero bases in a descriptor's allocation layout. True subviews restrict the logical coordinates while retaining that allocation padding. This applies to all shared-memory and tensor-memory accesses, including FP4 padding.
@@ -24,4 +25,4 @@
 
 ## Lowering Guidelines
 - Triton IR uses fixed-width integer types, not MLIR's `index` type. Do not report missing `index` support as a Triton bug.
-- Lowerings must inspect only the operation they lower. Do not inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.
+- Lowerings must inspect only the operation they lower, except that they may match constant-valued operands through their defining constant operations. Do not otherwise inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.

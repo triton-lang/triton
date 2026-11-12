@@ -64,6 +64,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
          !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
         nvws.warp_group.return
       }
+    partition1 num_warps(4) {
+      nvws.warp_group.return
+    }
     tt.return
   }
 }

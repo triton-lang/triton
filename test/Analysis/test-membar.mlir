@@ -1131,7 +1131,10 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
     ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
@@ -1163,7 +1166,10 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ^bb3:
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
@@ -1301,7 +1307,10 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
     ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>

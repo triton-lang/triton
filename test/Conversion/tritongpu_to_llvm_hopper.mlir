@@ -213,10 +213,10 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %out0 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xf16, #blocked>
     // CHECK-COUNT-2: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xf16>
     %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf16, #blocked>
-    // CHECK-COUNT-2: cvt.rn.f16x2.e5m2x2 a, $1;
-    // CHECK-SAME: cvt.bf16.f16 b0, a0;
-    // CHECK-SAME: cvt.bf16.f16 b1, a1;
-    // CHECK-SAME: "=r,h"
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.fptrunc.round"
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.fptrunc.round"
     %out2 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
 
     // CHECK-COUNT-2: nvvm.convert.f16x2.to.f8x2 {{.*}} : vector<2xf16> -> vector<2xi8>(f8E5M2)
@@ -717,4 +717,26 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
   tt.return
 }
 
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // The block basis broadcasts when the first dimension has size 1.
+  // CHECK: nvvm.barrier
+  tt.func @convert_layout_broadcast_cta(%arg: tensor<1x16xf32, #src>, %out: tensor<1x16x!tt.ptr<f32>, #dst>) {
+    %0 = ttg.convert_layout %arg : tensor<1x16xf32, #src> -> tensor<1x16xf32, #dst>
+    tt.store %out, %0 : tensor<1x16x!tt.ptr<f32>, #dst>
+    tt.return
+  }
+
+  // With two rows the block basis splits the tensor.
+  // CHECK: nvvm.barrier
+  tt.func @convert_layout_split_cta(%arg: tensor<2x16xf32, #src>, %out: tensor<2x16x!tt.ptr<f32>, #dst>) {
+    %0 = ttg.convert_layout %arg : tensor<2x16xf32, #src> -> tensor<2x16xf32, #dst>
+    tt.store %out, %0 : tensor<2x16x!tt.ptr<f32>, #dst>
+    tt.return
+  }
 }

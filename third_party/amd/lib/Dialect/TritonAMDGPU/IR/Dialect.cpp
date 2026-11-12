@@ -339,10 +339,7 @@ LogicalResult verifyTDMGatherScatterLayout(Operation *op,
         "incompatible with the warp-level TDM instruction. Change layout "
         "to broadcast the same indices to all lanes in a warp.");
 
-  auto paddedEnc =
-      dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
-  auto sharedLL = paddedEnc ? paddedEnc.getLinearComponent()
-                            : triton::gpu::toLinearLayout(smemTy);
+  auto sharedLL = triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
   auto kDim0 = StringAttr::get(op->getContext(), "dim0");
   auto indexBlockIt = indexLL.getBases().find(kBlock);
   auto sharedBlockIt = sharedLL.getBases().find(kBlock);
@@ -1644,8 +1641,7 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
   unsigned elementBitWidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (paddedEnc) {
     if (paddedEnc.getIntervals().size() != 1)
-      return op->emitOpError(
-          "TDM load only supports a single padding interval");
+      return op->emitOpError("TDM only supports a single padding interval");
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
          llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -1819,6 +1815,12 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
     return failure();
 
   auto enc = smemTy.getEncoding();
+  auto partitionedEnc = llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc);
+  if (partitionedEnc) {
+    if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
+      return failure();
+    enc = partitionedEnc.getPartitionLayout();
+  }
   auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
   if (!paddedEnc && !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
@@ -1831,7 +1833,14 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
     if (intervals.size() != 1)
       return emitOpError("TDM store only supports single interval paddings.");
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    SmallVector<int64_t> shapePerCTA;
+    if (partitionedEnc) {
+      shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+      if (partitionedEnc.getPartitionDim() == shapePerCTA.size() - 1)
+        shapePerCTA.back() /= partitionedEnc.getNumLogicalPieces();
+    } else {
+      shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    }
     if (intervals[0] != shapePerCTA.back())
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
@@ -1859,6 +1868,15 @@ LogicalResult AsyncTDMScatterOp::verify() {
     return failure();
 
   auto enc = smemTy.getEncoding();
+  if (auto partitionedEnc =
+          llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc)) {
+    if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
+      return failure();
+    if (partitionedEnc.getPartitionDim() != 0)
+      return emitOpError("NYI: TDM scatter only supports partitioning along "
+                         "rows (partitionDim 0)");
+    enc = partitionedEnc.getPartitionLayout();
+  }
   if (!llvm::isa<gpu::PaddedSharedEncodingAttr>(enc) &&
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
@@ -1925,6 +1943,15 @@ LogicalResult AsyncTDMGatherOp::verify() {
     return failure();
 
   auto enc = smemTy.getEncoding();
+  if (auto partitionedEnc =
+          llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(enc)) {
+    if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
+      return failure();
+    if (partitionedEnc.getPartitionDim() != 0)
+      return emitOpError("NYI: TDM gather only supports partitioning along "
+                         "rows (partitionDim 0)");
+    enc = partitionedEnc.getPartitionLayout();
+  }
   if (!llvm::isa<gpu::PaddedSharedEncodingAttr>(enc) &&
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
