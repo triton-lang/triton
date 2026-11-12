@@ -286,7 +286,9 @@ public:
       init = cvt.getSrc();
     }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
-    if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())
+    // A load without a dependency token has no token to forward to the alloc.
+    if (!load || !load->hasOneUse() || !load.getDep() ||
+        !load.getDep().hasOneUse())
       return failure();
     if (alloc.getType() != load.getSrc().getType())
       return failure();
