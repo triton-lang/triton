@@ -422,7 +422,7 @@ struct TMEMAref {
       stageClusters[*partitionId] = paritionIdStageCluster.second;
     buffer = {};
   }
-  void release(OpBuilder &b, Location loc) {
+  AsyncOp release(OpBuilder &b, Location loc) {
     auto asyncOpIt = asyncOp.find(partitionId);
     assert(asyncOpIt != asyncOp.end() && asyncOpIt->second);
     AsyncOp currentAsyncOp = *asyncOpIt->second;
@@ -442,6 +442,7 @@ struct TMEMAref {
               AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = PUT;
     }
+    return currentAsyncOp;
   }
   Value getBuffer(OpBuilder &b, std::optional<PartitionId> partitionId,
                   Operation *op) {
@@ -783,7 +784,12 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks,
       }
     }
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
-    state.release(b, node->op->getLoc());
+    if (state.release(b, node->op->getLoc()) == AsyncOp::TC5MMA) {
+      // The last async GET still signals the empty barrier. Wait at the end
+      // of the aref lifetime, outside any loop that can acquire it again.
+      b.setInsertionPoint(arefOp->getBlock()->getTerminator());
+      state.acquire(b, arefOp.getLoc(), {std::nullopt, {}});
+    }
   }
 
   return numTmemBlocks;
