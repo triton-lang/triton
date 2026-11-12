@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 import pytest
+import shutil
+import zipfile
 import tarfile
 import tempfile
 
@@ -154,3 +156,32 @@ def test_amd_codegen_download_mirror(artifact, mirror, monkeypatch, tmp_path):
         "https://oaitriton.blob.core.windows.net/public/llvm-builds")
     assert downloads == [f"{base}/{name}.tar.gz"]
     assert result.read_bytes() == contents
+
+
+@pytest.mark.parametrize("use_curl", [False, True])
+def test_dependency_archive_cache_distinguishes_urls(use_curl, monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    import build_helpers
+
+    if use_curl and shutil.which("curl") is None:
+        pytest.skip("curl is not available")
+    if not use_curl:
+        monkeypatch.setattr(build_helpers.shutil, "which", lambda _: None)
+    monkeypatch.setenv("TRITON_CACHE_DEPENDENCY_DOWNLOADS", "1")
+    archive_paths = []
+    for version in (1, 2):
+        archive_path = tmp_path / f"v{version}" / "include.zip"
+        archive_path.parent.mkdir()
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("include/version.h", str(version))
+        archive_paths.append(archive_path)
+
+    destination = tmp_path / "json"
+    archives = tmp_path / "archives"
+    for version, archive_path in enumerate(archive_paths, 1):
+        build_helpers._download_and_extract(archive_path.as_uri(), str(destination), "json", str(archives))
+        assert (destination / "include/version.h").read_text() == str(version)
+
+    archive_paths[-1].unlink()
+    build_helpers._download_and_extract(archive_paths[-1].as_uri(), str(destination), "json", str(archives))
+    assert (destination / "include/version.h").read_text() == "2"
