@@ -41,7 +41,7 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  return getCTASplitNum(srcEncoding)[axis] == 1;
+  return getCTASplitNum(srcEncoding, srcShape)[axis] == 1;
 }
 
 bool ReduceOpHelper::isAssociative() {

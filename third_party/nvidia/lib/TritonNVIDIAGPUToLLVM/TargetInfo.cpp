@@ -612,6 +612,12 @@ std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
   return LLVM::NVIDIA::shuffleUp(loc, rewriter, val, delta);
 }
 
+std::pair<Value, Value> TargetInfo::shuffleDown(RewriterBase &rewriter,
+                                                Location loc, Value val,
+                                                int delta) const {
+  return LLVM::NVIDIA::shuffleDown(loc, rewriter, val, delta);
+}
+
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
   return LLVM::NVIDIA::shuffleIdx(loc, rewriter, val, i);

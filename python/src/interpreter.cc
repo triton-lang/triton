@@ -23,6 +23,18 @@ namespace py = nanobind;
 
 namespace {
 
+// A load or compare-exchange failure may not use release or acq_rel.
+static std::memory_order load_order(std::memory_order order) {
+  switch (order) {
+  case std::memory_order_acq_rel:
+    return std::memory_order_acquire;
+  case std::memory_order_release:
+    return std::memory_order_relaxed;
+  default:
+    return order;
+  }
+}
+
 // Bit-compatible half storage used by the interpreter's atomic fadd path.
 struct triton_half {
   uint16_t value;
@@ -62,9 +74,10 @@ T atomic_cmp(T *ptr, T val, std::memory_order order) {
   T old_val;
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     std::atomic<T> *atomic_ptr = reinterpret_cast<std::atomic<T> *>(ptr);
-    old_val = atomic_ptr->load(order);
+    old_val = atomic_ptr->load(load_order(order));
     while (cmp(old_val, val)) {
-      if (atomic_ptr->compare_exchange_weak(old_val, val, order, order)) {
+      if (atomic_ptr->compare_exchange_weak(old_val, val, order,
+                                            load_order(order))) {
         break;
       }
     }
@@ -86,11 +99,11 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     T new_value;
     std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
-    old_value = atomic_loc->load(order);
+    old_value = atomic_loc->load(load_order(order));
     do {
       new_value = old_value + value;
-    } while (
-        !atomic_loc->compare_exchange_weak(old_value, new_value, order, order));
+    } while (!atomic_loc->compare_exchange_weak(old_value, new_value, order,
+                                                load_order(order)));
   } else {
     const std::lock_guard<std::mutex> lock(atomic_op_guard);
     old_value = *loc;
@@ -497,7 +510,7 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
     atomic_loc->compare_exchange_strong(*expected_uint, desired_val, order,
-                                        order);
+                                        load_order(order));
   } else {
     const std::lock_guard<std::mutex> lock(atomic_op_guard);
     T *atomic_loc = static_cast<T *>(loc);

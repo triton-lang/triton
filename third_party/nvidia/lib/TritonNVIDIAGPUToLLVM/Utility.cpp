@@ -58,12 +58,13 @@ Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
   return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::bfly);
 }
 
-std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
-                                  Value val, int delta) {
+static std::pair<Value, Value>
+shuffleWithPredicate(Location loc, RewriterBase &rewriter, Value val, int delta,
+                     mlir::gpu::ShuffleMode mode) {
   Value sourceInBounds;
   auto shuffleWord = [&](Value word) -> Value {
-    auto shuffle = mlir::gpu::ShuffleOp::create(rewriter, loc, word, delta, 32,
-                                                mlir::gpu::ShuffleMode::UP);
+    auto shuffle =
+        mlir::gpu::ShuffleOp::create(rewriter, loc, word, delta, 32, mode);
     // Both halves of a 64-bit value read the same source lane.
     if (!sourceInBounds)
       sourceInBounds = shuffle.getValid();
@@ -73,6 +74,18 @@ std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
                      ? shuffleWord(val)
                      : shuffleWords(loc, rewriter, val, shuffleWord);
   return {result, sourceInBounds};
+}
+
+std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
+                                  Value val, int delta) {
+  return shuffleWithPredicate(loc, rewriter, val, delta,
+                              mlir::gpu::ShuffleMode::UP);
+}
+
+std::pair<Value, Value> shuffleDown(Location loc, RewriterBase &rewriter,
+                                    Value val, int delta) {
+  return shuffleWithPredicate(loc, rewriter, val, delta,
+                              mlir::gpu::ShuffleMode::DOWN);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {

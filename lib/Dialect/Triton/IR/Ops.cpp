@@ -1,6 +1,7 @@
 #include <array>
 #include <sstream>
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -684,6 +686,38 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   return success();
 }
 
+LogicalResult verifyCallbackBody(Operation *owner, Region &body,
+                                 llvm::SmallPtrSetImpl<Region *> &visited) {
+  if (!visited.insert(&body).second)
+    return success();
+  WalkResult result = body.walk([&](Operation *op) -> WalkResult {
+    if (auto call = dyn_cast<CallOp>(op)) {
+      // A threaded function pass can be rewriting the callee concurrently.
+      if (op->getContext()->isMultithreadingEnabled())
+        return WalkResult::advance();
+      auto fn = dyn_cast_or_null<FuncOp>(call.resolveCallable());
+      if (!fn)
+        return WalkResult::advance(); // tt.call verifies its callee.
+      return verifyCallbackBody(owner, fn.getBody(), visited);
+    }
+    if (!isa<LLVM::AssumeOp, AssertOp, PrintOp>(op)) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+      if (hasUnknownEffects(op) || (effects && !effects.hasNoEffect()))
+        return op->emitOpError("is not allowed in a ")
+               << owner->getName().getStringRef()
+               << " callback. Expected a pure operation, llvm.intr.assume, "
+                  "tt.assert or tt.print";
+    }
+    return WalkResult::advance();
+  });
+  return success(!result.wasInterrupted());
+}
+
+LogicalResult verifyCallbackBody(Operation *owner, Region &body) {
+  llvm::SmallPtrSet<Region *, 4> visited;
+  return verifyCallbackBody(owner, body, visited);
+}
+
 template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
   const auto &operands = op.getOperands();
@@ -726,7 +760,7 @@ template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
              << " to have type " << argElemTy << " but got " << resultTy;
     }
   }
-  return success();
+  return verifyCallbackBody(op, op.getCombineOp());
 }
 
 llvm::SmallVector<RankedTensorType>
@@ -928,22 +962,11 @@ LogicalResult MapElementwiseOp::verifyRegions() {
   }
   auto expectedReturnTypes =
       repeatInterleave(getElementTypesImpl(getResults()), getPack());
-  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
-    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
-    // Ban stores as we won't get the redundant masking correct by treating it
-    // as a scalar.
-    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
-      return op->emitOpError()
-             << "Stores are not supported inside map_elementwise";
-    }
-    if (isa<MapElementwiseReturnOp>(op) &&
-        op->getOperandTypes() != expectedReturnTypes) {
-      return op->emitError()
-             << "region return does not match map_elementwise result";
-    }
-    return WalkResult::advance();
-  });
-  return success(!walkRes.wasInterrupted());
+  for (auto ret : getRegion().getOps<MapElementwiseReturnOp>())
+    if (ret->getOperandTypes() != expectedReturnTypes)
+      return ret.emitError(
+          "region return does not match map_elementwise result");
+  return verifyCallbackBody(*this, getRegion());
 }
 
 //-- SplatOp --

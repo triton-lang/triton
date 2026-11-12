@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from math import prod
 import pytest
 import torch
 import triton
@@ -125,14 +126,16 @@ def _fp6_desc_store(src, dst, raw, desc, FORMAT: tl.constexpr, BLOCK_M: tl.const
     tl.store(raw + offsets, codes)
     if desc is None:
         desc = tl.make_tensor_descriptor(dst, [BLOCK_M + 2, 256], [192, 1], [BLOCK_M, WIDTH], fp6_format=FORMAT)
-    desc.store([1, COL], codes.reshape(BLOCK_M, WIDTH))
+    coords: tl.constexpr = (1, ) * (len(desc.block_shape) - 1) + (COL, )
+    desc.store(coords, codes.reshape(desc.block_shape))
 
 
-def test_fp6_tma_store_box64_sm100(capfd):
+@pytest.mark.parametrize("shape", ["2,64", "1,1,1,2,64"])
+def test_fp6_tma_store_box64_sm100(capfd, shape):
     from triton.backends.compiler import GPUTarget
     from triton.compiler import ASTSource
 
-    signature = {"src": "*fp32", "dst": "*u8", "raw": "*u8", "desc": "tensordesc<fp6e2m3[2,64]>"}
+    signature = {"src": "*fp32", "dst": "*u8", "raw": "*u8", "desc": f"tensordesc<fp6e2m3[{shape}]>"}
     constants = {"FORMAT": "e2m3", "BLOCK_M": 2, "WIDTH": 64, "COL": 0}
     source = ASTSource(_fp6_desc_store, {**signature, **dict.fromkeys(constants, "constexpr")}, constants)
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
@@ -141,26 +144,39 @@ def test_fp6_tma_store_box64_sm100(capfd):
 
 
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
-@pytest.mark.parametrize("rows,columns", [(1, 64), (1, 128), (2, 64), (2, 128), (256, 128)])
-def test_fp6_tma_store_host_box64(fmt, rows, columns):
+@pytest.mark.parametrize("outer_tile,columns", [
+    ((1, ), 64),
+    ((1, ), 128),
+    ((2, ), 64),
+    ((2, ), 128),
+    ((256, ), 128),
+    ((2, 4), 64),
+    ((2, 1, 4), 128),
+    ((2, 1, 2, 4), 128),
+])
+def test_fp6_tma_store_host_box64(fmt, outer_tile, columns):
     if not is_blackwell_ultra():
         pytest.skip("64-value FP6 stores require SM103")
 
     row_bytes = columns * 6 // 8
     pitch = 48 if columns == 64 else 112
-    storage = torch.full((16 + (rows + 2) * pitch + 16, ), 0xa5, device="cuda", dtype=torch.uint8)
-    dst = storage[16:-16].view(rows + 2, pitch)[:, :row_bytes]
-    desc = TensorDescriptor.from_tensor(dst, [rows, 64], fp6_format=fmt)
-    codes = (torch.arange(rows, device="cuda")[:, None] * 7 + torch.arange(64, device="cuda")) % 64
+    outer_shape = tuple(n + 2 for n in outer_tile)
+    storage = torch.full((32 + prod(outer_shape) * pitch, ), 0xa5, device="cuda", dtype=torch.uint8)
+    dst = storage[16:-16].view(*outer_shape, pitch)[..., :row_bytes]
+    desc = TensorDescriptor.from_tensor(dst, [*outer_tile, 64], fp6_format=fmt)
+    rows = prod(outer_tile)
+    fp6_bits = (torch.arange(rows, device="cuda")[:, None] * 7 + torch.arange(64, device="cuda")) % 64
     expected = storage.clone()
-    expected[16:-16].view(rows + 2, pitch)[1:-1, row_bytes - 48:row_bytes] = pack_fp6(codes)
-    raw = torch.empty_like(codes, dtype=torch.uint8)
-    kernel = _fp6_desc_store[(1, )](fp6_values(fmt, codes), dst, raw, desc, fmt, rows, 64, columns - 64)
+    tile = (slice(1, -1), ) * len(outer_tile) + (slice(row_bytes - 48, row_bytes), )
+    expected[16:-16].view(*outer_shape, pitch)[tile] = pack_fp6(fp6_bits).reshape(*outer_tile, 48)
+    raw = torch.empty_like(fp6_bits, dtype=torch.uint8)
+    kernel = _fp6_desc_store[(1, )](fp6_values(fmt, fp6_bits), dst, raw, desc, fmt, rows, 64, columns - 64)
     torch.testing.assert_close(storage, expected)
     assert kernel.metadata.global_scratch_size == 0
-    assert f"!tt.tensordesc<{rows}x64xui8," in kernel.asm["ttgir"]
+    tile_type = "x".join(map(str, (*outer_tile, 64)))
+    assert f"!tt.tensordesc<{tile_type}xui8," in kernel.asm["ttgir"]
     assert 'padding = "b6p2x16"' in kernel.asm["ttgir"]
-    assert "cp.async.bulk.tensor.2d.global.shared::cta" in kernel.asm["ptx"]
+    assert f"cp.async.bulk.tensor.{dst.ndim}d.global.shared::cta" in kernel.asm["ptx"]
     assert "tensormap.replace" not in kernel.asm["ptx"]
 
 

@@ -709,16 +709,17 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
     auto shape = desc.getShape();
     auto width = gpu::getShapePerCTA(descEnc, shape).back();
     if (width == 64) {
-      if (!store || swizzle || shape.size() != 2 || shape.back() != width ||
-          memDesc.getShape() != shape || nvmma != descEnc)
-        return op->emitOpError(
-            "64-value FP6 TMA requires a matching unswizzled [M, 64] store");
+      if (!store || swizzle || shape.size() < 2 || shape.size() > 5 ||
+          shape.back() != width || memDesc.getShape() != shape ||
+          nvmma != descEnc)
+        return op->emitOpError("64-value FP6 TMA requires a matching "
+                               "unswizzled rank-2 to rank-5 store");
     } else if (width < 128 || (swizzle ? swizzle : width) != 128)
       return op->emitOpError("FP6 TMA requires a 128-value box");
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
-  auto splits = getCTASplitNum(nvmma);
+  auto splits = nvmma.getCGALayout().getCTASplitNum();
   // Gather/scatter get row positions from the x-offsets layout.
   unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
   for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)

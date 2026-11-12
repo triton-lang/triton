@@ -366,6 +366,21 @@ TEST_F(ShapePerCTATest, ShapePerCTA) {
   EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
 }
 
+TEST_F(ShapePerCTATest, CTASplitNumUsesTensorShape) {
+  auto cga = CGAEncodingAttr::fromSplitParams(&ctx, {2, 1}, {2, 1}, {0, 1});
+  auto blocked =
+      BlockedEncodingAttr::get(&ctx, {1, 1}, {4, 8}, {1, 4}, {1, 0}, cga);
+  auto linear = toLinearEncoding(blocked, {4, 16});
+  for (auto encoding : SmallVector<Attribute>{blocked, linear}) {
+    EXPECT_EQ(getCTASplitNum(encoding, {1, 16}), (SmallVector<unsigned>{1, 1}));
+    EXPECT_EQ(getCTASplitNum(encoding, {4, 16}), (SmallVector<unsigned>{2, 1}));
+  }
+  EXPECT_EQ(getCTASplitNum(linear, {2, 16}), (SmallVector<unsigned>{1, 1}));
+  EXPECT_EQ(getShapePerCTA(linear, {2, 16}), (SmallVector<int64_t>{1, 16}));
+  auto nvmma = NVMMASharedEncodingAttr::get(&ctx, 128, false, 32, false, cga);
+  EXPECT_EQ(getShapePerCTA(nvmma, {1, 32}), (SmallVector<int64_t>{1, 32}));
+}
+
 class JoinOpTest : public ::testing::Test {
 public:
   JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
