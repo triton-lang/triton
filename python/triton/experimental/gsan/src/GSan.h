@@ -17,7 +17,10 @@ struct LaunchState {
 // A normal/write-once pair for each power-of-two granularity from 1 to 16.
 // The low pool-index bit selects the mode; the remaining bits encode log2
 // granularity. Pool offsets are relative to the reservation base.
-static constexpr size_t kPoolReserveSize = 1ull << 40;
+// Eight TiB per pool gives normal byte-granular allocations a 128 GiB buddy
+// root after accounting for 24-byte shadow cells. Local and imported
+// allocations consume this capacity together.
+static constexpr size_t kPoolReserveSize = 1ull << 43;
 static constexpr int kNumPools = 10;
 static constexpr size_t kReserveSize = kNumPools * kPoolReserveSize;
 // Default normal granularity. Write-once allocations default to one byte.

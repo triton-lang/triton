@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 
 import pytest
 import torch
@@ -690,6 +691,50 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
         if imported_ptr != 0:
             free_allocation(imported_ptr, device)
         free(real_ptr)
+
+
+def _run_byte_pool_import_capacity_check():
+    device = torch.cuda.current_device()
+    block_size = 128 * 1024**2
+    capacity = 128 * 1024**3
+    handle_type = ShareableHandleType.POSIX_FILE_DESCRIPTOR
+    with ExitStack() as cleanup:
+        real_ptr = gsan_malloc(block_size, device, shadow_granularity=1)
+        assert real_ptr != 0
+        cleanup.callback(gsan_free, real_ptr, device)
+        real_fd, shadow_fd, alloc_size, granularity = export_allocation_handles(real_ptr, handle_type,
+                                                                                include_granularity=True)
+        cleanup.callback(os.close, real_fd)
+        cleanup.callback(os.close, shadow_fd)
+        assert alloc_size == block_size
+        assert granularity == 1
+
+        # Reuse one physical allocation to fill the pool with peer mappings.
+        # Only 128 MiB of data and 3 GiB of shadow storage are physically backed.
+        pointers = {real_ptr}
+        for _ in range(capacity // block_size - 1):
+            imported_ptr = import_allocation_handles(real_fd, shadow_fd, alloc_size, device, handle_type,
+                                                     shadow_granularity=granularity)
+            assert imported_ptr != 0
+            cleanup.callback(free_allocation, imported_ptr, device)
+            assert imported_ptr not in pointers
+            pointers.add(imported_ptr)
+
+        assert max(pointers) - min(pointers) == capacity - block_size
+        assert gsan_malloc(8, device, shadow_granularity=1) == 0
+
+        # Exercise both mappings at the far end of the enlarged address range.
+        last_ptr = max(pointers)
+        uint8_cuda_tensor_from_ptr(last_ptr, 1, device).fill_(17)
+        assert uint8_cuda_tensor_from_ptr(real_ptr, 1, device).item() == 17
+        uint8_cuda_tensor_from_ptr(shadow_cell_address(last_ptr), 1, device).fill_(23)
+        assert uint8_cuda_tensor_from_ptr(shadow_cell_address(real_ptr), 1, device).item() == 23
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_byte_pool_import_capacity():
+    result = run_in_process(_run_byte_pool_import_capacity_check)
+    assert result.exc is None
 
 
 @pytest.mark.parametrize("granularity", [0, 3, 32, -1, True, 1.0, "1"])
