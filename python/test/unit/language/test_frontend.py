@@ -19,6 +19,50 @@ from typing import NamedTuple
 # ===-----------------------------------------------------------------------===#
 
 
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype", [tl.float16, tl.bfloat16, tl.float32, tl.float64])
+@pytest.mark.parametrize("mode", ["", "consan", "fpsan", "consan, fpsan"])
+@pytest.mark.parametrize("scalar", [False, True])
+def test_fpsan_barrier_instrumentation_mode(frontend, dtype, mode, scalar):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, BARRIER: tl.constexpr, GLUON: tl.constexpr, SCALAR: tl.constexpr):
+        if SCALAR:
+            offsets = 0
+        elif GLUON:
+            offsets = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        else:
+            offsets = tl.arange(0, 128)
+        x = lang.load(X + offsets)
+        if BARRIER:
+            x = lang.fpsan_barrier(x)
+        lang.store(Y + offsets, x)
+
+    args = (MockTensor(dtype), MockTensor(dtype), True, frontend == "gluon", scalar)
+    module = run_parser(kernel, args=args, kwargs={"instrumentation_mode": mode})
+    assert module.verify()
+    ir = module.str_nodebug()
+    assert ("tt.fpsan_barrier" in ir) == ("fpsan" in mode)
+    if "fpsan" not in mode:
+        reference = run_parser(kernel, args=(*args[:2], False, *args[3:]), kwargs={"instrumentation_mode": mode})
+        # Ignore the symbol name, which contains the constexpr specialization.
+        assert ir[ir.index("("):] == reference.str_nodebug()[reference.str_nodebug().index("("):]
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("mode", ["", "fpsan"])
+def test_fpsan_barrier_integer_input(frontend, mode):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X):
+        lang.fpsan_barrier(lang.load(X))
+
+    with pytest.raises(CompilationError, match="fpsan_barrier requires a floating-point input"):
+        run_parser(kernel, args=(MockTensor(tl.int32), ), kwargs={"instrumentation_mode": mode})
+
+
 @pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
 def test_jit_variadic_keyword_arguments(jit):
 

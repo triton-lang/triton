@@ -138,6 +138,7 @@ enum class UnaryOpId : uint64_t {
   Floor,
   Ceil,
   PreciseSqrt,
+  Barrier,
 };
 
 constexpr uint64_t getUnaryOpId(UnaryOpId opId) {
@@ -3434,6 +3435,8 @@ public:
     patterns.add<UnaryPattern<math::CeilOp>>(&getContext(), UnaryOpId::Ceil);
     patterns.add<UnaryPattern<tt::PreciseSqrtOp>>(&getContext(),
                                                   UnaryOpId::PreciseSqrt);
+    patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
+                                                   UnaryOpId::Barrier);
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,

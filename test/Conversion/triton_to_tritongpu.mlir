@@ -1,6 +1,18 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2' | FileCheck %s
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2 num-ctas=2' | FileCheck %s --check-prefixes=CHECK-TWO-CTAS
 
+// CHECK-LABEL: tt.func @fpsan_barrier
+// CHECK-TWO-CTAS-LABEL: tt.func @fpsan_barrier
+tt.func @fpsan_barrier(%x: tensor<128xf32>) -> tensor<128xf32> {
+  // CHECK: %[[RESULT:.*]] = tt.fpsan_barrier %arg0 : tensor<128xf32, #blocked>
+  // CHECK: tt.return %[[RESULT]] : tensor<128xf32, #blocked>
+  // CHECK-TWO-CTAS: tt.fpsan_barrier %arg0 : tensor<128xf32, #blocked>
+  %result = tt.fpsan_barrier %x : tensor<128xf32>
+  tt.return %result : tensor<128xf32>
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 tt.func @ops() {
   // CHECK: module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {{.*}}

@@ -1971,6 +1971,10 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
            })
+      .def("create_fpsan_barrier",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return self.create<FpSanBarrierOp>(input.getType(), input);
+           })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Type descTy, Value base,

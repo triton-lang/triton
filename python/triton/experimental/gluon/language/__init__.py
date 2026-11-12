@@ -61,6 +61,7 @@ from ._core import (
     expand_dims,
     full,
     fp4_to_fp,
+    fpsan_barrier,
     gather,
     num_warps,
     num_ctas,

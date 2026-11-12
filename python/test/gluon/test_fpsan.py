@@ -363,6 +363,7 @@ OP_TO_ID_U64 = {
     "floor": np.uint64(9),
     "ceil": np.uint64(10),
     "sqrt_rn": np.uint64(11),
+    "barrier": np.uint64(12),
 }
 
 OP_TO_TAG_U32 = {name: np.uint32(murmur64Mixer(op_id) & np.uint64(0xFFFFFFFF)) for name, op_id in OP_TO_ID_U64.items()}
@@ -1026,6 +1027,65 @@ def test_unary_math_identity(device, op, fresh_knobs):
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("expression", ["multiply", "fma"])
+def test_fpsan_barrier_expression_structure(device, fresh_knobs, frontend, expression):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(A, B, C, Out, ANNOTATE: tl.constexpr, RHS: tl.constexpr, EXPR: tl.constexpr, GLUON: tl.constexpr,
+               WARP_SIZE: tl.constexpr):
+        if GLUON:
+            offsets = gl.arange(0, 256, layout=gl.BlockedLayout([1], [WARP_SIZE], [4], [0]))
+        else:
+            offsets = tl.arange(0, 256)
+        a = lang.load(A + offsets)
+        b = lang.load(B + offsets)
+        c = lang.load(C + offsets)
+        if RHS:
+            if EXPR == "multiply":
+                bc = b * c
+                if ANNOTATE:
+                    bc = lang.fpsan_barrier(bc)
+                out = a * bc
+            else:
+                out = lang.fma(a, b, c)
+        else:
+            ab = a * b
+            if ANNOTATE:
+                ab = lang.fpsan_barrier(ab)
+            if EXPR == "multiply":
+                out = ab * c
+            else:
+                out = ab + c
+        lang.store(Out + offsets, out)
+
+    rng = np.random.RandomState(17)
+    bits = [rng.randn(256).astype(np.float32).view(np.int32) for _ in range(3)]
+    inputs = [triton.TensorWrapper(torch.tensor(x, device=device), dtype=torch.float32) for x in bits]
+    outputs = {}
+    for annotate, rhs in itertools.product([False, True], repeat=2):
+        output = torch.empty(256, dtype=torch.int32, device=device)
+        kernel[(1, )](*inputs, triton.TensorWrapper(output, dtype=torch.float32), annotate, rhs, expression,
+                      frontend == "gluon", THREADS_PER_WARP, enable_fp_fusion=False)
+        outputs[annotate, rhs] = output.cpu().numpy()
+
+    np.testing.assert_array_equal(outputs[False, False], outputs[False, True])
+    assert np.any(outputs[True, False] != outputs[True, True])
+
+    a, b, c = [_mix_f32_bits_to_payload_u32(x) for x in bits]
+    product = _expected_unary_tag_payload_u32(a * b, "barrier")
+    expected = product * c if expression == "multiply" else product + c
+    np.testing.assert_array_equal(outputs[True, False], _unmix_payload_u32_to_f32_bits_i32(expected))
+    if expression == "multiply":
+        expected = a * _expected_unary_tag_payload_u32(b * c, "barrier")
+        np.testing.assert_array_equal(outputs[True, True], _unmix_payload_u32_to_f32_bits_i32(expected))
+    else:
+        np.testing.assert_array_equal(outputs[True, True], outputs[False, True])
 
 
 def test_absf_payload_semantics(device, fresh_knobs):

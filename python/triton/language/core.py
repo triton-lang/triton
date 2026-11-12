@@ -3291,6 +3291,26 @@ def map_elementwise(
 
 
 @builtin
+def fpsan_barrier(input, _semantic=None):
+    """
+    Mark an intermediate expression as significant to floating-point sanitization.
+
+    With FPSan enabled, apply a deterministic, non-homomorphic transformation to
+    the input's payload. For example, ``fpsan_barrier(a * b) * c`` can differ
+    from ``a * fpsan_barrier(b * c)``, and ``fpsan_barrier(a * b) + c`` can
+    differ from ``fma(a, b, c)``. Without FPSan, return the input unchanged.
+
+    This is not a synchronization or optimization barrier and does not enforce
+    floating-point rounding or prevent FMA contraction in normal execution.
+
+    :param input: A floating-point scalar or tensor.
+    :return: A value with the same type, shape, and layout as ``input``.
+    """
+    input = _semantic.to_tensor(input)
+    return _semantic.fpsan_barrier(input)
+
+
+@builtin
 def debug_barrier(_semantic=None):
     '''
     Insert a barrier to synchronize all threads in a block.

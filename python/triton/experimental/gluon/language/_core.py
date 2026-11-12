@@ -114,6 +114,7 @@ def builtin(fn: T) -> T:
 add = builtin(tl_core.add)
 associative_scan = builtin(tl_core.associative_scan)
 assume = builtin(tl_core.assume)
+fpsan_barrier = builtin(tl_core.fpsan_barrier)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)

@@ -225,6 +225,7 @@ Compiler Hint Ops
 
     assume
     debug_barrier
+    fpsan_barrier
     max_constancy
     max_contiguous
     multiple_of

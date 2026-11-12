@@ -5,6 +5,62 @@
 
 //--- success.mlir
 
+// CHECK-LABEL: @fpsan_barrier_mul_add
+tt.func public @fpsan_barrier_mul_add(%a: f32, %b: f32, %c: f32) -> f32 {
+  // CHECK-DAG: %[[M:.*]] = arith.constant 314159 : i32
+  // CHECK-DAG: %[[TAG:.*]] = arith.constant 1151905845 : i32
+  // CHECK: %[[AB:.*]] = arith.muli
+  // CHECK: %[[MIX:.*]] = arith.muli %[[AB]], %[[M]]
+  // CHECK: %[[TAGGED:.*]] = arith.xori %[[MIX]], %[[TAG]]
+  // CHECK: %[[BARRIER:.*]] = arith.muli %[[TAGGED]], %[[M]]
+  // CHECK: arith.addi %[[BARRIER]],
+  // CHECK-NOT: tt.fpsan_barrier
+  // CHECK: tt.return
+  %ab = arith.mulf %a, %b : f32
+  %barrier = tt.fpsan_barrier %ab : f32
+  %result = arith.addf %barrier, %c : f32
+  tt.return %result : f32
+}
+
+// -----
+
+// CHECK-LABEL: @fpsan_barrier_f64
+tt.func public @fpsan_barrier_f64(%x: f64) -> f64 {
+  // CHECK-DAG: arith.constant -8577902394587172811 : i64
+  // CHECK-DAG: arith.constant 314159 : i64
+  // CHECK: tti.experimental_fpsan_embed {{.*}} : (f64) -> i64
+  // CHECK: arith.muli
+  // CHECK: arith.xori
+  // CHECK: arith.muli
+  // CHECK: tti.experimental_fpsan_unembed {{.*}} : (i64) -> f64
+  // CHECK-NOT: tt.fpsan_barrier
+  // CHECK: tt.return
+  %result = tt.fpsan_barrier %x : f64
+  tt.return %result : f64
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @fpsan_barrier_f16
+  tt.func public @fpsan_barrier_f16(%x: tensor<128xf16, #blocked>) -> tensor<128xf16, #blocked> {
+    // CHECK-DAG: arith.constant dense<-20427> : tensor<128xi16, #blocked>
+    // CHECK-DAG: arith.constant dense<-13521> : tensor<128xi16, #blocked>
+    // CHECK: tti.experimental_fpsan_embed {{.*}} : (tensor<128xf16, #blocked>) -> tensor<128xi16, #blocked>
+    // CHECK: arith.muli
+    // CHECK: arith.xori
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_unembed {{.*}} : (tensor<128xi16, #blocked>) -> tensor<128xf16, #blocked>
+    // CHECK-NOT: tt.fpsan_barrier
+    // CHECK: tt.return
+    %result = tt.fpsan_barrier %x : tensor<128xf16, #blocked>
+    tt.return %result : tensor<128xf16, #blocked>
+  }
+}
+
+// -----
+
 module {
   // CHECK-LABEL: @call_arithmetic
   tt.func public @call_arithmetic(%x: f32, %y: f32) -> f32 {

@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+from triton._instrumentation import is_enabled
 from triton._utils import validate_fp6_box
 
 from .._C.libtriton import ir
@@ -1931,6 +1932,13 @@ class TritonSemantic(Generic[TensorTy]):
 
     def debug_barrier(self) -> TensorTy:
         return self.make_tensor(self.builder.create_barrier(), tl.void)
+
+    def fpsan_barrier(self, input: TensorTy) -> TensorTy:
+        if not input.dtype.is_floating():
+            raise ValueError(f"fpsan_barrier requires a floating-point input, got {input.dtype}")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return input
+        return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
 
     def grid_dependency_wait(self) -> None:
         self.builder.create_grid_dependency_wait()
