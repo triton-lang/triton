@@ -1,15 +1,23 @@
+#include <array>
 #include <sstream>
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -39,17 +47,83 @@ void LoadOp::getEffects(
 namespace mlir {
 namespace triton {
 
+OpFoldResult AnnotateOp::fold(FoldAdaptor adaptor) {
+  if ((*this)->getAttrs().empty())
+    return getSrc();
+  return {};
+}
+
+void AnnotateOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                             MLIRContext *context) {
+  patterns.add(+[](AnnotateOp op, PatternRewriter &rewriter) -> LogicalResult {
+    Operation *definingOp = op.getSrc().getDefiningOp();
+    if (!definingOp || definingOp->getNumResults() != 1)
+      return failure();
+    rewriter.modifyOpInPlace(definingOp, [&] {
+      for (NamedAttribute attr : op->getAttrs())
+        definingOp->setDiscardableAttr(attr.getName(), attr.getValue());
+    });
+    rewriter.replaceOp(op, op.getSrc());
+    return success();
+  });
+}
+
+LogicalResult
+verifyCacheModifier(CacheModifier modifier, CachePolicyOperation operation,
+                    function_ref<InFlightDiagnostic()> emitError) {
+  bool isSupported = false;
+  switch (operation) {
+  case CachePolicyOperation::Load:
+    isSupported =
+        modifier == CacheModifier::NONE || modifier == CacheModifier::CA ||
+        modifier == CacheModifier::CG || modifier == CacheModifier::CS ||
+        modifier == CacheModifier::CV;
+    break;
+  case CachePolicyOperation::Store:
+    isSupported =
+        modifier == CacheModifier::NONE || modifier == CacheModifier::WB ||
+        modifier == CacheModifier::CG || modifier == CacheModifier::CS ||
+        modifier == CacheModifier::WT;
+    break;
+  }
+  if (isSupported)
+    return success();
+  return emitError() << "cache modifier '" << stringifyCacheModifier(modifier)
+                     << "' is not supported for "
+                     << (operation == CachePolicyOperation::Load ? "loads"
+                                                                 : "stores");
+}
+
+LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
+                                CachePolicyOperation operation) {
+  if (!cachePolicy)
+    return success();
+  Dialect &dialect = cachePolicy.getDialect();
+  auto *interface = dyn_cast<DialectCachePolicyInterface>(&dialect);
+  if (!interface)
+    return op->emitOpError("unsupported cache policy attribute ")
+           << cachePolicy;
+  return interface->verifyCachePolicy(cachePolicy, operation, [&]() {
+    return op->emitOpError("invalid cache policy: ");
+  });
+}
+
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, cache, evict,
-                isVolatile);
+                   bool isVolatile) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*cachePolicy=*/{}, isVolatile);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, CacheModifier cache, EvictionPolicy evict,
-                   bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, /*other=*/{}, cache, evict,
+                   Value mask, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
+                /*cachePolicy=*/{}, isVolatile);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, mask, other, /*cachePolicy=*/{},
                 isVolatile);
 }
 
@@ -59,54 +133,30 @@ void LoadOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
 
 Type LoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
-// load(ptr, splat(1), ...)        -> load(ptr, ...)
-// load(ptr, splat(0), other, ...) -> other
-struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
-  CanonicalizeMaskedLoadPattern(MLIRContext *context)
-      : OpRewritePattern<LoadOp>(context, 1) {}
+LogicalResult LoadOp::verify() {
+  return verifyCachePolicy(*this, getCachePolicyAttr(),
+                           CachePolicyOperation::Load);
+}
 
-  LogicalResult matchAndRewrite(LoadOp loadOp,
-                                PatternRewriter &rewriter) const override {
-    auto mask = loadOp.getMask();
-    if (!mask)
-      return failure();
-
-    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
-    if (!constantMask)
-      return failure();
-
-    auto splatMask = mlir::dyn_cast<SplatElementsAttr>(constantMask.getValue());
-    if (!splatMask)
-      return failure();
-
-    if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
-      // mask = splat(1)
-      rewriter.replaceOpWithNewOp<LoadOp>(
-          loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-    } else {
-      // mask = splat(0)
-
-      // If there's no "other", the value is "undef".  Perhaps we want to
-      // optimize it in the future.x
-      auto otherVal = loadOp.getOther();
-      if (!otherVal)
-        return failure();
-      rewriter.replaceOp(loadOp, otherVal);
-    }
-    return success();
-  }
-};
-
-void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                         MLIRContext *context) {
-  results.add<CanonicalizeMaskedLoadPattern>(context);
+LogicalResult LoadOp::canonicalize(LoadOp op, PatternRewriter &rewriter) {
+  // Without "other", a false-masked load produces an undefined value.
+  if (!op.getOther() || !op.getMask() || !matchPattern(op.getMask(), m_Zero()))
+    return failure();
+  rewriter.replaceOp(op, op.getOther());
+  return success();
 }
 
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, cache, evict);
+                    Value value) {
+  StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                 /*cachePolicy=*/{});
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, Value mask, bool ignoreCTA) {
+  StoreOp::build(builder, state, ptr, value, mask, /*cachePolicy=*/{},
+                 ignoreCTA);
 }
 
 Value StoreOp::getPredicateOperand() { return getMask(); }
@@ -115,38 +165,14 @@ void StoreOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
 
 Type StoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
-// store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
-// store(ptr, value, splat(0), ...) -> [none]
-struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
-  CanonicalizeMaskedStorePattern(MLIRContext *context)
-      : OpRewritePattern<StoreOp>(context, 1) {}
+LogicalResult StoreOp::verify() {
+  return verifyCachePolicy(*this, getCachePolicyAttr(),
+                           CachePolicyOperation::Store);
+}
 
-  LogicalResult matchAndRewrite(StoreOp storeOp,
-                                PatternRewriter &rewriter) const override {
-    auto mask = storeOp.getMask();
-    if (!mask)
-      return failure();
-
-    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
-    if (!constantMask)
-      return failure();
-
-    auto splatMask = mlir::dyn_cast<SplatElementsAttr>(constantMask.getValue());
-    if (!splatMask)
-      return failure();
-
-    if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
-      // mask = splat(1)
-      rewriter.replaceOpWithNewOp<StoreOp>(
-          storeOp, storeOp.getPtr(), storeOp.getValue(), storeOp.getCache(),
-          storeOp.getEvict());
-    } else {
-      // mask = splat(0)
-      rewriter.eraseOp(storeOp);
-    }
-    return success();
-  }
-};
+LogicalResult StoreOp::canonicalize(StoreOp op, PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
 
 Value AtomicRMWOp::getPredicateOperand() { return getMask(); }
 
@@ -155,6 +181,57 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 }
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+LogicalResult AtomicRMWOp::verify() {
+  RMWOp op = getAtomicRmwOp();
+  if ((op == RMWOp::AND || op == RMWOp::OR || op == RMWOp::XOR) &&
+      !isa<IntegerType>(getElementTypeOrSelf(getVal().getType())))
+    return emitOpError() << stringifyRMWOp(op)
+                         << " requires an integer element type";
+  return success();
+}
+
+Value AtomicLoadOp::getPredicateOperand() { return getMask(); }
+
+void AtomicLoadOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicLoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+Value AtomicStoreOp::getPredicateOperand() { return getMask(); }
+
+void AtomicStoreOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicStoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+LogicalResult AtomicStoreOp::canonicalize(AtomicStoreOp op,
+                                          PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
+static LogicalResult verifyAtomicLoadStoreType(Operation *op, Type ptrTy) {
+  Type elementTy = getElementTypeOrSelf(getPointeeType(ptrTy));
+  if (!elementTy.isIntOrFloat())
+    return op->emitOpError("only supports integer and floating-point elements");
+  if (elementTy.getIntOrFloatBitWidth() < 8)
+    return op->emitOpError("does not support sub-byte elements");
+  return success();
+}
+
+LogicalResult AtomicLoadOp::verify() {
+  if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
+    return emitOpError("only supports acquire and relaxed semantics");
+  return verifyAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
+
+LogicalResult AtomicStoreOp::verify() {
+  if (getSem() != MemSemantic::RELEASE && getSem() != MemSemantic::RELAXED)
+    return emitOpError("only supports release and relaxed semantics");
+  return verifyAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
 
 LogicalResult AtomicPollOp::verify() {
   if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
@@ -166,11 +243,6 @@ LogicalResult AtomicPollOp::verify() {
     return emitOpError(
         "only supports integer elements with width {16, 32, 64}");
   return success();
-}
-
-void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                          MLIRContext *context) {
-  results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
 //-- TransOp --
@@ -478,6 +550,31 @@ int32_t DotScaledOp::deduceScaleFactor() {
 }
 
 //-- MakeRangeOp --
+void MakeRangeOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                              MLIRContext *ctx) {
+  // Fold a comparison with a constant when every element gives the same result.
+  patterns.add(+[](arith::CmpIOp op, PatternRewriter &rewriter) {
+    auto range = op.getLhs().getDefiningOp<MakeRangeOp>();
+    APInt bound;
+    if (!range || !matchPattern(op.getRhs(), m_ConstantInt(&bound)))
+      return failure();
+
+    // make_range has signed i32 endpoints and excludes end.
+    auto values = ConstantIntRanges::fromSigned(
+        range.getStartAttr().getValue(), range.getEndAttr().getValue() - 1);
+    auto result = intrange::evaluatePred(
+        static_cast<intrange::CmpPredicate>(op.getPredicate()), values,
+        ConstantIntRanges::constant(bound));
+    if (!result)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, DenseElementsAttr::get(cast<ShapedType>(op.getType()),
+                                   rewriter.getBoolAttr(*result)));
+    return success();
+  });
+}
+
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
   if (adaptor.getStart() + 1 == adaptor.getEnd()) {
@@ -589,6 +686,38 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   return success();
 }
 
+LogicalResult verifyCallbackBody(Operation *owner, Region &body,
+                                 llvm::SmallPtrSetImpl<Region *> &visited) {
+  if (!visited.insert(&body).second)
+    return success();
+  WalkResult result = body.walk([&](Operation *op) -> WalkResult {
+    if (auto call = dyn_cast<CallOp>(op)) {
+      // A threaded function pass can be rewriting the callee concurrently.
+      if (op->getContext()->isMultithreadingEnabled())
+        return WalkResult::advance();
+      auto fn = dyn_cast_or_null<FuncOp>(call.resolveCallable());
+      if (!fn)
+        return WalkResult::advance(); // tt.call verifies its callee.
+      return verifyCallbackBody(owner, fn.getBody(), visited);
+    }
+    if (!isa<LLVM::AssumeOp, AssertOp, PrintOp>(op)) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+      if (hasUnknownEffects(op) || (effects && !effects.hasNoEffect()))
+        return op->emitOpError("is not allowed in a ")
+               << owner->getName().getStringRef()
+               << " callback. Expected a pure operation, llvm.intr.assume, "
+                  "tt.assert or tt.print";
+    }
+    return WalkResult::advance();
+  });
+  return success(!result.wasInterrupted());
+}
+
+LogicalResult verifyCallbackBody(Operation *owner, Region &body) {
+  llvm::SmallPtrSet<Region *, 4> visited;
+  return verifyCallbackBody(owner, body, visited);
+}
+
 template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
   const auto &operands = op.getOperands();
@@ -631,7 +760,7 @@ template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
              << " to have type " << argElemTy << " but got " << resultTy;
     }
   }
-  return success();
+  return verifyCallbackBody(op, op.getCombineOp());
 }
 
 llvm::SmallVector<RankedTensorType>
@@ -689,6 +818,79 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
     return nullptr;
 
   return reduceOp;
+}
+
+bool ReduceOp::isCommutative() {
+  Block &block = getCombineOp().front();
+  // Restrict the proof to a pure, straight-line expression DAG.
+  for (Operation &op : block.without_terminator())
+    if (op.getNumRegions() || !isMemoryEffectFree(&op))
+      return false;
+
+  // Number each value twice: with the original arguments and with the two
+  // input tuples exchanged. Captures are opaque leaves shared by both views.
+  DenseMap<Value, std::array<unsigned, 2>> numbers;
+  unsigned nextNumber = 0;
+  unsigned numOperands = getNumOperands();
+  for (unsigned i = 0; i < numOperands; ++i) {
+    numbers[block.getArgument(i)] = {nextNumber, nextNumber + 1};
+    numbers[block.getArgument(i + numOperands)] = {nextNumber + 1, nextNumber};
+    nextNumber += 2;
+  }
+  auto getNumber = [&](Value value, unsigned view) {
+    auto [it, inserted] =
+        numbers.try_emplace(value, std::array{nextNumber, nextNumber});
+    if (inserted)
+      ++nextNumber;
+    return it->second[view];
+  };
+
+  struct Expression {
+    Operation *op;
+    SmallVector<unsigned> operands;
+    SmallVector<unsigned> results;
+  };
+  DenseMap<size_t, SmallVector<Expression, 1>> expressions;
+  for (Operation &op : block.without_terminator()) {
+    for (unsigned view = 0; view < 2; ++view) {
+      SmallVector<unsigned> operands;
+      for (Value operand : op.getOperands())
+        operands.push_back(getNumber(operand, view));
+      if (op.hasTrait<OpTrait::IsCommutative>())
+        llvm::sort(operands);
+
+      size_t hash = OperationEquivalence::computeHash(
+          &op,
+          [&](Value operand) {
+            return llvm::hash_value(getNumber(operand, view));
+          },
+          OperationEquivalence::ignoreHashValue,
+          OperationEquivalence::IgnoreLocations);
+      auto &bucket = expressions[hash];
+      // A hash match alone is not a proof. Compare the full operation,
+      // including its types, attributes and properties, and numbered operands.
+      auto it = llvm::find_if(bucket, [&](const Expression &expr) {
+        return expr.operands == operands &&
+               OperationEquivalence::isEquivalentTo(
+                   expr.op, &op, OperationEquivalence::ignoreValueEquivalence,
+                   /*markEquivalent=*/nullptr,
+                   OperationEquivalence::IgnoreLocations);
+      });
+      if (it == bucket.end()) {
+        SmallVector<unsigned> results;
+        for (unsigned i = 0; i < op.getNumResults(); ++i)
+          results.push_back(nextNumber++);
+        bucket.push_back({&op, std::move(operands), std::move(results)});
+        it = std::prev(bucket.end());
+      }
+      for (auto [result, number] : llvm::zip(op.getResults(), it->results))
+        numbers[result][view] = number;
+    }
+  }
+
+  return llvm::all_of(block.getTerminator()->getOperands(), [&](Value value) {
+    return getNumber(value, 0) == getNumber(value, 1);
+  });
 }
 
 //-- ScanOp --
@@ -760,22 +962,11 @@ LogicalResult MapElementwiseOp::verifyRegions() {
   }
   auto expectedReturnTypes =
       repeatInterleave(getElementTypesImpl(getResults()), getPack());
-  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
-    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
-    // Ban stores as we won't get the redundant masking correct by treating it
-    // as a scalar.
-    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
-      return op->emitOpError()
-             << "Stores are not supported inside map_elementwise";
-    }
-    if (isa<MapElementwiseReturnOp>(op) &&
-        op->getOperandTypes() != expectedReturnTypes) {
-      return op->emitError()
-             << "region return does not match map_elementwise result";
-    }
-    return WalkResult::advance();
-  });
-  return success(!walkRes.wasInterrupted());
+  for (auto ret : getRegion().getOps<MapElementwiseReturnOp>())
+    if (ret->getOperandTypes() != expectedReturnTypes)
+      return ret.emitError(
+          "region return does not match map_elementwise result");
+  return verifyCallbackBody(*this, getRegion());
 }
 
 //-- SplatOp --
@@ -866,10 +1057,8 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
       Dialect &dialect = srcEnc.getDialect();
       auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
       if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
-              srcEnc, op.getAxis(), newExpandEnc, op.getLoc()))) {
-        return emitOptionalError(op.getLoc(),
-                                 "failed to infer layout for ExpandDimsOp");
-      }
+              srcEnc, op.getAxis(), newExpandEnc, std::nullopt)))
+        return failure();
     }
 
     auto newExpandTy = RankedTensorType::get(
@@ -924,19 +1113,18 @@ std::optional<unsigned> ReshapeOp::getExpandDimsAxis() {
 }
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
-                      ArrayRef<int64_t> shape, Value src, bool allowReorder) {
+                      ArrayRef<int64_t> shape, Value src) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
-    auto result =
-        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape, dstEnc,
-                                     allowReorder, state.location);
+    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
+                                               dstEnc, state.location);
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
-  build(builder, state, dstTy, src, allowReorder);
+  build(builder, state, dstTy, src, false);
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
@@ -950,8 +1138,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 
   // reshape(expand_dims(x)) -> x
   if (auto expandDims = dyn_cast<ExpandDimsOp>(definingOp)) {
-    if (!op.getAllowReorder() &&
-        op.getType() == expandDims.getSrc().getType()) {
+    if (op.getType() == expandDims.getSrc().getType()) {
       rewriter.replaceOp(op, expandDims.getSrc());
       return success();
     }
@@ -959,12 +1146,8 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 
   // reshape(reshape) -> reshape
   if (auto parentReshape = dyn_cast<ReshapeOp>(definingOp)) {
-    // Allow reorder if either reshape allowed it
-    const bool allowReorder =
-        (op.getAllowReorder() || parentReshape.getAllowReorder());
-    rewriter.replaceOpWithNewOp<ReshapeOp>(op, op.getType(),
-                                           parentReshape.getSrc(), allowReorder,
-                                           op.getEfficientLayout());
+    rewriter.replaceOpWithNewOp<ReshapeOp>(
+        op, op.getType(), parentReshape.getSrc(), op.getEfficientLayout());
     return success();
   }
 
@@ -978,7 +1161,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType() && !getAllowReorder()) {
+  if (getType() == getSrc().getType()) {
     // no-op
     return getSrc();
   }
@@ -1006,15 +1189,12 @@ LogicalResult ReshapeOp::verify() {
   }
 
   // Check that we can infer the dst encoding from the src encoding and that the
-  // inferred dst encoding is the same as the given dst encoding. We pass the
-  // current dst encoding as a hint so that allowReorder reshapes are guaranteed
-  // to produce the current encoding iff it is valid.
-  Attribute inferredDstEnc = dstEnc;
+  // inferred dst encoding is the same as the given dst encoding.
+  Attribute inferredDstEnc;
   auto layoutInterface =
       cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
   auto result = layoutInterface->inferReshapeOpEncoding(
-      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc,
-      getAllowReorder(), getLoc());
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
   if (failed(result))
     return failure();
   return layoutInterface->verifyLayoutsAreEqual(
@@ -1096,8 +1276,8 @@ LogicalResult BitcastOp::verify() {
     }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
-  unsigned dstBits = dstType.getIntOrFloatBitWidth();
-  unsigned srcBits = srcType.getIntOrFloatBitWidth();
+  unsigned dstBits = getIntOrFloatOrPtrBitWidth(dstType);
+  unsigned srcBits = getIntOrFloatOrPtrBitWidth(srcType);
   if (dstBits != srcBits) {
     return emitError("Cannot bitcast data-type of size ")
            << srcBits << " to data-type of size " << dstBits;
@@ -1144,6 +1324,15 @@ LogicalResult BroadcastOp::verify() {
              << i << " between source and result.  "
              << "Broadcast requires the source dimension to be 1.";
     }
+  }
+  auto srcEncoding = srcTensorType.getEncoding();
+  if (srcEncoding && resultTensorType.getEncoding()) {
+    auto interface =
+        cast<DialectInferLayoutInterface>(&srcEncoding.getDialect());
+    if (failed(interface->verifyBroadcastOpEncoding(srcTensorType,
+                                                    resultTensorType)))
+      return emitOpError("requires matching source and result layouts up to "
+                         "broadcasting");
   }
   return success();
 }
@@ -1521,12 +1710,24 @@ LogicalResult SplitOp::fold(FoldAdaptor adaptor,
 
 // -- ElementwiseInlineAsmOp --
 void ElementwiseInlineAsmOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get());
   effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  for (OpOperand &operand : getOperation()->getOpOperands())
+    if (auto *interface = dyn_cast<DialectInlineAsmInterface>(
+            &operand.get().getType().getDialect()))
+      interface->getOperandEffects(operand, effects);
+}
+
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure) {
+  for (OpOperand &operand : op->getOpOperands())
+    if (auto *interface = dyn_cast<DialectInlineAsmInterface>(
+            &operand.get().getType().getDialect()))
+      if (failed(interface->verifyOperand(operand, isPure)))
+        return failure();
+  return success();
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1536,17 +1737,27 @@ Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
 }
 
 LogicalResult ElementwiseInlineAsmOp::verify() {
-  if (getNumOperands() >= 1) {
-    auto tensorType = dyn_cast<RankedTensorType>(getOperand(0).getType());
-    size_t numInputElems = tensorType ? tensorType.getNumElements() : 0;
-    if (numInputElems % this->getPackedElement() != 0) {
+  if (getPackedElement() <= 0)
+    return emitOpError("packed_element must be positive");
+  RankedTensorType tensorType;
+  for (Type type : llvm::concat<Type>(getOperandTypes(), getResultTypes())) {
+    auto tensor = dyn_cast<RankedTensorType>(type);
+    if (!tensor)
+      continue;
+    if (tensorType && tensor.getShape() != tensorType.getShape())
+      return emitOpError("requires matching tensor shapes");
+    if (tensorType && tensor.getEncoding() != tensorType.getEncoding())
+      return emitOpError("requires matching tensor encodings");
+    tensorType = tensor;
+    size_t numInputElems = tensor.getNumElements();
+    if (numInputElems % getPackedElement() != 0) {
       return emitError("number of input elements ")
              << numInputElems
              << " must be a multiple of the op's packed_element attribute, "
              << getPackedElement();
     }
   }
-  return success();
+  return verifyInlineAsmOperands(*this, getPure());
 }
 
 // -- ExternElementwiseOp --
@@ -1631,10 +1842,11 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   }
 
   Type dtype = resultType.getElementType();
-  if (dtype.getIntOrFloatBitWidth() > 32)
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
+  if (bitWidth > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
-  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  unsigned minCols = 32 / bitWidth * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("must have at least ")
            << minCols << " columns for " << dtype << ", but got " << cols;
@@ -1695,7 +1907,11 @@ LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
                                           TensorDescInterface desc,
                                           ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
-  if (block.getElementType() != tensor.getElementType()) {
+  if (isFP6(block.getElementType())) {
+    if (!isa<DescriptorStoreOp>(op) || !tensor.getElementType().isInteger(8))
+      return op->emitOpError(
+          "packed FP6 descriptors require stores of i8 codes");
+  } else if (block.getElementType() != tensor.getElementType()) {
     return op->emitOpError("descriptor block and tensor element types must "
                            "match, but got descriptor element type ")
            << block.getElementType() << " and tensor element type "

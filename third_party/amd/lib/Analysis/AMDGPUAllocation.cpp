@@ -30,31 +30,11 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
   return elems * bitwidth / 8;
 }
 
-static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
-  Value result = op->getResult(0);
-  if (result.use_empty())
-    return 0;
-  auto tensorTy = dyn_cast<RankedTensorType>(result.getType());
-  if (!tensorTy)
-    return 0;
-  auto freeVariableMasks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-  bool hasBroadcast = llvm::any_of(freeVariableMasks,
-                                   [](auto mask) { return mask.second != 0; });
-  if (!hasBroadcast)
-    return 0;
-  auto smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
-  auto elems = getNumScratchElements(smemShape);
-  if (elems == 0)
-    return 0;
-  auto elemTy = tensorTy.getElementType();
-  return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-}
-
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo) {
 
-  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    ReduceOpHelper::GetNumScratchElemsFn AMDGetNumScratchElemsFn =
+  if (isa<ReduceOp, ScanOp>(op)) {
+    GetNumScratchElemsFn AMDGetNumScratchElemsFn =
         [&targetInfo](const triton::LinearLayout &src,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
           int numBanks = targetInfo.getSharedMemoryBanks();
@@ -64,7 +44,11 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
           return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
                                                srcTile, dstTile);
         };
-    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
+    if (auto reduceOp = dyn_cast<ReduceOp>(op))
+      return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
+          AMDGetNumScratchElemsFn);
+    auto scanOp = cast<ScanOp>(op);
+    return ScanLoweringHelper(scanOp).getScratchSizeInBytes(
         AMDGetNumScratchElemsFn);
   }
 
@@ -91,7 +75,7 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
   }
 
   if (isa<amdgpu::BufferAtomicCASOp, amdgpu::BufferAtomicRMWOp>(op))
-    return getBufferAtomicScratchSizeInBytes(op);
+    return getAtomicResultScratchSize(op->getResult(0));
 
   return defaultAllocationAnalysisScratchSizeFn(op);
 }

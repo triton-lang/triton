@@ -28,13 +28,14 @@
 #PADDED_SHARED_0_1x512 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [1, 512]}>
 #PADDED_SHARED_0_16x16 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 16]}>
 #PADDED_SHARED_0_16x32 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 32]}>
+#PADDED_SHARED_0_64x8 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [64, 8]}>
 
 #PADDED_SHARED_1_16x256 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 #PADDED_SHARED_2_16x256 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 
 // PartitionedSharedEncoding attributes for testing
 #PARTITIONED_SHARED_SWIZZLE = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #A_SHARED}>
-#PARTITIONED_SHARED_PADDED = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 1, partitionLayout = #PADDED_SHARED_0_16x32}>
+#PARTITIONED_SHARED_PADDED = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 1, partitionLayout = #PADDED_SHARED_0_64x8}>
 
 #smem = #ttg.shared_memory
 
@@ -973,23 +974,31 @@ tt.func @partition_outside_alloc_interference() {
 }
 
 // expected-remark @below {{ptr_allocation_datalayout}}
-// expected-remark @below {{size = 8}}
+// expected-remark @below {{size = 12}}
+// expected-remark @below {{offset = 8, size = 4}}
 tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
   // expected-remark @below {{offset = 0, size = 8}}
   ttg.warp_specialize(%arg0)
   default {
     ttg.warp_yield
+  }
+  partition0(%ptr: !tt.ptr<i32>) num_warps(4) {
+    ttg.warp_return
   } : (!tt.ptr<i32>) -> ()
   tt.return
 }
 
 // expected-remark @below {{tightly_packed_captures}}
-// expected-remark @below {{size = 9}}
+// expected-remark @below {{size = 16}}
+// expected-remark @below {{offset = 12, size = 4}}
 tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
   // expected-remark @below {{offset = 0, size = 9}}
   ttg.warp_specialize(%arg0, %arg1)
   default {
     ttg.warp_yield
+  }
+  partition0(%value: i8, %address: i64) num_warps(4) {
+    ttg.warp_return
   } : (i8, i64) -> ()
   tt.return
 }

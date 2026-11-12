@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 """
-Common utilities for GFX1250 GEMM kernels.
+Common utilities for CDNA5 GEMM kernels.
 
 This module contains shared functions, classes, and utilities used by both
 persistent and StreamK GEMM implementations.

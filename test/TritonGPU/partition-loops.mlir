@@ -285,6 +285,33 @@ tt.func @partition_outputs(%lb: i32, %ub: i32, %step: i32) -> (!ty, !ty, !ty) {
   tt.return %outs#0, %outs#1, %outs#2 : !ty, !ty, !ty
 }
 
+// CHECK-LABEL: @scan_in_two_partitions
+tt.func @scan_in_two_partitions(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: partition0
+  // CHECK: "tt.scan"({{.*}}) <{axis = 0 : i32, reverse = true}>
+  // CHECK: arith.addf
+  // CHECK-NEXT: arith.maxnumf
+  // CHECK-NEXT: tt.scan.return
+  // CHECK: "op_b"
+  // CHECK: partition1
+  // CHECK: "tt.scan"({{.*}}) <{axis = 0 : i32, reverse = true}>
+  // CHECK: arith.addf
+  // CHECK-NEXT: arith.maxnumf
+  // CHECK-NEXT: tt.scan.return
+  // CHECK: "op_b"
+  scf.for %i = %lb to %ub step %step : i32 {
+    %x = "op_a"() {ttg.partition = array<i32: 0, 1>} : () -> tensor<128xf32>
+    %s:2 = "tt.scan"(%x, %x) <{axis = 0 : i32, reverse = true}> ({
+    ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
+      %0 = arith.addf %a0, %b0 {ttg.partition = array<i32: 0, 1>} : f32
+      %1 = arith.maxnumf %a1, %b1 {ttg.partition = array<i32: 0, 1>} : f32
+      tt.scan.return %0, %1 {ttg.partition = array<i32: 0, 1>} : f32, f32
+    }) {ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>, array<i32: 0, 1>]} : (tensor<128xf32>, tensor<128xf32>) -> (tensor<128xf32>, tensor<128xf32>)
+    "op_b"(%s#0, %s#1) {ttg.partition = array<i32: 0, 1>} : (tensor<128xf32>, tensor<128xf32>) -> ()
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1>}
+  tt.return
+}
+
 // CHECK-LABEL: @trivial_tensor_captures
 tt.func @trivial_tensor_captures(%arg0: f16, %lb: i32, %ub: i32, %step: i32) {
   %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>

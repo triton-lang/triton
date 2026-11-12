@@ -1,5 +1,29 @@
 // RUN: triton-opt %s -test-print-alignment -split-input-file -verify-diagnostics=only-expected -o /dev/null
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_alignment(%index: i32) {
+    %zero = arith.constant 0 : i32
+    %stride = arith.constant 256 : i32
+    %owner = ttg.thread_predicate <31, 3>
+    %selected = scf.if %owner -> (i32) {
+      %value = ttg.thread_scope -> (i32) {
+        %offset = arith.muli %index, %stride : i32
+        ttg.thread_yield %offset : i32
+      }
+      scf.yield %value : i32
+    } else {
+      scf.yield %zero : i32
+    }
+    // expected-remark @below {{contiguity = [1], divisibility = [256], constancy = [1]}}
+    %broadcast = ttg.thread_handoff %selected <31, 3> -> <0, 0> : i32
+    // expected-remark @below {{contiguity = [1], divisibility = [256], constancy = [128]}}
+    %values = tt.splat %broadcast : i32 -> tensor<128xi32>
+    tt.return
+  }
+}
+
+// -----
+
 tt.func @cast() {
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1}}
   %cst = arith.constant 1 : i32
@@ -1470,6 +1494,72 @@ tt.func @select_cond_constancy_clamps_divisibility(%arg0: tensor<8xi1>) {
   // collapse to gcd(8, 8, 1) = 1; divisibility must clamp to 1 (not gcd(8, 16) = 8).
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %sel = arith.select %arg0, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+// Equal pointer groups retain their alignment; splitting a group accounts for
+// the byte offset of each new group base.
+tt.func @select_pointer_groups(
+    %lhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %rhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %whole: tensor<8xi1> {tt.constancy = 8 : i32},
+    %half: tensor<8xi1> {tt.constancy = 4 : i32},
+    %each: tensor<8xi1>) {
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %same_groups = arith.select %whole, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  // expected-remark @below {{contiguity = [4], divisibility = [16], constancy = [1]}}
+  %split_groups = arith.select %half, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1]}}
+  %split_elements = arith.select %each, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @select_pointer_mixed_groups(
+    %lhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %rhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 4 : i32, tt.divisibility = 64 : i32},
+    %cond: tensor<8xi1> {tt.constancy = 8 : i32}) {
+  // The second output group starts sixteen bytes into the first lhs group.
+  // expected-remark @below {{contiguity = [4], divisibility = [16], constancy = [1]}}
+  %mixed = arith.select %cond, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  %poison = ub.poison : tensor<8x!tt.ptr<f32>>
+  // An unresolved arm does not introduce a known interior group base.
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %defined = arith.select %cond, %lhs, %poison : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @select_aligned_splats(
+    %lhs: !tt.ptr<f32> {tt.divisibility = 64 : i32},
+    %rhs: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %cond: tensor<8xi1>) {
+  %a = tt.splat %lhs : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+  %b = tt.splat %rhs : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+  // Every element is already an aligned group base.
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1]}}
+  %pointers = arith.select %cond, %a, %b : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  %c64 = arith.constant dense<64> : tensor<8xi32>
+  %c32 = arith.constant dense<32> : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1]}}
+  %integers = arith.select %cond, %c64, %c32 : tensor<8xi1>, tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @select_integer_groups(%whole: tensor<8xi1> {tt.constancy = 8 : i32},
+                               %half: tensor<8xi1> {tt.constancy = 4 : i32}) {
+  %lhs = tt.make_range {end = 72 : i32, start = 64 : i32} : tensor<8xi32>
+  %rhs = tt.make_range {end = 136 : i32, start = 128 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %same_groups = arith.select %whole, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
+  // Integer groups advance by one, independent of the integer bit width.
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1]}}
+  %split_groups = arith.select %half, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
   tt.return
 }
 

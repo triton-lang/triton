@@ -14,6 +14,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <optional>
 
@@ -48,6 +49,51 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 } // namespace mlir::LLVM
 
 namespace mlir::triton {
+
+class ModuleAxisInfoAnalysis;
+
+// Split the mixed attributes accepted by the old aggregate builders.
+template <typename Op> struct BuilderAttributes {
+  typename Op::Properties properties{};
+  SmallVector<NamedAttribute> discardableAttrs;
+};
+
+template <typename Op>
+BuilderAttributes<Op> splitBuilderAttributes(OpBuilder &builder, Location loc,
+                                             ArrayRef<NamedAttribute> attrs) {
+  BuilderAttributes<Op> result;
+  if constexpr (std::is_same_v<typename Op::Properties, EmptyProperties>) {
+    llvm::append_range(result.discardableAttrs, attrs);
+  } else {
+    Op::populateDefaultProperties(
+        OperationName(Op::getOperationName(), builder.getContext()),
+        result.properties);
+    LogicalResult converted = Op::setPropertiesFromAttr(
+        result.properties, builder.getDictionaryAttr(attrs),
+        [&]() { return emitError(loc, "failed to convert properties"); });
+    assert(succeeded(converted) && "failed to convert properties");
+    (void)converted;
+
+    auto properties = dyn_cast_or_null<DictionaryAttr>(
+        Op::getPropertiesAsAttr(builder.getContext(), result.properties));
+    for (NamedAttribute attr : attrs) {
+      StringRef name = attr.getName().getValue();
+      bool isProperty = properties && properties.contains(name);
+      if (name == "operand_segment_sizes")
+        isProperty |= properties && properties.contains("operandSegmentSizes");
+      if (name == "result_segment_sizes")
+        isProperty |= properties && properties.contains("resultSegmentSizes");
+      if (!isProperty)
+        result.discardableAttrs.push_back(attr);
+    }
+  }
+  return result;
+}
+
+// The address of the descriptor's logical origin in its memory space.
+Value getMemDescAddress(RewriterBase &rewriter, Location loc,
+                        const LLVMTypeConverter *typeConverter,
+                        gpu::MemDescType type, Value lowered);
 
 struct TritonLLVMOpBuilder {
   TritonLLVMOpBuilder(Location loc, OpBuilder &builder)
@@ -352,6 +398,16 @@ Value emitRedundantThreadPredicate(
     const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfoBase &targetInfo);
+
+Value emitThreadPredicate(ThreadDomainAttr domain,
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          const TargetInfoBase &targetInfo);
+
+// Inside an owner's branch, only redundant CTAs need a predicate.
+// An empty value means all participating threads can execute the operation.
+Value emitMemoryThreadPredicate(
+    Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
 
 // Takes two values that may be boolean, or null to represent constant True.
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
@@ -726,22 +782,35 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
+/// Choose a legal atomic load/store width using pointer alignment/contiguity
+/// and mask constancy.
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo);
+
+/// Emit `bodyBuilder` inline when `pred` is null. Otherwise, emit it only when
+/// `pred` is true and merge its results with `falseValues` in a continuation
+/// block.
+SmallVector<Value>
+emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
+               ValueRange falseValues,
+               llvm::function_ref<SmallVector<Value>()> bodyBuilder);
+
 /// Insert CTA or cluster barriers around an atomic operation according to its
-/// acquire/release semantics. `emitBarrierAfter` may be false when result
-/// staging already emits the required barrier after the atomic instruction.
+/// acquire/release semantics and any ordering already provided by result
+/// staging.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
-/// Whether atomic result broadcast barrier is sufficient for acquire ordering.
-/// Must run after scratch allocation.
-bool atomicResultHasOrderingBarrier(Operation *op);
+void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,
+                              uint32_t laneMask,
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo);
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo);
+Value broadcastScalarResult(Operation *op, Value resultVal,
+                            ConversionPatternRewriter &rewriter,
+                            Value threadPred, const TargetInfoBase &targetInfo);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
@@ -757,6 +826,14 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
+
+// Use storePred is supplied to skip selected producer lanes.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,
@@ -785,20 +862,17 @@ createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
 // Broadcast canonical owners' results to redundant threads and CTAs. Both the
 // input and returned values contain only unique registers.
-SmallVector<Value>
-broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
-                      ConversionPatternRewriter &rewriter,
-                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
-                      TritonLLVMOpBuilder &b, Value threadPred,
-                      const TargetInfoBase &targetInfo);
+SmallVector<Value> broadcastTensorResult(Operation *op,
+                                         ConversionPatternRewriter &rewriter,
+                                         ArrayRef<Value> uniqueResultVals,
+                                         Value threadPred,
+                                         const TargetInfoBase &targetInfo);
 
-void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
-                                 ConversionPatternRewriter &rewriter,
-                                 SmallVector<Value> &resultVals,
-                                 Type valueElemTy, TritonLLVMOpBuilder &b,
-                                 Value threadPred,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter);
+/// Synchronize an atomic result, then replace the op.
+void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Value threadPred,
+                           const TargetInfoBase &targetInfo,
+                           const LLVMTypeConverter *typeConverter);
 
 // -----------------------------------------------------------------------
 // FuncOp conversion utilities

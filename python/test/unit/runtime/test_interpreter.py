@@ -1,7 +1,9 @@
 import numpy as np
+import pytest
 import itertools
 
 from triton._C.libtriton import interpreter as _interpreter
+from triton._C.libtriton import ir
 import triton.language as tl
 from triton.runtime import interpreter
 
@@ -10,6 +12,86 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
     base = np.uint64(array.ctypes.data)
     offsets = np.arange(array.size, dtype=np.uint64) * np.uint64(array.itemsize)
     return (base + offsets).reshape(array.shape)
+
+
+@pytest.mark.parametrize("dtype, prefix", [
+    (tl.float16, "fcmpO"),
+    (tl.float32, "fcmpO"),
+    (tl.float64, "fcmpO"),
+    (tl.float32, "fcmpU"),
+    (tl.int32, "icmpS"),
+    (tl.uint32, "icmpU"),
+    (tl.int1, "icmpU"),
+])
+@pytest.mark.parametrize("op, expected", [
+    ("LT", [True, False, False, False]),
+    ("LE", [True, True, False, True]),
+    ("GT", [False, False, True, False]),
+    ("GE", [False, True, True, True]),
+    ("EQ", [False, True, False, True]),
+    ("NE", [True, False, True, False]),
+])
+def test_compare_op_return_type(dtype, prefix, op, expected):
+    builder = interpreter.InterpreterBuilder()
+    np_dtype = interpreter._get_np_dtype(dtype)
+    lhs = interpreter.TensorHandle(np.array([0, 1, 2, 3], dtype=np_dtype), dtype)
+    rhs = interpreter.TensorHandle(np.array([1, 1, 0, 3], dtype=np_dtype), dtype)
+    if dtype.is_int() and op in ("EQ", "NE"):
+        prefix = "icmp"
+    result = getattr(builder, f"create_{prefix}{op}")(lhs, rhs)
+    assert result.dtype == tl.int1
+    assert result.data.dtype == np.bool_
+    np.testing.assert_array_equal(result.data, expected)
+    converted = builder.create_ui_to_fp(result, tl.float16)
+    np.testing.assert_array_equal(converted.data, np.array(expected, dtype=np.float16))
+
+
+def test_bf16_to_fp16_rounding_and_overflow():
+    # Signed zeros, finite values, overflow, subnormal rounding, and infinities.
+    bits = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x4781, 0xC781, 0x3300, 0x3301, 0x33C0, 0xB3C0, 0x7F80, 0xFF80],
+                    dtype=np.uint16)
+    expected = np.array(
+        [0x0000, 0x8000, 0x3C00, 0xBC00, 0x7C00, 0xFC00, 0x0000, 0x0001, 0x0002, 0x8002, 0x7C00, 0xFC00],
+        dtype=np.uint16)
+    src = interpreter.TensorHandle(bits, tl.bfloat16)
+    with np.errstate(over="ignore"):
+        result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.float16, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result.data.view(np.uint16), expected)
+
+
+def test_fp16_to_bf16_exact_values():
+    bits = np.array([0x0000, 0x8000, 0x3C00, 0xBC00, 0x3C08, 0x0001, 0x7C00, 0xFC00, 0x7E00], dtype=np.uint16)
+    expected = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x3F81, 0x3380, 0x7F80, 0xFF80, 0x7FC0], dtype=np.uint16)
+    src = interpreter.TensorHandle(bits.view(np.float16), tl.float16)
+    result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.bfloat16, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result.data, expected)
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype, bits, expected", [
+    (tl.float32, tl.bfloat16, [0x00008000, 0x00018000, 0x007F8000, 0x80008000], [0x0000, 0x0002, 0x0080, 0x8000]),
+    (tl.float16, tl.bfloat16, [0x0001, 0x8001], [0x3380, 0xB380]),
+    (tl.float8e4nv, tl.float8e5, [0x01, 0x02, 0x07], [0x18, 0x1C, 0x23]),
+])
+def test_float_conversion_subnormal_rounding(src_dtype, dst_dtype, bits, expected):
+    uint_dtype = getattr(np, f"uint{src_dtype.primitive_bitwidth}")
+    data = np.array(bits, dtype=uint_dtype).view(interpreter._get_np_dtype(src_dtype))
+    result = interpreter._convert_float(data, src_dtype, dst_dtype, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("src_dtype, codes, expected", [
+    (tl.float8e4nv, [0x7F, 0xFF, 0x7E], [float('nan'), float('nan'), 448.0]),
+    (tl.float8e5, [0x7C, 0xFC, 0x7D], [float('inf'), float('-inf'), float('nan')]),
+    (tl.float8e4b8, [0x80, 0x7F], [float('nan'), 240.0]),
+    (tl.float8e5b16, [0x80, 0x7F], [float('nan'), 57344.0]),
+    (tl.float8e4b15, [0x7F], [1.875]),
+])
+def test_fp8_upcast_special_codes(src_dtype, codes, expected):
+    # The FP8 Inf/NaN encodings must decode as such, not as finite numbers.
+    data = np.array(codes, dtype=np.uint8)
+    result = interpreter._convert_float(data, src_dtype, tl.float32, ir.ROUNDING_MODE.RTNE)
+    for got, want in zip(result.view(np.float32).tolist(), expected):
+        assert (np.isnan(got) and np.isnan(want)) or got == want
 
 
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
@@ -86,3 +168,78 @@ def test_atomic_cas_accepts_non_contiguous_ndarray_views() -> None:
     np.testing.assert_array_equal(old, original[:, ::2])
     original[:, ::2] = desired
     np.testing.assert_array_equal(dst, original)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_fma_broadcast_and_strides(dtype):
+    x = np.arange(12, dtype=dtype).reshape(3, 4)[:, ::2]
+    y = np.array(2, dtype=dtype)
+    z = np.arange(2, dtype=dtype)
+    handles = [interpreter.TensorHandle(value, getattr(tl, dtype)) for value in (x, y, z)]
+    result = interpreter.InterpreterBuilder().create_fma(*handles)
+    assert result.data.shape == x.shape
+    assert result.data.dtype == np.dtype(dtype)
+    np.testing.assert_array_equal(result.data, x * y + z)
+
+
+@pytest.mark.parametrize("compute_type", [tl.bfloat16, tl.float16])
+@pytest.mark.parametrize("signed_scale", [False, True])
+@pytest.mark.parametrize("rhs_scale", [False, True])
+def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
+    scales = np.repeat(np.array([0, 127, 128, 255], dtype=np.uint8), 8)[:, None]
+    if signed_scale:
+        scales = scales.view(np.int8)
+    scales = interpreter.TensorHandle(scales, tl.int8 if signed_scale else tl.uint8)
+    # Each packed byte contains two FP4 values of one.
+    values = np.full((32, 16), 0x22, dtype=np.uint8)
+    values = interpreter.TensorHandle(values.T if rhs_scale else values, tl.uint8)
+    normal_bits = 0x3F80 if compute_type == tl.bfloat16 else 0x3C00
+    normal = interpreter.TensorHandle(np.full((32, 32), normal_bits, dtype=np.uint16), compute_type)
+    normal_format = ir.ScaleDotElemTypeTY.BF16 if compute_type == tl.bfloat16 else ir.ScaleDotElemTypeTY.FP16
+    scaled_operand = (values, scales, ir.ScaleDotElemTypeTY.E2M1)
+    normal_operand = (normal, None, normal_format)
+    lhs, rhs = (normal_operand, scaled_operand) if rhs_scale else (scaled_operand, normal_operand)
+    acc = interpreter.TensorHandle(np.zeros((32, 32), dtype=np.float32), tl.float32)
+    result = interpreter.InterpreterBuilder().create_dot_scaled(*lhs, *rhs, False, True, True, acc)
+
+    minimum = 2.0**-122 if compute_type == tl.bfloat16 else 0.0
+    expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
+    expected = np.broadcast_to(expected, (32, 32))
+    np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
+    import importlib.util
+    import torch
+
+    source = tmp_path / "core_helper.py"
+    source.write_text("import triton.language.core as core\n"
+                      "def helper(out, fail):\n"
+                      "    core.store(out, core.full((), 7, core.int32))\n"
+                      "    if fail:\n"
+                      "        raise ValueError('helper failed')\n")
+    spec = importlib.util.spec_from_file_location("core_helper", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    helper = interpreter.InterpretedFunction(module.helper)
+
+    def caller(out, helper: tl.constexpr, fail: tl.constexpr):
+        helper(out, fail)
+        tl.store(out, tl.load(out) + 1)
+
+    original = tl.core.full
+    # Restore module attributes even if the regression assertion fails.
+    for name, value in vars(tl.core).copy().items():
+        monkeypatch.setattr(tl.core, name, value)
+    output = torch.zeros((), dtype=torch.int32)
+    kernel = interpreter.InterpretedFunction(caller)
+    if fail:
+        with pytest.raises(interpreter.InterpreterError, match="helper failed"):
+            kernel[(1, )](output, helper, fail)
+    else:
+        kernel[(1, )](output, helper, fail)
+    assert output.item() == (7 if fail else 8)
+    assert tl.core.full is original
+    with pytest.raises(ValueError, match="_semantic"):
+        tl.core.full((), 7, tl.int32)

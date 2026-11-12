@@ -18,6 +18,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using mlir::triton::actionAdditiveStrides;
 using mlir::triton::gpu::bankConflictsLdSt;
 using mlir::triton::gpu::getVecBitwidthLdSt;
 using mlir::triton::gpu::LocalMemOpTile;
@@ -302,6 +303,58 @@ protected:
 };
 
 // ——— Tests ———
+
+TEST_F(SwizzleTest, AdditiveStridesRejectsTransitiveOverlap) {
+  auto kRegister = S("register");
+  auto kLane = S("lane");
+  auto kWarp = S("warp");
+  auto kBlock = S("block");
+  auto kOffset = S("offset");
+  SmallVector<std::pair<StringAttr, int32_t>> outDims = {{kOffset, 2048},
+                                                         {kBlock, 1}};
+
+  // The 0x510 basis overlaps the lane address at 0x10, so it must remain in
+  // the outer xor offset. The 0x100 basis must remain there too because it
+  // overlaps 0x510; moving it into the additive inner loop would incorrectly
+  // turn (base ^ 0x510) ^ 0x100 into (base ^ 0x510) + 0x100.
+  LinearLayout reps(
+      {{kRegister, {{1, 0}, {2, 0}, {4, 0}, {0x100, 0}, {0x510, 0}}},
+       {kLane, {{0x10, 0}}},
+       {kWarp, {}},
+       {kBlock, {}}},
+      outDims, /*requireSurjective=*/false);
+  LinearLayout addrLayout({{kLane, {{0x10, 0}}}, {kWarp, {}}, {kBlock, {}}},
+                          outDims, /*requireSurjective=*/false);
+
+  auto result = actionAdditiveStrides(reps, addrLayout, /*maskSpanOffsets=*/0,
+                                      /*maskSpanBlocks=*/0,
+                                      /*regsPerInst=*/8);
+  EXPECT_EQ(result.first, 8);
+}
+
+TEST_F(SwizzleTest, AdditiveStridesKeepsIndependentRegisterBases) {
+  auto kRegister = S("register");
+  auto kLane = S("lane");
+  auto kWarp = S("warp");
+  auto kBlock = S("block");
+  auto kOffset = S("offset");
+  SmallVector<std::pair<StringAttr, int32_t>> outDims = {{kOffset, 2048},
+                                                         {kBlock, 1}};
+
+  LinearLayout reps(
+      {{kRegister, {{1, 0}, {2, 0}, {4, 0}, {0x100, 0}, {0x500, 0}}},
+       {kLane, {{0x10, 0}}},
+       {kWarp, {}},
+       {kBlock, {}}},
+      outDims, /*requireSurjective=*/false);
+  LinearLayout addrLayout({{kLane, {{0x10, 0}}}, {kWarp, {}}, {kBlock, {}}},
+                          outDims, /*requireSurjective=*/false);
+
+  auto result = actionAdditiveStrides(reps, addrLayout, /*maskSpanOffsets=*/0,
+                                      /*maskSpanBlocks=*/0,
+                                      /*regsPerInst=*/8);
+  EXPECT_EQ(result.first, 32);
+}
 
 TEST_F(SwizzleTest, Test128x128Float8Transpose) {
   // 128x128 float8 matrix transpose

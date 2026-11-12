@@ -4,9 +4,13 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 
+// The optional mask or pred enables all elements when absent. An optional
+// other operand supplies the value for masked-off elements.
+def FoldTruePredicate : NativeOpTrait<"FoldTruePredicate">;
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
 def VerifyTensorLayoutsTrait : NativeOpTrait<"VerifyTensorLayoutsTrait">;
 def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
+def SameResultsType : NativeOpTrait<"SameResultsType">;
 def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
 def SameLoadStoreOperandsShape : NativeOpTrait<"SameLoadStoreOperandsShape">;
 def SameLoadStoreOperandsAndResultShape : NativeOpTrait<"SameLoadStoreOperandsAndResultShape">;

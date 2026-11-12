@@ -2,10 +2,10 @@
 #define TRITON_IR_TRAITS_H_
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Support/LogicalResult.h"
-#include "triton/Dialect/Triton/IR/Types.h"
 
 namespace mlir {
 namespace OpTrait {
@@ -27,6 +27,7 @@ LogicalResult verifyTensorSize(Operation *op);
 LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op);
+LogicalResult verifySameResultsType(Operation *op);
 LogicalResult verifyEquivalentTensorType(Type typeA, Type typeB);
 LogicalResult verifySameOperandsAndResultEncoding(Operation *op);
 
@@ -35,6 +36,35 @@ LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 LogicalResult verifySameLoadStoreOperandsAndResultShape(Operation *op);
 
 } // namespace impl
+
+template <typename ConcreteType>
+class FoldTruePredicate : public TraitBase<ConcreteType, FoldTruePredicate> {
+public:
+  static LogicalResult foldTrait(Operation *op, ArrayRef<Attribute> operands,
+                                 SmallVectorImpl<OpFoldResult> &) {
+    auto concrete = cast<ConcreteType>(op);
+    auto predicate = getPredicateRange(concrete);
+    if (predicate.empty())
+      return failure();
+    Attribute value =
+        operands[predicate.getAsOperandRange().getBeginOperandIndex()];
+    if (!value || !matchPattern(value, m_One()))
+      return failure();
+
+    predicate.clear();
+    if constexpr (requires { concrete.getOtherMutable(); })
+      concrete.getOtherMutable().clear();
+    return success();
+  }
+
+private:
+  static MutableOperandRange getPredicateRange(ConcreteType op) {
+    if constexpr (requires { op.getMaskMutable(); })
+      return op.getMaskMutable();
+    else
+      return op.getPredMutable();
+  }
+};
 
 template <class ConcreteType>
 class TensorSizeTrait : public TraitBase<ConcreteType, TensorSizeTrait> {
@@ -70,6 +100,14 @@ class SameOperandsEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsEncoding(op);
+  }
+};
+
+template <typename ConcreteType>
+class SameResultsType : public TraitBase<ConcreteType, SameResultsType> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifySameResultsType(op);
   }
 };
 

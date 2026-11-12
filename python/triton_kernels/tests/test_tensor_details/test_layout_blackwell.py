@@ -2,6 +2,7 @@ import math
 import pytest
 import torch
 import triton
+import triton.language as tl
 from torch._subclasses.fake_tensor import FakeTensorMode
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
@@ -11,6 +12,7 @@ from triton_kernels.tensor_details.layout import (
     StridedLayout,
 )
 from triton_kernels.tensor_details.dtype import FP4
+from triton_kernels.tensor_details.layout_details import blackwell_scale
 from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout, empty
 
 # ------------------------------------------------------------
@@ -621,6 +623,67 @@ def test_scale_convert_layout_dtype(layout, dtype):
     assert torch.equal(restored.data.cpu().view(torch.uint8), data.view(torch.uint8))
 
 
+@pytest.mark.parametrize("rows,columns,source_slices,dest_slices,source_alignment,dest_alignment", [
+    (512, 576, 1, 6, 8, 8),
+    (3072, 576, 1, 6, 8, 8),
+    (129, 12, None, 6, 4, 8),
+    (129, 12, 1, 6, 8, 4),
+    (512, 576, 1, 1, 8, 8),
+    (129, 12, None, None, 4, 8),
+    (129, 12, 3, 6, 8, 8),
+    (0, 576, 1, 6, 8, 8),
+])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.float8_e4m3fn])
+@pytest.mark.parametrize("storage", ["contiguous", "gapped_source", "gapped_output"])
+def test_act_scale_encoded_conversion_replay(rows, columns, source_slices, dest_slices, source_alignment,
+                                             dest_alignment, dtype, storage):
+    data = torch.randint(0, 256, (rows, columns), device="cuda", dtype=torch.uint8).view(dtype)
+    source_counts = (None if source_slices is None else torch.zeros(source_slices, device="cuda", dtype=torch.int32))
+    dest_counts = None if dest_slices is None else torch.zeros(dest_slices, device="cuda", dtype=torch.int32)
+
+    def gapped(tensor):
+        shape = list(tensor.data.shape)
+        shape[1] *= 2
+        result = wrap_torch_tensor(
+            tensor.data.new_empty(shape)[:, ::2], shape=list(tensor.shape), layout=tensor.storage.layout)
+        result.data.copy_(tensor.data)
+        return result
+
+    def forward():
+        source_metadata = None if source_counts is None else make_ragged_tensor_metadata(source_counts, rows)
+        dest_metadata = None if dest_counts is None else make_ragged_tensor_metadata(dest_counts, rows)
+        source_layout = BlackwellActMXScaleLayout(source_metadata, column_alignment=source_alignment)
+        dest_layout = BlackwellActMXScaleLayout(dest_metadata, column_alignment=dest_alignment)
+        source = convert_layout(wrap_torch_tensor(data), source_layout)
+        if storage == "gapped_source":
+            source = gapped(source)
+        target = None
+        if storage == "gapped_output":
+            target = gapped(
+                empty([rows, columns], dtype=dtype, device="cuda", layout=dest_layout, allow_implicit_conversion=True))
+        result = convert_layout(source, dest_layout, out=target)
+        expected = convert_layout(convert_layout(source, StridedLayout(-1)), dest_layout)
+        if target is not None:
+            assert result is target
+        return result, expected
+
+    forward()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        result, expected = forward()
+    pointer = result.data.data_ptr()
+    for active in (rows // 2, rows, 0):
+        for counts in (source_counts, dest_counts):
+            if counts is not None:
+                n = counts.numel()
+                counts.copy_(
+                    torch.tensor([active // n + (i < active % n) for i in range(n)], device="cuda", dtype=torch.int32))
+        data.view(torch.uint8).bitwise_xor_(0x55)
+        graph.replay()
+        assert torch.equal(result.data.view(torch.uint8), expected.data.view(torch.uint8))
+        assert result.data.data_ptr() == pointer
+
+
 @pytest.mark.parametrize("kind", ["act", "mx", "ragged_act"])
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("inverse", [False, True])
@@ -699,3 +762,37 @@ def test_scale_convert_layout_fake(layout, monkeypatch):
         restored = convert_layout(out, StridedLayout())
         assert list(restored.data.shape) == list(shape)
         assert convert_layout(out, StridedLayout(), out=restored) is restored
+
+
+@triton.jit
+def _gather_scale_column(S, Rows, Out, STRIDES: tl.constexpr):
+    i = tl.arange(0, 4)
+    rows = tl.load(Rows + i)
+    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, 0, rows, 0, *STRIDES)
+    tl.store(Out + i, tl.load(ptrs))
+
+
+def test_scale_ptr_gather_column(device):
+    data = torch.arange(9 * 8, device=device).reshape(9, 8).to(torch.uint8)
+    packed = convert_layout(wrap_torch_tensor(data), BlackwellMXScaleLayout()).data
+    rows = torch.tensor([8, 0, 5, 2], device=device)
+    gathered = torch.empty(4, dtype=torch.uint8, device=device)
+
+    _gather_scale_column[(1, )](packed, rows, gathered, packed.stride()[1:])
+
+    assert torch.equal(gathered, data[rows, 0])
+
+
+# The one-byte base stands in for a large allocation; do not specialize its pointer range.
+@triton.jit(do_not_specialize=["S"])
+def _scale_ptr_offset(S, Out, outer, inner):
+    # Two int32 stride products sum to 2**31; inspect the pointer without loading it.
+    ptr = blackwell_scale.swizzle_mx_scale_bw_ptr(S, outer, inner, 0, 2**31 - 1024, 512, 256, 1, INDEX_TYPE=tl.int32)
+    tl.store(Out, ptr.to(tl.int64) - S.to(tl.int64))
+
+
+def test_scale_ptr_large_offset(device):
+    base = torch.empty(1, dtype=torch.uint8, device=device)
+    offset = torch.empty((), dtype=torch.int64, device=device)
+    _scale_ptr_offset[(1, )](base, offset, 128, 8)
+    assert offset.item() == 2**31

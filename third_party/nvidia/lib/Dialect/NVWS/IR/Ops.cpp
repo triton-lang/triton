@@ -204,6 +204,10 @@ ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
   result.addAttribute(getNumWarpsAttrName(result.name),
                       p.getBuilder().getDenseI32ArrayAttr(partitionNumWarps));
 
+  // The results, if any, are those of the first region's yield.
+  if (p.parseOptionalArrowTypeList(result.types))
+    return failure();
+
   return success();
 }
 
@@ -218,6 +222,7 @@ void WarpGroupOp::print(OpAsmPrinter &p) {
     p << " num_warps(" << numWarps << ") ";
     p.printRegion(region, /*printEntryBlockArgs=*/false);
   }
+  p.printOptionalArrowTypeList(getResultTypes());
 }
 
 void CreateTokenOp::build(::mlir::OpBuilder &builder,

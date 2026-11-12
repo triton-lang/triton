@@ -44,20 +44,84 @@ static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
 
 namespace mlir::triton::gpu {
 
-namespace {
+void InlineAsmOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  if (getPure())
+    return;
+  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+}
 
-template <typename T> bool hasEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && isa<T>(encoding);
+Speculation::Speculatability InlineAsmOp::getSpeculatability() {
+  return getPure() ? Speculation::Speculatable : Speculation::NotSpeculatable;
+}
+
+LogicalResult InlineAsmOp::verify() {
+  for (Type type : llvm::concat<Type>(getOperandTypes(), getResultTypes())) {
+    auto tensor = dyn_cast<RankedTensorType>(type);
+    if (tensor &&
+        !isa_and_present<DistributedEncodingTrait>(tensor.getEncoding()))
+      return emitOpError("requires explicit distributed tensor layouts");
   }
-  return false;
+  return verifyInlineAsmOperands(*this, getPure());
 }
 
-bool hasDotOperandEncoding(Value value) {
-  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
+static LogicalResult verifyThreadDomain(Operation *op,
+                                        ThreadDomainAttr domain) {
+  auto module = op->getParentOfType<ModuleOp>();
+  uint32_t laneMask = TritonGPUDialect::getThreadsPerWarp(module) - 1;
+  uint32_t warpMask = lookupNumWarps(op) - 1;
+  uint32_t blockMask = lookupNumCTAs(op) - 1;
+  if (!domain.hasMasksWithin(laneMask, warpMask, blockMask))
+    return op->emitOpError(
+        "thread domain exceeds the enclosing execution domain");
+  return success();
 }
+
+LogicalResult ThreadPredicateOp::verify() {
+  return verifyThreadDomain(*this, getDomain());
+}
+
+void ThreadScopeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent())
+    successors.emplace_back(&getBody());
+  else
+    successors.emplace_back(getOperation());
+}
+
+ValueRange ThreadScopeOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? ValueRange(getResults())
+                                 : ValueRange(getBody().getArguments());
+}
+
+LogicalResult ThreadHandoffOp::verify() {
+  auto source = getSource();
+  auto destination = getDestination();
+  if (failed(verifyThreadDomain(*this, source)) ||
+      failed(verifyThreadDomain(*this, destination)))
+    return failure();
+  if (!destination.hasMasksWithin(source.getLane(), source.getWarp(),
+                                  source.getBlock()))
+    return emitOpError("destination must widen the source thread domain");
+  if (source != destination && source.hasSameWarpAndBlock(destination) &&
+      destination.getLane())
+    return emitOpError("lane handoff requires every destination warp lane");
+  if (source.getWarp() != destination.getWarp() &&
+      (destination.getLane() || destination.getWarp()))
+    return emitOpError(
+        "cross-warp handoff requires the full destination domain");
+  if (source.getBlock() != destination.getBlock()) {
+    if (!destination.isFull())
+      return emitOpError(
+          "cross-CTA handoff requires the full destination domain");
+    if (source.getBlock() != lookupNumCTAs(*this) - 1)
+      return emitOpError("cross-CTA handoff requires CTA zero as its source");
+  }
+  return success();
+}
+
+namespace {
 
 bool isConvertTrivial(ConvertLayoutOp op) {
   auto srcType = op.getSrc().getType();
@@ -124,20 +188,11 @@ struct CanonicalizeConvertFromReshape
     // If the layouts are structurally the same, the convert is trivial
     if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-          op.getEfficientLayout());
+          op, op.getType(), convert.getSrc(), op.getEfficientLayout());
       return success();
     }
 
-    if (isExpensiveView(convert.getSrc().getType(), op.getType()))
-      return failure();
-    if (!op.getAllowReorder())
-      return failure();
-
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
-        op.getEfficientLayout());
-    return mlir::success();
+    return failure();
   }
 };
 
@@ -308,28 +363,6 @@ struct CanonicalizeConvertFromConvert
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
       return failure();
-
-    // cvt(reshape) -> reshape
-    if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-          isExpensiveView(reshape.getSrc().getType(), op.getType()))
-        return failure();
-
-      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
-      // operations, which requires the element type to match between unpacking
-      // and packing. However, part of values with dot operand encoding will be
-      // packed/unpacked as i32 elements instead of the underlying element type.
-      // To avoid errors, skip this folding when either the operand or result
-      // of view has a dot operand encoding.
-      if (hasDotOperandEncoding(op->getOperand(0)) ||
-          hasDotOperandEncoding(op->getResult(0)))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<ReshapeOp>(op, op->getResult(0).getType(),
-                                             reshape.getResult(),
-                                             reshape.getAllowReorder());
-      return success();
-    }
 
     // cvt(histogram) -> histogram
     if (auto histogram = dyn_cast<HistogramOp>(arg)) {
@@ -557,6 +590,9 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
 LogicalResult MemDescReshapeOp::verify() {
   MemDescType dstType = getResult().getType();
   MemDescType srcType = getSrc().getType();
+  if (NVMMASharedEncodingAttr::isPackedFp6(srcType.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFp6(dstType.getEncoding()))
+    return emitOpError("cannot reshape an opaque packed FP6 tile");
   if (product(dstType.getShape()) != product(srcType.getShape())) {
     return emitError(
         "number of src and dst elements of reshape must be the same");
@@ -580,6 +616,8 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  if (NVMMASharedEncodingAttr::isPackedFp6(srcEnc))
+    return failure();
   auto *ctx = srcEnc.getContext();
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
@@ -596,7 +634,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CGALayout);
+            mmaEncoding.getPadding(), CGALayout);
         auto srcLL = toLinearLayout(srcShape, srcEnc);
         auto dstLL = toLinearLayout(dstShape, candidateEncoding);
         if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
@@ -685,7 +723,7 @@ LogicalResult MemDescReinterpretOp::verify() {
 
     auto getPadPattern = [](MemDescType ty) {
       auto enc = getPaddedEncoding(ty.getEncoding());
-      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      auto elmtSize = ty.getElementTypeBitWidth() / 8;
       llvm::MapVector<int32_t, int32_t> pattern;
 
       for (auto [interval, padding] :
@@ -777,6 +815,12 @@ LogicalResult MemDescReinterpretOp::verify() {
   // dimension, owns every byte in its allocation regardless of zero bases.
   if (!srcIsLayoutSubview)
     return success();
+
+  // The byte footprint below is exact only for complete FP6 packing atoms.
+  if (NVMMASharedEncodingAttr::isPackedFp6(srcEnc) &&
+      srcTy.getDimSize(getOrder(srcTy).front()) % 16 != 0)
+    return emitOpError("cannot reinterpret an FP6 subview that splits a "
+                       "16-value packing atom");
 
   // Remember that we disallow dstTy that's a subview.
   // A destination without a subview owns its entire physical allocation, even
@@ -918,6 +962,9 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
 }
 
 LogicalResult LocalAllocOp::verify() {
+  if (getSrc() && NVMMASharedEncodingAttr::isPackedFp6(getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!isa<SharedMemorySpaceAttr>(getType().getMemorySpace()))
     return emitOpError("should create a buffer of shared memory");
   if (getSrc() && failed(verifySharedMemoryRank(*this, getSrc().getType(),
@@ -928,6 +975,9 @@ LogicalResult LocalAllocOp::verify() {
 
 // LocalStoreOp
 LogicalResult LocalStoreOp::verify() {
+  if (NVMMASharedEncodingAttr::isPackedFp6(getDst().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (!getDst().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
   if (failed(verifySharedMemoryRank(*this, getSrc().getType(),
@@ -938,6 +988,9 @@ LogicalResult LocalStoreOp::verify() {
 
 // LocalLoadOp
 LogicalResult LocalLoadOp::verify() {
+  if (NVMMASharedEncodingAttr::isPackedFp6(getSrc().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   if (failed(verifySharedMemoryRank(*this, getType(), getSrc().getType(),
                                     "result")))
     return failure();
@@ -946,6 +999,9 @@ LogicalResult LocalLoadOp::verify() {
 
 // LocalGatherOp
 LogicalResult LocalGatherOp::verify() {
+  if (NVMMASharedEncodingAttr::isPackedFp6(getSrc().getType().getEncoding()))
+    return emitOpError(
+        "FP6 MMA tiles cannot be accessed as register byte lanes");
   auto srcTy = getSrc().getType();
   auto indicesTy = cast<RankedTensorType>(getIndices().getType());
   auto dstTy = cast<RankedTensorType>(getType());
@@ -1230,6 +1286,12 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
   auto layoutRank = dropPipeliningDim(getOffsets(), srcEnc).size();
   auto prefixRank = getOffsets().size() - layoutRank;
+  if (NVMMASharedEncodingAttr::isPackedFp6(srcEnc)) {
+    unsigned inner = getOrder(srcTy).front();
+    if (getOffsets()[inner] % 16 || dstTy.getDimSize(inner) % 16)
+      return emitOpError(
+          "FP6 subviews must preserve complete 16-value packing atoms");
+  }
 
   SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
@@ -1367,6 +1429,8 @@ LogicalResult WarpSpecializeOp::verify() {
                                << " partitions but `partitionNumWarps` has "
                                << getPartitionNumWarps().size() << " elements";
   }
+  if (getPartitionNumWarps().empty())
+    return emitOpError("requires at least one worker partition");
   for (auto [i, numWarps] : llvm::enumerate(getPartitionNumWarps())) {
     if (llvm::isPowerOf2_32(numWarps))
       continue;
@@ -1601,8 +1665,8 @@ LogicalResult WarpYieldOp::verify() {
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
 size_t getSharedMemorySize(Type type) {
-  if (isa<IntegerType, FloatType>(type))
-    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<IntegerType, FloatType, PackedFloat4E2M1Type>(type))
+    return llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 8);
   if (isa<PointerType, TensorDescInterface>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
@@ -1639,6 +1703,8 @@ unsigned WarpSpecializeOp::getTotalPartitionWarps() {
 //===----------------------------------------------------------------------===//
 
 void BarrierOp::print(OpAsmPrinter &p) {
+  if (isWarp())
+    p << " warp";
   // print "all" instead of  "local|global_read|global_write|tensor|all"
   if (getAddrSpace() == AddrSpace::All) {
     p << " all";
@@ -1648,6 +1714,9 @@ void BarrierOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto scope = succeeded(parser.parseOptionalKeyword("warp"))
+                   ? BarrierScope::Warp
+                   : BarrierScope::CTA;
   auto parseAddrSpace = [&]() -> FailureOr<AddrSpace> {
     std::string keyword;
     if (parser.parseKeywordOrString(&keyword))
@@ -1677,7 +1746,15 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 
   result.addAttribute("addrSpace",
                       AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
+  result.addAttribute("scope",
+                      BarrierScopeAttr::get(parser.getContext(), scope));
 
+  return success();
+}
+
+LogicalResult BarrierOp::verify() {
+  if (isWarp() && getAddrSpace() != AddrSpace::Local)
+    return emitOpError("warp scope supports only the local address space");
   return success();
 }
 

@@ -28,30 +28,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 constexpr uint32_t kSharedMemoryObjectMask = (1u << 24) - 1;
 
 ////////////////////////////////////////////
-// Utility functions
-////////////////////////////////////////////
-
-Value createMemDescToI32(RewriterBase &rewriter, Location loc,
-                         const LLVMTypeConverter *typeConverter,
-                         ttg::MemDescType memDescTy, Value sharedMemStruct) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto i32Ty = rewriter.getIntegerType(32);
-  if (isa<ttng::TensorMemorySpaceAttr>(memDescTy.getMemorySpace())) {
-    return b.ptrtoint(i32Ty, sharedMemStruct);
-  }
-  assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
-         "Unsupported memory encoding");
-  Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
-  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
-                                                       srcElemTy, rewriter);
-  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-  auto elemSize = getIntOrFloatOrPtrBitWidth(srcElemTy) / 8;
-  offset = b.mul(offset, b.i32_val(elemSize));
-  return b.and_(b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase())),
-                b.i32_val(kSharedMemoryObjectMask));
-}
-
-////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
 
@@ -163,6 +139,18 @@ struct BufferDescriptorsOpConversion
     return b.ptrtoint(i64Ty, basePtr);
   }
 };
+
+Value createLockOwnerPredicate(const TargetInfoBase &targetInfo, OpBuilder &b,
+                               Location loc) {
+  if (targetInfo.isCuda())
+    return mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+  TritonLLVMOpBuilder tb(loc, b);
+  auto [laneId, warpId] = getLaneAndWarpId(b, loc);
+  Value lane0 = tb.icmp_eq(laneId, tb.i32_val(0));
+  Value warp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  return tb.and_(lane0, warp0);
+}
+
 struct LockAcquireOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalLockAcquireOp> {
   explicit LockAcquireOpConversion(LLVMTypeConverter &typeConverter,
@@ -187,16 +175,7 @@ struct LockAcquireOpConversion
     Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
-    Value elect;
-    if (targetInfo.isCuda()) {
-      elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
-    } else {
-      TritonLLVMOpBuilder tb(loc, b);
-      auto [laneId, warpId] = getLaneAndWarpId(b, loc);
-      Value lane0 = tb.icmp_eq(laneId, tb.i32_val(0));
-      Value warp0 = tb.icmp_eq(warpId, tb.i32_val(0));
-      elect = tb.and_(lane0, warp0);
-    }
+    Value elect = createLockOwnerPredicate(targetInfo, b, loc);
     if (op.getPred()) {
       elect = arith::AndIOp::create(b, loc, elect, op.getPred());
     }
@@ -211,21 +190,13 @@ struct LockAcquireOpConversion
         arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 1));
 
     if (targetInfo.isCuda()) {
-      // Inline PTX CAS: old = atom.global.acquire.gpu.cas.b32 [lock], 0, 1
-      // Use converted lock pointer from adaptor for addressing
-      PTXBuilder ptx;
-      auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
-      auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
-      auto *cmpOpr = ptx.newOperand(zero, "r");
-      auto *valOpr = ptx.newOperand(one, "r");
-      auto &atom = *ptx.create("atom");
-      atom.global().o("acquire").o("gpu").o("cas").o("b32");
-      atom(dstOpr, ptrOpr, cmpOpr, valOpr);
-      Value old = ptx.launch(b, loc, i32);
-      // while (old != 0) loop
-      Value cond =
-          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, old, zero);
-      LLVM::CondBrOp::create(b, loc, cond, whileBlock, endBlock);
+      // PTX acquire also applies when the comparison fails.
+      Value result = LLVM::AtomicCmpXchgOp::create(
+          b, loc, adaptor.getLock(), zero, one, LLVM::AtomicOrdering::acquire,
+          LLVM::AtomicOrdering::acquire,
+          targetInfo.getAtomicSyncScope(MemSyncScope::GPU));
+      Value acquired = TritonLLVMOpBuilder(loc, b).extract_val(result, 1);
+      LLVM::CondBrOp::create(b, loc, acquired, endBlock, whileBlock);
     } else {
       Value oldVal = LLVM::AtomicRMWOp::create(
           b, loc, LLVM::AtomicBinOp::xchg, adaptor.getLock(), one,
@@ -278,9 +249,8 @@ struct LockReleaseOpConversion
     Value zero =
         arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 0));
 
+    Value elect = createLockOwnerPredicate(targetInfo, b, loc);
     if (targetInfo.isCuda()) {
-      Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
-
       PTXBuilder ptx;
       auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
       auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
@@ -290,6 +260,8 @@ struct LockReleaseOpConversion
       atom(dstOpr, ptrOpr, valOpr).predicate(elect);
       ptx.launch(b, loc, i32);
     } else {
+      auto [prevBlock, ifBlock, thenBlock] = createIfBlock(b, loc, elect);
+      b.setInsertionPointToStart(ifBlock);
       LLVM::AtomicRMWOp::create(b, loc, LLVM::AtomicBinOp::xchg,
                                 adaptor.getLock(), zero,
                                 LLVM::AtomicOrdering::release,
@@ -315,8 +287,8 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value converted =
-        createMemDescToI32(rewriter, loc, getTypeConverter(),
-                           op.getMemdesc().getType(), adaptor.getMemdesc());
+        getMemDescAddress(rewriter, loc, getTypeConverter(),
+                          op.getMemdesc().getType(), adaptor.getMemdesc());
     rewriter.replaceOp(op, converted);
     return success();
   }

@@ -33,6 +33,12 @@ bool isConstI32OneTensor(Value value) {
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld, bool isCluster,
                     Value pred = Value()) {
+  if (!pred) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    return LLVM::AtomicRMWOp::create(
+        rewriter, loc, LLVM::AtomicBinOp::uinc_wrap, ptr, b.i32_val(-1),
+        LLVM::AtomicOrdering::monotonic, isCluster ? "cluster" : "block");
+  }
   PTXBuilder ptxBuilder;
   // PTX atom/red.inc resets to 0 only when the old value reaches the bound, so
   // using UINT32_MAX makes it equivalent to a wrapping increment-by-1.
@@ -59,18 +65,26 @@ Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
 FailureOr<Value> emitSharedAtomicRMW(ConversionPatternRewriter &rewriter,
                                      Location loc, Type valueElemTy, Value ptr,
                                      Value value, RMWOp rmwOp, bool returnOld,
-                                     bool isCluster, Value pred) {
-  SmallVector<Value> vals{value};
-  if (!returnOld) {
-    auto result =
-        emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                               pred, isCluster, PtxAtomicInstr::Red);
-    if (succeeded(result))
-      return result;
+                                     bool isCluster, Value pred,
+                                     const NVIDIA::TargetInfo &targetInfo) {
+  if (!pred && !usePtxForHalfAdd(rmwOp, valueElemTy, targetInfo)) {
+    auto binOp = matchAtomicOp(rmwOp);
+    if (!binOp)
+      return failure();
+    return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, value,
+                                     LLVM::AtomicOrdering::monotonic,
+                                     isCluster ? "cluster" : "block")
+        .getResult();
   }
-
-  return emitPtxSharedAtomicRMW(rewriter, loc, valueElemTy, ptr, vals, rmwOp,
-                                pred, isCluster, PtxAtomicInstr::Atom);
+  auto addrSpace = isCluster ? PtxAtomicAddrSpace::SharedCluster
+                             : PtxAtomicAddrSpace::Shared;
+  // Exchange has no PTX reduction form.
+  auto instr = returnOld || rmwOp == RMWOp::XCHG ? PtxAtomicInstr::Atom
+                                                 : PtxAtomicInstr::Red;
+  return emitPtxAtomicRMWImpl(rewriter, loc, valueElemTy, ptr, value, rmwOp,
+                              MemSemantic::RELAXED,
+                              isCluster ? "cluster" : "cta", pred, /*vec=*/1,
+                              /*packed=*/1, addrSpace, instr);
 }
 
 LogicalResult lowerLdStMatrix(
@@ -262,15 +276,16 @@ struct AsyncSharedStoreOpConversion
         loc, adaptor.getMbarrier(),
         typeConverter->convertType(mbarrierTy.getElementType()), rewriter);
 
+    auto kBlock = str_attr("block");
     auto regLayout = toLinearLayout(srcTy);
     auto freeVarMasks = regLayout.getFreeVariableMasks();
-    freeVarMasks[str_attr("block")] = 0;
+    freeVarMasks[kBlock] = 0;
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     Value mapPred = threadPred ? threadPred : b.true_val();
     regLayout = regLayout.removeZeroBasesAlongDim(str_attr("register"));
     auto sharedLayout = toLinearLayoutIgnoringPadding(dstTy);
-    auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
+    auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
     auto values = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     Value currentCTAId = targetInfo.getClusterCTAId(rewriter, loc);
     Value mbarrierPtr = mbarrierMemObj.getBase();
@@ -290,9 +305,7 @@ struct AsyncSharedStoreOpConversion
       unsigned storeBitwidth = std::max(32u, elemBitwidth);
       unsigned elemsPerStore = storeBitwidth / elemBitwidth;
       unsigned storeVec = vecTy.getNumElements() / elemsPerStore;
-      std::string constraint = storeBitwidth == 64 ? "l" : "r";
-
-      SmallVector<std::pair<Value, std::string>> storeValues;
+      SmallVector<Value> storeValues;
       for (unsigned i = 0; i < storeVec; ++i) {
         auto elems = values.slice(idx + i * elemsPerStore, elemsPerStore);
         Value value = elems.front();
@@ -303,9 +316,23 @@ struct AsyncSharedStoreOpConversion
           value = b.ptrtoint(int_ty(storeBitwidth), value);
         else if (!elemTy.isInteger())
           value = b.bitcast(value, int_ty(storeBitwidth));
-        storeValues.emplace_back(value, constraint);
+        storeValues.push_back(value);
       }
 
+      unsigned totalBitwidth = storeBitwidth * storeVec;
+      if (!threadPred && totalBitwidth <= 64) {
+        Value storeValue = storeValues.front();
+        if (storeVec > 1)
+          storeValue = b.bitcast(packLLVector(storeLoc, storeValues, rewriter),
+                                 int_ty(totalBitwidth));
+        LLVM::createLLVMIntrinsicCallOp(rewriter, storeLoc,
+                                        "llvm.nvvm.st.async", TypeRange{},
+                                        {dst, storeValue, mbarrier});
+        return {};
+      }
+
+      // Use vector PTX for 128-bit transfers and preserve instruction
+      // predicates.
       PTXBuilder ptxBuilder;
       auto &store = ptxBuilder.create("st.async")
                         ->o("weak")
@@ -314,10 +341,15 @@ struct AsyncSharedStoreOpConversion
                         .v(storeVec, /*predicate=*/storeVec > 1)
                         .b(storeBitwidth);
       auto *dstOperand = ptxBuilder.newAddrOperand(dst, "r");
-      auto *valueOperand =
-          storeVec == 1
-              ? ptxBuilder.newOperand(storeValues.front().first, constraint)
-              : ptxBuilder.newListOperand(storeValues);
+      std::string constraint = storeBitwidth == 64 ? "l" : "r";
+      PTXBuilder::Operand *valueOperand;
+      if (storeVec == 1) {
+        valueOperand = ptxBuilder.newOperand(storeValues.front(), constraint);
+      } else {
+        valueOperand = ptxBuilder.newListOperand();
+        for (Value word : storeValues)
+          valueOperand->listAppend(ptxBuilder.newOperand(word, constraint));
+      }
       auto *barrierOperand = ptxBuilder.newAddrOperand(mbarrier, "r");
       store(dstOperand, valueOperand, barrierOperand)
           .maybePredicate(threadPred, "b");
@@ -348,7 +380,6 @@ public:
   matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto lowering = prepareLocalAtomicScatterRMW(
         op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
         op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
@@ -382,8 +413,9 @@ public:
           results.push_back(result);
         continue;
       }
-      auto old = emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value,
-                                     rmwOp, returnOld, isCluster, pred);
+      auto old =
+          emitSharedAtomicRMW(rewriter, loc, info.llvmElemTy, ptr, value, rmwOp,
+                              returnOld, isCluster, pred, targetInfo);
       if (failed(old))
         return failure();
       if (returnOld)
@@ -395,9 +427,8 @@ public:
       return success();
     }
 
-    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
-                                info.llvmElemTy, b, info.threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -408,7 +439,8 @@ private:
 
 void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   // Backend optimized memory ops get higher benefit
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
@@ -420,6 +452,6 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                                   benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
                                       benefit.getBenefit() + 1);
-  mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, benefit);
+  mlir::triton::populateMemoryOpToLLVMPatterns(
+      typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
 }

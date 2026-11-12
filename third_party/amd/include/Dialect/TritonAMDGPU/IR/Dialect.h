@@ -40,6 +40,14 @@ struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
 } // namespace mlir::triton::amd
 
 namespace mlir::triton::amdgpu {
+/// Internal wait annotation computed by UpdateAsyncWaitCount and consumed by
+/// AMD Membar. "shared" rules out pending async global writes for the waited
+/// queue using target capabilities or dataflow; "all" retains conservative
+/// ordering. The annotation neither replaces the hardware wait nor proves
+/// that accesses are warp-local.
+inline constexpr llvm::StringLiteral kAsyncCompletionScopeAttrName =
+    "amdg.completion_scope";
+
 /// Returns the number of dwords for a TDM tensor descriptor based on rank.
 /// 2D tensors: group0 (4) + group1 (8) = 12 dwords
 /// 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20 dwords
@@ -47,6 +55,15 @@ inline int getTensorDescNumDwords(triton::TensorDescType type) {
   auto shape = type.getShape();
   return (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
 }
+
+/// Derives the scale layout an fp4 scaled upcast requires from the layout of
+/// its output. `scaleShape` must have the same rank as the output and match it
+/// on every dimension but `axis`, where it must divide the output extent. The
+/// result is canonical: broadcast (zero) register bases are dropped so a thread
+/// keeps one register per distinct scale value.
+FailureOr<triton::LinearLayout> inferScaledUpcastFp4ScaleLayout(
+    const triton::LinearLayout &outputLL, ArrayRef<int64_t> scaleShape,
+    int64_t axis, function_ref<InFlightDiagnostic()> emitError = nullptr);
 } // namespace mlir::triton::amdgpu
 
 // clang-format off
@@ -56,6 +73,18 @@ inline int getTensorDescNumDwords(triton::TensorDescType type) {
 
 #define GET_ATTRDEF_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.h.inc"
+
+#define GET_TYPEDEF_CLASSES
+#include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUTypes.h.inc"
+
+namespace mlir::triton::amdgpu {
+/// The element type accessed through the base of a buffer op: the pointee of
+/// a scalar pointer or the element type of a buffer descriptor.
+Type getBufferElementType(Type base);
+/// Whether `value`'s element type matches the element type of buffer base
+/// `base` (a scalar pointer or a buffer descriptor).
+bool elementTypeMatchesBufferBase(Type value, Type base);
+} // namespace mlir::triton::amdgpu
 
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.h.inc"
 #define GET_OP_CLASSES

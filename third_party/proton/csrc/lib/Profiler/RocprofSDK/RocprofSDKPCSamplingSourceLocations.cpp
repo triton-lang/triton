@@ -229,8 +229,8 @@ void RocprofSDKPCSampling::clearSourceLocationCacheLocked(
 void RocprofSDKPCSampling::tryReleaseCodeObject(uint64_t codeObjectId) {
   metadataState.withLock([&](MetadataState &metadata) {
     samplingState.withLock([&](SamplingState &sampling) {
-      if (sampling.pendingCodeObjectIds.count(codeObjectId) > 0 ||
-          sampling.flushingCodeObjectIds.count(codeObjectId) > 0)
+      if (sampling.pendingCodeObjectIds.contains(codeObjectId) ||
+          sampling.flushingCodeObjectIds.contains(codeObjectId))
         return;
 
       auto info = metadata.codeObjects.find(codeObjectId);

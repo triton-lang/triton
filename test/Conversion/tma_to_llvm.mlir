@@ -1,4 +1,13 @@
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+// RUN: triton-opt %s | triton-opt | FileCheck %s --check-prefix=ROUNDTRIP
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm="compute-capability=100" --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -178,4 +187,99 @@ tt.func @tma_gather_scatter_column_subslice(%desc: !tt.tensordesc<1x128xbf16, #s
   tt.return
 }
 
+
+// CHECK-LABEL: @tma_cache_default
+// CHECK-NOT: createpolicy
+// CHECK-NOT: L2::cache_hint
+// CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes [$1], [$2, {$3, $4}], [$5];", "b,r,l,r,r,r"
+// CHECK: ret void
+tt.func @tma_cache_default(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
 }
+
+// CHECK-LABEL: @tma_cache_first
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4}], [$5], $6;", "b,r,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_first(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_last
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4}], [$5], $6;", "b,r,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_last(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_fractional
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4}], [$5], $6;", "b,r,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_fractional(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_normal
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_normal.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4}], [$5], $6;", "b,r,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_normal(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_primary = evict_normal, l2_secondary = evict_unchanged, l2_fraction = 1.000000e+00 : f32>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_gather
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4, $5, $6, $7}], [$8], $9;", "b,r,l,r,r,r,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_gather(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32, %pred: i1) {
+  ttng.async_tma_gather %desc[%indices, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, i1
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_scatter
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta.bulk_group.L2::cache_hint [$1, {$2, $3, $4, $5, $6}], [$7], $8;", "b,l,r,r,r,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32) {
+  ttng.async_tma_scatter %desc[%indices, %coord] %dst {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_store
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group.L2::cache_hint [$1, {$2, $3}], [$4], $5;", "b,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %coord: i32) {
+  ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %dst {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tma_cache_desc, !tma_cache_dst
+  tt.return
+}
+
+}
+
+// ROUNDTRIP-LABEL: @tma_cache_first
+// ROUNDTRIP: cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>
+// ROUNDTRIP-LABEL: @tma_cache_fractional
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_gather
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_scatter
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_store
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>

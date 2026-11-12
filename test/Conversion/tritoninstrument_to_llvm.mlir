@@ -1,4 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20 --implicit-check-not=tti.
+// RUN: split-file %s %t
+// RUN: triton-opt %t/lock-acquire.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=PTX
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
@@ -7,10 +9,10 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_0([0, 42]) {addr_space = 0 : i32} : !llvm.array<2 x i64>
 
 // CHECK-LABEL: @experimental_buffer_descriptors_tmem
-// CHECK: llvm.mlir.constant(4294967295 : i64) : i64
-tt.func private @experimental_buffer_descriptors_tmem() {
-  tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<2xi64, #blocked>
-  tt.return
+// CHECK-DAG: llvm.mlir.constant(4294967295 : i64) : i64
+tt.func private @experimental_buffer_descriptors_tmem() -> tensor<2xi64, #blocked> {
+  %result = tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<2xi64, #blocked>
+  tt.return %result : tensor<2xi64, #blocked>
 }
 }
 
@@ -23,10 +25,10 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_0([0, 42])
 
 // CHECK-LABEL: @experimental_buffer_descriptors_shared
-// CHECK: llvm.mlir.constant(16777215 : i64) : i64
-tt.func private @experimental_buffer_descriptors_shared() {
-  tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
-  tt.return
+// CHECK-DAG: llvm.mlir.constant(16777215 : i64) : i64
+tt.func private @experimental_buffer_descriptors_shared() -> tensor<2xi64, #blocked> {
+  %result = tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
+  tt.return %result : tensor<2xi64, #blocked>
 }
 }
 
@@ -34,9 +36,9 @@ tt.func private @experimental_buffer_descriptors_shared() {
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_assert_uniform(
+// CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK: %[[RAW_TID:.*]] = nvvm.read.ptx.sreg.tid.x
 // CHECK: %[[TID:.*]] = llvm.and %[[RAW_TID]], %{{.*}} : i32
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // CHECK: %[[NOT_THREAD_ZERO:.*]] = llvm.icmp "ne" %[[TID]], %[[ZERO]] : i32
 // CHECK: %[[CONDITION:.*]] = llvm.or %[[NOT_THREAD_ZERO]], %arg0 : i1
 // CHECK: llvm.cond_br
@@ -56,7 +58,9 @@ tt.func private @experimental_assert_uniform(%arg0: i1) {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
-// CHECK: 09atom.global.acquire.gpu.cas.b32
+// CHECK: %[[CAS:.*]] = llvm.cmpxchg {{.*}} syncscope("device") acquire acquire
+// CHECK: %[[ACQUIRED:.*]] = llvm.extractvalue %[[CAS]][1]
+// CHECK: llvm.cond_br %[[ACQUIRED]],
 // CHECK: nvvm.barrier
 tt.func private @experimental_lock_acquire(
   %lock: !tt.ptr<i32>,
@@ -92,12 +96,12 @@ tt.func private @experimental_lock_release(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_memdesc_to_i32
-// CHECK:  llvm.ptrtoint %1 : !llvm.ptr<3> to i32
+// CHECK:  llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
 tt.func private @experimental_memdesc_to_i32(
   %memdesc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-) {
-  tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-  tt.return
+) -> i32 {
+  %result = tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+  tt.return %result : i32
 }
 }
 
@@ -107,13 +111,13 @@ tt.func private @experimental_memdesc_to_i32(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_pointer_memdesc_to_i32
-// CHECK: %[[POINTER_BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
+// CHECK-DAG: %[[POINTER_BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
 // CHECK: llvm.mul {{.*}}, %[[POINTER_BYTES]] : i32
 tt.func private @experimental_pointer_memdesc_to_i32(
   %memdesc: !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
-) {
-  tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
-  tt.return
+) -> i32 {
+  %result = tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+  tt.return %result : i32
 }
 }
 
@@ -122,24 +126,24 @@ tt.func private @experimental_pointer_memdesc_to_i32(
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 // CHECK-LABEL: @experimental_memory_offset_to_i32_shared
+// CHECK-DAG: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
+// CHECK-DAG: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
 // CHECK: %[[BASE:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
-// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
 // CHECK: %[[ADDRESS:.*]] = llvm.add %[[BASE]], %[[OFFSET]] : i32
-// CHECK: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
 // CHECK: llvm.and %[[ADDRESS]], %[[MASK]] : i32
-tt.func private @experimental_memory_offset_to_i32_shared() {
-  tti.experimental_memory_offset_to_i32 42, shared_mem
-  tt.return
+tt.func private @experimental_memory_offset_to_i32_shared() -> i32 {
+  %result = tti.experimental_memory_offset_to_i32 42, shared_mem
+  tt.return %result : i32
 }
 
 // CHECK-LABEL: @experimental_memory_offset_to_i32_tensor
+// CHECK-DAG: %[[OFFSET:.*]] = llvm.mlir.constant(65539 : i32)
 // CHECK: %[[BASE_PTR:.*]] = nvg.tensor_memory_base
 // CHECK: %[[BASE:.*]] = llvm.ptrtoint %[[BASE_PTR]] : !llvm.ptr<6> to i32
-// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(65539 : i32)
 // CHECK: llvm.add %[[BASE]], %[[OFFSET]] : i32
-tt.func private @experimental_memory_offset_to_i32_tensor() {
-  tti.experimental_memory_offset_to_i32 65539, tensor_mem
-  tt.return
+tt.func private @experimental_memory_offset_to_i32_tensor() -> i32 {
+  %result = tti.experimental_memory_offset_to_i32 65539, tensor_mem
+  tt.return %result : i32
 }
 }
 
@@ -193,4 +197,21 @@ tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
   tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
   tt.return
 }
+}
+
+// -----
+
+//--- lock-acquire.mlir
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: @lock_acquire
+  // CHECK: llvm.cmpxchg {{.*}} syncscope("device") acquire acquire
+  // PTX-LABEL: .visible .entry lock_acquire(
+  // PTX: atom.acquire.gpu.global.cas.b32
+  // PTX: bar.sync
+  tt.func public @lock_acquire(%lock: !tt.ptr<i32>, %pred: i1) {
+    tti.experimental_lock_acquire %lock, %pred : !tt.ptr<i32>
+    tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+    tt.return
+  }
 }

@@ -34,9 +34,15 @@ class BlackwellMXScaleLayout(Layout):
 class BlackwellActMXScaleLayout(Layout):
 
     ragged_metadata: RaggedTensorMetadata | None
+    column_alignment: int = 8
+
+    def __post_init__(self):
+        if self.column_alignment not in (4, 8):
+            raise ValueError("Scale column alignment must be 4 or 8")
 
     def can_preserve_storage_as(self, other: Layout, rank: int) -> bool:
-        return isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+        return (isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+                and self.column_alignment == other.column_alignment)
 
     @property
     def name(self):
@@ -49,7 +55,8 @@ class BlackwellActMXScaleLayout(Layout):
         return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
-        return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata)
+        return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata,
+                                                       ALIGN_K=self.column_alignment)
 
 
 # ------------------- Blackwell MX Scale Layout Transformation -------------------
@@ -70,7 +77,7 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
             B, M, K = 1, *self.shape
             added_leading_batch_dim = True
             if self.ragged_metadata is None:
-                M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+                M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
                 mode = "batched"
             else:
                 # In ragged mode, input often include padded tokens
@@ -84,9 +91,9 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
                 mode = "ragged"
         else:
             B, M, K = self.shape
-            M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+            M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
             mode = "batched"
-        K_pad = (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
+        K_pad = (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
         # initialize attributes
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "M", M)
@@ -99,6 +106,16 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
     @property
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
+
+    def _convert_data_from(self, data, source, *, out):
+        if (isinstance(source, BlackwellActMXScaleLayoutTransformation) and len(self.shape) == 2 and out is None
+                and not data.requires_grad and self._can_convert(data)
+                and (source.mode == "batched" or source.ragged_metadata.n_slices == 1)):
+            shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
+            metadata = self.ragged_metadata if self.mode == "ragged" else None
+            return _convert_mx_scale(data, shape, self.storage_shape, out=out, ragged_metadata=metadata,
+                                     encoded_source=source)
+        return super()._convert_data_from(data, source, out=out)
 
     def _convert(self, data, out, inverse):
         if inverse and out is None:
@@ -169,8 +186,8 @@ class BlackwellMXScaleLayoutTransformation(ScaleLayoutTransformation):
         object.__setattr__(self, "ALIGN_K", 8)
         object.__setattr__(self, "ALIGN_N", 128)
         object.__setattr__(self, "SWIZZLE_K", 4)
-        object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
-        object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
+        object.__setattr__(self, "K_pad", (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K)
+        object.__setattr__(self, "N_pad", (N + (self.ALIGN_N - 1)) // self.ALIGN_N * self.ALIGN_N)
 
     @property
     def storage_shape(self) -> list[int]:
@@ -205,7 +222,8 @@ class BlackwellMXScaleLayoutTransformation(ScaleLayoutTransformation):
         return data
 
 
-def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None, inverse=False):
+def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None, inverse=False,
+                      encoded_source=None):
     if out is None:
         out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
     if not out.numel():
@@ -214,7 +232,10 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
         # No encoded rows are needed, but the logical output may still have capacity.
         return out.zero_()
     matrix, encoded = (out, data) if inverse else (data, out)
-    assert tuple(matrix.shape) == tuple(shape)
+    if encoded_source is None:
+        assert tuple(matrix.shape) == tuple(shape)
+    else:
+        assert not inverse and encoded_source.shape == [*shape[:-2], shape[-1], shape[-2]]
     batch = math.prod(shape[:-2])
     k_pad, n_pad = storage_shape[2] * 4, storage_shape[1] // batch * 128
     metadata = (None, None, None, None)
@@ -225,7 +246,7 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
         n_slices = ragged_metadata.n_slices
     # Keep enough blocks for small tensors; larger tiles amortize scheduling work.
     size = batch * k_pad * n_pad
-    contiguous_k = matrix.stride(-2) == 1
+    contiguous_k = encoded_source is None and matrix.stride(-2) == 1
     block_k = min(128, triton.next_power_of_2(k_pad)) if contiguous_k else 64
     block_k = min(block_k, max(8, triton.next_power_of_2(size) // (128 * 128)))
     if contiguous_k and k_pad % 32 == 0:
@@ -239,6 +260,8 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
                 num_warps = 8
     elif matrix.stride(-1) == 1 and k_pad <= 32 and size >= 2**22:
         block_k, num_warps = 32, 2
+    source_metadata = (encoded_source.ragged_metadata
+                       if encoded_source is not None and encoded_source.mode == "ragged" else None)
     grid = (batch * triton.cdiv(n_pad, block_n) * triton.cdiv(k_pad, block_k), )
     with torch.cuda.device(data.device):
         _convert_blackwell_mx_scale[grid](
@@ -254,6 +277,10 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
             BLOCK_K=block_k,
             BLOCK_N=block_n,
             INVERSE=inverse,
+            SourceSliceOffs=None if source_metadata is None else source_metadata.slice_offs,
+            SourceBlockOffs=None if source_metadata is None else source_metadata.block_offs(128),
+            SOURCE_ENCODED_STRIDES=None if encoded_source is None else data.stride(),
+            SOURCE_N_BLOCKS=0 if encoded_source is None else encoded_source.M_pad // 128,
             num_warps=num_warps,
         )
     return out
@@ -532,24 +559,39 @@ def unswizzle_act_mx_scale_bw(
 
 
 @triton.jit
+def swizzle_mx_scale_bw_ptr(base, outer, inner, leading_block, stride_outer, stride_inner, stride_half, stride_lane,
+                            SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+                            SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER, SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+                            SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
+    """Pointers for broadcastable scale coordinates, without bounds masking.
+
+    ``outer`` indexes the non-MX axis; ``inner`` indexes scales along the MX axis.
+    ``leading_block`` is the batch or segment origin in outer storage tiles.
+    Strides are in elements. Each stride product uses ``INDEX_TYPE`` before
+    being added to the pointer.
+    """
+    outer = tl.to_tensor(outer)
+    inner = tl.to_tensor(inner)
+    outer_block = leading_block + outer // SIZE_OUTER
+    inner_group = inner // SIZE_INNER
+    outer_lane = outer % SIZE_OUTER
+    inner_linear = ((outer_lane % SIZE_LANE * (SIZE_OUTER // SIZE_LANE) + outer_lane // SIZE_LANE) * SIZE_INNER +
+                    inner % SIZE_INNER)
+    half = inner_linear // SIZE_HALF
+    lane = inner_linear % SIZE_HALF
+    return (base + tl.cast(outer_block, INDEX_TYPE) * stride_outer + tl.cast(inner_group, INDEX_TYPE) * stride_inner +
+            tl.cast(half, INDEX_TYPE) * stride_half + tl.cast(lane, INDEX_TYPE) * stride_lane)
+
+
+@triton.jit
 def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_outer, stride_inner, stride_half,
                                   stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
                                   SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                   SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
                                   SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
-    col_block = cols // SIZE_OUTER
-    outer = leading_idx * tl.cdiv(n_cols, SIZE_OUTER) + col_block
-    inner_group = rows // SIZE_INNER
-    col_lane = cols - col_block * SIZE_OUTER
-    col_quad = col_lane // SIZE_LANE
-    col_lane_inner = col_lane - col_quad * SIZE_LANE
-    row_lane = rows - inner_group * SIZE_INNER
-    inner_linear = ((col_lane_inner[None, :] * (SIZE_OUTER // SIZE_LANE) + col_quad[None, :]) * SIZE_INNER +
-                    row_lane[:, None])
-    half = inner_linear // SIZE_HALF
-    inner = inner_linear - half * SIZE_HALF
-    return (base + outer.to(INDEX_TYPE)[None, :] * stride_outer + inner_group.to(INDEX_TYPE)[:, None] * stride_inner +
-            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
+    return swizzle_mx_scale_bw_ptr(base, cols[None, :], rows[:, None], leading_idx * tl.cdiv(n_cols, SIZE_OUTER),
+                                   stride_outer, stride_inner, stride_half, stride_lane, SIZE_OUTER, SIZE_INNER,
+                                   SIZE_LANE, SIZE_HALF, INDEX_TYPE)
 
 
 @triton.jit
@@ -569,6 +611,10 @@ def _convert_blackwell_mx_scale(
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
     INVERSE: tl.constexpr = False,
+    SourceSliceOffs=None,
+    SourceBlockOffs=None,
+    SOURCE_ENCODED_STRIDES: tl.constexpr = None,
+    SOURCE_N_BLOCKS: tl.constexpr = 0,
 ):
     tl.static_assert(BLOCK_K % 4 == 0 and BLOCK_N % 128 == 0)
     K: tl.constexpr = SHAPE[-2]
@@ -612,7 +658,8 @@ def _convert_blackwell_mx_scale(
     else:
         encoded_offsets = ((batch * n_blocks + n_block) * ENCODED_STRIDES[1] + group * ENCODED_STRIDES[2] +
                            lane // 256 * ENCODED_STRIDES[3] + lane % 256 * ENCODED_STRIDES[4])
-    matrix_offsets = batch_offset + rows[:, None] * MATRIX_STRIDES[-2] + cols[None, :] * MATRIX_STRIDES[-1]
+    if SOURCE_ENCODED_STRIDES is None:
+        matrix_offsets = batch_offset + rows[:, None] * MATRIX_STRIDES[-2] + cols[None, :] * MATRIX_STRIDES[-1]
     matrix_mask = (rows[:, None] < K) & col_mask[None, :]
     encoded_mask = (group < K_PAD // 4) & (n_block < n_blocks)
     if INVERSE:
@@ -627,7 +674,22 @@ def _convert_blackwell_mx_scale(
             tail_mask = (rows[:, None] < K) & (tail_cols[None, :] >= valid_rows) & (tail_cols[None, :] < N)
             tl.store(Matrix + tail_offsets, 0, tail_mask)
     else:
-        vals = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)
+        if SOURCE_ENCODED_STRIDES is None:
+            vals = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)
+        else:
+            source_cols = cols
+            source_block = batch * SOURCE_N_BLOCKS
+            source_mask = cols < N
+            if SourceSliceOffs is not None:
+                source_start = tl.load(SourceSliceOffs).to(tl.int64)
+                source_end = tl.load(SourceSliceOffs + 1).to(tl.int64)
+                source_cols = cols - source_start
+                source_block = tl.load(SourceBlockOffs).to(tl.int64)
+                source_mask = (cols >= source_start) & (cols < source_end)
+            source_ptrs = swizzle_mx_scale_bw_ptr(Matrix, source_cols[None, :], rows[:, None], source_block,
+                                                  SOURCE_ENCODED_STRIDES[1], SOURCE_ENCODED_STRIDES[2],
+                                                  SOURCE_ENCODED_STRIDES[3], SOURCE_ENCODED_STRIDES[4])
+            vals = tl.load(source_ptrs, matrix_mask & source_mask[None, :], other=0)
         # A swizzle block is 4x128; reorder its 512 encoded elements.
         vals = vals.reshape(BLOCK_K // 4, 4, BLOCK_N // 128, 4, 32).trans(2, 0, 4, 3, 1).ravel()
         tl.store(Encoded + encoded_offsets, vals, encoded_mask)
@@ -639,16 +701,7 @@ def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block, stride_
                                       SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                       SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
                                       SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
-    row_block = rows // SIZE_OUTER
-    outer = leading_m_block + row_block
-    inner_group = cols // SIZE_INNER
-    col_lane = cols - inner_group * SIZE_INNER
-    row_lane = rows - row_block * SIZE_OUTER
-    row_quad = row_lane // SIZE_LANE
-    row_lane_inner = row_lane - row_quad * SIZE_LANE
-    inner_linear = ((row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER +
-                    col_lane[None, :])
-    half = inner_linear // SIZE_HALF
-    inner = inner_linear - half * SIZE_HALF
-    return (base + outer.to(INDEX_TYPE)[:, None] * stride_outer + inner_group.to(INDEX_TYPE)[None, :] * stride_inner +
-            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
+    leading_m_block = tl.broadcast_to(tl.to_tensor(leading_m_block), rows.shape)
+    return swizzle_mx_scale_bw_ptr(base, rows[:, None], cols[None, :], leading_m_block[:, None], stride_outer,
+                                   stride_inner, stride_half, stride_lane, SIZE_OUTER, SIZE_INNER, SIZE_LANE, SIZE_HALF,
+                                   INDEX_TYPE)

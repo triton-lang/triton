@@ -15,6 +15,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
+
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.h.inc"
+
 #include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -28,6 +32,42 @@ struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   StringRef getName() const final { return "<GlobalMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
+
+enum class CachePolicyOperation { Load, Store };
+
+// Allows memory operations to validate cache policy attributes without
+// depending on the dialect that defines the policy.
+class DialectCachePolicyInterface
+    : public DialectInterface::Base<DialectCachePolicyInterface> {
+public:
+  DialectCachePolicyInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  verifyCachePolicy(Attribute cachePolicy, CachePolicyOperation operation,
+                    function_ref<InFlightDiagnostic()> emitError) const = 0;
+};
+
+LogicalResult verifyCacheModifier(CacheModifier modifier,
+                                  CachePolicyOperation operation,
+                                  function_ref<InFlightDiagnostic()> emitError);
+LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
+                                CachePolicyOperation operation);
+
+// Dialects define how their types behave as inline assembly operands without
+// exposing those types to the Triton dialect.
+class DialectInlineAsmInterface
+    : public DialectInterface::Base<DialectInlineAsmInterface> {
+public:
+  DialectInlineAsmInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual void getOperandEffects(
+      OpOperand &operand,
+      SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const = 0;
+  virtual LogicalResult verifyOperand(OpOperand &operand,
+                                      bool isPure) const = 0;
+};
+
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure);
 
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
@@ -49,6 +89,10 @@ public:
                             Attribute &resultEncoding,
                             std::optional<Location> loc) const = 0;
 
+  virtual LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const = 0;
+
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
   virtual LogicalResult
@@ -60,13 +104,10 @@ public:
   // makes the reshape a "nop", i.e. the same GPU threads contain the same
   // elements as before the reshape using legacy layouts.  This is not always
   // possible (in which case we fallback to using LinearLayouts)
-  // If allowReorder is set, an existing value in dstEnc is preferred when it
-  // still yields a non-expensive view.
   // In the future we'll always use LinearLayouts
   virtual LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         bool allowReorder,
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are

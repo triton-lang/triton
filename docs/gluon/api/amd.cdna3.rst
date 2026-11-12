@@ -6,7 +6,16 @@ AMD CDNA 3
 .. autosummary::
     :toctree: generated
     :nosignatures:
+    :template: autosummary/gluon-module.rst
 
+    buffer
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    CachePolicy
     buffer_load
     buffer_store
     buffer_atomic_add
@@ -16,4 +25,6 @@ AMD CDNA 3
     buffer_atomic_or
     buffer_atomic_xchg
     buffer_atomic_xor
+    get_scaled_upcast_fp4_scale_layout
     mfma
+    scaled_upcast

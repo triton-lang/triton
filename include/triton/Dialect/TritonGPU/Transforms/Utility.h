@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <optional>
 
 namespace mlir {
 class DominanceInfo;
@@ -21,7 +22,14 @@ class StoreOp;
 class FuncOp;
 namespace gpu {
 class SwizzledSharedEncodingAttr;
+
+// True when `op` implements EfficientLayoutOpInterface and has pinned its
+// result layout.
+inline bool hasEfficientLayout(Operation *op) {
+  auto iface = dyn_cast_if_present<EfficientLayoutOpInterface>(op);
+  return iface && iface.getEfficientLayout();
 }
+} // namespace gpu
 } // namespace triton
 
 // Return a tuple of two or three entries representing the shape of the
@@ -136,8 +144,10 @@ bool isExpensiveLoadOrStore(Operation *op);
 // Return true if an operation may be cloned by layout rematerialization.
 bool canBeRematerialized(Operation *op);
 
-// Return true if the op can use the target encoding for its result.
-bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
+// Return the operands whose layouts must remain fixed for the op to use the
+// target result encoding, or nullopt if the encoding is incompatible.
+std::optional<SmallVector<OpOperand *>>
+canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -317,6 +327,21 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
 // Get a boolean if the Value is an arith::ConstantOp
 std::optional<bool> getBoolFromConstant(Value cst);
+
+/// Emit cluster synchronization so every warp in each CTA participates.
+///
+/// `emit` creates the target-specific cluster synchronization operations using
+/// the supplied builder. These operations must not reference SSA values defined
+/// outside the region where they are inserted. If `joinWarps` is true, ensure
+/// all warps in the CTA finish the emitted operations before execution
+/// continues past the synchronization.
+///
+/// `anchor`, which must be outside any warp_specialize op, provides the context
+/// for looking up warp counts, and `builder` determines the insertion point.
+void emitClusterSyncForAllWarps(OpBuilder &builder, Location loc,
+                                Operation *anchor,
+                                function_ref<void(OpBuilder &)> emit,
+                                bool joinWarps = false);
 
 } // namespace mlir::triton
 

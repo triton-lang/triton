@@ -118,7 +118,8 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
   }
 
   if (auto outputsAttr = op->getAttr(kPartitionOutputsAttrName)) {
-    if (!isa<scf::ForOp, scf::WhileOp, scf::IfOp, triton::ReduceOp>(op))
+    if (!isa<scf::ForOp, scf::WhileOp, scf::IfOp, triton::ReduceOp,
+             triton::ScanOp>(op))
       return op->emitOpError("has unexpected attribute ")
              << kPartitionOutputsAttrName;
 

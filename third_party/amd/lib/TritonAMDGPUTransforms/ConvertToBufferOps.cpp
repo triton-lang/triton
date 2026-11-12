@@ -17,6 +17,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
@@ -39,21 +40,6 @@ namespace mlir {
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
-
-// Return true iff the given value v is a tensor splatting from 1 (int).
-// The usefulness of this func stems from the fact than if a buffer-op's mask
-// operand is a all-1-tensor, it does not need to take this operand.
-bool isSplatOneConstTensor(const Value v) {
-  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp)
-    return false;
-
-  if (auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isOne();
-
-  return false;
-}
 
 bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
                                 std::shared_ptr<DataFlowSolver> solver) {
@@ -91,13 +77,14 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   while (auto ptrTy = dyn_cast<triton::PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
 
-  if (!elemTy || !elemTy.isIntOrFloat()) {
+  if (!elemTy ||
+      !(elemTy.isIntOrFloat() || isa<triton::PackedFloat4E2M1Type>(elemTy))) {
     LDBG("unknown element type: " << elemTy);
     return false;
   }
 
   // step 3: check of byte-offset is within 2G
-  int64_t elemBitSz = elemTy.getIntOrFloatBitWidth();
+  int64_t elemBitSz = getIntOrFloatOrPtrBitWidth(elemTy);
   int64_t elemMaxIdx = smax.getSExtValue();
   int64_t byteOfst = (elemBitSz * elemMaxIdx + elemBitSz + 7) / 8;
   int64_t szLimit2GB = (1LL << 31) - 1;
@@ -477,15 +464,12 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
     Value basePtr = splatOp.getSrc();
 
-    Value maybeMask{};
-    if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
-      maybeMask = op.getMask();
     Value blockStride = maybeTruncateStrideToI32(
         getBlockStride(op->getLoc(), tensorOffset, rewriter), rewriter,
         op->getLoc(), op);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
         op, op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset,
-        op.getVal(), blockStride, sem, scope, maybeMask);
+        op.getVal(), blockStride, sem, scope, op.getMask());
 
     return success();
   }
@@ -499,12 +483,9 @@ private:
   bool analyzeSmallTensorOfst;
 };
 
-// Workaround to allow static_assert(false) on older compilers as it was
-// ill-formed before defect report CWG2518
-// (https://cplusplus.github.io/CWG/issues/2518.html)
-template <typename T> struct always_false : std::false_type {};
-
 template <typename SourceOp>
+  requires llvm::is_one_of<SourceOp, triton::LoadOp,
+                           triton::gpu::AsyncCopyGlobalToLocalOp>::value
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
@@ -519,6 +500,10 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
+    if constexpr (std::is_same_v<SourceOp, triton::LoadOp>)
+      if (op.getIsVolatile())
+        return rewriter.notifyMatchFailure(
+            op, "Unsupported volatile load in ConvertTritonLoadToBufferLoad");
     Value ptr = op.getOperand(0);
 
     if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
@@ -530,11 +515,9 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeOther{};
-      if (op.getOther() && !isZeroConst(op.getOther()))
+      if (op.getOther() && !isZeroFillConst(op.getOther()))
         maybeOther = op.getOther();
-      Value maybeMask{};
-      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
-        maybeMask = op.getMask();
+      Value mask = op.getMask();
       Value blockStride = maybeTruncateStrideToI32(
           getBlockStride(op->getLoc(), tensorOffset, rewriter), rewriter,
           op->getLoc(), op);
@@ -542,22 +525,20 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       auto bufferLoadOp = [&]() {
         if constexpr (std::is_same_v<SourceOp, triton::LoadOp>) {
           unsigned contig = getVectorSize(ptr, axisAnalysisPass);
-          if (maybeMask)
+          if (mask)
             contig = std::min<unsigned>(
-                contig, axisAnalysisPass.getMaskAlignment(maybeMask));
+                contig, axisAnalysisPass.getMaskAlignment(mask));
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
-              blockStride, op.getCache(), maybeMask, maybeOther, contig);
-        } else if constexpr (std::is_same_v<
-                                 SourceOp,
-                                 triton::gpu::AsyncCopyGlobalToLocalOp>) {
+              blockStride, op.getCachePolicyAttr(), mask, maybeOther, contig,
+              /*soffset=*/Value(),
+              /*scope=*/triton::MemSyncScopeAttr());
+        } else {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
-              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
-              op.getContiguity());
-        } else {
-          static_assert(always_false<SourceOp>::value,
-                        "Unsupported type in ConvertTritonLoadToBufferLoad");
+              tensorOffset, mask, maybeOther, blockStride,
+              op.getCachePolicyAttr(), op.getContiguity(),
+              /*soffset=*/Value(), /*scope=*/triton::MemSyncScopeAttr());
         }
       }();
 
@@ -607,20 +588,19 @@ struct ConvertTritonStoreToBufferStore
           truncateOffsetToI32(offset, rewriter, op->getLoc(), op);
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
-      Value maybeMask{};
+      Value mask = op.getMask();
       unsigned contig = getVectorSize(ptr, axisAnalysisPass);
-      if (op.getMask() && !isSplatOneConstTensor(op.getMask())) {
-        maybeMask = op.getMask();
-        contig = std::min<unsigned>(
-            contig, axisAnalysisPass.getMaskAlignment(maybeMask));
-      }
+      if (mask)
+        contig =
+            std::min<unsigned>(contig, axisAnalysisPass.getMaskAlignment(mask));
       Value blockStride = maybeTruncateStrideToI32(
           getBlockStride(op->getLoc(), tensorOffset, rewriter), rewriter,
           op->getLoc(), op);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask, contig);
+          op, op.getValue(), basePtr, tensorOffset, blockStride,
+          op.getCachePolicyAttr(), mask, contig, /*soffset=*/Value(),
+          /*scope=*/triton::MemSyncScopeAttr());
       return success();
     }
     LDBG("Failed to convert: " << op);

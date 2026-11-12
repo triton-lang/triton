@@ -136,11 +136,11 @@ struct TestBufferRegionAliasPass
           addressSet.set(address);
         region.ctaAddresses.emplace_back(0, std::move(addressSet));
       }
-      tt::BufferRegionView view{std::move(region), /*storageBase=*/base,
-                                /*affineOffset=*/0};
       // Explicit address sets share one synthetic allocation frame.
-      view.allocationFrame =
+      uint32_t allocationFrame =
           analysis->getOperationId(op->getParentOfType<ModuleOp>());
+      tt::BufferRegionView view{std::move(region), base, 0, {}, 0, 0,
+                                allocationFrame};
       return tt::BufferRegionFootprint{
           ttg::SharedMemorySpaceAttr::get(op->getContext()),
           tt::RegionInfo({std::move(view)})};

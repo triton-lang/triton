@@ -2,7 +2,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefixes=CHECK,LLVM-MINMAX
 // RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 | FileCheck %s --check-prefixes=CHECK,SW-NAN
 // RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 | FileCheck %s --check-prefixes=CHECK,LLVM-MINMAX
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 | FileCheck %s --check-prefixes=CHECK,SW-NAN
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 | FileCheck %s --check-prefixes=CHECK,LLVM-MINMAX
 // RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --check-prefixes=CHECK,LLVM-MINMAX
 //
 // This grouping reflects Triton's supportMaximumMinimum() table, not the

@@ -71,9 +71,10 @@ template <typename T> bool hasProtonEvent(T *o) {
 
 void instrumentWarpSpecializeOps(FuncOp func, Value buffer, Value profileMem) {
   for (auto wsOp : func.getOps<triton::gpu::WarpSpecializeOp>()) {
-    auto loc = wsOp.getLoc();
-    if (hasProtonEvent(wsOp.getOperation())) {
-      auto partOp = wsOp.getPartitionOp();
+    auto partOp = wsOp.getPartitionOp();
+    if (hasProtonEvent(partOp.getOperation())) {
+      auto loc = wsOp.getLoc();
+      // All worker partitions share the same explicit capture list.
       partOp->insertOperands(partOp->getNumOperands(), {buffer, profileMem});
       for (Region *region : wsOp.getPartitionRegions()) {
         region->addArgument(buffer.getType(), loc);

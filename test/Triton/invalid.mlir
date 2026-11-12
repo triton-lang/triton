@@ -1,5 +1,61 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_store_i1(%ptr: !tt.ptr<i1>, %value: i1) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  tt.atomic_store release, gpu, %ptr, %value : !tt.ptr<i1>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_load_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  %value = tt.atomic_load acquire, gpu, %ptr : (tensor<32x!tt.ptr<i1>>) -> tensor<32xi1>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_store_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>, %value: tensor<32xi1>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  tt.atomic_store release, gpu, %ptr, %value : tensor<32x!tt.ptr<i1>>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_and_float(%ptr: !tt.ptr<f32>, %val: f32) {
+  // expected-error @+1 {{and requires an integer element type}}
+  %old = tt.atomic_rmw and, relaxed, gpu, %ptr, %val : (!tt.ptr<f32>, f32) -> f32
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_or_float(%ptr: !tt.ptr<f64>, %val: f64) {
+  // expected-error @+1 {{or requires an integer element type}}
+  %old = tt.atomic_rmw or, relaxed, gpu, %ptr, %val : (!tt.ptr<f64>, f64) -> f64
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_xor_float(%ptr: tensor<32x!tt.ptr<f32>>, %val: tensor<32xf32>) {
+  // expected-error @+1 {{xor requires an integer element type}}
+  %old = tt.atomic_rmw xor, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<f32>>, tensor<32xf32>) -> tensor<32xf32>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>) {
   // expected-error @+1 {{result type matches expected shape}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> i1
@@ -11,6 +67,38 @@ tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected:
 tt.func @atomic_poll_invalid_width(%ptr: tensor<32x!tt.ptr<i8>>, %expected: tensor<32xi8>) {
   // expected-error @+1 {{only supports integer elements with width {16, 32, 64}}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i8>>, tensor<32xi8> -> tensor<32xi1>
+  tt.return
+}
+
+// -----
+
+tt.func @load_with_store_cache_modifier(%ptr: !tt.ptr<f32>) {
+  // expected-error @+1 {{'tt.load' op invalid cache policy: cache modifier 'wb' is not supported for loads}}
+  %value = tt.load %ptr {cachePolicy = #tt.cache_policy<cache_modifier = wb, eviction_policy = evict_normal>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @store_with_load_cache_modifier(%ptr: !tt.ptr<f32>, %value: f32) {
+  // expected-error @+1 {{'tt.store' op invalid cache policy: cache modifier 'ca' is not supported for stores}}
+  tt.store %ptr, %value {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @load_with_nvidia_store_cache_modifier(%ptr: !tt.ptr<f32>) {
+  // expected-error @+1 {{'tt.load' op invalid cache policy: cache modifier 'wt' is not supported for loads}}
+  %value = tt.load %ptr {cachePolicy = #ttng.cache_policy<cache_modifier = wt>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @store_with_nvidia_load_cache_modifier(%ptr: !tt.ptr<f32>, %value: f32) {
+  // expected-error @+1 {{'tt.store' op invalid cache policy: cache modifier 'cv' is not supported for stores}}
+  tt.store %ptr, %value {cachePolicy = #ttng.cache_policy<cache_modifier = cv>} : !tt.ptr<f32>
   tt.return
 }
 
@@ -184,6 +272,19 @@ tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tenso
 
 // -----
 
+tt.func @reduce_with_release(%addresses: tensor<32xi64>) {
+  %0 = "tt.reduce" (%addresses) ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %ptr = tt.int_to_ptr %lhs : i64 -> !tt.ptr<i64>
+    // expected-error @+1 {{'tt.atomic_store' op is not allowed in a tt.reduce callback}}
+    tt.atomic_store release, gpu, %ptr, %rhs : !tt.ptr<i64>
+    tt.reduce.return %lhs : i64
+  }) {axis = 0 : i32} : (tensor<32xi64>) -> i64
+  tt.return
+}
+
+// -----
+
 tt.func public @fn(%v: tensor<4x128xf32>) {
     // expected-error @+1 {{requires the same shape}}
     %a = "tt.scan" (%v) ({
@@ -267,6 +368,15 @@ tt.func public @fn(%arg0: f32) {
     %a, %b = tt.split %arg0 : f32 -> f16
     tt.return
 }
+
+// -----
+
+tt.func public @split_result_type_mismatch(%arg0: tensor<32x2xf32>) {
+    // expected-error @+1 {{outLHS and outRHS types match}}
+    %parts:2 = "tt.split"(%arg0) : (tensor<32x2xf32>) -> (tensor<32xf32>, tensor<32xf16>)
+    tt.return
+}
+
 // -----
 
 tt.func public @fn(%arg0: tensor<2xf32>) {
@@ -671,7 +781,7 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
   %cst = arith.constant dense<0> : tensor<256xi32>
   "tt.map_elementwise" (%ptr, %cst) <{pack = 1 : i32}> ({
   ^bb0(%arg0: !tt.ptr<i32>, %arg1: i32):
-     // expected-error @below {{Stores are not supported inside map_elementwise}}
+     // expected-error @below {{'tt.store' op is not allowed in a tt.map_elementwise callback}}
      tt.store %arg0, %arg1 : !tt.ptr<i32>
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)

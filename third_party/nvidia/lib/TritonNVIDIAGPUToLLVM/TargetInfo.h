@@ -6,6 +6,8 @@
 
 namespace mlir::triton::NVIDIA {
 
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(int computeCapability)
@@ -23,6 +25,15 @@ public:
   Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
 
   StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  unsigned getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
@@ -54,11 +65,14 @@ public:
   bool supportBitwidth32Elementwise() const override {
     return targetFeatures.supportBitwidth32Elementwise();
   }
+  bool supportsTcgen05() const override {
+    return targetFeatures.supportsTcgen05();
+  }
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
-  Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                  int i) const override;
+  std::pair<Value, Value> shuffleUp(RewriterBase &rewriter, Location loc,
+                                    Value val, int delta) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -71,11 +85,14 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+  bool preferThreePredicateChains() const override {
+    // ptxas can fuse comparisons into each chain and merge the three
+    // partial predicates with one PLOP3.
+    return true;
+  }
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -88,11 +105,16 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
+  void assertTrap(RewriterBase &rewriter, Location loc) const override;
+
   int getSharedAddressSpace() const override;
 
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
+  bool supportNativeBF16AtomicAdd() const override {
+    return getComputeCapability() >= 90;
+  }
 
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {

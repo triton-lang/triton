@@ -37,7 +37,7 @@ public:
         mmaOp = mma;
       }
     }
-    if (!mmaOp)
+    if (!mmaOp || mmaOp.getAccumulator() != op.getResult())
       return failure();
     if (tmemLoad && !mmaOp->isBeforeInBlock(tmemLoad))
       return failure();

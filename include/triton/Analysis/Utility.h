@@ -1,6 +1,8 @@
 #ifndef TRITON_ANALYSIS_UTILITY_H
 #define TRITON_ANALYSIS_UTILITY_H
 
+#include <array>
+
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
@@ -11,17 +13,44 @@
 
 namespace mlir {
 
-inline bool isZeroConst(Value v) {
+// Match zero-filled storage: negative floating-point zero must be preserved.
+inline bool isZeroFillConst(Value v) {
+  if (auto splat = v.getDefiningOp<triton::SplatOp>())
+    return isZeroFillConst(splat.getSrc());
+  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
+    return isZeroFillConst(bitcast.getSrc());
   auto constantOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constantOp)
     return false;
+  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+    return attr.getValue().isZero();
+  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
+    return attr.getValue().bitcastToAPInt().isZero();
   if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
   if (auto denseAttr =
           dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
   return false;
 }
+
+// Callback to allow backends to specify a target-specific getter for scratch
+// elements.
+using GetNumScratchElemsFn =
+    std::function<unsigned(const triton::LinearLayout &src,
+                           const triton::LinearLayout &dst, unsigned bitwidth)>;
+
+struct LayoutConversionScratchConfig {
+  SmallVector<unsigned> offsets;
+  unsigned sizeInBytes = 0;
+};
+
+// Byte offsets in operand order and total storage for one layout conversion.
+LayoutConversionScratchConfig getLayoutConversionScratchConfig(
+    const triton::LinearLayout &src, const triton::LinearLayout &dst,
+    ArrayRef<Type> elementTypes,
+    GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
 class ReduceOpHelper {
 public:
@@ -42,22 +71,8 @@ public:
   };
 
   explicit ReduceOpHelper(triton::ReduceOp op)
-      : op(op.getOperation()), axis(op.getAxis()) {
-    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
-    srcTy = firstTy;
-    srcShape = firstTy.getShape();
-    srcEncoding = firstTy.getEncoding();
-    srcElementTypes = op.getElementTypes();
-
-    for (const auto &t : op.getInputTypes()) {
-      if (t.getShape() != srcShape) {
-        op.emitError() << "shape mismatch";
-      }
-      if (t.getEncoding() != srcEncoding) {
-        op.emitError() << "encoding mismatch";
-      }
-    }
-  }
+      : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
+        srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
 
   RankedTensorType getSrcTy() { return srcTy; }
 
@@ -69,18 +84,13 @@ public:
 
   bool isAssociative();
 
-  // Callback to allow backends to specify target-specific getter for scratch
-  // elements.
-  using GetNumScratchElemsFn = std::function<unsigned(
-      const triton::LinearLayout &src, const triton::LinearLayout &dst,
-      unsigned bitwidth)>;
-
+  // Allocation size for the whole reduction: the maximum sizeInBytes returned
+  // by getLayoutConversionScratchConfig across its inter-warp/CTA stages.
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   InThreadVectorizeOpKind
-  getInThreadVectorizeOpKind(unsigned axisPack,
-                             bool supportBitwidth16Elementwise,
+  getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                              bool supportBitwidth32Elementwise);
 
   static triton::ColumnAction
@@ -91,77 +101,168 @@ public:
   zeroBasesAlongDimAndReorder(const triton::LinearLayout &layout, unsigned axis,
                               mlir::StringAttr dim);
 
-  static triton::LinearLayout getInterLayout(const triton::LinearLayout &layout,
-                                             unsigned axis);
+  static triton::LinearLayout
+  getInterWarpReductionLayout(const triton::LinearLayout &layout,
+                              unsigned axis);
 
+  // Removes redundant register bases but retains replicated lanes.
   static triton::LinearLayout reducedRegLaneLayout(RankedTensorType srcTy,
                                                    unsigned axis);
-
-  static Value createInThreadVectorizedCombineOp(OpBuilder &builder,
-                                                 Location loc,
-                                                 InThreadVectorizeOpKind kind,
-                                                 Value lhs, Value rhs);
 
 private:
   triton::ReduceOp op;
   RankedTensorType srcTy;
   ArrayRef<int64_t> srcShape;
   Attribute srcEncoding;
-  SmallVector<Type> srcElementTypes;
   int axis;
 };
 
+// Lower a scan in three phases: scan thread-local segments, scan
+// their totals within each warp-local segment, then exchange and scan
+// warp-local totals.
+//
+// Segment: a contiguous range along the scan axis owned by one thread or warp.
+// Total layout: maps registers, lanes, and warps to segment indices along the
+// scan axis, preserving coordinates for independent scans.
+// Scan layout: ownership used to accumulate totals within a warp. The
+// intra-warp scan layout places low axis bits in registers before lanes. The
+// inter-warp scan layout replicates each full totals sequence across its
+// participating warps.
+//
+// Example: forward sum of x0..x31 with two warps and two distinct lane owners
+// per warp. R, L, W list scan-axis register, lane, and warp bases. Zero
+// lane bases and the empty block dimension are omitted. R=[] means one value
+// per thread.
+//
+// 1. originalLayout = permutedLayout: R=[1,4,8], L=[2], W=[16].
+//    Coordinates index original elements; the register order is canonical.
+//      warp 0, lane 0: [x0,x1], [x4,x5], [x8,x9], [x12,x13]
+//      warp 0, lane 1: [x2,x3], [x6,x7], [x10,x11], [x14,x15]
+//      warp 1: the same pattern with element indices increased by 16.
+//    threadSegmentSize=2, warpSegmentSize=16. Scan each pair locally to obtain
+//    [x(2j), Tj], where Tj=x(2j)+x(2j+1). Save these element prefixes.
+//
+// 2. intraWarpTotalsLayout: R=[2,4], L=[1], W=[8].
+//    Extract each pair's total. Divide the element bases by threadSegmentSize
+//    and remove zero register bases; coordinates now index thread segments.
+//      warp 0, lane 0: T0,T2,T4,T6; lane 1: T1,T3,T5,T7
+//      warp 1, lane 0: T8,T10,T12,T14; lane 1: T9,T11,T13,T15
+//    intraWarpScanLayout: R=[1,2], L=[4], W=[8].
+//    Put each warp-local segment's register bits before its lane bits and
+//    convert with warp shuffles. Each thread now holds four consecutive totals:
+//      warp 0, lane 0: T0,T1,T2,T3; lane 1: T4,T5,T6,T7
+//      warp 1, lane 0: T8,T9,T10,T11; lane 1: T12,T13,T14,T15
+//    Scan registers, then lanes. Slot j holds Uj=T(8w)+...+Tj in warp w.
+//    These warp-local prefixes retain intraWarpScanLayout.
+//
+// 3. interWarpTotalsLayout: R=[], L=[0], W=[1].
+//    Each warp segment contains eight thread totals. Extract register 3:
+//      warp 0: lane 0 holds U3; lane 1 holds U7
+//      warp 1: lane 0 holds U11; lane 1 holds U15
+//    Only terminal lane 1 has the complete warp total: W0=U7, W1=U15.
+//    Divide the source axis bases by eight and remove zero register bases.
+//    Coordinates now index warp segments. Select the terminal lanes as store
+//    producers; zero lane bases give their common segment address. Keep the
+//    Uj prefixes in intraWarpScanLayout for later use.
+//
+//    interWarpScanLayout: R=[], L=[1], W=[0].
+//    Broadcast the full sequence across participating warps. Store W0 and W1
+//    from their selected owners, synchronize, then load this layout:
+//      each warp, lane 0: W0; lane 1: W1
+//    Scan the totals, preserving their layout:
+//      each warp, lane 0: S0=W0; lane 1: S1=W0+W1
+//
+// Carry propagation:
+//    Map each consumer's warp-segment index s to the preceding prefix S(s-1)
+//    using the inverse of interWarpScanLayout. Warp 0 has no carry. Warp 1
+//    receives S0=Q7 through the inter-warp phase and retains it in registers.
+//    Apply this carry to the saved Uj:
+//      warp 0: Qj=Uj                for j=0..7
+//      warp 1: Qj=S0+Uj=T0+...+Tj  for j=8..15
+//    Qj=T0+...+Tj=x0+...+x(2j+1): j indexes thread-local segments. In
+//    particular, Q7 ends at x15. These prefixes retain intraWarpScanLayout.
+//    Convert them back to intraWarpTotalsLayout to restore the ownership of
+//    each Tj:
+//      warp 0, lane 0: Q0,Q2,Q4,Q6;     lane 1: Q1,Q3,Q5,Q7
+//      warp 1, lane 0: Q8,Q10,Q12,Q14;  lane 1: Q9,Q11,Q13,Q15
+//    Replace each saved pair's terminal value Tj with Qj. Its first element
+//    becomes Q(j-1)+x(2j), except that x0 remains unchanged. The return
+//    conversion provides the inclusive Qj; fetching Q(j-1) is a separate step.
+//    Map j-1 through the inverse of intraWarpTotalsLayout to obtain its source
+//    register and lane. In warp 1, the required sources are:
+//      destination total slot | lane 0 needs    | lane 1 needs
+//      r0                     | retained Q7     | r0/lane 0 (Q8)
+//      r1                     | r0/lane 1 (Q9)  | r1/lane 0 (Q10)
+//      r2                     | r1/lane 1 (Q11) | r2/lane 0 (Q12)
+//      r3                     | r2/lane 1 (Q13) | r3/lane 0 (Q14)
+//    Each total slot r supplies the carry for saved element registers 2r,2r+1.
+//    For each destination slot, enumerate candidate source registers across
+//    lanes. Shuffle each candidate from the computed source lane, then select
+//    the candidate matching the computed source register. For r1, the
+//    candidates are r0 and r1: lane 0 selects r0 from lane 1 (Q9), while lane 1
+//    selects r1 from lane 0 (Q10).
+//
 class ScanLoweringHelper {
 public:
+  enum class InterWarpScanType { Registers, Warp, Grouped };
+
   explicit ScanLoweringHelper(triton::ScanOp op);
-  // Return true if the lowering of the scan op is supported.
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
   bool isSupported();
-  // Return the number of elements per thread along axis dim.
-  unsigned getAxisNumElementsPerThread();
-  // Return the number of elements per thread along non-axis dims.
-  unsigned getNonAxisNumElementsPerThread();
-  // Return the number of threads per warp along non-axis dims.
-  unsigned getNonAxisNumThreadsPerWarp();
-  // Return the flat numbers of threads computing independent scan results.
-  unsigned getNonAxisNumThreadsPerCTA();
-  // Return the number of warps per CTA along axis dim with unique data.
-  unsigned getAxisNumWarpsWithUniqueData();
-  // Return the number of threads per warp along axis dim with unique data.
-  unsigned getAxisNumThreadsPerWarpWithUniqueData();
-  // Return the number of blocks along axis dim.
-  unsigned getAxisNumBlocks();
-  // Return the number of blocks along non axis dim.
-  unsigned getNonAxisNumBlocks();
-  // Return the size of the scratch space needed for scan lowering.
-  unsigned getScratchSizeInBytes();
-  // Return the number of elements of the scratch space needed for scan
-  // lowering.
-  unsigned getScratchSizeInElems();
+  const triton::LinearLayout &getPermutedLayout() const {
+    return permutedLayout;
+  }
+  const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
 
-  // Stride between contiguous element along axis dim.
-  unsigned getAxisElementStride();
-  // Stride between contiguous threads along axis dim.
-  unsigned getAxisThreadStride();
-  // Stride between contiguous blocks along axis dim.
-  unsigned getAxisBlockStride();
+  unsigned getThreadSegmentSize() const { return threadSegmentSize; }
 
-  Location getLoc() { return scanOp.getLoc(); }
-  unsigned getAxis() { return scanOp.getAxis(); }
-  bool getReverse() { return scanOp.getReverse(); }
-  triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
-  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
-  unsigned getNumOperands() { return scanOp.getNumOperands(); }
-  SmallVector<Type> getElementTypes() { return srcElementTypes; }
-  SmallVector<unsigned> getOrder() { return order; }
-  Region &getCombineOp();
+  const std::optional<triton::LinearLayout> &getIntraWarpTotalsLayout() const {
+    return intraWarpTotalsLayout;
+  }
+
+  const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
+    return intraWarpScanLayout;
+  }
+
+  unsigned getWarpSegmentSize() const { return warpSegmentSize; }
+
+  const std::optional<triton::LinearLayout> &getInterWarpTotalsLayout() const {
+    return interWarpTotalsLayout;
+  }
+
+  const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
+    return interWarpScanLayout;
+  }
+
+  InterWarpScanType getInterWarpScanType() const { return interWarpScanType; }
+  LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
+
+  unsigned
+  getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
 private:
-  triton::ScanOp scanOp;
-  triton::gpu::LinearEncodingAttr srcEncoding;
-  Attribute legacyEncoding;
-  llvm::ArrayRef<int64_t> srcShape;
-  SmallVector<Type> srcElementTypes;
-  SmallVector<unsigned> order;
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
+                     triton::ScanOp op);
+
+  triton::LinearLayout buildPermutedLayout();
+  triton::LinearLayout buildIntraWarpTotalsLayout() const;
+  triton::LinearLayout buildIntraWarpScanLayout() const;
+  triton::LinearLayout buildInterWarpTotalsLayout() const;
+  triton::LinearLayout buildInterWarpScanLayout();
+
+  triton::ScanOp op;
+  unsigned axis;
+  triton::LinearLayout originalLayout;
+  // Register zero bases removed, then axis register bits ordered logically.
+  triton::LinearLayout permutedLayout;
+  triton::ColumnAction registerOrder;
+  unsigned threadSegmentSize = 1;
+  unsigned warpSegmentSize = 1;
+  std::optional<triton::LinearLayout> intraWarpTotalsLayout;
+  std::optional<triton::LinearLayout> intraWarpScanLayout;
+  std::optional<triton::LinearLayout> interWarpTotalsLayout;
+  std::optional<triton::LinearLayout> interWarpScanLayout;
+  InterWarpScanType interWarpScanType = InterWarpScanType::Registers;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
@@ -181,41 +282,47 @@ private:
   RankedTensorType dstTy;
 };
 
-// This struct represents the factorization of a warp-local layout conversion
-// into three components: a register-only permutation, a lane-only permutation,
-// and a set of swaps between lane and register basis vectors. Algebraically, it
-// represents the factorization P = P_mixed \circ P_lane \circ P_reg. It is used
-// to aid in the implementation of the layout conversion using warp-shuffles.
+// For permutation cases, this struct represents the factorization of a
+// warp-local layout conversion into three components: a register-only
+// permutation, a lane-only permutation, and a set of swaps between lane and
+// register basis vectors. Algebraically, it represents the factorization
+// P = P_mixed \circ P_lane \circ P_reg. It is used to aid in the implementation
+// of the layout conversion using warp-shuffles.
 //
-// `pReg` and `pLane` are square layouts each with only one input and output
-// dimension. `mixedTranspositions` holds pairs of integers (i, j)
-// corresponding to the transposition (r_i l_j) of the i-th register basis
-// vector with the j-th lane basis vector along with 16-bit selectors for byte
-// permute instructions (where each of the four nybbles is in the range [0, 7]).
+// `pReg` is a square permutation of the padded registers. `shuffleMap` maps
+// register/lane/warp/block coordinates to source lanes for the shuffle stage.
+// `mixedTranspositions` holds the register bit and source/destination lane bits
+// for each exchange, along with 16-bit selectors for byte permute instructions
+// (where each of the four nybbles is in the range [0, 7]). A lane bit of -1
+// denotes a constant-zero predicate for a one-sided exchange.
 // `nPack` gives the number of basis vectors that can be used for register
 // packing while ensuring packed elements arrive at the same destination lane.
 struct DecomposedWarpConversion {
   struct TranspositionInfo {
-    std::pair<int, int> transposition;
+    int regBit;
+    int srcLane;
+    int dstLane;
     uint16_t topPreSel = 0x3210;
     uint16_t botPreSel = 0x7654;
     uint16_t topPostSel = 0x3210;
     uint16_t botPostSel = 0x7654;
   };
 
-  triton::LinearLayout pReg, pLane;
+  triton::LinearLayout pReg, shuffleMap;
   SmallVector<TranspositionInfo> mixedTranspositions;
   int nPack;
 };
 
-// Produces a decomposition of a permutation describing a warp-local layout
-// conversion as described in `DecomposedWarpConversion` above.
+// Produces a warp-local decomposition.
 //
-// This function handles cases where the numbers of register and lane basis
-// vectors differ between the two layouts. This is done by padding the smaller
+// For permutation cases, the numbers of register and lane basis vectors may
+// differ between the two layouts. This is handled by padding the smaller
 // dimension(s) with zero vectors, ensuring that the layout conversion can be
-// represented as a permutation. The layouts must not contain broadcasted
-// register bases.
+// represented as a permutation.
+//
+// Supports permutation layouts with warp/CTA-dependent lane selection. Source
+// registers must not depend on warp/CTA coordinates.
+// The layouts must not contain broadcasted register bases.
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
                                   const triton::LinearLayout &dstLayout,
@@ -250,8 +357,6 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 // If shape is empty, it means no shared memory is needed.
 unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
-bool supportWMMA(triton::DotOp op);
-
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(triton::DotOpInterface op, int version);
@@ -268,10 +373,8 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
-
-// TODO: Move utility functions that belong to ConvertLayoutOp to class
-// ConvertLayoutOpHelper in the future
-bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
+bool cvtNeedsSharedMemory(const triton::LinearLayout &src,
+                          const triton::LinearLayout &dst);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
@@ -280,6 +383,8 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim);
 
 namespace triton {
+
+bool canUseWarpBallotHistogram(HistogramOp op);
 
 struct BarrierStages {
   // Stages are independent: for example, a release atomic with scratch has
@@ -297,6 +402,10 @@ struct BarrierStages {
 // broadcast barrier at that scope supplies the post-atomic rendezvous itself.
 BarrierStages getAtomicBarrierStages(MemSemantic semantic,
                                      bool hasResultBarrier);
+
+// Lane bits to clear when shuffling an atomic result from its issuing lane.
+// Returns nullopt when broadcasting the result requires shared memory.
+std::optional<int32_t> getAtomicResultShuffleMask(Value result);
 
 // Whether distributing an atomic result requires communication between CTAs.
 bool atomicResultHasCTABroadcast(Operation *op);
