@@ -552,57 +552,51 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
   auto kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");
 
-  auto maxVecElems = std::min<int>(padded.getMinInterval(), 128 / bitwidth);
   auto cvt = reg.invertAndCompose(padded.getLinearComponent());
-  auto [elemsPerVec, permutation] =
-      tt::largestVectorisation(ctx, cvt, bitwidth, maxVecElems);
-  cvt = permutation.apply(cvt);
+  auto [elemsPerVec, perm] =
+      tt::largestVectorisation(ctx, cvt, bitwidth, padded.getMinInterval());
+  elemsPerVec = std::min(elemsPerVec, 128 / bitwidth);
   int vecDwords = std::max(1, elemsPerVec * bitwidth / 32);
 
-  // Find which lanes are served together with lane 0 in one cycle. For
-  // example, for ds_read_b128 on CDNA4 these are lanes 1, 2, 12 and 20 and
-  // their XOR combinations.
-  int numLanes = cvt.getInDimSize(kLane);
-  SmallVector<int32_t> masks(laneTile.laneMask);
-  if (masks.empty()) {
-    int log2Lanes = llvm::Log2_32(numLanes);
-    int log2Phase = std::max<int>(0, llvm::Log2_32(vecDwords) + log2Lanes -
-                                         llvm::Log2_32(numBanks));
-    for (int i = 0; i < log2Lanes - log2Phase; i++)
-      masks.push_back(1 << i);
-  }
+  // Find the offsets read by the lanes that are served together with lane 0
+  // in one cycle. For example, for ds_read_b128 on CDNA4 these are lanes 1, 2,
+  // 12 and 20 and their XOR combinations.
+  SmallVector<int32_t> laneOffsets;
+  for (int i = 0; i < cvt.getInDimSizeLog2(kLane); i++)
+    laneOffsets.push_back(cvt.getBasis(kLane, i, kOffset));
+  auto phase =
+      ttg::getLaneTile(laneTile, laneOffsets, elemsPerVec, bitwidth, numBanks);
 
   // Every group of lanes in every instruction reads the same pattern of
-  // offsets (ys, the offsets of lane 0's group), just XORed with a different
-  // starting offset t.
+  // offsets (`ys`, the offsets of lane 0's group), just XORed with a
+  // different starting offset `t`.
   //
-  // Starting offsets that differ by an element of ys read the same group of
-  // offsets, so we only need one of them. basis holds offsets that each have a
-  // different highest bit, and reduce() removes from x every part that the
-  // basis can build. Two values that differ by a combination of the basis
+  // Starting offsets that differ by an element of `ys` read the same group of
+  // offsets, so we only need one of them. `basis` holds offsets that each have
+  // a different highest bit, and `reduce(x)` removes from `x` every part that
+  // `basis` can build. Two values that differ by a combination of `basis`
   // reduce to the same value.
-  auto laneToOffset = cvt.sublayout({kLane}, {kOffset});
   SmallVector<uint32_t> ys = {0};
   SmallVector<uint32_t> basis;
   auto reduce = [&](uint32_t x) {
-    for (uint32_t b : basis)
+    for (uint32_t b : llvm::reverse(basis))
       x = std::min(x, x ^ b);
     return x;
   };
-  for (int32_t mask : masks) {
-    uint32_t y = laneToOffset.apply({{kLane, mask}})[0].second;
+  for (uint32_t y : phase) {
     for (int i = 0, n = ys.size(); i < n; i++)
       ys.push_back(ys[i] ^ y);
     if (uint32_t b = reduce(y)) {
       basis.push_back(b);
-      llvm::sort(basis, std::greater<uint32_t>());
+      llvm::sort(basis);
     }
   }
 
-  // Most bits of t do not matter. A bit that never changes inside a group
+  // Most bits of `t` do not matter. A bit that never changes inside a group
   // moves every lane of the group by the same distance, which just rotates
   // which banks are used, unless that distance is not a whole number of
-  // dwords. So we only need to look at the bits in keyBits.
+  // dwords. `keyBits` holds the bits that change inside a group, and the bits
+  // whose distance is not a whole number of dwords.
   auto shifts =
       getPaddedSharedShifts(padded, bitwidth, /*offsetInBytes=*/false);
   uint32_t groupBits = 0;
@@ -613,10 +607,10 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
     if (applyPadding(1u << k, shifts) * bitwidth % 32 != 0)
       keyBits |= 1u << k;
 
-  // Collect every distinct value of t & keyBits that can occur, up to the
-  // group itself. t is built by XORing lane, register, warp and block offsets
-  // (registers above the vector). An offset that the basis can already build
-  // adds nothing new; any other offset doubles the keys.
+  // Collect every distinct value of `t & keyBits` that can occur, up to the
+  // group itself, skipping the register bits inside the vector. An offset that
+  // `basis` can already build adds nothing new; any other offset doubles
+  // `keys`.
   SmallVector<uint32_t> keys = {0};
   for (auto dim : cvt.getInDimNames()) {
     int first = dim == kReg ? llvm::Log2_32(elemsPerVec) : 0;
@@ -625,13 +619,14 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
       if (!g)
         continue;
       basis.push_back(g);
-      llvm::sort(basis, std::greater<uint32_t>());
+      llvm::sort(basis);
       for (int j = 0, n = keys.size(); j < n; j++)
         keys.push_back(keys[j] ^ g);
     }
   }
 
-  // For each of them, count how many different dwords each bank must serve.
+  // For the group of each `t` in `keys`, count how many different dwords each
+  // bank must serve.
   int maxWays = 1;
   for (uint32_t t : keys) {
     llvm::DenseSet<int64_t> dwords;

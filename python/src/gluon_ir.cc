@@ -912,14 +912,13 @@ void init_gluon_ir(py::module_ &m) {
              int numBanks = targetInfo.getSharedMemoryBanks();
              auto padded =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(sharedLayoutAttr);
-             std::optional<int> maxVecElems;
-             if (padded)
-               maxVecElems =
-                   std::min<int>(padded.getMinInterval(), 128 / bitwidth);
+             auto maybeMaxVecElems =
+                 padded ? std::optional<int>(padded.getMinInterval())
+                        : std::nullopt;
              auto cvt = regLayout.invertAndCompose(smemLayout);
              auto [elemsPerVec, perm] = tt::largestVectorisation(
-                 mod.getContext(), cvt, bitwidth, maxVecElems);
-             auto vecBitwidth = std::max(32, elemsPerVec * bitwidth);
+                 mod.getContext(), cvt, bitwidth, maybeMaxVecElems);
+             auto vecBitwidth = std::clamp(elemsPerVec * bitwidth, 32, 128);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
