@@ -3056,6 +3056,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
         The function and its callees must be pure, except for :code:`assume`,
         :code:`device_assert`, and :code:`device_print`.
+        They must lower without shared-memory scratch.
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
@@ -3138,6 +3139,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
     :param combine_fn: a function to combine two groups of scalar tensors (must be marked with @triton.jit).
         The function and its callees must be pure, except for :code:`assume`,
         :code:`device_assert`, and :code:`device_print`.
+        They must lower without shared-memory scratch.
     :type combine_fn: Callable
     :param reverse: whether to apply the associative scan in the reverse direction along axis
     :type reverse: bool
@@ -3242,6 +3244,7 @@ def map_elementwise(
         :param scalar_fn: the function to map over.
             The function and its callees must be pure, except for :code:`assume`,
             :code:`device_assert`, and :code:`device_print`.
+            They must lower without shared-memory scratch.
         :param pack: the number of elements to be processed by one function call.
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''

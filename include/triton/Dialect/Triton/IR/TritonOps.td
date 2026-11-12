@@ -903,6 +903,7 @@ def TT_ReduceOp: TT_Op<"reduce",
     let description = [{
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
@@ -944,6 +945,7 @@ def TT_ScanOp: TT_Op<"scan",
     let description = [{
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
@@ -976,6 +978,7 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
     let description = [{
       The scalar function and its callees may contain memory-effect-free
       operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
