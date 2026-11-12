@@ -208,6 +208,25 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
 
 
+@pytest.mark.parametrize("shape", [(), (4, )])
+def test_fpsan_namespace_normal_execution(shape):
+
+    def kernel(shape: tl.constexpr):
+        x = tl.full(shape, 1.0001, tl.float32)
+        return tl.fpsan.barrier(x), tl.fpsan.homomorphic_cast(x, tl.float16)
+
+    barrier = tl.fpsan.barrier
+    cast = tl.fpsan.homomorphic_cast
+    unchanged, narrowed = interpreter.InterpretedFunction(kernel)(shape)
+    expected = np.full(shape, 1.0001, dtype=np.float32)
+    np.testing.assert_array_equal(unchanged.handle.data, expected)
+    np.testing.assert_array_equal(narrowed.handle.data, expected.astype(np.float16))
+    assert unchanged.dtype == tl.float32
+    assert narrowed.dtype == tl.float16
+    assert tl.fpsan.barrier is barrier
+    assert tl.fpsan.homomorphic_cast is cast
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
     import importlib.util

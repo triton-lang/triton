@@ -164,6 +164,40 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 // Math Ops
 //
 
+def TT_FpSanBarrierOp : TT_Op<"fpsan_barrier", [Elementwise,
+                                               SameOperandsAndResultType,
+                                               Pure]> {
+    let summary = "Mark an expression boundary for floating-point sanitization";
+    let description = [{
+        Apply a deterministic, non-homomorphic transformation to the input's
+        FPSan payload. This makes the placement of the boundary observable
+        without changing the input's shape, element type, or layout.
+
+        The frontend emits this operation only when FPSan is enabled. It is
+        neither a synchronization barrier nor a floating-point rounding mode.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
+                                      SameOperandsAndResultShape,
+                                      SameOperandsAndResultEncoding, Pure]> {
+    let summary = "Project an FPSan payload into a same-width or narrower ring";
+    let description = [{
+        Preserve the low bits of the input's FPSan payload in the destination
+        floating-point type. Unlike an ordinary FPSan downcast, this operation
+        preserves addition and multiplication. Widening is not supported.
+
+        The frontend emits this operation only when FPSan is enabled.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {

@@ -1369,6 +1369,7 @@ def _patch_lang(fn):
         _patch_builtin(lang.tensor, interpreter_builder, scope)
         if lang == tl:
             _patch_builtin(lang.math, interpreter_builder, scope)
+            _patch_builtin(lang.fpsan, interpreter_builder, scope)
         _patch_lang_tensor(lang.tensor, scope)
         _patch_lang_core(lang, scope)
     _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)

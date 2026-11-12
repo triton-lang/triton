@@ -3,6 +3,7 @@
 
 from . import math
 from . import extra
+from . import fpsan
 from .standard import (
     all,
     any,
@@ -214,6 +215,7 @@ __all__ = [
     "float8e4b8",
     "float8e5",
     "float8e5b16",
+    "fpsan",
     "floor",
     "fma",
     "full",

@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+from triton._instrumentation import is_enabled
 from triton._utils import validate_fp6_box
 
 from .._C.libtriton import ir
@@ -1931,6 +1932,33 @@ class TritonSemantic(Generic[TensorTy]):
 
     def debug_barrier(self) -> TensorTy:
         return self.make_tensor(self.builder.create_barrier(), tl.void)
+
+    def fpsan_barrier(self, input: TensorTy) -> TensorTy:
+        if not input.dtype.is_floating():
+            raise ValueError(f"fpsan.barrier requires a floating-point input, got {input.dtype}")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return input
+        return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
+
+    def fpsan_homomorphic_cast(self, input: TensorTy, dst_ty: tl.dtype,
+                               fp_downcast_rounding: Optional[str] = None) -> TensorTy:
+        dst_ty = dst_ty.scalar
+        if not input.dtype.is_floating() or not dst_ty.is_floating():
+            raise ValueError("fpsan.homomorphic_cast requires floating-point input and destination types")
+        src_width = input.dtype.primitive_bitwidth
+        dst_width = dst_ty.primitive_bitwidth
+        if dst_width > src_width:
+            raise ValueError("fpsan.homomorphic_cast destination must not be wider than input")
+        if input.dtype == dst_ty:
+            return input
+        self._str_to_rounding_mode(fp_downcast_rounding)
+        if fp_downcast_rounding is not None and dst_width == src_width:
+            raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return self.cast(input, dst_ty, fp_downcast_rounding)
+        result_ty = input.type.with_element_ty(dst_ty)
+        handle = self.builder.create_fpsan_homomorphic_cast(input.handle, result_ty.to_ir(self.builder))
+        return self.make_tensor(handle, result_ty)
 
     def grid_dependency_wait(self) -> None:
         self.builder.create_grid_dependency_wait()

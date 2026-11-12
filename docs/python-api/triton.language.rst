@@ -230,6 +230,17 @@ Compiler Hint Ops
     multiple_of
 
 
+Floating-Point Sanitization
+--------------------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    fpsan.barrier
+    fpsan.homomorphic_cast
+
+
 Debug Ops
 -----------------
 
