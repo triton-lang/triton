@@ -135,8 +135,7 @@ def _validate_np_data_size(np_array, tl_dtype):
 def _int_constant(value, np_dtype):
     # The compiled builder takes the value as an int64 (signed types) or a
     # uint64 (unsigned types) and arith.constant keeps its low bits, so e.g.
-    # tl.full(shape, 0xFFFFFFFF, tl.int32) is -1. NumPy 2 rejects such values in
-    # np.array(..., dtype=...), while astype narrows the same way.
+    # tl.full(shape, 0xFFFFFFFF, tl.int32) is -1.
     wide_dtype = np.int64 if np.issubdtype(np_dtype, np.signedinteger) else np.uint64
     return np.array([value], dtype=wide_dtype).astype(np_dtype)
 
