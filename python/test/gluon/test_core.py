@@ -8012,7 +8012,10 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
                                           multicast, return_kernel=True, early_a_release=early_a_release)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
     if early_a_release:
-        assert "sync_restrict::shared::read::mma::a" in compiled.asm["ptx"]
+        commits = re.findall(r"tcgen05\.commit[^\s;]*", compiled.asm["ptx"])
+        assert len(commits) == 2
+        assert "sync_restrict::shared::read::mma::a" in commits[0]
+        assert ".mbarrier::arrive::one.shared::cluster" in commits[1]
 
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA")
