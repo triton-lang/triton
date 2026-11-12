@@ -511,7 +511,7 @@ class HIPBackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            getattr(metadata, "shared_dynamic", metadata.shared),
+            metadata.shared_dynamic,
         )
 
     def get_codegen_implementation(self, options):
@@ -921,11 +921,8 @@ class HIPBackend(BaseBackend):
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
         shared_static = re.search(r"^\s*\.amdhsa_group_segment_fixed_size\s+(\d+)\s*$", amdgcn, re.MULTILINE)
-        metadata["shared_dynamic"] = metadata.get("shared_dynamic", metadata.get("shared", 0))
-        if shared_static is not None:
-            metadata["shared_static"] = int(shared_static.group(1))
-        else:
-            metadata["shared_static"] = max(metadata.get("shared", 0) - metadata["shared_dynamic"], 0)
+        assert shared_static is not None
+        metadata["shared_static"] = int(shared_static.group(1))
         metadata["shared"] = metadata["shared_static"] + metadata["shared_dynamic"]
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")

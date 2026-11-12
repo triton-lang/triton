@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 import re
 
@@ -123,13 +121,6 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
     assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
     assert HIPBackend(target).pack_metadata(compiled.metadata)[2] == 0
     assert compiled.packed_metadata[2] == 0
-
-
-def test_compile_only_amd_legacy_dynamic_lds_metadata():
-    target = GPUTarget("hip", "gfx950", 64)
-    metadata = SimpleNamespace(num_warps=8, num_ctas=1, shared=152448)
-    backend = HIPBackend(target)
-    assert backend.pack_metadata(metadata)[2] == 152448
 
 
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
