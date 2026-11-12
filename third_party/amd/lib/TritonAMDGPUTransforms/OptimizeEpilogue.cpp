@@ -101,8 +101,8 @@ usePermlaneSwapToOptimizeStore(PatternRewriter &rewriter, Value ptr, Value val,
 // skipping the relayout into the coalesced layout of `dstType`, the type the
 // original store used.
 //
-// For an MMA source it always is: the relayout is a pure LDS round trip and
-// the MFMA/WMMA layouts store acceptably.
+// For an MMA source it always is, except gfx1250 WMMA (below): the relayout
+// is a pure LDS round trip and the MFMA/WMMA layouts store acceptably.
 //
 // For any other distributed source it is profitable when the store stays as
 // wide and as coalesced as it would be in the layout of `dstType`, without
@@ -113,6 +113,15 @@ static bool isProfitableBypassSource(RankedTensorType srcType,
   Attribute dstEncoding = dstType.getEncoding();
   if (!srcEncoding || !dstEncoding)
     return false;
+
+  // gfx1250 WMMA: a lane holds 8 N-contiguous values of one row, so storing
+  // from the accumulator writes 32 B into each of 16 rows per instruction and
+  // every 128 B line goes out in 4 pieces. chooseMfmaLikeStoreLayout has no
+  // WMMA path, so keep the blocked layout: the convert goes through LDS and
+  // each store writes whole lines.
+  if (auto wmma = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(srcEncoding))
+    if (wmma.getVersion() >= 3)
+      return false;
 
   // If the source is MMA, it is always profitable. If not (FMA), we check
   // several things like contiguity, number of stores, etc.
