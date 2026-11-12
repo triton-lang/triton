@@ -2071,6 +2071,66 @@ def test_runtime_partitioned_tdm_store(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GRO
     assert torch.equal(b_device.cpu(), a)
 
 
+@gluon.jit
+def partitioned_local_load_kernel(src_ptr, dst_ptr, M: ttgl.constexpr, N: ttgl.constexpr, shared_layout: ttgl.constexpr,
+                                  load_layout: ttgl.constexpr):
+    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0])
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, blocked))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, blocked))[None, :]
+    value = ttgl.load(src_ptr + offs_m * N + offs_n)
+    smem = ttgl.allocate_shared_memory(src_ptr.type.element_ty, [M, N], shared_layout, value)
+
+    value = smem.load(load_layout)
+    offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, load_layout))[:, None]
+    offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, load_layout))[None, :]
+    ttgl.store(dst_ptr + offs_m * N + offs_n, value)
+
+
+_PARTITIONED_TRANSPOSE_LOAD_CASES = [
+    # Destination register bit 0 holds column 8, which selects the partition.
+    # ds_load_tr16_b128 reads it from issuing-lane bit 0, so each issuing lane
+    # still reads from a single partition.
+    pytest.param(
+        PartitionedSharedLayout(2, 1, 1, ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1])),
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 8], [0, 1], [0, 2], [0, 4], [32, 0]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[0, 0], [0, 0]],
+            block_bases=[],
+            shape=[64, 16],
+        ),
+        True,
+        id="partition-varies-across-registers",
+    ),
+    # Destination lane bit 0 holds rows 1 and 8, so each issuing lane's
+    # contiguous read would span both partitions.
+    pytest.param(
+        PartitionedSharedLayout(2, 4, 0, ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1])),
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [32, 0]],
+            lane_bases=[[9, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[0, 0], [0, 0]],
+            block_bases=[],
+            shape=[64, 16],
+        ),
+        False,
+        id="read-crosses-partitions",
+    ),
+]
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("shared_layout,load_layout,expect_transpose", _PARTITIONED_TRANSPOSE_LOAD_CASES)
+def test_runtime_partitioned_transpose_load(shared_layout, load_layout, expect_transpose):
+    M, N = load_layout.shape
+    src = torch.arange(M * N, dtype=torch.float16).reshape(M, N)
+    dst = torch.zeros_like(src).cuda()
+    pgm = partitioned_local_load_kernel[(1, )](src.cuda(), dst, M, N, shared_layout, load_layout, num_warps=4)
+
+    torch.testing.assert_close(dst.cpu(), src, rtol=0, atol=0)
+    assert ("ds_load_tr16_b128" in pgm.asm["amdgcn"]) == expect_transpose
+
+
 _LOAD_SHARED_FP4_REPACKED_CASES = [
     pytest.param(
         (128, 32),
