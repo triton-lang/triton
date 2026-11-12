@@ -66,25 +66,31 @@ void elideTrivialCaptures(LLVM::LLVMFuncOp func,
 // lowerWarpSpecializeCommon
 //===----------------------------------------------------------------------===//
 
+/// Phase indicator for register reallocation during warp specialization.
+enum class RegisterReallocPhase {
+  SwitchLoopStart,       // Reallocate at the beginning of switch loop
+  WorkerPartitionStart,  // Reallocate at worker partition region start
+  WorkerPartitionEnd,    // Reallocate at worker partition region end
+  DefaultPartitionStart, // Reallocate at default partition region start
+  DefaultPartitionEnd    // Reallocate at default partition region end
+};
+
 /// Callbacks for backend-specific operations during warp specialization
 /// lowering.
 struct WarpSpecializeCallbacks {
   /// Create a barrier to synchronize threads across the whole CTA
-  std::function<void(TritonLLVMIRRewriter &)> createAllBarrier;
+  std::function<void(TritonLLVMIRRewriter &, unsigned barIdx)> createAllBarrier;
 
-  /// Effective worker cap, or -1 when no adjustment is needed.
-  std::function<int32_t(gpu::WarpSpecializeOp, unsigned)> getWorkerRegisterCap =
-      [](gpu::WarpSpecializeOp, unsigned) { return -1; };
-
-  std::function<void(TritonLLVMIRRewriter &, int32_t cap, bool acquire)>
-      reallocWorkerRegisters = [](TritonLLVMIRRewriter &, int32_t, bool) {};
+  /// Reallocate registers.
+  /// regionNumber is only used for WorkerPartitionStart and WorkerPartitionEnd
+  /// phases.
   std::function<void(TritonLLVMIRRewriter &, gpu::WarpSpecializeOp,
-                     bool acquire)>
-      reallocDefaultRegisters =
-          [](TritonLLVMIRRewriter &, gpu::WarpSpecializeOp, bool) {};
+                     RegisterReallocPhase, unsigned regionNumber)>
+      reallocRegisters;
 
-  /// Number of consecutive worker warps sharing a command byte.
-  unsigned warpsPerCommand = 1;
+  /// For direct dispatch, each partition uses the register adjustment of its
+  /// representative. An empty map or a -1 entry requires no adjustment.
+  SmallVector<int32_t> workerRegisterPartitions;
 };
 
 /// A single site can dispatch directly if every returning path executes it
@@ -98,7 +104,7 @@ LogicalResult lowerWarpSpecializeCommon(
     LLVM::LLVMFuncOp func, ArrayRef<gpu::WarpSpecializeOp> wsOps, bool direct,
     Block *switchLoop, Value wid, unsigned defaultNumWarps,
     unsigned totalNumWarps, const TargetInfoBase &targetInfo,
-    const WarpSpecializeCallbacks &callbacks);
+    const WarpSpecializeCallbacks &callbacks, unsigned switchLoopBarrierIdx);
 
 } // namespace triton
 } // namespace mlir
