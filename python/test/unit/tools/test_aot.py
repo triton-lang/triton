@@ -678,6 +678,37 @@ def test_aot_target_parsing_with_explicit_target():
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)
 
 
+all_constexpr_kernel_src = """
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(VALUE: tl.constexpr):
+    pass
+"""
+
+
+def test_compile_all_constexpr_kernel():
+    # Every argument is specialized away, so the entry point only takes the stream.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = os.path.join(tmp_dir, "kernel.py")
+        with open(kernel_path, "w") as file:
+            file.write(all_constexpr_kernel_src)
+        _compile_kernel(dir=tmp_dir, signature="4", kernel_name="kernel", out_name="all_constexpr",
+                        out_path="all_constexpr", num_warps=1, grid="1,1,1", kernel_path=kernel_path)
+
+        stream_ty = "hipStream_t" if is_hip() else "CUstream"
+        (header, ) = glob.glob(os.path.join(tmp_dir, "all_constexpr.*.h"))
+        with open(header) as file:
+            assert re.search(rf"\ball_constexpr_\w+\({stream_ty} stream\);", file.read())
+
+        (source, ) = glob.glob(os.path.join(tmp_dir, "all_constexpr.*.c"))
+        command = ["gcc", "-fsyntax-only", source]
+        for inc_dir in include_dirs:
+            command.extend(["-I", inc_dir])
+        subprocess.run(command, check=True, cwd=tmp_dir)
+
+
 scalar_float_kernel_src = """
 import triton
 import triton.language as tl

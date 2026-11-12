@@ -54,7 +54,7 @@ void load_{kernel_name}() {{
 /*
 {kernel_docstring}
 */
-CUresult {kernel_name}(CUstream stream, {signature}) {{
+CUresult {kernel_name}(CUstream stream{trailing_signature}) {{
     if ({kernel_name}_func == NULL)
        load_{kernel_name}();
     unsigned int gX = {gridX};
