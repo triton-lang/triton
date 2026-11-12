@@ -225,11 +225,20 @@ Compiler Hint Ops
 
     assume
     debug_barrier
-    fpsan_barrier
-    fpsan_homomorphic_cast
     max_constancy
     max_contiguous
     multiple_of
+
+
+Floating-Point Sanitization
+--------------------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    fpsan.barrier
+    fpsan.homomorphic_cast
 
 
 Debug Ops

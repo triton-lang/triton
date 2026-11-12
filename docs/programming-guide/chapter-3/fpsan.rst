@@ -292,7 +292,7 @@ Important caveat:
 Opt-in Expression Boundaries
 ===========================
 
-Use ``tl.fpsan_barrier(x)`` (or ``gl.fpsan_barrier(x)`` in Gluon) to make an
+Use ``tl.fpsan.barrier(x)`` (or ``gl.fpsan.barrier(x)`` in Gluon) to make an
 intermediate result significant to a FpSan comparison. The input must be a
 floating-point scalar or tensor; its type, shape, and layout are preserved.
 
@@ -301,10 +301,10 @@ transformation to each element's payload. For example:
 
 .. code-block:: python
 
-   left = tl.fpsan_barrier(a * b) * c
-   right = a * tl.fpsan_barrier(b * c)
+   left = tl.fpsan.barrier(a * b) * c
+   right = a * tl.fpsan.barrier(b * c)
 
-   unfused = tl.fpsan_barrier(a * b) + c
+   unfused = tl.fpsan.barrier(a * b) + c
    fused = tl.fma(a, b, c)
 
 These pairs can have different FpSan results. Without the barriers, each pair
@@ -325,7 +325,7 @@ normal compilation, or synchronize execution.
 Local Homomorphic Casts
 ======================
 
-``tl.fpsan_homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
+``tl.fpsan.homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
 retains the low payload bits when converting to a narrower floating-point type.
 It preserves addition and multiplication across the conversion. Other casts
 retain their existing FpSan semantics.
@@ -335,7 +335,7 @@ signature:
 
 .. code-block:: python
 
-   result = tl.fpsan_homomorphic_cast(tl.fpsan_barrier(a * b), tl.float16)
+   result = tl.fpsan.homomorphic_cast(tl.fpsan.barrier(a * b), tl.float16)
 
 The barrier mixes high payload bits into low bits before they are discarded.
 Moving the downcast ahead of the barrier therefore generally changes the result,

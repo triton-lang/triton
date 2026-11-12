@@ -1061,14 +1061,14 @@ def test_fpsan_barrier_expression_structure(device, fresh_knobs, frontend, expre
             if EXPR == "multiply":
                 bc = b * c
                 if ANNOTATE:
-                    bc = lang.fpsan_barrier(bc)
+                    bc = lang.fpsan.barrier(bc)
                 out = a * bc
             else:
                 out = lang.fma(a, b, c)
         else:
             ab = a * b
             if ANNOTATE:
-                ab = lang.fpsan_barrier(ab)
+                ab = lang.fpsan.barrier(ab)
             if EXPR == "multiply":
                 out = ab * c
             else:
@@ -1118,8 +1118,8 @@ def test_fpsan_homomorphic_cast_barrier_placement(device, fresh_knobs, frontend,
             offsets = tl.arange(0, 256)
         a = lang.load(A + offsets)
         b = lang.load(B + offsets)
-        narrow_a = lang.fpsan_homomorphic_cast(a, DST)
-        narrow_b = lang.fpsan_homomorphic_cast(b, DST)
+        narrow_a = lang.fpsan.homomorphic_cast(a, DST)
+        narrow_b = lang.fpsan.homomorphic_cast(b, DST)
         if OP == "add":
             wide = a + b
             early = narrow_a.to(SRC) + narrow_b.to(SRC)
@@ -1127,11 +1127,11 @@ def test_fpsan_homomorphic_cast_barrier_placement(device, fresh_knobs, frontend,
             wide = a * b
             early = narrow_a.to(SRC) * narrow_b.to(SRC)
         lang.store(Cast + offsets, narrow_a)
-        lang.store(After + offsets, lang.fpsan_homomorphic_cast(wide, DST))
-        lang.store(Before + offsets, lang.fpsan_homomorphic_cast(early, DST))
-        lang.store(BarrierAfter + offsets, lang.fpsan_homomorphic_cast(lang.fpsan_barrier(a), DST))
-        lang.store(BarrierBefore + offsets, lang.fpsan_barrier(narrow_a))
-        lang.store(BarrierRoundtrip + offsets, lang.fpsan_homomorphic_cast(lang.fpsan_barrier(narrow_a.to(SRC)), DST))
+        lang.store(After + offsets, lang.fpsan.homomorphic_cast(wide, DST))
+        lang.store(Before + offsets, lang.fpsan.homomorphic_cast(early, DST))
+        lang.store(BarrierAfter + offsets, lang.fpsan.homomorphic_cast(lang.fpsan.barrier(a), DST))
+        lang.store(BarrierBefore + offsets, lang.fpsan.barrier(narrow_a))
+        lang.store(BarrierRoundtrip + offsets, lang.fpsan.homomorphic_cast(lang.fpsan.barrier(narrow_a.to(SRC)), DST))
 
     rng = np.random.RandomState(19)
     a_bits, b_bits = [_random_float_bits(rng, (256, ), src) for _ in range(2)]

@@ -36,7 +36,7 @@ def test_fpsan_barrier_instrumentation_mode(frontend, dtype, mode, scalar):
             offsets = tl.arange(0, 128)
         x = lang.load(X + offsets)
         if BARRIER:
-            x = lang.fpsan_barrier(x)
+            x = lang.fpsan.barrier(x)
         lang.store(Y + offsets, x)
 
     args = (MockTensor(dtype), MockTensor(dtype), True, frontend == "gluon", scalar)
@@ -57,9 +57,9 @@ def test_fpsan_barrier_integer_input(frontend, mode):
 
     @jit
     def kernel(X):
-        lang.fpsan_barrier(lang.load(X))
+        lang.fpsan.barrier(lang.load(X))
 
-    with pytest.raises(CompilationError, match="fpsan_barrier requires a floating-point input"):
+    with pytest.raises(CompilationError, match=r"fpsan\.barrier requires a floating-point input"):
         run_parser(kernel, args=(MockTensor(tl.int32), ), kwargs={"instrumentation_mode": mode})
 
 
@@ -98,7 +98,7 @@ def test_fpsan_homomorphic_cast_instrumentation_mode(frontend, src, dst, roundin
             offsets = tl.arange(0, 128)
         x = lang.load(X + offsets)
         if SPECIAL:
-            x = lang.fpsan_homomorphic_cast(x, DTYPE, ROUNDING)
+            x = lang.fpsan.homomorphic_cast(x, DTYPE, ROUNDING)
         else:
             x = x.to(DTYPE, fp_downcast_rounding=ROUNDING)
         lang.store(Y + offsets, x)
@@ -128,7 +128,7 @@ def test_fpsan_homomorphic_cast_invalid_input(frontend, mode, src, dst, rounding
 
     @jit
     def kernel(X, DTYPE: tl.constexpr, ROUNDING: tl.constexpr):
-        lang.fpsan_homomorphic_cast(lang.load(X), DTYPE, ROUNDING)
+        lang.fpsan.homomorphic_cast(lang.load(X), DTYPE, ROUNDING)
 
     with pytest.raises(CompilationError, match=error):
         run_parser(kernel, args=(MockTensor(src), dst, rounding), kwargs={"instrumentation_mode": mode})

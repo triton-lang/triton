@@ -1935,7 +1935,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def fpsan_barrier(self, input: TensorTy) -> TensorTy:
         if not input.dtype.is_floating():
-            raise ValueError(f"fpsan_barrier requires a floating-point input, got {input.dtype}")
+            raise ValueError(f"fpsan.barrier requires a floating-point input, got {input.dtype}")
         if not is_enabled(self.builder.options, "fpsan"):
             return input
         return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
@@ -1944,11 +1944,11 @@ class TritonSemantic(Generic[TensorTy]):
                                fp_downcast_rounding: Optional[str] = None) -> TensorTy:
         dst_ty = dst_ty.scalar
         if not input.dtype.is_floating() or not dst_ty.is_floating():
-            raise ValueError("fpsan_homomorphic_cast requires floating-point input and destination types")
+            raise ValueError("fpsan.homomorphic_cast requires floating-point input and destination types")
         src_width = input.dtype.primitive_bitwidth
         dst_width = dst_ty.primitive_bitwidth
         if dst_width > src_width:
-            raise ValueError("fpsan_homomorphic_cast destination must not be wider than input")
+            raise ValueError("fpsan.homomorphic_cast destination must not be wider than input")
         if input.dtype == dst_ty:
             return input
         self._str_to_rounding_mode(fp_downcast_rounding)

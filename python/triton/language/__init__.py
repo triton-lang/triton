@@ -3,6 +3,7 @@
 
 from . import math
 from . import extra
+from . import fpsan
 from .standard import (
     all,
     any,
@@ -82,8 +83,6 @@ from .core import (
     float8e4b8,
     float8e5,
     float8e5b16,
-    fpsan_barrier,
-    fpsan_homomorphic_cast,
     full,
     gather,
     histogram,
@@ -216,8 +215,7 @@ __all__ = [
     "float8e4b8",
     "float8e5",
     "float8e5b16",
-    "fpsan_barrier",
-    "fpsan_homomorphic_cast",
+    "fpsan",
     "floor",
     "fma",
     "full",
