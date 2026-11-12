@@ -6,39 +6,36 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cuda.h>
 #include <memory>
 #include <unistd.h>
 
-// CUDA VMM mechanics shared by the independent race and profiling allocators.
+#include "GSanDriver.h"
+
+// VMM mechanics shared by the independent race and profiling allocators.
 // No reservation, configuration, or allocation state is shared here.
 namespace triton::cuda_allocator {
 
+namespace drv = gsan::drv;
+
 union ShareableHandle {
   int fd;
-  CUmemFabricHandle fabricHandle;
+  drv::FabricHandle fabricHandle;
 };
 
-inline bool
-isSupportedShareableHandleType(CUmemAllocationHandleType handleType) {
-  return handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR ||
-         handleType == CU_MEM_HANDLE_TYPE_FABRIC;
-}
-
 inline void *getShareableHandleImportArg(const ShareableHandle *handle,
-                                         CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+                                         drv::HandleType handleType) {
+  if (handleType == drv::HandleType::PosixFileDescriptor)
     return reinterpret_cast<void *>(static_cast<uintptr_t>(handle->fd));
-  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
-    return const_cast<CUmemFabricHandle *>(&handle->fabricHandle);
+  if (handleType == drv::HandleType::Fabric)
+    return const_cast<drv::FabricHandle *>(&handle->fabricHandle);
   return nullptr;
 }
 
 inline void *getShareableHandleExportArg(ShareableHandle *handle,
-                                         CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+                                         drv::HandleType handleType) {
+  if (handleType == drv::HandleType::PosixFileDescriptor)
     return &handle->fd;
-  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC)
+  if (handleType == drv::HandleType::Fabric)
     return &handle->fabricHandle;
   return nullptr;
 }
@@ -57,7 +54,7 @@ inline void *getShareableHandleExportArg(ShareableHandle *handle,
 // of the hard parts for us and only asks us to allocate large blocks that it
 // will divide up as needed.
 struct AllocNode {
-  CUdeviceptr virtualAddress = 0;
+  uintptr_t virtualAddress = 0;
   AllocNode *parent = nullptr;
   std::unique_ptr<AllocNode> leftChild;
   std::unique_ptr<AllocNode> rightChild;
@@ -65,15 +62,14 @@ struct AllocNode {
   size_t maxFreeBlockSize = 0;
 
   // Allocation handles, used only by leaf nodes
-  CUmemGenericAllocationHandle realHandle = 0;
-  CUmemGenericAllocationHandle shadowHandle = 0;
+  drv::Handle realHandle = 0;
+  drv::Handle shadowHandle = 0;
   size_t allocSize = 0;
 };
 
-inline void printCUDAError(CUresult err) {
-  const char *errs = "<unknown error>";
-  cuGetErrorString(err, &errs);
-  fprintf(stderr, "CUDA allocator encountered an unexpected error: %s\n", errs);
+inline void printDriverError(drv::Result err) {
+  fprintf(stderr, "allocator encountered an unexpected error: %s\n",
+          drv::errorString(err));
 }
 
 inline size_t cdiv(size_t num, size_t den) { return (num + (den - 1)) / den; }
@@ -172,7 +168,7 @@ inline AllocNode *allocateNode(AllocNode *root, size_t allocSize) {
   return allocateNode(next, allocSize);
 }
 
-inline AllocNode *findNodeByAddress(AllocNode *root, CUdeviceptr address) {
+inline AllocNode *findNodeByAddress(AllocNode *root, uintptr_t address) {
   AllocNode *node = root;
   while (node != nullptr) {
     if (address < node->virtualAddress ||
@@ -227,6 +223,7 @@ inline void freeNode(AllocNode *leaf) {
   coalesceUp(leaf->parent);
 }
 
+#ifndef GSAN_BACKEND_HIP
 inline CUresult ensureContext(int device) {
   CUcontext ctx = 0;
   CUresult res = cuCtxGetCurrent(&ctx);
@@ -240,46 +237,39 @@ inline CUresult ensureContext(int device) {
     return res;
   return cuCtxSetCurrent(ctx);
 }
+#endif
 
-inline CUresult mapNodeHandles(AllocNode *node,
-                               CUmemGenericAllocationHandle realHandle,
-                               CUmemGenericAllocationHandle shadowHandle,
-                               size_t allocSize, uintptr_t shadowAddress,
-                               size_t shadowSize, int device, bool *realMapped,
-                               bool *shadowMapped) {
+inline drv::Result mapNodeHandles(AllocNode *node, drv::Handle realHandle,
+                                  drv::Handle shadowHandle, size_t allocSize,
+                                  uintptr_t shadowAddress, size_t shadowSize,
+                                  int device, bool *realMapped,
+                                  bool *shadowMapped) {
   assert(node != nullptr);
   assert(realMapped != nullptr);
   assert(shadowMapped != nullptr);
 
-  CUresult err = cuMemMap(node->virtualAddress, allocSize, /*offset*/ 0,
-                          realHandle, /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
+  drv::Result err = drv::memMap(node->virtualAddress, allocSize, realHandle);
+  if (err != drv::kSuccess)
     return err;
   *realMapped = true;
 
-  err = cuMemMap(shadowAddress, shadowSize, /*offset*/ 0, shadowHandle,
-                 /*flags*/ 0);
-  if (err != CUDA_SUCCESS)
+  err = drv::memMap(shadowAddress, shadowSize, shadowHandle);
+  if (err != drv::kSuccess)
     return err;
   *shadowMapped = true;
 
-  CUmemAccessDesc accessDesc = {};
-  accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  accessDesc.location.id = device;
-  accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
-  err = cuMemSetAccess(node->virtualAddress, allocSize, &accessDesc, 1);
-  if (err != CUDA_SUCCESS)
+  err = drv::memSetAccess(node->virtualAddress, allocSize, device);
+  if (err != drv::kSuccess)
     return err;
 
-  err = cuMemSetAccess(shadowAddress, shadowSize, &accessDesc, 1);
-  if (err != CUDA_SUCCESS)
+  err = drv::memSetAccess(shadowAddress, shadowSize, device);
+  if (err != drv::kSuccess)
     return err;
 
   node->allocSize = allocSize;
   node->realHandle = realHandle;
   node->shadowHandle = shadowHandle;
-  return CUDA_SUCCESS;
+  return drv::kSuccess;
 }
 
 inline void unmapNodeHandles(AllocNode *node, size_t allocSize,
@@ -287,102 +277,101 @@ inline void unmapNodeHandles(AllocNode *node, size_t allocSize,
                              bool realMapped, bool shadowMapped) {
   assert(node != nullptr);
   if (shadowMapped)
-    cuMemUnmap(shadowAddress, shadowSize);
+    (void)drv::memUnmap(shadowAddress, shadowSize);
   if (realMapped)
-    cuMemUnmap(node->virtualAddress, allocSize);
+    (void)drv::memUnmap(node->virtualAddress, allocSize);
 }
 
-inline CUmemAllocationHandleType defaultShareableHandleType() {
+inline drv::HandleType defaultShareableHandleType() {
   const auto *conf = getenv("PYTORCH_CUDA_ALLOC_CONF");
-  return conf && strstr(conf, "fabric_handles:True")
-             ? CU_MEM_HANDLE_TYPE_FABRIC
-             : CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+  return drv::kHasFabricHandles && conf && strstr(conf, "fabric_handles:True")
+             ? drv::HandleType::Fabric
+             : drv::HandleType::PosixFileDescriptor;
 }
 
-inline CUresult createAllocation(AllocNode *node, size_t allocSize,
-                                 uintptr_t shadowAddress, size_t shadowSize,
-                                 const CUmemAllocationProp &prop,
-                                 CUstream stream) {
-  CUmemGenericAllocationHandle realHandle = 0, shadowHandle = 0;
+inline drv::Result createAllocation(AllocNode *node, size_t allocSize,
+                                    uintptr_t shadowAddress, size_t shadowSize,
+                                    int device, drv::HandleType handleType,
+                                    drv::Stream stream) {
+  drv::Handle realHandle = 0, shadowHandle = 0;
   bool realMapped = false, shadowMapped = false;
-  CUresult err = cuMemCreate(&realHandle, allocSize, &prop, 0);
-  if (err == CUDA_SUCCESS)
-    err = cuMemCreate(&shadowHandle, shadowSize, &prop, 0);
-  if (err == CUDA_SUCCESS)
-    err = mapNodeHandles(node, realHandle, shadowHandle, allocSize,
-                         shadowAddress, shadowSize, prop.location.id,
-                         &realMapped, &shadowMapped);
-  if (err == CUDA_SUCCESS)
-    err = cuMemsetD8Async(shadowAddress, 0, shadowSize, stream);
-  if (err != CUDA_SUCCESS) {
-    unmapNodeHandles(node, allocSize, shadowAddress, shadowSize, realMapped,
-                     shadowMapped);
-    if (shadowHandle)
-      cuMemRelease(shadowHandle);
-    if (realHandle)
-      cuMemRelease(realHandle);
-  }
-  return err;
-}
-
-inline CUresult importAllocation(AllocNode *node, size_t allocSize,
-                                 uintptr_t shadowAddress, size_t shadowSize,
-                                 const ShareableHandle &real,
-                                 const ShareableHandle &shadow,
-                                 CUmemAllocationHandleType handleType,
-                                 int device) {
-  CUmemGenericAllocationHandle realHandle = 0, shadowHandle = 0;
-  bool realMapped = false, shadowMapped = false;
-  CUresult err = cuMemImportFromShareableHandle(
-      &realHandle, getShareableHandleImportArg(&real, handleType), handleType);
-  if (err == CUDA_SUCCESS)
-    err = cuMemImportFromShareableHandle(
-        &shadowHandle, getShareableHandleImportArg(&shadow, handleType),
-        handleType);
-  if (err == CUDA_SUCCESS)
+  drv::Result err = drv::memCreate(&realHandle, allocSize, device, handleType);
+  if (err == drv::kSuccess)
+    err = drv::memCreate(&shadowHandle, shadowSize, device, handleType);
+  if (err == drv::kSuccess)
     err =
         mapNodeHandles(node, realHandle, shadowHandle, allocSize, shadowAddress,
                        shadowSize, device, &realMapped, &shadowMapped);
-  if (err != CUDA_SUCCESS) {
+  if (err == drv::kSuccess)
+    err = drv::memsetD8Async(shadowAddress, shadowSize, stream);
+  if (err != drv::kSuccess) {
     unmapNodeHandles(node, allocSize, shadowAddress, shadowSize, realMapped,
                      shadowMapped);
     if (shadowHandle)
-      cuMemRelease(shadowHandle);
+      (void)drv::memRelease(shadowHandle);
     if (realHandle)
-      cuMemRelease(realHandle);
+      (void)drv::memRelease(realHandle);
   }
   return err;
 }
 
-inline CUresult exportAllocation(const AllocNode *node, ShareableHandle *real,
-                                 ShareableHandle *shadow,
-                                 CUmemAllocationHandleType handleType) {
-  CUresult err = cuMemExportToShareableHandle(
-      getShareableHandleExportArg(real, handleType), node->realHandle,
-      handleType, 0);
-  if (err != CUDA_SUCCESS)
+inline drv::Result importAllocation(AllocNode *node, size_t allocSize,
+                                    uintptr_t shadowAddress, size_t shadowSize,
+                                    const ShareableHandle &real,
+                                    const ShareableHandle &shadow,
+                                    drv::HandleType handleType, int device) {
+  drv::Handle realHandle = 0, shadowHandle = 0;
+  bool realMapped = false, shadowMapped = false;
+  drv::Result err = drv::importHandle(
+      &realHandle, getShareableHandleImportArg(&real, handleType), handleType);
+  if (err == drv::kSuccess)
+    err = drv::importHandle(&shadowHandle,
+                            getShareableHandleImportArg(&shadow, handleType),
+                            handleType);
+  if (err == drv::kSuccess)
+    err =
+        mapNodeHandles(node, realHandle, shadowHandle, allocSize, shadowAddress,
+                       shadowSize, device, &realMapped, &shadowMapped);
+  if (err != drv::kSuccess) {
+    unmapNodeHandles(node, allocSize, shadowAddress, shadowSize, realMapped,
+                     shadowMapped);
+    if (shadowHandle)
+      (void)drv::memRelease(shadowHandle);
+    if (realHandle)
+      (void)drv::memRelease(realHandle);
+  }
+  return err;
+}
+
+inline drv::Result exportAllocation(const AllocNode *node,
+                                    ShareableHandle *real,
+                                    ShareableHandle *shadow,
+                                    drv::HandleType handleType) {
+  drv::Result err =
+      drv::exportHandle(getShareableHandleExportArg(real, handleType),
+                        node->realHandle, handleType);
+  if (err != drv::kSuccess)
     return err;
-  err = cuMemExportToShareableHandle(
-      getShareableHandleExportArg(shadow, handleType), node->shadowHandle,
-      handleType, 0);
-  if (err != CUDA_SUCCESS &&
-      handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+  err = drv::exportHandle(getShareableHandleExportArg(shadow, handleType),
+                          node->shadowHandle, handleType);
+  if (err != drv::kSuccess &&
+      handleType == drv::HandleType::PosixFileDescriptor)
     close(real->fd);
   return err;
 }
 
 inline void releaseAllocation(AllocNode *node, uintptr_t shadowAddress,
-                              size_t shadowSize, CUstream stream) {
+                              size_t shadowSize, drv::Stream stream) {
   // Wait for the allocator's memset and the caller's work before unmapping.
-  auto check = [](CUresult err) {
-    if (err != CUDA_SUCCESS)
-      printCUDAError(err);
+  auto check = [](drv::Result err) {
+    if (err != drv::kSuccess)
+      printDriverError(err);
   };
-  check(cuStreamSynchronize(stream));
-  check(cuMemUnmap(node->virtualAddress, node->allocSize));
-  check(cuMemUnmap(shadowAddress, shadowSize));
-  check(cuMemRelease(node->realHandle));
-  check(cuMemRelease(node->shadowHandle));
+  check(drv::streamSynchronize(stream));
+  check(drv::memUnmap(node->virtualAddress, node->allocSize));
+  check(drv::memUnmap(shadowAddress, shadowSize));
+  check(drv::memRelease(node->realHandle));
+  check(drv::memRelease(node->shadowHandle));
   freeNode(node);
 }
 

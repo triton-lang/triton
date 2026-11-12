@@ -22,24 +22,23 @@ inline bool parseIntArg(PyObject *obj, const char *name, int *out) {
 }
 
 inline bool parseShareableHandleTypeArg(PyObject *obj, const char *name,
-                                        CUmemAllocationHandleType *out) {
+                                        drv::HandleType *out) {
   int handleType = 0;
   if (!parseIntArg(obj, name, &handleType))
     return false;
-  if (handleType != CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
-      handleType != CU_MEM_HANDLE_TYPE_FABRIC) {
+  if (!drv::isSupportedHandleType(static_cast<drv::HandleType>(handleType))) {
     PyErr_Format(PyExc_ValueError, "%s has unsupported value %d", name,
                  handleType);
     return false;
   }
-  *out = static_cast<CUmemAllocationHandleType>(handleType);
+  *out = static_cast<drv::HandleType>(handleType);
   return true;
 }
 
 inline bool parseShareableHandleArg(PyObject *obj, const char *name,
-                                    CUmemAllocationHandleType handleType,
+                                    drv::HandleType handleType,
                                     ShareableHandle *out) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+  if (handleType == drv::HandleType::PosixFileDescriptor)
     return parseIntArg(obj, name, &out->fd);
 
   if (!PyBytes_Check(obj)) {
@@ -61,10 +60,9 @@ inline bool parseShareableHandleArg(PyObject *obj, const char *name,
   return true;
 }
 
-inline PyObject *
-shareableHandleToPyObject(const ShareableHandle &handle,
-                          CUmemAllocationHandleType handleType) {
-  if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)
+inline PyObject *shareableHandleToPyObject(const ShareableHandle &handle,
+                                           drv::HandleType handleType) {
+  if (handleType == drv::HandleType::PosixFileDescriptor)
     return PyLong_FromLong(handle.fd);
   return PyBytes_FromStringAndSize(
       reinterpret_cast<const char *>(&handle.fabricHandle),
