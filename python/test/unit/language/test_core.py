@@ -170,7 +170,7 @@ def test_static_lds_launch(device):
                               options={"num_warps": 8})
     compiled[(1, 1, 1)](src, dst)
     assert compiled.metadata.shared > 0
-    assert compiled.metadata.shared_dynamic == 0
+    assert compiled.packed_metadata[2] == 0
     torch.testing.assert_close(dst, src.T, rtol=0, atol=0)
 
 

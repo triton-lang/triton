@@ -117,7 +117,6 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
     shared = compiled.metadata.shared
     assert (shared > 0) == transpose
     assert compiled.metadata.shared_static == shared
-    assert compiled.metadata.shared_dynamic == 0
     assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
     assert HIPBackend(target).pack_metadata(compiled.metadata)[2] == 0
     assert compiled.packed_metadata[2] == 0

@@ -511,7 +511,7 @@ class HIPBackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            metadata.shared_dynamic,
+            0,
         )
 
     def get_codegen_implementation(self, options):
@@ -856,7 +856,6 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
-        metadata["shared_dynamic"] = 0
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -923,7 +922,7 @@ class HIPBackend(BaseBackend):
         shared_static = re.search(r"^\s*\.amdhsa_group_segment_fixed_size\s+(\d+)\s*$", amdgcn, re.MULTILINE)
         assert shared_static is not None
         metadata["shared_static"] = int(shared_static.group(1))
-        metadata["shared"] = metadata["shared_static"] + metadata["shared_dynamic"]
+        metadata["shared"] = metadata["shared_static"]
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
