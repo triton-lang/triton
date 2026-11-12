@@ -697,3 +697,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// A hint on an integer stride argument feeding the offsets keeps the
+// tt.pointer_range=32 buffer-op conversion.
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // COMMON-LABEL: annotated_stride_arg
+  tt.func @annotated_stride_arg(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<256xf32, #blocked0> {
+    // COMMON: %[[stride:.*]] = tt.annotate %arg1
+    %0 = tt.annotate %arg1 {tt.divisibility = dense<16> : tensor<1xi32>} : i32
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    // COMMON: %[[stride_splat:.*]] = tt.splat %[[stride]]
+    %2 = tt.splat %0 : i32 -> tensor<256xi32, #blocked0>
+    // COMMON: %[[offset:.*]] = arith.muli %{{.*}}, %[[stride_splat]]
+    %3 = arith.muli %1, %2 : tensor<256xi32, #blocked0>
+    %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %5 = tt.addptr %4, %3 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
+    // COMMON: amdg.buffer_load %arg0[%[[offset]]]
+    %6 = tt.load %5 : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return %6 : tensor<256xf32, #blocked0>
+  }
+}

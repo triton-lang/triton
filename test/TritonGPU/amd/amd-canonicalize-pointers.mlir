@@ -1657,3 +1657,35 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[SPLAT:.*]] = tt.splat %[[ARG0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
 // CHECK:           %[[PTR:.*]] = tt.addptr %[[SPLAT]], %{{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
 // CHECK:           tt.store %[[PTR]], %[[ARG1]] : tensor<1024x!tt.ptr<f32>>
+
+// -----
+
+// A hint on an integer stride argument stays on the stride, and the offsets
+// computed from it are accumulated into the fat-pointer offset.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_stride_arg(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<1024xf32> {
+    %0 = tt.annotate %arg1 {tt.divisibility = dense<16> : tensor<1xi32>} : i32
+    %1 = tt.get_program_id x : i32
+    %2 = arith.muli %1, %0 : i32
+    %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %4 = tt.splat %0 : i32 -> tensor<1024xi32>
+    %5 = arith.muli %3, %4 : tensor<1024xi32>
+    %6 = tt.addptr %arg0, %2 : !tt.ptr<f32>, i32
+    %7 = tt.splat %6 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %8 = tt.addptr %7, %5 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %9 = tt.load %8 : tensor<1024x!tt.ptr<f32>>
+    tt.return %9 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_stride_arg(
+// CHECK-SAME:                                 %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: i32) -> tensor<1024xf32> {
+// CHECK:           %[[STRIDE:.*]] = tt.annotate %[[ARG1]] {tt.divisibility = dense<16> : tensor<1xi32>} : i32
+// CHECK:           %[[ROW:.*]] = arith.muli %{{.*}}, %[[STRIDE]] : i32
+// CHECK:           %[[ROW_SPLAT:.*]] = tt.splat %[[ROW]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[STRIDE_SPLAT:.*]] = tt.splat %[[STRIDE]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[COL:.*]] = arith.muli %{{.*}}, %[[STRIDE_SPLAT]] : tensor<1024xi32>
+// CHECK:           %[[OFFSET:.*]] = arith.addi %[[COL]], %[[ROW_SPLAT]] : tensor<1024xi32>
+// CHECK:           %[[BASE:.*]] = tt.splat %[[ARG0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[BASE]], %[[OFFSET]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.load %[[PTR]] : tensor<1024x!tt.ptr<f32>>
