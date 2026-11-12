@@ -85,12 +85,15 @@ define amdgpu_kernel void @mir_kernel(ptr addrspace(1) %out, i32 %a, i32 %b) {{
   ret void
 }}
 '''
-    mir = compiler.translate_to_mir(source, triple, arch, "", [], False, "mir_kernel", str(tmp_path), "", False)
+    mir, dag = compiler.translate_to_mir(source, triple, arch, "", [], False, "mir_kernel", str(tmp_path), "", False)
     assert mir.startswith("---")
     assert "S_BARRIER" in mir
     assert "S_WAIT" not in mir
     path = tmp_path / "mir_kernel.txt"
-    assert compiler.MIR_DAG_MARKER in path.read_text()
+    dumped = path.read_text()
+    assert compiler.MIR_DAG_MARKER in dumped
+    # The returned DAG is the same text the dump appends after the marker.
+    assert dumped.split(compiler.MIR_DAG_MARKER)[1] == dag
     path.write_text(mir)
     assembly = compiler.translate_mir_to_asm(str(path), triple, arch, "", [], False, False, enable_misched, False)
     assert "mir_kernel:" in assembly

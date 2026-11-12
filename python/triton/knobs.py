@@ -543,6 +543,10 @@ class amd_knobs(base_knobs):
     swap_mir: env_opt_str = env_opt_str("TRITON_SWAP_MIR")
     # Enable machine instruction scheduler in MIR swap mode
     swap_mir_enable_misched: env_bool = env_bool("TRITON_SWAP_MIR_ENABLE_MISCHED", False)
+    # MODULE:CLASS of a triton.backends.amd.compiler.MIRScheduler subclass, run in
+    # place of LLVM's machine scheduler. Untyped here: the base class lives in the
+    # backend, which triton core must not import.
+    mir_scheduler: env_class[Any] = env_class("TRITON_MIR_SCHEDULER", "MIRScheduler")
 
 
 class proton_knobs(base_knobs):
