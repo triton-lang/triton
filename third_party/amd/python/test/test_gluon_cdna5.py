@@ -9,7 +9,7 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import get_current_target, is_hip_cdna5, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
+from triton._internal_testing import get_current_target, is_hip_cdna5, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes, create_mxfp_operand, create_mxfp_scale
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -1165,35 +1165,6 @@ def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block, M, N, K):
     b_f32 = b.to(torch.float32)
 
     return torch.matmul(a_f32 * a_scale_f32, b_f32 * b_scale_f32).to(torch.float32)
-
-
-def create_mxfp_operand(operand: int, m: int, n: int, dtype: str):
-    size = (m, n)
-    if dtype == 'e4m3':
-        v = torch.randint(20, 40, size, dtype=torch.uint8)
-        v_ref = v.view(torch.float8_e4m3fn).to(torch.float32)
-    elif dtype == 'e5m2':
-        v = torch.randint(20, 40, size, dtype=torch.uint8)
-        v_ref = v.view(torch.float8_e5m2).to(torch.float32)
-    else:
-        assert dtype == 'e2m1'
-        pack_dim = 1 if operand == 0 else 0
-        v_mxfp4 = MXFP4Tensor(size=size).random()
-        v = v_mxfp4.to_packed_tensor(pack_dim)
-        v_ref = v_mxfp4.to(torch.float32)
-    return v, v_ref
-
-
-def create_mxfp_scale(operand: int, m: int, n: int, scale_dtype: str, scale_factor: int):
-    pack_dim = 1 if operand == 0 else 0
-    size = (m, n // scale_factor) if pack_dim == 1 else (m // scale_factor, n)
-    if scale_dtype == "e8m0":
-        scale = MXScaleTensor(size=tuple(size)).random(low=1.0, high=scale_factor)
-    else:
-        assert scale_dtype == "e4m3"
-        scale = torch.randint(20, 40, size, dtype=torch.uint8).view(torch.float8_e4m3fn)
-    scale_ref = scale.to(torch.float32).repeat_interleave(scale_factor, dim=pack_dim)
-    return scale.data, scale_ref
 
 
 def get_test_mxfp_block_mnk():

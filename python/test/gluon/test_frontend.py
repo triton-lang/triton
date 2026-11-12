@@ -4330,22 +4330,31 @@ def _get_amd_scaled_downcast(target):
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
-@pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.float32, "f32")])
-def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype):
+@pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.bfloat16, "bf16"), (ttgl.float32, "f32")])
+@pytest.mark.parametrize("scale_factor", [2, 8])
+def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype, scale_factor, capfd):
     scaled_downcast = _get_amd_scaled_downcast(target)
+    threads_per_warp = [8, target.warp_size // 8]
 
     @gluon.jit
-    def kernel():
-        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
-        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+    def kernel(SCALE_FACTOR: ttgl.constexpr, THREADS_PER_WARP: ttgl.constexpr):
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], THREADS_PER_WARP, [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8 // SCALE_FACTOR], THREADS_PER_WARP, [1, 1], [1, 0])
         input = ttgl.full([16, 64], 1.0, dtype, unpacked_layout)
-        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scale = ttgl.full([16, 64 // SCALE_FACTOR], 0x7F, ttgl.uint8, scale_layout)
         scaled_downcast(input, scale, "e2m1", axis=1)
 
-    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    if target == HIP_TARGET_CDNA5 and scale_factor == 2:
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            run_parser(kernel, *make_args(scale_factor, threads_per_warp, num_warps=1), target=target)
+        assert "each scale block along the scaled axis must cover a multiple of 8 fp4 values" in capfd.readouterr().err
+        return
+
+    module = run_parser(kernel, *make_args(scale_factor, threads_per_warp, num_warps=1), target=target)
     module_text = module.str_nodebug()
     assert "amdg.scaled_downcast_fp4" in module_text
     assert f"tensor<16x64x{ir_dtype}" in module_text
+    assert f"tensor<16x{64 // scale_factor}xi8" in module_text
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])

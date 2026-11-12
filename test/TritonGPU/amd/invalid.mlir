@@ -1375,3 +1375,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Four values per thread and 32 values per scale: a pk8 group of a thread's
+// registers spans two scale blocks.
+#in4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#out2 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale32 = #ttg.linear<{register = [[0, 4]], lane = [[0, 0], [0, 0], [0, 0], [0, 1], [0, 2]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scaled_downcast_fp4_pk8_group_spans_scales(%input: tensor<1x256xf32, #in4>, %scale: tensor<1x8xi8, #scale32>) {
+    // expected-error @+1 {{each v_cvt_scalef32 group of 8 fp4 values must share a single scale}}
+    %0 = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x256xf32, #in4>, tensor<1x8xi8, #scale32> -> tensor<1x128xi8, #out2>
+    tt.return
+  }
+}
+
+// -----
+
+#layout = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_downcast_fp8_pk2_one_scale_per_value(%input: tensor<1x512xf32, #layout>, %scale: tensor<1x512xi8, #layout>) {
+    // expected-error @+1 {{each scale block along the scaled axis must cover a multiple of 2 elements, but got 1 output elements per scale}}
+    %0 = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xf32, #layout>, tensor<1x512xi8, #layout> -> tensor<1x512xf8E4M3FN, #layout>
+    tt.return
+  }
+}
+
+// -----
+
+// Register 0 repeats an element, so the first pair of unique values (columns k
+// and k + 8) spans two scale blocks.
+#bcast = #ttg.linear<{register = [[0, 0], [0, 8]], lane = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32], [0, 64]], warp = [], block = []}>
+#bcast_scale = #ttg.linear<{register = [[0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 2], [0, 4], [0, 8]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_downcast_fp8_pk2_broadcast_register(%input: tensor<1x128xf32, #bcast>, %scale: tensor<1x16xi8, #bcast_scale>) {
+    // expected-error @+1 {{each v_cvt_scalef32 group of 2 elements must share a single scale}}
+    %0 = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x128xf32, #bcast>, tensor<1x16xi8, #bcast_scale> -> tensor<1x128xf8E4M3FN, #bcast>
+    tt.return
+  }
+}

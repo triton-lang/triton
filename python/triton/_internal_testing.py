@@ -21,6 +21,7 @@ from triton._compile_warmup_state import is_compile_warmup
 from numpy.random import RandomState
 from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -298,6 +299,61 @@ def tma_skip_msg(byval_only=False):
 # Evaluate hardware requirements when pytest runs the test, so importing the
 # process helpers does not initialize CUDA before a worker's startup code.
 requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
+
+
+def create_mxfp_operand(operand: int, m: int, n: int, dtype: str):
+    """Create a random MX-format GEMM operand on the CPU.
+
+    Args:
+        operand: 0 for the LHS operand, packed along dim 1 for e2m1, or 1 for
+            the RHS operand, packed along dim 0.
+        m: Number of rows.
+        n: Number of columns.
+        dtype: MX element format, one of "e2m1", "e4m3" or "e5m2".
+
+    Returns:
+        A tuple of the raw operand bytes and their float32 values.
+    """
+    size = (m, n)
+    if dtype == 'e4m3':
+        v = torch.randint(20, 40, size, dtype=torch.uint8)
+        v_ref = v.view(torch.float8_e4m3fn).to(torch.float32)
+    elif dtype == 'e5m2':
+        v = torch.randint(20, 40, size, dtype=torch.uint8)
+        v_ref = v.view(torch.float8_e5m2).to(torch.float32)
+    else:
+        assert dtype == 'e2m1'
+        pack_dim = 1 if operand == 0 else 0
+        v_mxfp4 = MXFP4Tensor(size=size).random()
+        v = v_mxfp4.to_packed_tensor(pack_dim)
+        v_ref = v_mxfp4.to(torch.float32)
+    return v, v_ref
+
+
+def create_mxfp_scale(operand: int, m: int, n: int, scale_dtype: str, scale_factor: int):
+    """Create random scales for an MX-format GEMM operand on the CPU.
+
+    Args:
+        operand: 0 for the LHS operand, scaled along dim 1, or 1 for the RHS
+            operand, scaled along dim 0.
+        m: Number of operand rows.
+        n: Number of operand columns.
+        scale_dtype: Scale format, "e8m0" or "e4m3".
+        scale_factor: Number of operand values that share one scale.
+
+    Returns:
+        A tuple of the raw scale bytes and the float32 scales broadcast to the
+        operand shape.
+    """
+    pack_dim = 1 if operand == 0 else 0
+    size = (m, n // scale_factor) if pack_dim == 1 else (m // scale_factor, n)
+    if scale_dtype == "e8m0":
+        scale = MXScaleTensor(size=tuple(size)).random(low=1.0, high=scale_factor)
+    else:
+        assert scale_dtype == "e4m3"
+        scale = torch.randint(20, 40, size, dtype=torch.uint8).view(torch.float8_e4m3fn)
+    scale_ref = scale.to(torch.float32).repeat_interleave(scale_factor, dim=pack_dim)
+    return scale.data, scale_ref
 
 
 def default_alloc_fn(size: int, align: int, _):

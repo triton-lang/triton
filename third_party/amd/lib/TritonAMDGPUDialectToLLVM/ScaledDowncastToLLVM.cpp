@@ -52,8 +52,8 @@ SmallVector<int> computeScaleRegisters(OpT op, int64_t numOutputValues) {
   LinearLayout scaleLL =
       triton::gpu::toLinearLayout(scaleTy).removeZeroBasesAlongDim(kReg);
 
-  auto outputToScaleLL =
-      OpT::computeScaleLayout(outputLL, axis, elementsPerScale);
+  auto outputToScaleLL = OpT::computeScaleLayout(
+      outputLL.removeZeroBasesAlongDim(kReg), axis, elementsPerScale);
   assert(outputToScaleLL && "expected valid scale layout after verifier");
   LinearLayout outputRegToScaleReg = outputToScaleLL->invertAndCompose(scaleLL);
 
@@ -158,7 +158,8 @@ struct ScaledDowncastFp4OpPattern
       // one byte of an i32 result. `byteSel` selects the byte to store into.
       for (int i = 0; i < numOutputBytes; i += 4) {
         int groupSize = std::min<int>(4, numOutputBytes - i);
-        Value packed = b.i32_val(0);
+        // Start from undef: every extracted byte is written by an intrinsic.
+        Value packed = b.undef(i32_ty);
         for (int byteSel = 0; byteSel < groupSize; ++byteSel) {
           int idx = i + byteSel;
           Value low = inputVals[2 * idx];

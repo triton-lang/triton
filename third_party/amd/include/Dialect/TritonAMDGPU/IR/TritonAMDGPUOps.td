@@ -824,10 +824,10 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
 
     The `axis` attribute identifies the dimension along which the fp4 elements
     are packed and along which scales are shared. The scale must be compact
-    along `axis`: one raw E8M0 i8 payload covers multiple consecutive packed
-    bytes along that axis (unlike :func:`scaled_upcast_fp4`, expanded scales
-    with one scale per output element are not supported). Each scale block along
-    `axis` must cover a multiple of 8 fp4 values.
+    along `axis`: one raw E8M0 i8 payload covers consecutive packed bytes along
+    that axis (unlike :func:`scaled_upcast_fp4`, expanded scales with one scale
+    per output element are not supported on CDNA5). Each scale block along
+    `axis` must cover a multiple of 8 fp4 values on CDNA5, or 2 on CDNA4.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_*` instructions (e.g. CDNA4 and CDNA5).
@@ -883,7 +883,7 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
     covers multiple consecutive output elements along that axis (unlike
     :func:`scaled_upcast_fp8`, expanded scales with one scale per output element
     are not supported). Each scale block along `axis` must cover a multiple of 8
-    output elements.
+    output elements on CDNA5, or 2 on CDNA4.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_{fp8,bf8}_*` instructions (e.g. CDNA4 and CDNA5).
