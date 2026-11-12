@@ -2670,31 +2670,43 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
 
 
 @pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
-    # ds_read_b128
+    # swizzled layouts:
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=8), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 3),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=8), ttgl.SwizzledSharedLayout(8, 1, 4, order=[1, 0]), [256, 64], 16, 1),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=8), ttgl.SwizzledSharedLayout(8, 1, 8, order=[1, 0]), [256, 64], 16, 0),
-    # ds_read_b64
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=4), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 7),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=4), ttgl.SwizzledSharedLayout(4, 1, 8, order=[1, 0]), [256, 64], 16, 1),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
                            k_width=4), ttgl.SwizzledSharedLayout(4, 1, 16, order=[1, 0]), [256, 64], 16, 0),
-    # padded layouts
+    # padded layouts:
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
-     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [128, 64], [1, 0]), [128, 64], 16, 1),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 1),
     (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
-     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [128, 64], [1, 0]), [128, 64], 16, 0),
-    (ttgl.BlockedLayout([1, 1], [64, 1], [2, 2], [1, 0]),
-     ttgl.PaddedSharedLayout.with_identity_for([[64, 1]], [64, 64], [1, 0]), [64, 64], 32, 0),
-    (ttgl.BlockedLayout([1, 1], [64, 1], [2, 2], [1, 0]),
-     ttgl.PaddedSharedLayout.with_identity_for([[64, 2]], [64, 64], [1, 0]), [64, 64], 32, 1),
-    (ttgl.BlockedLayout([1, 1], [16, 4], [2, 2], [1, 0]),
-     ttgl.PaddedSharedLayout.with_identity_for([[64, 1], [512, 2]], [64, 64], [1, 0]), [64, 64], 32, 3),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8], [512, 16]], [256, 64], [1, 0]), [256, 64], 16, 2),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout([[512, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0],
+                                           [1, 0], [2, 0], [4, 0], [8, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout(
+         [[64, 8]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [2, 0], [1, 0], [8, 0], [4, 0], [16, 0], [32, 0],
+                     [64, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(1, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [64, 256], [0, 1]), [64, 256], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [32, 32, 16], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 4]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 0),
 ])
 def test_bank_conflicts_amd(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
     dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
