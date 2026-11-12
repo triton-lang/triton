@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -562,6 +563,64 @@ static PyTypeObject PyCUtensorMapType = {
 };
 // clang-format on
 
+// Compare the last element's byte offset with the existing 128 KiB cutoff.
+// Virtual shapes and strides can overflow even a 64-bit span.
+static bool tensorMapSpanIsSmall(int rank, int elemSize, const uint64_t *shape,
+                                 const uint64_t *strides) {
+  const uint64_t maxOffset = 128 * 1024 - 2;
+  uint64_t remaining = maxOffset;
+  for (int i = 0; i < rank; ++i) {
+    uint64_t stride = i == 0 ? (uint64_t)elemSize : strides[i - 1];
+    uint64_t extent = shape[i] - 1;
+    if (stride && extent > remaining / stride)
+      return false;
+    remaining -= extent * stride;
+  }
+  return true;
+}
+
+#if CUDA_VERSION < 13050
+// The bundled CUDA headers predate cuTensorMapSetAllocationClass (CUDA 13.5).
+typedef enum { CU_TENSOR_MAP_ALLOC_CLASS_SMALL = 1 } CUtensorMapAllocClass;
+#endif
+
+static CUresult setSmallTensorMapAllocationClass(CUtensorMap *map) {
+  typedef CUresult (CUDAAPI *SetAllocationClass)(CUtensorMap *,
+                                                 CUtensorMapAllocClass,
+                                                 CUtensorMapAllocClass *);
+  // Called with the GIL held. Probe the loaded libcuda once because compat
+  // libraries with the same reported version may export different APIs.
+  static SetAllocationClass setAllocationClass;
+  static bool lookedUp;
+  if (!lookedUp) {
+    setAllocationClass = (SetAllocationClass)dlsym(
+        RTLD_DEFAULT, "cuTensorMapSetAllocationClass");
+    lookedUp = true;
+  }
+  if (setAllocationClass)
+    return setAllocationClass(map, CU_TENSOR_MAP_ALLOC_CLASS_SMALL, NULL);
+
+  CUdevice device;
+  CUresult res = cuCtxGetDevice(&device);
+  if (res != CUDA_SUCCESS)
+    return res;
+  int major;
+  res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                             device);
+  if (res != CUDA_SUCCESS)
+    return res;
+  // Only Blackwell has NVIDIA's documented bit-85 layout.
+  // https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-595-91-07/index.html#known-issues
+  if (major == 10 || major == 11 || major == 12) {
+    uint64_t word;
+    char *selector = (char *)map + sizeof(word);
+    memcpy(&word, selector, sizeof(word));
+    word &= ~(UINT64_C(1) << 21);
+    memcpy(selector, &word, sizeof(word));
+  }
+  return CUDA_SUCCESS;
+}
+
 static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   int swizzle;
@@ -571,11 +630,11 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   PyObject *shape;
   PyObject *strides;
   int padding;
-  int force_small_allocation = 0;
+  int use_small_tma_allocation_class = 0;
 
   if (!PyArg_ParseTuple(args, "KiiiOOOi|p", &global_address, &swizzle, &elemSize,
                         &elemType, &blockSize, &shape, &strides, &padding,
-                        &force_small_allocation)) {
+                        &use_small_tma_allocation_class)) {
     return NULL;
   }
 
@@ -661,27 +720,6 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
       &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,
       stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B, fill);
-  if (res == CUDA_SUCCESS && force_small_allocation) {
-    CUdevice device;
-    int major;
-    res = cuCtxGetDevice(&device);
-    if (res == CUDA_SUCCESS)
-      res = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-                                device);
-    if (res == CUDA_SUCCESS &&
-        (major == 10 || major == 11 || major == 12)) {
-      // NVIDIA's documented Blackwell workaround for virtual/non-dense tensors:
-      // https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-595-91-07/index.html#known-issues
-      // Large-allocation OOB address generation requires 128 KiB of accessible
-      // memory from the base, even when the loaded elements are zero-filled.
-      // Use memcpy rather than type-punning the opaque descriptor.
-      uint64_t word;
-      char *bytes = (char *)&desc->tensorMap;
-      memcpy(&word, bytes + sizeof(word), sizeof(word));
-      word &= ~((uint64_t)1 << 21);
-      memcpy(bytes + sizeof(word), &word, sizeof(word));
-    }
-  }
   if (res != CUDA_SUCCESS) {
     const char *str;
     cuGetErrorString(res, &str);
@@ -726,22 +764,15 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
     goto cleanup;
   }
 
-  // Follow the CUTLASS change for the driver version check
-  // https://github.com/NVIDIA/cutlass/commit/b7ecaa605dd70326900433695e11ebfec407edd2#diff-1dfcaf77b33258ff3175540718d9caff1cd471215f741ba42943ef00770e6d04
-  int driver_version = 0;
-  CUresult driver_version_result = cuDriverGetVersion(&driver_version);
-  assert(driver_version_result == CUDA_SUCCESS);
-
-  if (driver_version <= 13010) {
-    int max_byte_index = 0;
-    for (int i = 0; i < rank; ++i) {
-      int bytes_stride = i == 0 ? elemSize : stridesLL[i - 1];
-      max_byte_index += (shapeInt[i] - 1) * bytes_stride;
-    }
-    if (max_byte_index + 1 < 128 * 1024) {
-      uint64_t *desc_u64 = (uint64_t *)&desc->tensorMap;
-      desc_u64[1] &= ~(1llu << 21);
-    }
+  int driver_version;
+  CUDA_CHECK_AND_RETURN_NULL(cuDriverGetVersion(&driver_version));
+  // CUDA <= 13.1 also needs the CUTLASS small-tensor workaround (#9235).
+  // Ragged descriptors have virtual dimensions, so their encoded span
+  // cannot establish how much memory is accessible from the base pointer.
+  if (use_small_tma_allocation_class ||
+      (driver_version <= 13010 &&
+       tensorMapSpanIsSmall(rank, elemSize, shapeInt, stridesLL))) {
+    CUDA_CHECK_AND_RETURN_NULL(setSmallTensorMapAllocationClass(&desc->tensorMap));
   }
 
   return (PyObject *)desc;

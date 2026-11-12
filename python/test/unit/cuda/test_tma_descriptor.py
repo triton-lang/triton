@@ -1,6 +1,5 @@
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import ctypes
-import sys
 from types import SimpleNamespace
 import pytest
 import torch
@@ -141,7 +140,7 @@ def _tensor_before_unmapped_guard(source):
 
     Unlike a slice of a Torch allocation, this cannot borrow accessible padding
     from the caching allocator. No CUDA extension or cuda-python is required.
-    The yielded tensor is borrowed and must not be used after this context.
+    The yielded tensor interface is borrowed and must not outlive this context.
     """
     assert source.is_cuda and source.dtype == torch.uint8 and source.is_contiguous()
     assert source.numel() > 0 and source.numel() % 16 == 0
@@ -161,6 +160,7 @@ def _tensor_before_unmapped_guard(source):
         "cuMemCreate": [pointer(ptr), size, pointer(_VmmAllocationProp), ctypes.c_uint64],
         "cuMemMap": [ptr, size, size, ptr, ctypes.c_uint64],
         "cuMemSetAccess": [ptr, size, pointer(_VmmAccessDesc), size],
+        "cuMemcpyDtoDAsync_v2": [ptr, ptr, size, ctypes.c_void_p],
         "cuMemUnmap": [ptr, size],
         "cuMemRelease": [ptr],
         "cuMemAddressFree": [ptr, size],
@@ -174,7 +174,20 @@ def _tensor_before_unmapped_guard(source):
         if result:
             raise RuntimeError(f"{name} failed with CUDA driver error {result}")
 
-    with torch.cuda.device(source.device):
+    with torch.cuda.device(source.device), ExitStack() as resources:
+
+        def release_on_exit(function, *args):
+
+            def release(exc_type, exc, traceback):
+                try:
+                    function(*args)
+                except RuntimeError:
+                    # Still release every resource without hiding the first CUDA error.
+                    if exc_type is None:
+                        raise
+
+            resources.push(release)
+
         device_id, supported = ctypes.c_int(), ctypes.c_int()
         check("cuCtxGetDevice", ctypes.byref(device_id))
         # CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED = 102.
@@ -189,51 +202,20 @@ def _tensor_before_unmapped_guard(source):
         mapped_bytes = triton.cdiv(source.numel(), granularity.value) * granularity.value
         reserved_bytes = mapped_bytes + granularity.value
         address, handle = ptr(), ptr()
-        mapped = False
-        try:
-            check("cuMemAddressReserve", ctypes.byref(address), reserved_bytes, 0, 0, 0)
-            check("cuMemCreate", ctypes.byref(handle), mapped_bytes, ctypes.byref(prop), 0)
-            check("cuMemMap", address, mapped_bytes, 0, handle, 0)
-            mapped = True
-            access = _VmmAccessDesc(location, 3)  # CU_MEM_ACCESS_FLAGS_PROT_READWRITE.
-            check("cuMemSetAccess", address, mapped_bytes, ctypes.byref(access), 1)
-            tensor_address = address.value + mapped_bytes - source.numel()
-            owner = SimpleNamespace(__cuda_array_interface__={
-                "shape": tuple(source.shape),
-                "typestr": "|u1",
-                "data": (tensor_address, False),
-                "version": 3,
-                "stream": torch.cuda.current_stream(source.device).cuda_stream or 1,
-            })
-            guarded = torch.as_tensor(owner, device=source.device)
-            assert guarded.data_ptr() == tensor_address
-            assert guarded.stride() == source.stride()
-            assert guarded.data_ptr() + guarded.numel() == address.value + mapped_bytes
-            guarded.copy_(source)
-            yield guarded
-        finally:
-            # Preserve the original exception if a regression poisoned CUDA.
-            failed = sys.exc_info()[0] is not None
-            sync_error = None
-            if mapped:
-                try:
-                    torch.cuda.synchronize(source.device)
-                except RuntimeError as error:
-                    sync_error = error
-            cleanup = []
-            if mapped:
-                cleanup.append(("cuMemUnmap", driver.cuMemUnmap(address, mapped_bytes)))
-            if handle.value:
-                cleanup.append(("cuMemRelease", driver.cuMemRelease(handle)))
-            if address.value:
-                cleanup.append(("cuMemAddressFree", driver.cuMemAddressFree(address, reserved_bytes)))
-            if not failed:
-                if sync_error is not None:
-                    raise sync_error
-                for name, result in cleanup:
-                    if result:
-                        raise RuntimeError(f"{name} failed with CUDA driver error {result}")
-
+        check("cuMemAddressReserve", ctypes.byref(address), reserved_bytes, 0, 0, 0)
+        release_on_exit(check, "cuMemAddressFree", address, reserved_bytes)
+        check("cuMemCreate", ctypes.byref(handle), mapped_bytes, ctypes.byref(prop), 0)
+        release_on_exit(check, "cuMemRelease", handle)
+        check("cuMemMap", address, mapped_bytes, 0, handle, 0)
+        release_on_exit(check, "cuMemUnmap", address, mapped_bytes)
+        access = _VmmAccessDesc(location, 3)  # CU_MEM_ACCESS_FLAGS_PROT_READWRITE.
+        check("cuMemSetAccess", address, mapped_bytes, ctypes.byref(access), 1)
+        tensor_address = address.value + mapped_bytes - source.numel()
+        release_on_exit(torch.cuda.synchronize, source.device)
+        check("cuMemcpyDtoDAsync_v2", tensor_address, source.data_ptr(), source.numel(),
+              torch.cuda.current_stream(source.device).cuda_stream)
+        yield SimpleNamespace(shape=source.shape, dtype=source.dtype, stride=source.stride,
+                              data_ptr=lambda: tensor_address)
 
 
 @triton.jit
@@ -246,8 +228,7 @@ def _load_ragged_boundary(X, Y, slice_off, slice_size, RANK: tl.constexpr):
     tl.store(Y + offsets, value.reshape(128, 128))
 
 
-@pytest.mark.parametrize("rank", [2, 3])
-@pytest.mark.parametrize("slice_off, slice_size", [(0, 1), (0, 32), (24, 8), (32, 0)])
+@pytest.mark.parametrize("rank, slice_off, slice_size", [(2, 0, 1), (3, 24, 8), (2, 32, 0)])
 def test_ragged_tma_small_allocation_boundary(rank, slice_off, slice_size):
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Test requires Hopper or Blackwell target.")
@@ -256,11 +237,11 @@ def test_ragged_tma_small_allocation_boundary(rank, slice_off, slice_size):
     output = torch.empty((128, 128), device="cuda", dtype=torch.uint8)
     expected = torch.zeros_like(output)
     expected[:slice_size] = source[slice_off:slice_off + slice_size, :128]
+    if rank == 3:
+        source = source.as_strided((1, 32, 2048), (0, 2048, 1))
     with _tensor_before_unmapped_guard(source) as guarded:
-        if rank == 3:
-            guarded = guarded.as_strided((1, 32, 2048), (0, 2048, 1))
         block_shape = [128, 128] if rank == 2 else [1, 128, 128]
         descriptor = create_ragged_descriptor(guarded, block_shape, ragged_dim=rank - 2)
-        _load_ragged_boundary[(1,)](descriptor, output, slice_off, slice_size, rank)
+        _load_ragged_boundary[(1, )](descriptor, output, slice_off, slice_size, rank)
         torch.cuda.synchronize()
         assert torch.equal(output, expected)

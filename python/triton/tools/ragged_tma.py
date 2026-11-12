@@ -45,7 +45,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
     # The virtual dimensions above do not imply a large backing allocation.
     # Blackwell's large-allocation OOB mode requires 128 KiB of accessible
     # memory even for rows that the descriptor zero-fills.
-    return TensorDescriptor(T, tma_shape, tma_stride, box_shape, force_small_allocation=True)
+    return TensorDescriptor(T, tma_shape, tma_stride, box_shape, use_small_tma_allocation_class=True)
 
 
 @triton.jit
