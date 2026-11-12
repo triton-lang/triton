@@ -78,6 +78,46 @@ GSAN_DEVICE void rwLockReleaseWrite(uint32_t &lock) {
                             __MEMORY_SCOPE_WRKGRP);
 }
 
+// Unlike the per-SM state lock, snapshot protection must include peer GPUs.
+// Close admission before draining readers so a publisher cannot starve behind
+// a continuous stream of acquires. No shadow or state locks may be acquired
+// while holding this lock.
+template <bool Write> struct ClockBufferLockGuard {
+  uint32_t &lock;
+
+  GSAN_DEVICE ClockBufferLockGuard(ThreadState *state)
+      : lock(state->clockBufferLock) {
+    uint32_t current =
+        __scoped_atomic_load_n(&lock, __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
+    while (true) {
+      if (current & kWriterFlag) {
+        current = __scoped_atomic_load_n(&lock, __ATOMIC_RELAXED,
+                                         __MEMORY_SCOPE_SYSTEM);
+        continue;
+      }
+      uint32_t desired = Write ? current | kWriterFlag : current + 1;
+      if (__scoped_atomic_compare_exchange_n(&lock, &current, desired, true,
+                                             __ATOMIC_ACQUIRE, __ATOMIC_RELAXED,
+                                             __MEMORY_SCOPE_SYSTEM))
+        break;
+    }
+    if constexpr (Write) {
+      while (__scoped_atomic_load_n(&lock, __ATOMIC_ACQUIRE,
+                                    __MEMORY_SCOPE_SYSTEM) != kWriterFlag) {
+      }
+    }
+  }
+
+  GSAN_DEVICE ~ClockBufferLockGuard() {
+    if constexpr (Write)
+      __scoped_atomic_store_n(&lock, 0, __ATOMIC_RELEASE,
+                              __MEMORY_SCOPE_SYSTEM);
+    else
+      __scoped_atomic_fetch_sub(&lock, 1, __ATOMIC_RELEASE,
+                                __MEMORY_SCOPE_SYSTEM);
+  }
+};
+
 GSAN_DEVICE void clusterLockAcquire(uint32_t &lock) {
   uint32_t actual = 0;
   while (!__scoped_atomic_compare_exchange_n(&lock, &actual, 1, true,
@@ -147,71 +187,30 @@ GSAN_DEVICE epoch_t *getClockBufferBase(ThreadState *state) {
   return state->vectorClock + globals->numThreads;
 }
 
-GSAN_DEVICE uint32_t getClockBufferHead(ThreadState *state) {
-  return __scoped_atomic_load_n(&state->clockBufferHead, __ATOMIC_RELAXED,
-                                __MEMORY_SCOPE_SYSTEM);
-}
-
-GSAN_DEVICE void validateClockBufferToken(ThreadState *state, epoch_t token,
-                                          Location loc) {
-  uint32_t head = getClockBufferHead(state);
-  assert_msg(loc, token != 0, "Invalid GSan clock token");
-  assert_msg(loc, token <= head, "Future GSan clock token");
-  auto *globals = getGlobalState(state);
-  assert_msg(loc, head - token < globals->clockBufferSize,
-             "GSan clock buffer token overwritten");
-}
-
 GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
                                         Location loc) {
-  validateClockBufferToken(state, token, loc);
+  assert_msg(loc, token != 0, "Invalid GSan clock token");
+  assert_msg(loc, token <= state->clockBufferHead, "Future GSan clock token");
   auto *globals = getGlobalState(state);
+  assert_msg(loc, state->clockBufferHead - token < globals->clockBufferSize,
+             "GSan clock buffer token overwritten");
   uint32_t slot = token % globals->clockBufferSize;
   return getClockBufferBase(state) + slot * globals->numThreads;
 }
 
-// The per-SM state lock serializes publishers. Reserve the next token before
-// touching the slot it recycles. An optimistic reader that observes any of
-// the following atomic stores must also observe this retirement after its
-// acquire fence, and reject the old token. The token is not published in a
-// shadow cell or barrier until the snapshot is complete.
-GSAN_DEVICE epoch_t reserveClockBufferToken(ThreadState *state, Location loc) {
-  assert_msg(loc, getGlobalState(state)->clockBufferSize != 0,
-             "GSan clock buffer size must be non-zero");
-  uint32_t nextHead = getClockBufferHead(state) + 1;
+GSAN_DEVICE epoch_t publishClockBuffer(ThreadState *state, Location loc) {
+  ClockBufferLockGuard<true> guard(state);
+  auto *globals = getGlobalState(state);
+  uint32_t nextHead = state->clockBufferHead + 1;
   assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
-  __scoped_atomic_store_n(&state->clockBufferHead, nextHead, __ATOMIC_RELAXED,
-                          __MEMORY_SCOPE_SYSTEM);
-  __atomic_thread_fence(__ATOMIC_RELEASE);
+  epoch_t *slot =
+      getClockBufferBase(state) +
+      ((nextHead - 1) % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i)
+    slot[i] = state->vectorClock[i];
+  state->clockBufferHead = nextHead;
+  state->clockBufferDirty = 0;
   return static_cast<epoch_t>(nextHead);
-}
-
-GSAN_DEVICE epoch_t loadSnapshotEpoch(const epoch_t *ptr) {
-  return __scoped_atomic_load_n(ptr, __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
-}
-
-GSAN_DEVICE void storeSnapshotEpoch(epoch_t *ptr, epoch_t epoch) {
-  __scoped_atomic_store_n(ptr, epoch, __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
-}
-
-template <typename ReadEpoch>
-GSAN_DEVICE void writeSnapshot(epoch_t *slot, int numThreads,
-                               ReadEpoch readEpoch) {
-  // Load a group before storing it. Interleaving each source load with a
-  // system-scope atomic store serializes the copy when aliasing is unknown.
-  constexpr int chunkSize = 8;
-  int i = 0;
-  for (; i + chunkSize <= numThreads; i += chunkSize) {
-    epoch_t epochs[chunkSize];
-#pragma unroll
-    for (int j = 0; j < chunkSize; ++j)
-      epochs[j] = readEpoch(i + j);
-#pragma unroll
-    for (int j = 0; j < chunkSize; ++j)
-      storeSnapshotEpoch(slot + i + j, epochs[j]);
-  }
-  for (; i < numThreads; ++i)
-    storeSnapshotEpoch(slot + i, readEpoch(i));
 }
 
 GSAN_DEVICE AtomicSem decodeAtomicSem(uint32_t sem) {
@@ -435,17 +434,20 @@ GSAN_DEVICE void releaseShadow(ShadowCell *cell) {
 
 GSAN_DEVICE epoch_t appendClockBufferSnapshot(ThreadState *state,
                                               const epoch_t *snapshot,
-                                              Location loc,
-                                              bool fromSnapshot = false) {
+                                              Location loc) {
+  ClockBufferLockGuard<true> guard(state);
   auto *globals = getGlobalState(state);
-  auto nextHead = reserveClockBufferToken(state, loc);
-  const int numThreads = globals->numThreads;
+  assert_msg(loc, globals->clockBufferSize != 0,
+             "GSan clock buffer size must be non-zero");
+  uint32_t curHead = state->clockBufferHead;
+  uint32_t nextHead = curHead + 1;
+  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
   epoch_t *slot = getClockBufferBase(state) +
-                  (nextHead % globals->clockBufferSize) * numThreads;
-  writeSnapshot(slot, numThreads, [&](int i) {
-    return fromSnapshot ? loadSnapshotEpoch(snapshot + i) : snapshot[i];
-  });
-  return nextHead;
+                  (nextHead % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i)
+    slot[i] = snapshot[i];
+  state->clockBufferHead = nextHead;
+  return static_cast<epoch_t>(nextHead);
 }
 
 GSAN_DEVICE epoch_t publishCurrentVectorClock(ThreadState *state,
@@ -455,7 +457,7 @@ GSAN_DEVICE epoch_t publishCurrentVectorClock(ThreadState *state,
     state->clockBufferDirty = 0;
     return token;
   }
-  return getClockBufferHead(state);
+  return state->clockBufferHead;
 }
 
 GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
@@ -470,16 +472,20 @@ GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
 GSAN_DEVICE epoch_t publishCurrentVectorClockWithPriorRelease(
     ThreadState *state, const ScalarClock &previousWrite, Location loc) {
   const auto *previousSnapshot = getSnapshotForWrite(state, previousWrite, loc);
+  ClockBufferLockGuard<true> guard(state);
   auto *globals = getGlobalState(state);
-  auto nextHead = reserveClockBufferToken(state, loc);
-  const int numThreads = globals->numThreads;
+  assert_msg(loc, globals->clockBufferSize != 0,
+             "GSan clock buffer size must be non-zero");
+  uint32_t nextHead = state->clockBufferHead + 1;
+  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
   auto *slot = getClockBufferBase(state) +
-               (nextHead % globals->clockBufferSize) * numThreads;
-  writeSnapshot(slot, numThreads, [&](int i) {
+               (nextHead % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i) {
     auto current = state->vectorClock[i];
-    auto previous = loadSnapshotEpoch(previousSnapshot + i);
-    return current > previous ? current : previous;
-  });
+    auto previous = previousSnapshot[i];
+    slot[i] = current > previous ? current : previous;
+  }
+  state->clockBufferHead = nextHead;
   // The joined snapshot extends the release sequence without acquiring the
   // prior writer into this thread's vector clock.
   state->clockBufferDirty = 1;
@@ -491,8 +497,7 @@ GSAN_DEVICE epoch_t propagateClockBufferSnapshot(ThreadState *state,
                                                  Location loc) {
   auto *snapshot = getSnapshotForWrite(state, write, loc);
   assert_msg(loc, snapshot != nullptr, "Invalid GSan propagated clock token");
-  auto token = appendClockBufferSnapshot(state, snapshot, loc,
-                                         /*fromSnapshot=*/true);
+  auto token = appendClockBufferSnapshot(state, snapshot, loc);
   state->clockBufferDirty = 1;
   return token;
 }
@@ -511,30 +516,15 @@ GSAN_DEVICE bool mergeVectorClock(ThreadState *state, const epoch_t *snapshot,
                                   thread_id_t incompleteThread = kMaxThreads) {
   bool changed = false;
   auto *globals = getGlobalState(state);
-  const int numThreads = globals->numThreads;
-  auto mergeEpoch = [&](int i, epoch_t epoch) {
+  for (int i = 0; i < globals->numThreads; ++i) {
+    auto epoch = snapshot[i];
     if (i == incompleteThread && epoch != 0)
       --epoch;
     if (state->vectorClock[i] < epoch) {
       state->vectorClock[i] = epoch;
       changed = true;
     }
-  };
-  // Keep several snapshot loads in flight, particularly for peer memory.
-  // Validation still covers the entire import, including all these groups.
-  constexpr int chunkSize = 8;
-  int i = 0;
-  for (; i + chunkSize <= numThreads; i += chunkSize) {
-    epoch_t epochs[chunkSize];
-#pragma unroll
-    for (int j = 0; j < chunkSize; ++j)
-      epochs[j] = loadSnapshotEpoch(snapshot + i + j);
-#pragma unroll
-    for (int j = 0; j < chunkSize; ++j)
-      mergeEpoch(i + j, epochs[j]);
   }
-  for (; i < numThreads; ++i)
-    mergeEpoch(i, loadSnapshotEpoch(snapshot + i));
   if (changed)
     state->clockBufferDirty = 1;
   return changed;
@@ -544,7 +534,7 @@ GSAN_DEVICE bool dominatesSnapshot(ThreadState *state,
                                    const epoch_t *snapshot) {
   auto *globals = getGlobalState(state);
   for (int i = 0; i < globals->numThreads; ++i) {
-    if (state->vectorClock[i] < loadSnapshotEpoch(snapshot + i))
+    if (state->vectorClock[i] < snapshot[i])
       return false;
   }
   return true;
@@ -575,24 +565,22 @@ GSAN_DEVICE void assertOrderedOrCompatible(ThreadState *state,
 
 GSAN_DEVICE void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
                                    const ScalarClock &prior, Location loc,
-                                   bool optimistic = false) {
+                                   bool pinSnapshot = false) {
   if (!prior.isRelease)
     return;
   if (!areAtomicScopesCompatible(currentScope, state->threadId, prior.scope,
                                  prior.threadId, getGlobalState(state))) {
     return;
   }
-  mergeVectorClock(state, getSnapshotForWrite(state, prior, loc));
-  if (optimistic) {
-    // If any load saw a recycled snapshot, its publisher's release fence
-    // synchronizes with this acquire fence. The head check must then see the
-    // retirement. Keep the importing SM locked and fail before the tentative
-    // merge can be used by another access or published. Do not retry in place:
-    // max-merging a newer clock cannot be undone.
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  if (pinSnapshot) {
     auto *writerState =
         getThreadStateById(getGlobalState(state), prior.threadId);
-    validateClockBufferToken(writerState, prior.epoch, loc);
+    ClockBufferLockGuard<false> guard(writerState);
+    // Validate after pinning: the slot may have been reused since we copied
+    // the shadow's token. It cannot be reused between validation and import.
+    mergeVectorClock(state, getClockBufferSlot(writerState, prior.epoch, loc));
+  } else {
+    mergeVectorClock(state, getSnapshotForWrite(state, prior, loc));
   }
 }
 
@@ -1311,7 +1299,7 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       // state locked until every import finishes, but let other SMs acquire
       // the same shadow cells while we read the publisher's snapshots.
       for (uint8_t i = 0; i < numCells; ++i)
-        maybeMergeAcquire(state, scope, writes[i], loc, /*optimistic=*/true);
+        maybeMergeAcquire(state, scope, writes[i], loc, /*pinSnapshot=*/true);
     } else {
       // RMWs still hold the shadow locks while importing, checking the write,
       // and publishing a release snapshot that may include the acquire.

@@ -101,13 +101,16 @@ struct ThreadState {
   // Whether the vector clock changed since the last snapshot (to allow reuse).
   uint32_t clockBufferDirty : 1;
 
-  // Reserved snapshot token, advanced atomically before overwriting a slot.
-  // Keep it separate from flags modified with ordinary stores. Remote readers
-  // use it to validate snapshot lifetime after an optimistic import.
+  // Keep the head separate from flags modified without the clock-buffer lock.
   uint32_t clockBufferHead;
 
   // Per-SM lock serializing vector-clock changes and snapshot publication.
+  // Remote snapshot readers use clockBufferLock instead.
   uint32_t lock;
+
+  // System-scope reader-writer lock. Readers pin snapshots while importing
+  // without a shadow lock; writers hold it only while publishing a snapshot.
+  uint32_t clockBufferLock;
 
   thread_id_t threadId;
 
