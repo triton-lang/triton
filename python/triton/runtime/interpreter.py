@@ -87,7 +87,6 @@ class TensorDescHandle:
         assert len(offsets) == self.ndim
         scalar_ty = self.base.dtype.element_ty
         itemsize = scalar_ty.primitive_bitwidth // 8
-        assert (offsets[-1].data * itemsize) % 16 == 0, "block offset start must be 16-byte aligned"
 
         ptrs_data = np.broadcast_to(self.base.data, self.block_shape)
         masks = np.ones(self.block_shape, dtype=bool)

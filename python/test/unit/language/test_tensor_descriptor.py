@@ -448,6 +448,37 @@ def test_tensor_descriptor_padding(device):
     torch.testing.assert_close(expected, out_host_tma, equal_nan=True)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("moffset, noffset", [(0, 1), (3, 5), (-2, -3), (40, 45)])
+def test_tensor_descriptor_unaligned_offset(moffset, noffset, device):
+    # block offsets are element coordinates and need not be 16-byte aligned;
+    # only the base and the strides carry alignment requirements
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, M, N, moffset, noffset, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        in_desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+        out_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[M_BLOCK, N_BLOCK])
+        value = in_desc.load([moffset, noffset])
+        out_desc.store([moffset, noffset], value + 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    M, N = 48, 48
+    M_BLOCK, N_BLOCK = 16, 16
+    inp = torch.arange(M * N, device=device, dtype=torch.float32).reshape(M, N)
+    out = torch.zeros_like(inp)
+    kernel[(1, )](inp, out, M, N, moffset, noffset, M_BLOCK, N_BLOCK)
+
+    expected = torch.zeros_like(inp)
+    m0, n0 = max(moffset, 0), max(noffset, 0)
+    m1, n1 = min(moffset + M_BLOCK, M), min(noffset + N_BLOCK, N)
+    expected[m0:m1, n0:n1] = inp[m0:m1, n0:n1] + 1
+    torch.testing.assert_close(expected, out)
+
+
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     in_desc = tl.make_tensor_descriptor(
