@@ -322,6 +322,33 @@ When FpSan is disabled, this function returns its input unchanged and emits no
 operation. It does not enforce rounding, prevent fusion or reassociation in
 normal compilation, or synchronize execution.
 
+Local Homomorphic Casts
+======================
+
+``tl.fpsan_homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
+retains the low payload bits when converting to a narrower floating-point type.
+It preserves addition and multiplication across the conversion. Other casts
+retain their existing FpSan semantics.
+
+Use a barrier to mark how far such a cast may move without changing the FpSan
+signature:
+
+.. code-block:: python
+
+   result = tl.fpsan_homomorphic_cast(tl.fpsan_barrier(a * b), tl.float16)
+
+The barrier mixes high payload bits into low bits before they are discarded.
+Moving the downcast ahead of the barrier therefore generally changes the result,
+including when the narrowed value is cast back to the original width before
+the barrier. This is a signature distinction, not a compiler optimization
+restriction; collisions remain possible.
+
+The source and destination must be floating-point types, and the destination
+must be the same width or narrower. Same-width conversions preserve the payload.
+Widening is rejected because signed extension is not a ring homomorphism.
+Without FpSan, this function performs an ordinary floating-point cast, with the
+optional ``fp_downcast_rounding`` argument interpreted as for ``tl.cast``.
+
 ----------------
 Unary Math Ops
 ----------------

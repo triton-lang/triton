@@ -3300,6 +3300,9 @@ def fpsan_barrier(input, _semantic=None):
     from ``a * fpsan_barrier(b * c)``, and ``fpsan_barrier(a * b) + c`` can
     differ from ``fma(a, b, c)``. Without FPSan, return the input unchanged.
 
+    High payload bits are mixed into low bits, so moving an
+    :func:`fpsan_homomorphic_cast` across a barrier can change the signature.
+
     This is not a synchronization or optimization barrier and does not enforce
     floating-point rounding or prevent FMA contraction in normal execution.
 
@@ -3308,6 +3311,29 @@ def fpsan_barrier(input, _semantic=None):
     """
     input = _semantic.to_tensor(input)
     return _semantic.fpsan_barrier(input)
+
+
+@builtin
+def fpsan_homomorphic_cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, _semantic=None):
+    """
+    Cast to a same-width or narrower floating-point type, preserving FPSan algebra.
+
+    With FPSan enabled, retain the low bits of the input's payload. This preserves
+    addition and multiplication, allowing a downcast to move through arithmetic
+    without changing the signature. Use :func:`fpsan_barrier` to mark a boundary
+    across which moving the cast should be observable.
+
+    Without FPSan, perform an ordinary floating-point cast. Widening and integer
+    conversions are not supported. The input's shape and layout are preserved.
+
+    :param input: A floating-point scalar or tensor.
+    :param dtype: A floating-point destination type no wider than the input.
+    :param fp_downcast_rounding: Rounding mode for normal execution: ``"rtne"``
+        (default) or ``"rtz"``. Only valid for a narrower destination type;
+        FPSan payload truncation is independent of this choice.
+    """
+    return _semantic.fpsan_homomorphic_cast(_semantic.to_tensor(input), _unwrap_if_constexpr(dtype),
+                                            _unwrap_if_constexpr(fp_downcast_rounding))
 
 
 @builtin

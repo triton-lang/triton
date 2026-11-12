@@ -62,6 +62,7 @@ from ._core import (
     full,
     fp4_to_fp,
     fpsan_barrier,
+    fpsan_homomorphic_cast,
     gather,
     num_warps,
     num_ctas,

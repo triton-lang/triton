@@ -1,5 +1,13 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @fpsan_homomorphic_cast_widening(%x: f16) -> f32 {
+  // expected-error @+1 {{destination must not be wider than input}}
+  %value = tt.fpsan_homomorphic_cast %x : f16 -> f32
+  tt.return %value : f32
+}
+
+// -----
+
 tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
   // expected-error @+1 {{does not support sub-byte elements}}
   %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1

@@ -181,6 +181,23 @@ def TT_FpSanBarrierOp : TT_Op<"fpsan_barrier", [Elementwise,
     let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
+def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
+                                      SameOperandsAndResultShape,
+                                      SameOperandsAndResultEncoding, Pure]> {
+    let summary = "Project an FPSan payload into a same-width or narrower ring";
+    let description = [{
+        Preserve the low bits of the input's FPSan payload in the destination
+        floating-point type. Unlike an ordinary FPSan downcast, this operation
+        preserves addition and multiplication. Widening is not supported.
+
+        The frontend emits this operation only when FPSan is enabled.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {

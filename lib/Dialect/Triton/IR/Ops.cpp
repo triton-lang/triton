@@ -1247,6 +1247,15 @@ LogicalResult FpToFpOp::verify() {
   return success();
 }
 
+LogicalResult FpSanHomomorphicCastOp::verify() {
+  unsigned srcWidth =
+      getElementTypeOrSelf(getInput().getType()).getIntOrFloatBitWidth();
+  unsigned dstWidth = getElementTypeOrSelf(getType()).getIntOrFloatBitWidth();
+  if (dstWidth > srcWidth)
+    return emitOpError("destination must not be wider than input");
+  return success();
+}
+
 //-- BitcastOp --
 OpFoldResult BitcastOp::fold(FoldAdaptor adaptor) {
   if (getSrc().getType() == getType())

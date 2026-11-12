@@ -776,6 +776,24 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
   uint64_t opIdHash = murmur64Mixer(getUnaryOpId(opId));
   auto opIdVal = getIntConstantLike(rewriter, loc, inI.getType(),
                                     static_cast<int64_t>(opIdHash));
+  if (opId == UnaryOpId::Barrier) {
+    // Unlike the other unary tags, a barrier must not commute with payload
+    // truncation. Each xor-right-shift mixes high bits into low bits; odd
+    // multipliers and xor-right-shifts keep the full-width mapping bijective.
+    Value mixed = arith::XOrIOp::create(rewriter, loc, inI, opIdVal);
+    Value shift = getUIntConstantLike(rewriter, loc, inI.getType(),
+                                      getIntBitwidth(inI.getType()) / 2);
+    for (uint64_t multiplier : {0xff51afd7ed558ccdULL, 0xc4ceb9fe1a85ec53ULL}) {
+      Value high = arith::ShRUIOp::create(rewriter, loc, mixed, shift);
+      mixed = arith::XOrIOp::create(rewriter, loc, mixed, high);
+      mixed = arith::MulIOp::create(
+          rewriter, loc, mixed,
+          getUIntConstantLike(rewriter, loc, inI.getType(), multiplier));
+    }
+    Value high = arith::ShRUIOp::create(rewriter, loc, mixed, shift);
+    mixed = arith::XOrIOp::create(rewriter, loc, mixed, high);
+    return unembedToFloat(rewriter, loc, mixed, input.getType());
+  }
   auto multiplier =
       getU32ConstantLike(rewriter, loc, inI.getType(), kUnaryTagMultiplier);
   auto mixedIn = arith::MulIOp::create(rewriter, loc, inI, multiplier);
@@ -2130,6 +2148,22 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
   }
 };
 
+struct FpSanHomomorphicCastPattern
+    : public OpRewritePattern<tt::FpSanHomomorphicCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::FpSanHomomorphicCastOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value payload = embedToInt(rewriter, loc, op.getInput());
+    payload = castSignedIntValueToType(rewriter, loc, payload,
+                                       getIntTypeLike(op.getType()));
+    rewriter.replaceOp(op,
+                       unembedToFloat(rewriter, loc, payload, op.getType()));
+    return success();
+  }
+};
+
 struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(ttg::Fp4ToFpOp op,
@@ -3437,6 +3471,7 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
                                                    UnaryOpId::Barrier);
+    patterns.add<FpSanHomomorphicCastPattern>(&getContext());
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,

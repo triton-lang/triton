@@ -226,6 +226,7 @@ Compiler Hint Ops
     assume
     debug_barrier
     fpsan_barrier
+    fpsan_homomorphic_cast
     max_constancy
     max_contiguous
     multiple_of
