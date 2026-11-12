@@ -170,6 +170,7 @@ struct AuxDataMap {
     int numBaseThreadSlots = 1;
     int tmaThreadOffset = -1;
     int tcThreadOffset = -1;
+    int tcAReadThreadOffset = -1;
     int clcThreadOffset = -1;
     int asyncCopyMbarrierArriveThreadOffset = -1;
     int totalNumThreads = 1;
@@ -177,6 +178,7 @@ struct AuxDataMap {
 
     bool hasTMAThreads() const { return tmaThreadOffset >= 0; }
     bool hasTCThreads() const { return tcThreadOffset >= 0; }
+    bool hasTCAReadThreads() const { return tcAReadThreadOffset >= 0; }
     bool hasCLCThreads() const { return clcThreadOffset >= 0; }
     bool hasAsyncCopyMbarrierArriveThreads() const {
       return asyncCopyMbarrierArriveThreadOffset >= 0;

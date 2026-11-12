@@ -50,6 +50,7 @@ struct MemEffectsOpInfo {
     };
 
     RW rw;
+    bool isTensorCoreARead = false;
     std::optional<gpu::SharedKind> sharedKind;
     std::variant<Value, StaticSharedBuffer> buffer;
     std::string operandName = "";

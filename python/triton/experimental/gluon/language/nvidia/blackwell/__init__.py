@@ -721,7 +721,7 @@ def tcgen05_commit(barrier, pred=True, descs=(), *, completion="all", _semantic=
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
             the preceding multiplication inputs. Defaults to ().
-        completion (str): "all" (default) or "a_read" (Rubin only; unsupported by ConSan).
+        completion (str): "all" (default) or "a_read" (Rubin only).
     """
     pred = _semantic.to_tensor(pred)
     descs = _unwrap_if_constexpr(descs)

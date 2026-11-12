@@ -7915,6 +7915,9 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
             a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
                                                           cga_layout=a_desc.layout.cga_layout)
             a_smem.store(ttgl.full(a_smem.shape, 0, a_desc.dtype, a_layout))
+            if multi_cta:
+                # Order A overwrites across CTA replicas before reloading.
+                hopper.cluster.barrier()
         else:
             tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
                                use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])

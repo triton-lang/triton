@@ -3847,3 +3847,43 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#early_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#early_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#early_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 65552 : i32, ttg.tensor_memory_size = 128 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @early_a_release_frontiers
+  tt.func public @early_a_release_frontiers() {
+    %true = arith.constant true
+    %a = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #early_shared, #smem, mutable>
+    %b = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<128x128xf16, #early_shared, #smem, mutable>
+    %early = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    %full = ttg.local_alloc {allocation.offset = 65544 : i32} : () -> !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    %acc = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #early_acc, #ttng.tensor_memory, mutable>
+    ttng.init_barrier %early, 1 : !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    ttng.init_barrier %full, 1 : !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    // A reads have their own reader identity; B remains on the full TC frontier.
+    // CHECK: %[[A_MASK:.*]] = arith.constant 4 : i64
+    // CHECK: %[[A_PEERS:.*]] = arith.constant 4 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_MASK]], %[[A_PEERS]],
+    // CHECK: %[[B_MASK:.*]] = arith.constant 2 : i64
+    // CHECK: %[[B_PEERS:.*]] = arith.constant 2 : i64
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_MASK]], %[[B_PEERS]],
+    // CHECK: ttng.tc_gen5_mma
+    ttng.tc_gen5_mma %a, %b, %acc[], %true, %true {is_async} : !ttg.memdesc<128x128xf16, #early_shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #early_shared, #smem, mutable>, !ttg.memdesc<128x128xf32, #early_acc, #ttng.tensor_memory, mutable>
+    // CHECK: tt.call @__triton_consan_set_read_visibility
+    // CHECK: %[[A_THREAD:.*]] = arith.constant 2 : i32
+    // CHECK-NEXT: tt.call @__triton_consan_track_visible_accesses{{.*}}%[[A_THREAD]],
+    // CHECK-NOT: tt.call @__triton_consan_track_visible_accesses
+    // CHECK: ttng.tc_gen5_commit {{.*}} {early_a_release}
+    ttng.tc_gen5_commit %early {early_a_release} : !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    // Full completion also publishes the A-read frontier.
+    // CHECK-COUNT-3: tt.call @__triton_consan_track_visible_accesses
+    // CHECK: ttng.tc_gen5_commit
+    ttng.tc_gen5_commit %full : !ttg.memdesc<1xi64, #early_bar, #smem, mutable>
+    tt.return
+  }
+}
