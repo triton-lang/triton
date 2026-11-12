@@ -3,12 +3,14 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
 
@@ -318,15 +320,29 @@ bool MembarAnalysis::isRegionLocal(Value value) {
 }
 
 bool MembarAnalysis::mayNotifyPeer(Operation *op) {
-  // Nested operations are checked separately; region scratch is private.
-  if (isa<RegionBranchOpInterface, triton::AtomicLoadOp, triton::AtomicPollOp,
-          triton::gpu::ThreadHandoffOp>(op))
-    return false;
-  auto effects = getEffectsRecursively(op);
-  return !effects || llvm::any_of(*effects, [&](const auto &effect) {
-    return isa<MemoryEffects::Write>(effect.getEffect()) &&
-           (!effect.getValue() || !isRegionLocal(effect.getValue()));
-  });
+  namespace tt = triton;
+  namespace ttg = triton::gpu;
+  namespace tti = triton::instrument;
+
+  // We may just notify a different WS partition with barriers or global atomics
+  return llvm::TypeSwitch<Operation *, bool>(op)
+      .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
+            tti::ExperimentalGSanAtomicLoadOp, ttng::WaitBarrierOp>(
+          [](auto) { return false; })
+      .Case<tt::AtomicOpInterface>(
+          [&](auto atomic) { return !isRegionLocal(atomic.getPtr()); })
+      .Case<ttg::MBarrierOpInterface>([&](auto) {
+        auto writes =
+            tt::getMemoryAccesses(op, ttg::SharedKind::Barrier, tt::RW::Write);
+        return llvm::any_of(writes, [&](const tt::MemoryAccess &access) {
+          return !isRegionLocal(access.value);
+        });
+      })
+      .Case<tt::GridDependencyLaunchDependentsOp>([](auto) { return true; })
+      .Case<tt::ElementwiseInlineAsmOp, ttg::InlineAsmOp,
+            tt::ExternElementwiseOp>(
+          [](auto opaque) { return !opaque.getPure(); })
+      .Default(false);
 }
 
 bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
@@ -506,8 +522,9 @@ BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
 
 void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
   effects.threadDemands.hasDemand = true;
-  effects.threadDemands.mayNotifyPeer = mayNotifyPeer(op);
   effects.threadDemands.hasDemandBeyondGlobalReads = !hasOnlyGlobalReads(op);
+  effects.threadDemands.mayNotifyPeer =
+      effects.threadDemands.hasDemandBeyondGlobalReads && mayNotifyPeer(op);
   if (getThreadSyncInfo(op).requiresBefore())
     effects.threadDemands.publicationIssuers =
         IssuerSummary{getThreadIssuer(op)};
