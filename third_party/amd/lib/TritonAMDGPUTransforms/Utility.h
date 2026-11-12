@@ -50,8 +50,7 @@ triton::gpu::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     bool useAsyncCopy, unsigned warpSize);
 
 // Returns the bank conflicts of a load or store between the register layout
-// `reg` and the padded shared layout `padded`, like
-// `triton::gpu::bankConflictsMemDesc` for linear shared layouts.
+// `reg` and the padded shared layout `padded`.
 int bankConflictsMemDescPadded(const triton::LinearLayout &reg,
                                triton::gpu::PaddedSharedEncodingAttr padded,
                                int32_t bitwidth, int32_t numBanks = 32,
