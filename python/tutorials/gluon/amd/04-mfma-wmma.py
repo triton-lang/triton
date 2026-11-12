@@ -5,13 +5,13 @@ MFMA and WMMA
 AMD GPUs run matrix multiplications on dedicated matrix cores. CDNA4 GPUs use
 matrix fused-multiply-add (MFMA) instructions, and CDNA5 GPUs use wave matrix
 multiply-accumulate (WMMA) instructions. Both read their operands from registers
-and accumulate in registers. They can't consume shared memory (LDS) directly,
+and accumulate in registers. As they can't consume shared memory (LDS) directly,
 so the kernel needs extra instructions to load every operand from LDS into
-registers, and it must load them fast enough to keep the matrix cores busy.
+registers.
 
-This tutorial first introduces MFMA and its layouts with the bf16 data type on
-CDNA4, and the ways to load the operands from LDS. Then it covers WMMA on CDNA5,
-where the LDS adds a new kind of conflict.
+This tutorial will introduces MFMA/WMMA and its layouts with the bf16 data type.
+We will also cover different ways to load the operands from LDS and demonstrate
+its importance for performance.
 """
 
 import importlib
