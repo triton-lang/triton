@@ -5,13 +5,14 @@ import os
 import pytest
 import torch
 import triton
+from triton._C.libtriton import gsan_testing
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator, has_live_allocations, reset
 from triton.experimental.gsan import _stream_sync
-from triton._C.libtriton.gsan_testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
+from triton.experimental.gsan._testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
@@ -35,6 +36,30 @@ from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
 # This tests cases where AllocNode.size != AllocNode.allocSize
 _ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
+
+
+@pytest.mark.parametrize("reserve_base", [0x200000, 0x1234560000, (1 << 44) - 0x200000])
+@pytest.mark.parametrize("granularity", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("write_once", [False, True])
+def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, write_once):
+    pool_size = gsan_testing.POOL_RESERVE_SIZE_BYTES
+    pool_index = 2 * (granularity.bit_length() - 1) + write_once
+    shadow_base = reserve_base + pool_index * pool_size
+    data_base = shadow_base + pool_size // 2
+    cell_size = 4 if write_once else 24
+    # The buddy root is bounded by the available data and shadow space.
+    capacity = min(pool_size // 2, pool_size // 2 // cell_size * granularity)
+    capacity = 1 << (capacity.bit_length() - 1)
+    for offset in [0, 1, granularity - 1, granularity, 0x200000, capacity - 1]:
+        address = data_base + offset
+        assert gsan_testing.is_gsan_managed(address, reserve_base)
+        assert gsan_testing.shadow_granularity(address, reserve_base) == granularity
+        assert gsan_testing.is_write_once_address(address, reserve_base) == write_once
+        assert gsan_testing.shadow_cell_size(address, reserve_base) == cell_size
+        assert gsan_testing.shadow_cell_address(address,
+                                                reserve_base) == shadow_base + offset // granularity * cell_size
+    for address in [0, reserve_base - 1, shadow_base, data_base - 1, reserve_base + 10 * pool_size, (1 << 64) - 1]:
+        assert not gsan_testing.is_gsan_managed(address, reserve_base)
 
 
 def _run_configure_check(device_ranks: dict[int, int], num_devices: int) -> None:
@@ -65,6 +90,17 @@ def _run_freeze_config_check() -> None:
         assert "configuration is already frozen" in str(exc)
     else:
         raise AssertionError("expected freeze_config() to reject later config changes")
+
+
+def _run_export_before_initialization_check() -> None:
+    with pytest.raises(RuntimeError, match="gsanExportAllocationHandles failed"):
+        export_allocation_handles(0, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_handles_before_initialization():
+    result = run_in_process(_run_export_before_initialization_check)
+    assert result.exc is None
 
 
 def _run_allocator_freezes_config_check(shadow_granularity: int) -> None:
@@ -437,7 +473,7 @@ def test_default_topology_uses_cuda_device_indices():
 def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     pool_index = 2 * (1, 2, 4, 8, 16).index(shadow_granularity)
-    real_base = reserve_ptr + (2 * pool_index + 1) * reserve_size // 32
+    real_base = reserve_ptr + (2 * pool_index + 1) * gsan_testing.POOL_RESERVE_SIZE_BYTES // 2
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)

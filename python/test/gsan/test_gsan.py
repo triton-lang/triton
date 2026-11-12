@@ -12,7 +12,8 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x, run_in_process
 from triton.experimental.gsan import configure, create_mem_pool
-from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity as get_shadow_granularity, shadow_cell_address
+from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock
+from triton.experimental.gsan._testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 

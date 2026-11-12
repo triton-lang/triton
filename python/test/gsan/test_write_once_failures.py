@@ -11,7 +11,8 @@ from triton.experimental.gluon import language as gl
 
 from triton._internal_testing import is_cuda, is_hopper_or_newer
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._allocator import get_reserve_pointer, get_reserve_size
+from triton.experimental.gsan._allocator import get_reserve_pointer
+from triton._C.libtriton.gsan_testing import POOL_RESERVE_SIZE_BYTES
 from triton.tools.tensor_descriptor import TensorDescriptor
 from test_gsan_failures import _raw_kernel, _run_failure_case
 
@@ -192,9 +193,9 @@ def _memory_category_boundary_kernel(address, out, STORE: tl.constexpr):
 def _run_memory_category_boundary(pool_index, boundary, is_store):
     with _write_once_pools():
         out = torch.empty(1, dtype=torch.int16, device="cuda")
-        pool_size = get_reserve_size() // 16
+        pool_size = POOL_RESERVE_SIZE_BYTES
         offset = pool_index * pool_size + (pool_size // 2 if boundary == "start" else pool_size)
-        # A two-byte access straddles a real/shadow or real/unused-slot boundary.
+        # A two-byte access straddles a real/shadow or real/reservation-end boundary.
         address = get_reserve_pointer() + offset - 1
         _memory_category_boundary_kernel[(1, )](address, out, is_store)
         torch.cuda.synchronize()
