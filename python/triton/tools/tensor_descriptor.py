@@ -14,7 +14,7 @@ class TensorDescriptor:
     fp6_format: str | None = None
     # Virtual shapes need not describe the size of the underlying allocation.
     # Request the safe TMA out-of-bounds address-generation mode in that case.
-    force_small_allocation: bool = False
+    use_small_tma_allocation_class: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)
