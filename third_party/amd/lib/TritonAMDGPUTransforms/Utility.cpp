@@ -584,7 +584,16 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
     return offsets;
   };
   auto laneOffsets = offsetsOf(kLane, 0);
+  // Two starting offsets that differ by an element of ys read the same group
+  // of offsets. reduce() picks one representative for them, using the
+  // generators of ys stored so that each has a different highest bit.
   SmallVector<uint32_t> ys = {0};
+  SmallVector<uint32_t> groupBasis;
+  auto reduce = [&](uint32_t x) {
+    for (uint32_t b : groupBasis)
+      x = std::min(x, x ^ b);
+    return x;
+  };
   for (int32_t mask : masks) {
     uint32_t y = 0;
     for (auto [i, offset] : llvm::enumerate(laneOffsets))
@@ -592,6 +601,10 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
         y ^= offset;
     for (int i = 0, n = ys.size(); i < n; i++)
       ys.push_back(ys[i] ^ y);
+    if (uint32_t b = reduce(y)) {
+      groupBasis.push_back(b);
+      llvm::sort(groupBasis, std::greater<uint32_t>());
+    }
   }
 
   // Most bits of t do not matter. A bit that never changes inside a group
@@ -608,9 +621,9 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
     if (applyPadding(1u << k, shifts) * bitwidth % 32 != 0)
       keyBits |= 1u << k;
 
-  // Collect every distinct value of t & keyBits that can occur. t is built by
-  // XORing lane, register, warp and block offsets, so XOR combinations of
-  // these offsets (masked by keyBits) give all of them.
+  // Collect every distinct value of t & keyBits that can occur, up to the
+  // group itself. t is built by XORing lane, register, warp and block offsets,
+  // so XOR combinations of these offsets (masked by keyBits) give all of them.
   SmallVector<uint32_t> generators(laneOffsets);
   for (auto dim : cvt.getInDimNames())
     if (dim != kLane)
@@ -619,10 +632,12 @@ int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
           offsetsOf(dim, dim == kReg ? llvm::Log2_32(elemsPerVec) : 0));
   llvm::DenseSet<uint32_t> seen = {0};
   SmallVector<uint32_t> keys = {0};
-  for (uint32_t generator : generators)
+  for (uint32_t generator : generators) {
+    uint32_t g = reduce(generator & keyBits);
     for (int i = 0, n = keys.size(); i < n; i++)
-      if (seen.insert(keys[i] ^ (generator & keyBits)).second)
-        keys.push_back(keys[i] ^ (generator & keyBits));
+      if (seen.insert(keys[i] ^ g).second)
+        keys.push_back(keys[i] ^ g);
+  }
 
   // For each of them, count how many different dwords each bank must serve.
   int maxWays = 1;
