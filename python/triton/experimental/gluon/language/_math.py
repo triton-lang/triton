@@ -1,6 +1,7 @@
 import triton.language.math as tl_math
 from ._core import builtin
 
+clmul = builtin(tl_math.clmul)
 umulhi = builtin(tl_math.umulhi)
 exp = builtin(tl_math.exp)
 exp2 = builtin(tl_math.exp2)

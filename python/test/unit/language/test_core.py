@@ -2989,6 +2989,64 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype_str", ["bool", *integral_dtypes])
+def test_clmul_broadcast(dtype_str, frontend, device):
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+
+    if frontend == "gluon" and is_interpreter():
+        pytest.skip("Gluon does not support interpreter mode")
+    jit = triton.jit if frontend == "triton" else gluon.jit
+
+    @jit
+    def kernel(X, Y, Z, N: tl.constexpr, GLUON: tl.constexpr, WARP_SIZE: tl.constexpr):
+        if GLUON:
+            layout: gl.constexpr = gl.BlockedLayout([1, 4], [4, WARP_SIZE // 4], [4, 1], [1, 0])
+            rows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))
+            cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
+            x = gl.load(X + rows)[:, None]
+            y = gl.load(Y + cols)[None, :]
+            gl.store(Z + rows[:, None] * N + cols[None, :], gl.clmul(x, y))
+        else:
+            rows = tl.arange(0, N)
+            cols = tl.arange(0, N)
+            x = tl.load(X + rows)[:, None]
+            y = tl.load(Y + cols)[None, :]
+            tl.store(Z + rows[:, None] * N + cols[None, :], tl.clmul(x, y))
+
+    dtype = np.dtype(dtype_str)
+    bits = 1 if dtype_str == "bool" else dtype.itemsize * 8
+    mask = (1 << bits) - 1
+    unsigned = np.dtype("bool" if bits == 1 else f"uint{bits}")
+    edges = [0, 1, 2 & mask, 3 & mask, mask, mask >> 1, 1 << (bits - 1), mask ^ (mask >> 1)]
+    rng = RandomState(17)
+    random = np.frombuffer(rng.bytes(8 * dtype.itemsize), dtype=unsigned)
+    values = np.concatenate((np.array(edges, dtype=unsigned), random))
+    x = values.view(dtype)
+    y = np.roll(values, 3).view(dtype)
+    n = len(x)
+    expected = []
+    for a in values.tolist():
+        for b in np.roll(values, 3).tolist():
+            product = 0
+            for bit in range(bits):
+                if b & (1 << bit):
+                    product ^= a << bit
+            expected.append(product & mask)
+    expected = np.array(expected, dtype=unsigned).view(dtype).reshape(n, n)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty((n, n), dtype=dtype), device=device)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, n, frontend == "gluon", THREADS_PER_WARP)
+    np.testing.assert_array_equal(to_numpy(z_tri), expected)
+    if not is_interpreter() and bits > 1:
+        # LLVM may vectorize elementwise intrinsics, particularly on AMD.
+        assert re.search(rf"@llvm\.clmul\.(?:v\d+)?i{bits}\(", compiled.asm["llir"])
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ['int32', 'uint32', 'int64', 'uint64'])
 def test_umulhi(dtype_str, device):
 

@@ -1392,6 +1392,10 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::MulIOp>(lhs, rhs);
            })
+      .def("create_clmul",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<triton::ClMulOp>(lhs, rhs);
+           })
       .def("create_umulhi",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<triton::MulhiUIOp>(lhs, rhs);
