@@ -16,14 +16,12 @@ struct LaunchState {
 
 // A normal/write-once pair for each power-of-two granularity from 1 to 16.
 // The low pool-index bit selects the mode; the remaining bits encode log2
-// granularity. Six unused slots keep the reservation a power of two.
+// granularity. Pool offsets are relative to the reservation base.
 static constexpr size_t kPoolReserveSize = 1ull << 40;
 static constexpr int kNumPools = 10;
-static constexpr size_t kReserveSize = 16 * kPoolReserveSize;
+static constexpr size_t kReserveSize = kNumPools * kPoolReserveSize;
 // Default normal granularity. Write-once allocations default to one byte.
 static constexpr int kShadowMemGranularityBytes = 4;
-static_assert((kReserveSize & (kReserveSize - 1)) == 0,
-              "kReserveSize must be a power of 2");
 
 using thread_id_t = uint16_t;
 
@@ -206,12 +204,15 @@ inline GSAN_HOST_DEVICE int getPoolIndexForGranularity(int granularity,
   return 2 * log2Granularity + writeOnce;
 }
 
-inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address) {
-  return (address & (kReserveSize - 1)) / kPoolReserveSize;
+inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address,
+                                         uintptr_t reserveBase) {
+  return (address - reserveBase) / kPoolReserveSize;
 }
 
-inline GSAN_HOST_DEVICE int getShadowGranularity(uintptr_t address) {
-  int pool = getPoolIndex(address);
+// Assumes address is in this process's GSan reservation.
+inline GSAN_HOST_DEVICE int getShadowGranularity(uintptr_t address,
+                                                 uintptr_t reserveBase) {
+  int pool = getPoolIndex(address, reserveBase);
   return 1 << (pool >> 1);
 }
 
@@ -223,33 +224,34 @@ inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(
          kPoolReserveSize / 2;
 }
 
-inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
-  return addr & ~(kReserveSize - 1);
-}
-
 // Assumes address is in this process's GSan reservation.
-inline GSAN_HOST_DEVICE bool isWriteOnceAddress(uintptr_t addr) {
-  return (getPoolIndex(addr) & 1) != 0;
+inline GSAN_HOST_DEVICE bool isWriteOnceAddress(uintptr_t addr,
+                                                uintptr_t reserveBase) {
+  return (getPoolIndex(addr, reserveBase) & 1) != 0;
 }
 
-inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr) {
-  return getShadowCellSize(isWriteOnceAddress(addr));
+inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr,
+                                                 uintptr_t reserveBase) {
+  return getShadowCellSize(isWriteOnceAddress(addr, reserveBase));
 }
 
 // Assumes address is in gsan-managed memory
-inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
-  auto poolBase = virtualAddress & ~(kPoolReserveSize - 1);
+inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress,
+                                                   uintptr_t reserveBase) {
+  auto offset = virtualAddress - reserveBase;
+  auto poolBase = reserveBase + (offset & ~(kPoolReserveSize - 1));
   auto realBase = poolBase + kPoolReserveSize / 2;
   auto byteOffset = virtualAddress - realBase;
-  auto cellOffset = byteOffset / getShadowGranularity(virtualAddress);
-  return poolBase + getShadowCellSize(virtualAddress) * cellOffset;
+  auto cellOffset =
+      byteOffset / getShadowGranularity(virtualAddress, reserveBase);
+  return poolBase + getShadowCellSize(virtualAddress, reserveBase) * cellOffset;
 }
 
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
-  return getReserveBaseFromAddress(addr) == reserveBase &&
-         getPoolIndex(addr) < kNumPools &&
-         (addr & (kPoolReserveSize - 1)) >= kPoolReserveSize / 2;
+  auto offset = addr - reserveBase;
+  return offset < kReserveSize &&
+         (offset & (kPoolReserveSize - 1)) >= kPoolReserveSize / 2;
 }
 
 enum class AddressCategory { Unmanaged, Normal, WriteOnce };
@@ -258,8 +260,8 @@ inline GSAN_HOST_DEVICE AddressCategory categorize(uintptr_t addr,
                                                    uintptr_t reserveBase) {
   if (!isGsanManaged(addr, reserveBase))
     return AddressCategory::Unmanaged;
-  return isWriteOnceAddress(addr) ? AddressCategory::WriteOnce
-                                  : AddressCategory::Normal;
+  return isWriteOnceAddress(addr, reserveBase) ? AddressCategory::WriteOnce
+                                               : AddressCategory::Normal;
 }
 
 inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {

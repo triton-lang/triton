@@ -910,7 +910,9 @@ GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
   auto reserveBase = state->reserveBase;
   auto category = categorize(write_addr, reserveBase);
   bool writeOnce = category == AddressCategory::WriteOnce;
-  int granularity = getShadowGranularity(write_addr);
+  int granularity = category == AddressCategory::Unmanaged
+                        ? 1
+                        : getShadowGranularity(write_addr, reserveBase);
   auto range = roundRange(Range{write_addr, write_addr + nBytes}, granularity);
   assert_msg(loc,
              range.start == range.end ||
@@ -921,7 +923,7 @@ GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
   checkCoarseAccess(write_addr, nBytes, granularity, loc);
 
   for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
-    auto shadowAddr = getShadowAddress(addr);
+    auto shadowAddr = getShadowAddress(addr, reserveBase);
     if (writeOnce) {
       doWrite(state, reinterpret_cast<WriteOnceShadowCell *>(shadowAddr), loc);
       continue;
@@ -964,7 +966,9 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
   auto reserveBase = state->reserveBase;
   auto category = categorize(read_addr, reserveBase);
   bool writeOnce = category == AddressCategory::WriteOnce;
-  int granularity = getShadowGranularity(read_addr);
+  int granularity = category == AddressCategory::Unmanaged
+                        ? 1
+                        : getShadowGranularity(read_addr, reserveBase);
   auto range = roundRange(Range{read_addr, read_addr + nBytes}, granularity);
   assert_msg(loc,
              range.start == range.end ||
@@ -975,7 +979,7 @@ GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
   checkCoarseAccess(read_addr, nBytes, granularity, loc);
 
   for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
-    auto shadowAddr = getShadowAddress(addr);
+    auto shadowAddr = getShadowAddress(addr, reserveBase);
     if (writeOnce) {
       doRead(state, reinterpret_cast<WriteOnceShadowCell *>(shadowAddr), loc);
       continue;
@@ -1014,12 +1018,12 @@ GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
   uintptr_t reserveBase = handleElement.reserveBase;
   if (!isGsanManaged(rowPtr, reserveBase))
     return;
-  int granularity = getShadowGranularity(rowPtr);
+  int granularity = getShadowGranularity(rowPtr, reserveBase);
   if (elementGranularity == 0) {
     checkCoarseAccess(rowPtr, rowBytes, granularity, handleElement.loc);
     elementGranularity = granularity;
   } else {
-    assert_msg(handleElement.loc, !isWriteOnceAddress(rowPtr),
+    assert_msg(handleElement.loc, !isWriteOnceAddress(rowPtr, reserveBase),
                "Atomic operations on write-once memory are not supported");
     checkAtomicGranularity(granularity, elementGranularity, handleElement.loc);
     elementGranularity = roundUp(elementGranularity, granularity);
@@ -1152,13 +1156,13 @@ template <typename ShadowCellHandler> struct NonAtomicElementHandler {
       rwLockAcquireRead(state->lock);
       acquired = true;
     }
-    if (isWriteOnceAddress(address)) {
-      auto *cell =
-          reinterpret_cast<WriteOnceShadowCell *>(getShadowAddress(address));
+    if (isWriteOnceAddress(address, reserveBase)) {
+      auto *cell = reinterpret_cast<WriteOnceShadowCell *>(
+          getShadowAddress(address, reserveBase));
       handleShadowCell(state, cell, loc);
       return;
     }
-    auto cell = acquireShadow(getShadowAddress(address));
+    auto cell = acquireShadow(getShadowAddress(address, reserveBase));
     handleShadowCell(state, cell, loc);
     releaseShadow(cell);
   }
@@ -1213,10 +1217,10 @@ GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
   checkAtomicAddress(state->reserveBase, address, loc);
   if (!isGsanManaged(address, state->reserveBase))
     return;
-  int granularity = getShadowGranularity(address);
+  auto reserveBase = state->reserveBase;
+  int granularity = getShadowGranularity(address, reserveBase);
   checkAtomicGranularity(granularity, bytesPerElem, loc);
   auto range = roundRange(Range{address, address + nBytes}, granularity);
-  auto reserveBase = state->reserveBase;
   uint8_t numCells = 0;
   for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (isGsanManaged(addr, reserveBase))
@@ -1236,7 +1240,8 @@ GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
   for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (!isGsanManaged(addr, reserveBase))
       continue;
-    event->cells[event->numCells++] = acquireShadow(getShadowAddress(addr));
+    event->cells[event->numCells++] =
+        acquireShadow(getShadowAddress(addr, reserveBase));
   }
 }
 
