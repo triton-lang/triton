@@ -20,6 +20,19 @@ def popc(arg0, _semantic=None):
 
 
 @core.extern
+def ffs(arg0, _semantic=None):
+    # ROCm device libs have no ffs; HIP defines __ffs/__ffsll in headers as
+    # (x == 0 ? -1 : ctz(x)) + 1. __ockl_ctz_* returns the bit width for 0.
+    ctz = core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("int32"), ): ("__ockl_ctz_u32", core.dtype("int32")),
+            (core.dtype("int64"), ): ("__ockl_ctz_u64", core.dtype("int64")),
+        }, is_pure=True, _semantic=_semantic).to(core.int32, _semantic=_semantic)
+    is_zero = _semantic.equal(_semantic.to_tensor(arg0), 0)
+    return _semantic.where(is_zero, _semantic.to_tensor(0), _semantic.add(ctz, 1, sanitize_overflow=False))
+
+
+@core.extern
 def abs(arg0, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0], {
