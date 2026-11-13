@@ -363,13 +363,17 @@ private:
     ModuleOp mod = getOperation();
     auto sharedSize = mod->getAttrOfType<IntegerAttr>("ttg.shared");
     unsigned ldsBytes = sharedSize ? sharedSize.getInt() : 0;
-    int numWarps = triton::gpu::lookupNumWarps(mod);
+    // Modules compiled by Triton always specify the number of warps; without
+    // it the workgroup size, and therefore the range, is unknown.
+    std::optional<int> numWarps = triton::gpu::maybeLookupNumWarps(mod);
+    if (!numWarps)
+      return;
     if (auto totalNumWarps =
             mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
       numWarps = totalNumWarps.getInt();
     unsigned waveSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     auto [minWavesPerEU, maxWavesPerEU] = computeAchievableWavesPerEU(
-        targetInfo, waveSize, numWarps * waveSize, ldsBytes);
+        targetInfo, waveSize, *numWarps * waveSize, ldsBytes);
     Builder b(mod.getContext());
     mod->setAttr("ttg.min_waves_per_eu", b.getI32IntegerAttr(minWavesPerEU));
     mod->setAttr("ttg.max_waves_per_eu", b.getI32IntegerAttr(maxWavesPerEU));
