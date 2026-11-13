@@ -443,6 +443,25 @@ def test_mxfp_casting(
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
 
 
+@pytest.mark.parametrize("axis", [0, -1])
+def test_nvfp4_outer_scale_roundtrip(axis, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    if axis == 0:
+        x = torch.full((16, 2, 3), 6., device=device)
+        outer = torch.tensor([[1., 2., 4.], [8., 4., 2.]], device=device)
+        expected_blocks = outer.reciprocal()[None, :, :]
+    else:
+        # A length-E vector selects groups even when the row count also equals E.
+        x = torch.full((2, 2, 16), 6., device=device)
+        outer = torch.tensor([1., 2.], device=device)
+        expected_blocks = outer.reciprocal()[:, None, None].expand(2, 2, 1)
+    packed, blocks = downcast_to_mxfp_torch(x, torch.uint8, axis, torch.float8_e4m3fn, 16, expected_scale=outer)
+    torch.testing.assert_close(blocks.float(), expected_blocks, rtol=0, atol=0)
+    actual = upcast_from_mxfp(packed, blocks, torch.float32, axis, tensor_scale=outer)
+    torch.testing.assert_close(actual, x, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("axis", [0, -1])

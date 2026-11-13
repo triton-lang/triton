@@ -27,6 +27,8 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    load_output_tensor_scale,
+    multiply_tensor_scales,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
@@ -83,16 +85,17 @@ _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
-             YExpectedScale, YActualScale, YChecksumScale,
+             YExpectedScale, stride_y_tensor_scale_z: tl.constexpr, stride_y_tensor_scale_m: tl.constexpr,
+             YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
+             XTensorScale, stride_x_tensor_scale_z: tl.constexpr, stride_x_tensor_scale_m: tl.constexpr,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
-             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
+             WTensorScale, stride_w_tensor_scale_e: tl.constexpr, stride_w_tensor_scale_n: tl.constexpr,
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
@@ -166,6 +169,7 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    SHARED_INPUT_SCALES: tl.constexpr = stride_x_tensor_scale_m == 0 and stride_w_tensor_scale_n == 0
     HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
@@ -260,6 +264,12 @@ def _p_matmul(
         (HAS_X_EPILOGUE_SCALE or WTensorScale is not None)
         and XScale is None and WScale is None and B is not None and Betas is None
         and (is_out_microscaled or SUBTILE_FACTOR == 1)
+    )
+    SCALAR_NVFP4_SCALES: tl.constexpr = (
+        HAS_X_EPILOGUE_SCALE and WTensorScale is not None and SHARED_INPUT_SCALES
+        and is_out_fp4 and YActualScale.dtype.element_ty == tl.float8e4nv
+        and YExpectedScale is not None and stride_y_tensor_scale_m == 0
+        and not HAS_GATHER and not FUSE_TENSOR_SCALE
     )
     yN = N // ACTIVATION_REDUCTION_N
 
@@ -362,7 +372,7 @@ def _p_matmul(
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
         if XTensorScale is not None:
-            XTensorScalePtrs = XTensorScale + off_x_z.to(index_type) * stride_x_tensor_scale_z
+            XTensorScalePtrs = XTensorScale + off_w_z.to(index_type) * stride_x_tensor_scale_z
             if USE_GATHER_TMA:
                 scale_offs_m = offs_x_m
             elif X_TMA_MODE is None:
@@ -556,25 +566,29 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
-            x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
-            w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+        if HAS_GATHER and is_x_microscaled and XMxScalePtrs is None:
+            # TMA loads the whole scale tile, including inactive rows with NaN scales.
+            active_rows = (offs_x_m if USE_GATHER_TMA else offs_m) >= 0
+            acc = tl.where(active_rows[None, :] if SWAP_XW else active_rows[:, None], acc, 0.0)
+
+        if SCALAR_NVFP4_SCALES:
+            x_outer = tl.load(XTensorScale + off_w_z.to(index_type) * stride_x_tensor_scale_z)
+            w_outer = tl.load(WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e)
+            input_outer_scale = x_outer * w_outer
+        elif HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
+            x_tensor_scales = None
             if HAS_X_EPILOGUE_SCALE:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0 if GatherIndx is not None else True), other=1.0)
+            w_scale_ptr = None
             if WTensorScale is not None:
-                offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-                w_tensor_scales = tl.load(
-                    WTensorScale
-                    + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                    + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
-                    mask=offs_w_tensor_scale_n < N,
-                    other=0.0,
-                )
+                w_scale_ptr = WTensorScale + off_w_z.to(index_type) * stride_w_tensor_scale_e
+            cols = off_n + tl.arange(0, BLOCK_N)
+            mask_n = True if OUT_N_TILE_ALIGNED and ACTIVATION_REDUCTION_N == 1 else cols < N
+            input_scales = multiply_tensor_scales(x_tensor_scales, w_scale_ptr, cols.to(index_type), stride_w_tensor_scale_n, mask_n)
+            if SWAP_XW:
+                input_scales = input_scales.T
             if not FUSE_TENSOR_SCALE:
-                if SWAP_XW:
-                    acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
-                else:
-                    acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+                acc *= input_scales
 
         # ------------------------------------------------------------
         # epilogue
@@ -644,9 +658,9 @@ def _p_matmul(
 
         if FUSE_TENSOR_SCALE:
             if SWAP_XW:
-                acc = _scaled_add(acc, w_tensor_scales[:, None] * x_tensor_scales[None, :], bias[:, None])
+                acc = _scaled_add(acc, input_scales, bias[:, None])
             else:
-                acc = _scaled_add(acc, x_tensor_scales[:, None] * w_tensor_scales[None, :], bias[None, :])
+                acc = _scaled_add(acc, input_scales, bias[None, :])
 
         accs = (acc,)
         biases = (bias,)
@@ -678,8 +692,12 @@ def _p_matmul(
         tl.static_assert(EPILOGUE_BLOCK_N == BLOCK_N // SUBTILE_FACTOR)
         tl.static_assert(len(accs) == SUBTILE_FACTOR)
 
+        ExpectedScale = YExpectedScale + start_z1 if PER_BATCH_OUT_SCALE else YExpectedScale
         if is_out_microscaled:
             MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+            scale_group = expt_id1 if RAGGED_DIMENSION == "M" else start_z1
+            ExpectedScale = load_output_tensor_scale(ExpectedScale, scale_group.to(index_type), stride_y_tensor_scale_z,
+                                                     offs_y_m.to(index_type), stride_y_tensor_scale_m, mask_m)
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -687,6 +705,9 @@ def _p_matmul(
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
+            if SCALAR_NVFP4_SCALES:
+                # Keep the FP32 product before bias and the output divisor before quantization.
+                acc_tile *= input_outer_scale
             if not FUSE_TENSOR_SCALE:
                 if Betas is None:
                     # Preserve the scale-plus-bias rounding when beta is implicit.
@@ -744,10 +765,6 @@ def _p_matmul(
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
                 out_mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
-                if PER_BATCH_OUT_SCALE:
-                    ExpectedScale = YExpectedScale + start_z1
-                else:
-                    ExpectedScale = YExpectedScale
                 # OCP MX outputs leave YExpectedScale unset, so this is an
                 # identity there. NVFP4 uses YExpectedScale to precondition the
                 # dense output before the microscaling epilogue writes direct
@@ -811,10 +828,8 @@ def _p_matmul(
                     local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
 
                 if PER_BATCH_OUT_SCALE:
-                    ExpectedScale = YExpectedScale + start_z1
                     ActualScale = YActualScale + start_z1
                 else:
-                    ExpectedScale = YExpectedScale
                     ActualScale = None  # local absmax is tracked and updated after the loop
 
                 out = float_to_flex(

@@ -16,11 +16,50 @@ from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
 
-def check_tensor_scale(operand, block_scale, tensor_scale):
+def check_tensor_scale(operand, block_scale, tensor_scale, microblock_size):
     is_nvfp4 = (block_scale is not None and operand.dtype in (FP4, torch.uint8)
                 and block_scale.data.dtype == torch.float8_e4m3fn)
     if (tensor_scale is not None) != is_nvfp4:
         raise ValueError("A tensor scale must be set if and only if the operand is NVFP4 (packed FP4 with E4M3 block scales)")
+    if microblock_size is not None and microblock_size not in (int(NVFP_BLOCK_SIZE), int(MXFP_BLOCK_SIZE)):
+        raise ValueError(f"Unsupported microscale block size {microblock_size}")
+    if block_scale is None:
+        return
+    if block_scale.data.dtype not in (torch.uint8, torch.float8_e4m3fn):
+        raise ValueError(f"Unsupported microscale dtype {block_scale.data.dtype}")
+    if is_nvfp4 and microblock_size != int(NVFP_BLOCK_SIZE):
+        raise ValueError(f"NVFP4 requires microblock_size=16, got {microblock_size}")
+    if block_scale.data.dtype == torch.uint8 and microblock_size != int(MXFP_BLOCK_SIZE):
+        raise ValueError(f"E8M0 block scales require microblock_size=32, got {microblock_size}")
+    if microblock_size is None:
+        raise ValueError("microblock_size is required when block scales are set")
+
+
+def broadcast_tensor_scale(scale: torch.Tensor | None, shape: tuple[int | torch.Tensor, ...]) -> torch.Tensor | None:
+    """Broadcast over the axes outside the microblocks, typically (group, position).
+
+    A length-E vector selects groups for standalone conversions and matmul outputs.
+    """
+    if scale is None:
+        return None
+    # An expanded axis repeats its first entry. Keep that entry so the same
+    # scale can broadcast to a different number of groups or positions.
+    scale = scale[tuple(slice(1) if stride == 0 else slice(None) for stride in scale.stride())]
+
+    if scale.numel() == 1:
+        scale = scale.reshape(())
+    elif len(shape) == 1:
+        scale = scale.squeeze(0)  # Also accept (1, position) for a dense operand.
+    elif len(shape) == 2 and scale.shape == shape[:1]:
+        scale = scale[:, None]  # A conversion or output vector indexes groups.
+
+    if shape and isinstance(shape[-1], torch.Tensor):
+        # Keep the supplied position extent without synchronizing a device row count.
+        shape = (*shape[:-1], -1 if scale.ndim else 1)
+    try:
+        return scale.expand(shape)
+    except RuntimeError as exc:
+        raise ValueError(f"Tensor scale {tuple(scale.shape)} must broadcast to {tuple(shape)}") from exc
 
 
 class DequantScaleRoundingMode(Enum):
@@ -111,6 +150,9 @@ def upcast_from_mxfp(
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
     The function assumes that the tensors were quantized along the given axis.
+    tensor_scale broadcasts over the remaining axes in their original order.
+    For two remaining axes (E, M), a length-E vector selects groups. Use
+    (1, M) for shared position scales when E == M.
     It permutes the tensor so that the quantized axis is last, reshapes to 2D,
     launches the Triton upcast kernel, and then unpermutes back to the original order.
     """
@@ -121,8 +163,7 @@ def upcast_from_mxfp(
                                        f"Got {tensor.ndim=} and {scale.ndim=}")
     if tensor_scale is not None and tensor_scale.numel() != 1:
         expected_tensor_scale_shape = tensor.shape[:axis] + tensor.shape[axis + 1:]
-        assert tensor_scale.shape == expected_tensor_scale_shape, \
-            f"Invalid tensor scale shape: expected {expected_tensor_scale_shape}, got {tensor_scale.shape}"
+        tensor_scale = broadcast_tensor_scale(tensor_scale, expected_tensor_scale_shape)
     # dtype checks
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
@@ -219,7 +260,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
       scale: Scale tensor computed per microblock along the axis.
 
     If expected_scale is provided, apply the same preconditioning as float_to_flex
-    before microscaled output quantization by dividing the source tensor by it.
+    before microscaled output quantization by multiplying by its FP32 reciprocal.
+    It broadcasts over the remaining axes as in upcast_from_mxfp.
     """
     # This should probably be packed into its own tiny class
     ndim = src_tensor.ndim
@@ -246,14 +288,13 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         axis_shape = src_tensor.size(axis)
         assert axis_shape % 2 == 0, "For mxfp4 conversion the contiguous axis length must be even."
 
-    # Permute the tensor so that the contiguous axis becomes the last dimension.
-    src = src_tensor.transpose(axis, src_tensor.ndim - 1).to(torch.float32)
+    src = src_tensor.to(torch.float32)
     if expected_scale is not None:
-        if expected_scale.numel() == 1:
-            src = src / expected_scale.to(device=device, dtype=src.dtype)
-        else:
-            assert src.ndim == 3
-            src = src / expected_scale.to(device=device, dtype=src.dtype)[:, None, None]
+        expected_tensor_scale_shape = src.shape[:axis] + src.shape[axis + 1:]
+        scale = broadcast_tensor_scale(expected_scale, expected_tensor_scale_shape).unsqueeze(axis)
+        src = src * scale.to(device=device, dtype=src.dtype).reciprocal()
+    # Permute the tensor so that the contiguous axis becomes the last dimension.
+    src = src.transpose(axis, -1)
     axis_shape = src.shape[-1]
 
     # Pad the axis to be divisible by the microblock size, in case it is not.
