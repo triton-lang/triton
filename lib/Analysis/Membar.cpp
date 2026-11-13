@@ -326,6 +326,8 @@ bool MembarAnalysis::mayNotifyPeer(Operation *op) {
 
   // We may just notify a different WS partition with barriers or global atomics
   return llvm::TypeSwitch<Operation *, bool>(op)
+      // A guarded notification must join pending waits before lanes split.
+      .Case<ttg::ThreadPredicateOp>([](auto) { return true; })
       .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
             tti::ExperimentalGSanAtomicLoadOp, ttng::WaitBarrierOp>(
           [](auto) { return false; })
