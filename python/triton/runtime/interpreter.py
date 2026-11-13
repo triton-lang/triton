@@ -132,6 +132,14 @@ def _validate_np_data_size(np_array, tl_dtype):
     return True
 
 
+def _int_constant(value, np_dtype):
+    # The compiled builder takes the value as an int64 (signed types) or a
+    # uint64 (unsigned types) and arith.constant keeps its low bits, so e.g.
+    # tl.full(shape, 0xFFFFFFFF, tl.int32) is -1.
+    wide_dtype = np.int64 if np.issubdtype(np_dtype, np.signedinteger) else np.uint64
+    return np.array([value], dtype=wide_dtype).astype(np_dtype)
+
+
 def _get_signed_np_dtype(dtype):
     if dtype == np.uint8:
         return np.int8
@@ -502,28 +510,28 @@ class InterpreterBuilder:
         return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_uint8(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
+        return TensorHandle(_int_constant(value, np.uint8), tl.uint8)
 
     def get_int8(self, value):
-        return TensorHandle(np.array([value], dtype=np.int8), tl.int8)
+        return TensorHandle(_int_constant(value, np.int8), tl.int8)
 
     def get_uint16(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint16), tl.uint16)
+        return TensorHandle(_int_constant(value, np.uint16), tl.uint16)
 
     def get_int16(self, value):
-        return TensorHandle(np.array([value], dtype=np.int16), tl.int16)
+        return TensorHandle(_int_constant(value, np.int16), tl.int16)
 
     def get_uint32(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
+        return TensorHandle(_int_constant(value, np.uint32), tl.uint32)
 
     def get_int32(self, value):
-        return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+        return TensorHandle(_int_constant(value, np.int32), tl.int32)
 
     def get_uint64(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint64), tl.uint64)
+        return TensorHandle(_int_constant(value, np.uint64), tl.uint64)
 
     def get_int64(self, value):
-        return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
+        return TensorHandle(_int_constant(value, np.int64), tl.int64)
 
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
