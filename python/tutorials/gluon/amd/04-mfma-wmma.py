@@ -55,8 +55,8 @@ if __name__ == "__main__" and not (is_cdna4() or is_cdna5()):
 # The operand data type and `instr_shape` select the MFMA instruction of each
 # warp. `instr_shape` is the shape of the instruction in [M, N, K] format for
 # one warp. With multiple warps, `warps_per_cta` distributes them over the
-# accumulator along the M and N dimensions. Typically when write the kernel,
-# these need to be chosen based on the block size.
+# accumulator along the M and N dimensions. When you write a kernel, you choose
+# them based on the block size.
 
 
 @gluon.jit
@@ -92,7 +92,7 @@ def mfma(A, B, instr_shape, warps_per_cta):
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (64, 128, 64)])
-# For bf16, CDNA4 has two MFMA instructions shapes:
+# For bf16, CDNA4 has two MFMA instruction shapes:
 # - `v_mfma_f32_16x16x32_bf16`
 # - `v_mfma_f32_32x32x16_bf16`.
 @pytest.mark.parametrize("instr_shape", [[16, 16, 32], [32, 32, 16]])
@@ -142,12 +142,12 @@ if __name__ == "__main__" and is_cdna4():
 # of a column in 4 registers.
 
 # %%
-# Understanding the MFMA layouts can help us do some layout optimizations.
-# One typical case is for layout conversion. In kernel like attention, there are
-# 2 chained MFMAs, where the output of the first is used as an operand of the
-# second MFMA (with softmax in between). From the layout view shown above, the
-# operand and output layouts are different. We can use the `transposed` flag
-# and `k_width` to adjust them and avoid this conversion.
+# Knowing the MFMA layouts helps us avoid layout conversions. Kernels like
+# attention chain two MFMAs, and the output of the first one, after a softmax,
+# becomes an operand of the second one. As shown above, the accumulator layout
+# differs from the operand layout, so the compiler has to convert between them.
+# We can use the `transposed` flag and `k_width` to make the two layouts match
+# and avoid this conversion.
 
 # %%
 # With `transposed=True`, each lane of the accumulator holds 4 consecutive
@@ -168,14 +168,14 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 
 # %%
-# To make the two layouts identical, we also need `k_width`. `k_width` means the
+# To make the two layouts identical, we also need `k_width`. `k_width` is the
 # number of consecutive elements along K that a lane holds in an MFMA operand.
-# The 16x16x32 MFMA instruction requires 8 values of A and 8 values of B per
-# lane, which means the `k_width=8`. However, we can use a different `k_width`
-# unless it is the same for both operands. This will still produce the correct
-# results - essentially, we are swapping the order of elements along the K
-# dimension. We can use `k_width=4`, then each lane holds 4 consecutive elements
-# which exactly match the transposed accumulator layout.
+# The 16x16x32 MFMA instruction takes 8 values of A and 8 values of B per lane,
+# so the natural choice is `k_width=8`. But we can use a different `k_width` as
+# long as both operands use the same one. The results stay correct, because
+# this only changes the order of the elements along K, in the same way for A
+# and B. With `k_width=4`, each lane holds 4 consecutive elements, which exactly
+# matches the transposed accumulator layout.
 
 if __name__ == "__main__" and is_cdna4():
     a_view = gl.DotOperandLayout(0, transposed_layout, 4).format_tensor_view([16, 32])
@@ -349,7 +349,7 @@ if __name__ == "__main__" and is_cdna4():
 
 # %%
 # The kernel above uses a simple shared memory layout, which can have bank
-# conflicts. We can check whether bank conflicts occur using the
+# conflicts. We can check whether bank conflicts occur with
 # `gl.bank_conflicts`. It counts the number of extra accesses that bank
 # conflicts cause between a register layout and a shared memory layout.
 
@@ -380,7 +380,7 @@ if __name__ == "__main__" and is_cdna4():
 # data. This differs from instruction to instruction, but we can still briefly
 # explain the common parts here. The LDS of a CDNA4 CU has 64 banks, each 4
 # bytes wide, so it can serve 256 bytes per cycle. Some instructions like
-# `ds_read_b128` can not be served in a single cycle for all lanes. In this
+# `ds_read_b128` cannot be served in a single cycle for all lanes. In this
 # case, the LDS splits the instruction into multiple cycles, serving a group of
 # lanes in each cycle. Bank conflicts only happen within a group. For
 # `ds_read_b128`, each group has 16 lanes. The first group has lanes 0-3, 12-15,
@@ -388,8 +388,8 @@ if __name__ == "__main__" and is_cdna4():
 # on.
 #
 # When picking the shared memory layout, we only need to consider the lanes in a
-# group. For a swizzled layout: `vec` can be `k_width`; `per_phase` can be the
-# number of rows in one 256-byte line of banks; and `max_phase` can be the
+# group. For a swizzled layout, `vec` can be `k_width`, `per_phase` can be the
+# number of rows in one 256-byte line of banks, and `max_phase` can be the
 # number of rows that a group reads divided by `per_phase`. For example, in our
 # 256x64 bf16 case, a row has 128 bytes which is 32 banks. So 2 rows can occupy
 # the full 64 banks. Therefore, we can set `per_phase=2`. And as we know
@@ -417,8 +417,8 @@ if __name__ == "__main__" and is_cdna4():
 # Another factor is the data path from global memory to shared memory. As we saw
 # in the async copy tutorial, a copy instruction has no shared memory address
 # for each lane, so the data it writes into shared memory needs to be
-# consecutive. So we can not add padding in-between, and the padded layout above
-# fails to compile with async copies.
+# consecutive. So we cannot add padding between the rows, and the padded layout
+# above fails to compile with async copies.
 
 
 @gluon.jit
@@ -534,18 +534,18 @@ if __name__ == "__main__" and is_cdna4():
 # consider before we build the matrix multiplication is the registers. The
 # accumulator of a large tile takes many of them.
 #
-# On CDNA4, there are 2 types of vector registers: VGPRs, which is the regular
-# vector registers, and AGPRs, for accumulation. There are 256 VGPRs and 256
-# AGPRs for warp to use. All vector instructions can use VGPRs, but a few can
-# use AGPRs. MFMA instructions can read their operands and accumulator from
-# AGPRs and write their result to AGPRs. Some memory instructions can also
-# load data into AGPRs like `ds_read_b128`.
+# On CDNA4, there are two types of vector registers, the regular VGPRs and the
+# AGPRs for accumulation. Each lane has 256 VGPRs and 256 AGPRs. All vector
+# instructions can use VGPRs, but only a few can use AGPRs. MFMA instructions
+# can read their operands and accumulator from AGPRs and write their result to
+# AGPRs. Some memory instructions, like `ds_read_b128`, can also load data into
+# AGPRs.
 #
 # The compiler decides which type to use. By default, it uses VGPRs, and only
-# moves values to AGPRs when run out of VGPRs. The `mfma` operation inGluon
-# provides an experimental argument `cd_regclass` which specifies the register
-# class for the accumulator (C) and output (D) . Setting `cd_regclass="a"`
-# will force them in AGPRs.
+# moves values to AGPRs when it runs out of VGPRs. The `mfma` operation in Gluon
+# has an experimental argument `cd_regclass`, which sets the register class of
+# the accumulator (C) and the output (D). With `cd_regclass="a"`, both go to
+# AGPRs.
 
 
 @gluon.jit
@@ -600,9 +600,8 @@ if __name__ == "__main__" and is_cdna4():
 # impacts the performance of the MFMA instructions.
 
 # %%
-# After features introduced above, we can combine them into a pipelined matmul
-# kernel. To simplify the search space, we will focus on the 256x256x64 block
-# size and 4 warps setting.
+# Now we combine these features into a pipelined matmul kernel. To keep the
+# search space small, we only use 256x256x64 blocks and 4 warps.
 
 
 @gluon.aggregate
@@ -830,23 +829,24 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 
 # %%
-# This tutorial shows the importance of layouts are in Gluon for AMD GPUs. Many
+# This section shows how important layouts are in Gluon for AMD GPUs. Many
 # optimizations come from choosing the right layout and letting the compiler
 # generate the expected instructions. Layouts control how data flows from global
 # memory to shared memory, from shared memory to registers, and between
-# registers. We can see that the data path must be carefully managed in order to
-# keep the compute unit busy. Later tutorials will introduce more advanced
-# layouts-based optimizations.
+# registers. The data path must be managed carefully to keep the compute unit
+# busy.
 
 # %%
 # CDNA5 WMMA
 # ----------
 #
-# In Gluon, a WMMA is exposed as `cdna5.wmma(a, b, acc)`. Just like `mfma`, the
-# accumulator carries the instruction layout, here an `AMDWMMALayout`, and both
-# operands use a `DotOperandLayout` whose parent is that layout. CDNA5 has one
-# bf16 shape, `v_wmma_f32_16x16x32_bf16`, a 16x32 tile times a 32x16 tile. So
-# `instr_shape` is `[16, 16, 32]`, and each operand needs `k_width=8`.
+# CDNA5 replaces MFMA with WMMA, the wave matrix multiply-accumulate
+# instructions. The idea stays the same, but a CDNA5 warp has 32 lanes, so the
+# instructions and their layouts change. For bf16, there is only one shape,
+# `v_wmma_f32_16x16x32_bf16`, which multiplies a 16x32 tile by a 32x16 tile. Its
+# Gluon operation is `cdna5.wmma(a, b, acc)`. The layouts work as for `mfma`,
+# with `AMDWMMALayout` in place of `AMDMFMALayout`. So we set `instr_shape` to
+# `[16, 16, 32]` and `k_width=8`.
 #
 # `AMDWMMALayout` describes the placement of the warps in a different way.
 # Instead of `warps_per_cta`, `warp_bases` gives the tile offset of each bit of
@@ -975,8 +975,8 @@ if __name__ == "__main__" and is_cdna5():
 # conflict. One row of 64 bf16 values is 128 bytes, so every row covers half of
 # the banks, and the lanes that read different rows collide.
 #
-# Both fixes from MFMA apply. For swizzling, note that two rows now fill all 64
-# banks, so the swizzle pattern advances every second row (`per_phase=2`). For
+# Both fixes from MFMA apply. For swizzling, two rows still fill all 64 banks,
+# so the swizzle pattern advances every second row (`per_phase=2`). For
 # padding, 8 extra values (16 bytes) after each row shift the next row by 4
 # banks. Padding is the natural choice on CDNA5, because TDM adds it on the fly
 # while it writes the tile.

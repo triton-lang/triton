@@ -222,11 +222,11 @@ if __name__ == "__main__" and is_cdna4():
 # these instructions read implicitly. The compiler sets `M0` with
 # `s_mov_b32 m0, ...` before each copy.
 #
-# This causes many constraints. Take `buffer_load_dwordx4 ... lds` as an
-# example: each lane loads 16 bytes, and lane `i` can only write its 16 bytes at
-# shared memory offset `16 * i` from the address in `M0`. This means one
-# instruction can only write 1KB of consecutive shared memory, without any gap
-# in between.
+# This puts a strict constraint on where the data goes. In
+# `buffer_load_dwordx4 ... lds`, each lane loads 16 bytes, and lane `i` can only
+# write its 16 bytes at shared memory offset `16 * i` from the address in `M0`.
+# So one instruction always writes 1 KB of consecutive shared memory, without
+# any gap in between.
 
 
 @contextlib.contextmanager
@@ -296,7 +296,7 @@ if __name__ == "__main__" and is_cdna4():
 # read. These barriers are inserted by the compiler analysis.
 
 # %%
-# Next, we can start to develop software pipelined version of the kernel.
+# Next, we build a software-pipelined version of the kernel.
 
 
 @gluon.jit
@@ -459,11 +459,11 @@ if __name__ == "__main__" and is_cdna4():
 # CDNA5 async copy
 # ----------------
 #
-# CDNA5 also copies from global memory directly to shared memory. Gluon exposes
-# this operation as `global_to_shared` in `cdna5.async_copy`, with the same
-# `commit_group` and `wait_group` as on CDNA4.
-# `elementwise_async_copy_cdna5_kernel` is `elementwise_async_copy_kernel` with
-# `global_to_shared`.
+# CDNA5 also provides async copies from global memory to shared memory. In
+# Gluon, they are available as `global_to_shared` in `cdna5.async_copy`, and
+# they use the same `commit_group` and `wait_group` as on CDNA4.
+# `elementwise_async_copy_cdna5_kernel` only replaces the copy of
+# `elementwise_async_copy_kernel` with `global_to_shared`.
 
 
 @gluon.jit
@@ -544,8 +544,9 @@ if __name__ == "__main__" and is_cdna5():
 # for async copies, and never for stores or loads into registers.
 #
 # Since each lane has its own shared memory address, one copy instruction
-# doesn't have to fill consecutive shared memory. The layout that spreads the
-# lanes of a warp over 8 rows now works on a tile with 256 columns.
+# doesn't have to fill consecutive shared memory. On CDNA4, the layout that
+# spreads the lanes of a warp over 8 rows fails to compile on a tile with 256
+# columns. On CDNA5, it works.
 
 # %%
 # Next, we measure the bandwidth on an MI455X GPU.
