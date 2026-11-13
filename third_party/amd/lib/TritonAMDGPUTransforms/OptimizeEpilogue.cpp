@@ -158,7 +158,7 @@ static bool isProfitableBypassSource(RankedTensorType srcType,
       triton::gpu::getContigPerThread(srcType)[contigDim];
   const unsigned dstContig =
       triton::gpu::getContigPerThread(dstType)[contigDim];
-  return srcContig >= std::min(dstContig, maxElems);
+  return std::min(srcContig, maxElems) == std::min(dstContig, maxElems);
 }
 
 // convert(val) : xmma -> blocked

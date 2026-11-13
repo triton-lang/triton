@@ -230,6 +230,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // -----
 
+// An unaligned row requires scalar stores. With eight elements per thread,
+// consecutive lanes would store sixteen bytes apart instead of two.
+// CHECK-LABEL: fma_blocked_unaligned_row
+// CHECK:       %[[VAL:.+]] = ttg.convert_layout %{{.*}} : tensor<4096xbf16, #blocked> -> tensor<4096xbf16, #blocked1>
+// CHECK:       tt.store %{{.*}}, %[[VAL]], %{{.*}} : tensor<4096x!tt.ptr<bf16>, #blocked1>
+#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @fma_blocked_unaligned_row(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %stride: i32, %n: i32) {
+    %value = arith.constant dense<1.0> : tensor<4096xbf16, #blocked>
+    %row = tt.get_program_id x : i32
+    %base = arith.muli %row, %stride : i32
+    %row_ptr = tt.addptr %arg0, %base : !tt.ptr<bf16>, i32
+    %ptrs = tt.splat %row_ptr : !tt.ptr<bf16> -> tensor<4096x!tt.ptr<bf16>, #blocked1>
+    %offsets = tt.make_range {start = 0 : i32, end = 4096 : i32} : tensor<4096xi32, #blocked1>
+    %ptr = tt.addptr %ptrs, %offsets : tensor<4096x!tt.ptr<bf16>, #blocked1>, tensor<4096xi32, #blocked1>
+    %bound = tt.splat %n : i32 -> tensor<4096xi32, #blocked1>
+    %mask = arith.cmpi slt, %offsets, %bound : tensor<4096xi32, #blocked1>
+    %converted = ttg.convert_layout %value : tensor<4096xbf16, #blocked> -> tensor<4096xbf16, #blocked1>
+    tt.store %ptr, %converted, %mask : tensor<4096x!tt.ptr<bf16>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 // The two layouts disagree on the order, so bypass is not profitable.
 // CHECK-LABEL: fma_blocked_order_mismatch
 // CHECK:       %[[VAL:.+]] = ttg.convert_layout %{{.*}} : tensor<64x128xf32, #blocked> -> tensor<64x128xf32, #blocked1>
