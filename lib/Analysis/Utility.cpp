@@ -1140,6 +1140,11 @@ bool supportMMA(triton::DotOp op, int version) {
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0))
       return false;
+    // A row of B must span at least one 128-bit shared-memory core. Narrower
+    // rows have no valid tcgen05 layout without padding the shared memory, so
+    // keep them on the MMAv2 path.
+    if (retShapePerCTA[rank - 1] * aElemTy.getIntOrFloatBitWidth() < 128)
+      return false;
     if (aElemTy.isF64() || bElemTy.isF64() ||
         retType.getElementType().isF64()) {
       // tcgen05.mma doesn't support F64.
