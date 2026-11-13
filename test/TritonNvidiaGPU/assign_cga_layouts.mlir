@@ -812,3 +812,27 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+
+  // CHECK-DAG: #[[$B:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[0, 0\]\]}}}>
+  // CHECK-DAG: #[[$A:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$D:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$SA:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$SB:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A scaled dot reduces along K within each CTA, like a dot. The default
+  // layout splits B along K across the CTAs; every CTA gets the whole B (and
+  // B scales) instead, while A, its scales and the result stay split along M.
+  // CHECK-LABEL: tt.func @dot_scaled_k_not_split
+  // CHECK: %[[B:.*]] = tt.load %{{.*}} : tensor<128x64x!tt.ptr<f8E5M2>, #[[$B]]>
+  // CHECK: tt.dot_scaled %{{.*}} scale %{{.*}}, %[[B]] scale %{{.*}}, %{{.*}} lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x128xf8E5M2, #[[$A]]>, tensor<128x4xi8, #[[$SA]]> * tensor<128x64xf8E5M2, #[[$B]]>, tensor<64x4xi8, #[[$SB]]> -> tensor<128x64xf32, #[[$D]]>
+  tt.func @dot_scaled_k_not_split(%a: tensor<128x128xf8E5M2, #blocked>, %b_ptrs: tensor<128x64x!tt.ptr<f8E5M2>, #blocked>, %sa: tensor<128x4xi8, #blocked>, %sb: tensor<64x4xi8, #blocked>) -> tensor<128x64xf32, #blocked> {
+    %b = tt.load %b_ptrs : tensor<128x64x!tt.ptr<f8E5M2>, #blocked>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    %d = tt.dot_scaled %a scale %sa, %b scale %sb, %c lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x128xf8E5M2, #blocked>, tensor<128x4xi8, #blocked> * tensor<128x64xf8E5M2, #blocked>, tensor<64x4xi8, #blocked> -> tensor<128x64xf32, #blocked>
+    tt.return %d : tensor<128x64xf32, #blocked>
+  }
+}

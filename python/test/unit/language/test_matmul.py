@@ -343,6 +343,46 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "scf.for" in ttgir
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("M, N, K", [(128, 64, 128), (256, 128, 128), (128, 128, 256)])
+@pytest.mark.parametrize("with_scales", [False, True])
+def test_dot_scaled_num_ctas(M, N, K, with_scales, device):
+    # The default multi-CTA layout splits B along K; a scaled dot reduces K within each CTA, so each CTA needs the
+    # whole B. Ones in only one half of K catch a CTA that reads the other half from uninitialized memory.
+
+    @triton.jit
+    def kernel(A, B, A_SCALE, B_SCALE, OUT, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+               WITH_SCALES: tl.constexpr):
+        am = tl.arange(0, M)
+        ak = tl.arange(0, K)
+        an = tl.arange(0, N)
+        a = tl.load(A + am[:, None] * K + ak[None, :])
+        b = tl.load(B + ak[:, None] * N + an[None, :])
+        if WITH_SCALES:
+            sk = tl.arange(0, K // 32)
+            a_scale = tl.load(A_SCALE + am[:, None] * (K // 32) + sk[None, :])
+            b_scale = tl.load(B_SCALE + an[:, None] * (K // 32) + sk[None, :])
+            c = tl.dot_scaled(a, a_scale, "e5m2", b, b_scale, "e5m2")
+        else:
+            c = tl.dot_scaled(a, None, "e5m2", b, None, "e5m2")
+        tl.store(OUT + am[:, None] * N + an[None, :], c)
+
+    one = 0x3C  # e5m2 1.0
+    a = torch.full((M, K), one, dtype=torch.uint8, device=device).view(torch.float8_e5m2)
+    # e8m0 scales of 1.0
+    a_scale = torch.full((M, K // 32), 127, dtype=torch.uint8, device=device)
+    b_scale = torch.full((N, K // 32), 127, dtype=torch.uint8, device=device)
+    for half in range(2):
+        b = torch.zeros((K, N), dtype=torch.uint8, device=device)
+        b[half * K // 2:(half + 1) * K // 2] = one
+        out = torch.full((M, N), -1.0, dtype=torch.float32, device=device)
+        kernel[(1, )](a, b.view(torch.float8_e5m2), a_scale, b_scale, out, M, N, K, with_scales, num_ctas=2,
+                      num_warps=4)
+        if is_compile_warmup():
+            return
+        torch.testing.assert_close(out, torch.full_like(out, K // 2), atol=0, rtol=0)
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")

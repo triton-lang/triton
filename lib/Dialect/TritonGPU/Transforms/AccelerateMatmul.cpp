@@ -937,6 +937,22 @@ public:
   }
 };
 
+// The CGA layout of a block-scale operand [rows, K / vec] whose rows follow
+// dimension `dim` of a dot result with CGA layout `retCGALayout`: the scales
+// of A follow M, those of B follow N, and K / vec is never split.
+static CGAEncodingAttr getScaleCGALayout(CGAEncodingAttr retCGALayout,
+                                         unsigned dim) {
+  MLIRContext *ctx = retCGALayout.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto bases = retCGALayout.getLinearLayout().getBases();
+  if (retCGALayout.getLinearLayout().getNumOutDims() != 2)
+    return retCGALayout;
+  for (auto &basis : bases[kBlock])
+    basis = {basis[dim], 0};
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
+}
+
 class ScaledBlockedToMMAv5
     : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
@@ -1077,12 +1093,16 @@ public:
         triton::nvidia_gpu::getTensorMemoryScalesBlockRepOrder(
             dotOp, /*isA=*/false, dotOp.getAElemType(), dotOp.getBElemType(),
             oldScaleAType.getElementType(), oldScaleBType.getElementType());
+    // The scales of A follow the result's rows and the scales of B its
+    // columns: B scales are [N, K / vec].
     Attribute scaleAEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
-            context, cgaLayout, aScaleBlockRepOrder);
+            context, getScaleCGALayout(cgaLayout, /*dim=*/0),
+            aScaleBlockRepOrder);
     Attribute scaleBEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
-            context, cgaLayout, bScaleBlockRepOrder);
+            context, getScaleCGALayout(cgaLayout, /*dim=*/1),
+            bScaleBlockRepOrder);
     Value scaleA =
         tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
     if (!scaleA) {

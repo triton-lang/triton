@@ -1556,3 +1556,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %d : tensor<128x256xf32, #blocked>
   }
 }
+
+// -----
+
+// CHECK-DAG: #[[$SCALE_A:.+]] = #ttng.tensor_memory_scales_encoding<CGALayout = {{\[\[1, 0\]\]}}>
+// CHECK-DAG: #[[$SCALE_B:.+]] = #ttng.tensor_memory_scales_encoding<CGALayout = {{\[\[0, 0\]\]}}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#whole = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#scale_whole = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Two CTAs split the rows of a one-CTA scaled MMA: the A scales follow the
+  // rows, while each CTA reads the whole N tile and so all the B scales.
+  // CHECK-LABEL: @mmav5_scaled_multi_cta_scales
+  // CHECK-DAG: ttng.tmem_alloc %{{.+}} : (tensor<256x4xi8, #{{.+}}>) -> !ttg.memdesc<256x4xi8, #[[$SCALE_A]], #ttng.tensor_memory>
+  // CHECK-DAG: ttng.tmem_alloc %{{.+}} : (tensor<128x4xi8, #{{.+}}>) -> !ttg.memdesc<128x4xi8, #[[$SCALE_B]], #ttng.tensor_memory>
+  // CHECK: ttng.tc_gen5_mma_scaled
+  tt.func public @mmav5_scaled_multi_cta_scales(%a: tensor<256x128xf8E5M2, #blocked>, %sa: tensor<256x4xi8, #scale>, %b: tensor<128x128xf8E5M2, #whole>, %sb: tensor<128x4xi8, #scale_whole>, %c: tensor<256x128xf32, #blocked>) -> tensor<256x128xf32, #blocked> {
+    %d = tt.dot_scaled %a scale %sa, %b scale %sb, %c lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<256x128xf8E5M2, #blocked>, tensor<256x4xi8, #scale> * tensor<128x128xf8E5M2, #whole>, tensor<128x4xi8, #scale_whole> -> tensor<256x128xf32, #blocked>
+    tt.return %d : tensor<256x128xf32, #blocked>
+  }
+}
