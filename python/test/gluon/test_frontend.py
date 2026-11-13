@@ -2,6 +2,7 @@ import expecttest
 import math
 import pytest
 import re
+import triton
 from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
@@ -6087,7 +6088,7 @@ def _bulk_codegen_kernel(src, out, pred):
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, 10240, pred=pred)
-    hopper.bulk.async_load(smem, src, 10240, bar, pred=pred)
+    hopper.bulk.async_load(smem, src, 2560, bar, pred=pred)
     hopper.mbarrier.wait(bar, phase=0, pred=pred)
     offsets = ttgl.arange(0, 4096, layout)
     ttgl.store(out + offsets, smem.load(layout), (offsets < 2560) & pred)
@@ -6118,11 +6119,11 @@ def test_bulk_async_load_unsupported_target(capability, ptx_version, message, ca
 def test_bulk_async_load_requires_compile_time_count():
 
     @gluon.jit
-    def kernel(src, num_bytes):
+    def kernel(src, num_elements):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
         bar = hopper.mbarrier.allocate_mbarrier()
-        hopper.bulk.async_load(smem, src, num_bytes, bar)
+        hopper.bulk.async_load(smem, src, num_elements, bar)
 
-    source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_bytes": "i32"}, {})
-    with pytest.raises(CompilationError, match="num_bytes must be a compile-time integer"):
+    source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_elements": "i32"}, {})
+    with pytest.raises(CompilationError, match="num_elements must be a compile-time integer"):
         triton.compile(source, target=GPUTarget("cuda", 90, 32))

@@ -921,73 +921,76 @@ static LogicalResult verifyTMACachePolicy(Operation *op, Attribute attr) {
 }
 
 // -- AsyncBulkCopyGlobalToLocalOp --
-FailureOr<BulkCopyLayout> getBulkCopyLayout(gpu::MemDescType type) {
-  if (!isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
-    return failure();
-  if (cast<SharedEncodingTrait>(type.getEncoding()).getAlignment() < 16)
-    return failure();
-  auto layout = toLinearLayoutIgnoringPadding(type);
-  auto offset = StringAttr::get(type.getContext(), "offset");
+BulkCopyLayout getBulkCopyLayout(gpu::MemDescType type) {
+  auto layout = toLinearLayout(type);
   auto block = StringAttr::get(type.getContext(), "block");
-  // A single linear instruction cannot span separately allocated buffers.
-  if (layout.hasInDim(StringAttr::get(type.getContext(), "partition")))
-    return failure();
-  auto inverse = layout.pseudoinvert();
-  auto dims = llvm::to_vector(inverse.getInDimNames());
-  if (dims.size() != type.getRank())
-    return failure();
-  uint32_t affineOffsetMask = 0;
-  uint32_t affineBlockMask = 0;
-  for (auto [dim, size] : llvm::zip_equal(dims, type.getShape())) {
-    for (unsigned bit = llvm::Log2_64(size);
-         bit < inverse.getInDimSizeLog2(dim); ++bit) {
-      affineOffsetMask |= inverse.getBasis(dim, bit, offset);
-      affineBlockMask |= inverse.getBasis(dim, bit, block);
-    }
-    inverse = inverse.resizeInDim(dim, size);
-  }
-  unsigned offsetMask = getOutputBasisMask(inverse, dims, offset);
-  unsigned splitMask = getOutputBasisMask(inverse, dims, block);
-  unsigned elements = offsetMask + 1;
-  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(type.getElementType()) / 8;
-  if (!elementBytes || !llvm::isPowerOf2_32(elements) ||
-      uint64_t(elements) * (1u << llvm::popcount(splitMask)) !=
-          type.getNumElements())
-    return failure();
-  // The image must fill the Cartesian product of the local range and CTA
-  // coordinates. This rules out holes, including swizzled partial views.
-  if (elements * elementBytes < 16 ||
-      (affineOffsetMask * elementBytes) % 16 != 0 || affineBlockMask)
-    return failure();
-  // Padding is not linear. A view fits a single interval only when it neither
-  // crosses a padding boundary nor has an origin with unaligned padding.
-  if (isPaddedEncoding(type.getEncoding())) {
-    if (elements > getMinInterval(type.getEncoding()) || affineOffsetMask)
-      return failure();
-  }
   unsigned broadcastMask = layout.getFreeVariableMasks().lookup(block);
-  return BulkCopyLayout{elements * elementBytes, splitMask, broadcastMask};
+  unsigned splitMask = (layout.getInDimSize(block) - 1) & ~broadcastMask;
+  unsigned numTiles = 1u << llvm::popcount(splitMask);
+  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(type.getElementType()) / 8;
+  return {unsigned(type.getNumElements() / numTiles) * elementBytes, splitMask,
+          broadcastMask};
+}
+
+int64_t AsyncBulkCopyGlobalToLocalOp::getNumBytesPerCTA() {
+  auto layout = getBulkCopyLayout(getDst().getType());
+  return getNumBytes() / (1u << llvm::popcount(layout.splitMask));
 }
 
 LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
   auto dstTy = getDst().getType();
+  if (!isa<SharedMemorySpaceAttr>(dstTy.getMemorySpace()))
+    return emitOpError("destination must be in shared memory");
   if (!dstTy.getMutableMemory())
     return emitOpError("cannot copy into immutable memory");
+  auto encoding = cast<SharedEncodingTrait>(dstTy.getEncoding());
+  if (isa<PartitionedSharedEncodingAttr>(encoding))
+    return emitOpError(
+        "cannot span separately allocated shared-memory partitions");
+  if (isPaddedEncoding(encoding))
+    return emitOpError("does not support padded shared-memory layouts");
+  if (encoding.getAlignment() < 16)
+    return emitOpError("destination layout must guarantee 16-byte alignment");
+  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(dstTy.getElementType()) / 8;
+  if (!elementBytes)
+    return emitOpError("destination elements must occupy at least one byte");
+
+  auto linear = toLinearLayout(dstTy);
+  if (linear.getNumOutDims() != dstTy.getRank())
+    return emitOpError("destination must select a single shared-memory buffer");
+  auto withinView = [&](ArrayRef<int32_t> basis) {
+    return llvm::all_of(llvm::zip_equal(basis, dstTy.getShape()), [](auto pair) {
+      return std::get<0>(pair) < std::get<1>(pair);
+    });
+  };
+  auto block = StringAttr::get(getContext(), "block");
+  if (!llvm::all_of(linear.getBases().lookup(block), withinView))
+    return emitOpError("destination view must not slice across CTAs");
   auto layout = getBulkCopyLayout(dstTy);
-  if (failed(layout))
-    return emitOpError("requires a contiguous, 16-byte-aligned physical range "
-                       "per CTA without padding or cross-CTA slicing");
+  unsigned elements = layout.bytesPerCTA / elementBytes;
+  auto offset = StringAttr::get(getContext(), "offset");
+  // The low offset bits must cover exactly the view; higher bits select its
+  // origin. This admits dense swizzled tiles (copied in physical byte order),
+  // but rejects strided or swizzled subviews with holes. No inverse is needed.
+  for (auto [bit, basis] : llvm::enumerate(linear.getBases().lookup(offset))) {
+    if (withinView(basis) != ((uint64_t{1} << bit) < elements))
+      return emitOpError(
+          "destination view must be contiguous in physical shared memory");
+  }
+  if (layout.bytesPerCTA < 16)
+    return emitOpError("destination view must contain at least 16 bytes per CTA");
   if (getSrc().getType().getAddressSpace() != PtrAddrSpace::Global)
     return emitOpError("requires a global-memory source pointer");
-  auto block = StringAttr::get(getContext(), "block");
   if (toLinearLayout(getBarrier().getType())
           .getFreeVariableMasks()
           .lookup(block))
     return emitOpError("requires a separate completion barrier in each CTA");
-  if (getNumBytes() <= 0 || getNumBytes() % 16 ||
-      getNumBytes() > layout->bytesPerCTA)
-    return emitOpError("byte count must be a positive multiple of 16 within "
-                       "the destination view");
+  unsigned numTiles = 1u << llvm::popcount(layout.splitMask);
+  if (getNumBytes() <= 0 || getNumBytes() % (16 * numTiles))
+    return emitOpError("total byte count must be a positive multiple of 16 times "
+                       "the number of distinct CTA tiles");
+  if (getNumBytesPerCTA() > layout.bytesPerCTA)
+    return emitOpError("total byte count exceeds the destination view capacity");
   return success();
 }
 

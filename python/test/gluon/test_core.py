@@ -8423,7 +8423,7 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
 
 
 @gluon.jit
-def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
+def _bulk_copy_kernel(src, out, take_copy, NUM_ELEMENTS: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
                       DST_OFFSET: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
     shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
@@ -8432,8 +8432,8 @@ def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttg
     dst = allocation.slice(DST_OFFSET, BLOCK)
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
-    hopper.mbarrier.expect(bar, NUM_BYTES, pred=take_copy)
-    hopper.bulk.async_load(dst, src + SRC_OFFSET, NUM_BYTES, bar, pred=take_copy)
+    hopper.mbarrier.expect(bar, NUM_ELEMENTS * src.dtype.element_ty.primitive_bitwidth // 8, pred=take_copy)
+    hopper.bulk.async_load(dst, src + SRC_OFFSET, NUM_ELEMENTS, bar, pred=take_copy)
     hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
     hopper.mbarrier.invalidate(bar)
     values = allocation.load(layout)
@@ -8453,7 +8453,7 @@ def test_bulk_async_load_copy(num_bytes, dtype, offset, take_copy, device):
     dst_offset = block if offset else 0
     src = (torch.arange(count + src_offset, device=device) % 113).to(dtype)
     out = torch.empty(2 * block, device=device, dtype=dtype)
-    compiled = _bulk_copy_kernel[(1, )](src, out, take_copy, num_bytes, block, src_offset, dst_offset)
+    compiled = _bulk_copy_kernel[(1, )](src, out, take_copy, count, block, src_offset, dst_offset)
     expected = torch.full_like(out, -7)
     if take_copy:
         expected[dst_offset:dst_offset + count] = src[src_offset:]
@@ -8470,7 +8470,7 @@ def _bulk_rms_kernel(x, gains, out, N: ttgl.constexpr, BLOCK: ttgl.constexpr):
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, N * 4)
-    hopper.bulk.async_load(smem, gains, N * 4, bar)
+    hopper.bulk.async_load(smem, gains, N, bar)
     offsets = ttgl.arange(0, BLOCK, layout)
     values = ttgl.load(x + ttgl.program_id(0) * N + offsets, offsets < N, other=0)
     inv_rms = ttgl.rsqrt(ttgl.sum(values * values, 0) / N + 1.e-6)
@@ -8509,7 +8509,7 @@ def test_bulk_async_load_buffer_reuse(device, instrumentation, fresh_knobs):
         for iteration in range(iterations):
             dst = buffers.index(iteration % 2)
             hopper.mbarrier.expect(bar, 512)
-            hopper.bulk.async_load(dst, src + iteration * 128, 512, bar)
+            hopper.bulk.async_load(dst, src + iteration * 128, 128, bar)
             hopper.mbarrier.wait(bar, phase=iteration % 2)
             ttgl.store(out + iteration * 128 + offsets, dst.load(layout))
         hopper.mbarrier.invalidate(bar)
@@ -8529,8 +8529,8 @@ def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
     def kernel(src, out):
         # The worker partition must issue with its own thread zero.
         ttgl.warp_specialize([
-            (_bulk_copy_kernel, (src, out, True, 512, 128, 0, 0)),
-            (_bulk_copy_kernel, (src + 128, out + 256, True, 512, 128, 0, 0)),
+            (_bulk_copy_kernel, (src, out, True, 128, 128, 0, 0)),
+            (_bulk_copy_kernel, (src + 128, out + 256, True, 128, 128, 0, 0)),
         ], [4])
 
     src = torch.arange(256, device=device, dtype=torch.int32)
@@ -8542,7 +8542,7 @@ def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
 
 
 @gluon.jit
-def _bulk_cluster_kernel(src, out, nbytes: ttgl.constexpr, take_copy, CGA: ttgl.constexpr, BLOCK: ttgl.constexpr,
+def _bulk_cluster_kernel(src, out, num_elements: ttgl.constexpr, take_copy, CGA: ttgl.constexpr, BLOCK: ttgl.constexpr,
                          MULTICAST: ttgl.constexpr, FROM_CTA: ttgl.constexpr, REPLICAS: ttgl.constexpr,
                          OUT_LAYOUT: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
@@ -8554,10 +8554,10 @@ def _bulk_cluster_kernel(src, out, nbytes: ttgl.constexpr, take_copy, CGA: ttgl.
     cols = ttgl.arange(0, BLOCK, ttgl.SliceLayout(0, OUT_LAYOUT))
     offsets = rows[:, None] * BLOCK + cols[None, :]
     for i in range(3):
-        hopper.mbarrier.expect(bar, nbytes, pred=take_copy, from_cta=FROM_CTA)
+        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
         if MULTICAST:
             ttgl.barrier(cluster=True)
-        hopper.bulk.async_load(smem, src + i * BLOCK, nbytes, bar, pred=take_copy, multicast=MULTICAST)
+        hopper.bulk.async_load(smem, src + i * num_elements, num_elements, bar, pred=take_copy, multicast=MULTICAST)
         hopper.mbarrier.wait(bar, phase=i % 2, pred=take_copy)
         values = smem.load(ttgl.SliceLayout(0, OUT_LAYOUT))
         ttgl.store(out + i * REPLICAS * BLOCK + offsets, values[None, :])
@@ -8576,13 +8576,15 @@ def _bulk_cluster_kernel(src, out, nbytes: ttgl.constexpr, take_copy, CGA: ttgl.
     ([[0], [0]], True, 0),
 ])
 @pytest.mark.parametrize("take_copy", [False, True])
+@pytest.mark.parametrize("elements_per_cta", [12, 128])
 @pytest.mark.parametrize("mode", ["", "consan"])
-def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, mode, device, fresh_knobs):
+def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, elements_per_cta, mode, device, fresh_knobs):
     triton.knobs.compilation.instrumentation_mode = mode
     cga = tuple(map(tuple, cga))
     tiles = 2**sum(any(basis) for basis in cga)
     block = 128 * tiles
-    src = torch.arange(3 * block, dtype=torch.int32, device=device)
+    num_elements = elements_per_cta * tiles
+    src = torch.arange(3 * num_elements, dtype=torch.int32, device=device)
     replicas = 1
     out_cga = []
     for basis in cga:
@@ -8593,11 +8595,11 @@ def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, mode, devi
             replicas *= 2
     out_layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=out_cga)
     out = torch.empty(3 * replicas * block, dtype=src.dtype, device=device)
-    _bulk_cluster_kernel[(1, )](src, out, 48, take_copy, cga, block, multicast, from_cta, replicas, out_layout,
+    _bulk_cluster_kernel[(1, )](src, out, num_elements, take_copy, cga, block, multicast, from_cta, replicas, out_layout,
                                 num_ctas=2**len(cga))
     expected = torch.full((3, replicas, tiles, 128), -7, dtype=src.dtype, device=device)
     if take_copy:
-        expected[:, :, :, :12] = src.view(3, 1, tiles, 128)[:, :, :, :12]
+        expected[:, :, :, :elements_per_cta] = src.view(3, 1, tiles, elements_per_cta)
     torch.testing.assert_close(out, expected.flatten(), atol=0, rtol=0)
 
 
@@ -8618,7 +8620,7 @@ def _bulk_layout_kernel(src, out, SHARED: ttgl.constexpr, ENCODE: ttgl.constexpr
         bar = hopper.mbarrier.allocate_mbarrier()
         hopper.mbarrier.init(bar, count=1)
         hopper.mbarrier.expect(bar, 2048)
-        hopper.bulk.async_load(smem, src, 2048, bar)
+        hopper.bulk.async_load(smem, src, 512, bar)
         hopper.mbarrier.wait(bar, phase=0)
         ttgl.store(out + indices, smem.load(layout))
         hopper.mbarrier.invalidate(bar)
@@ -8630,7 +8632,6 @@ def _bulk_layout_kernel(src, out, SHARED: ttgl.constexpr, ENCODE: ttgl.constexpr
     ttgl.SwizzledSharedLayout(4, 1, 8, [1, 0]),
     ttgl.NVMMASharedLayout(128, 32),
     ttgl.SharedLinearLayout([[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]]),
-    ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [16, 32], [1, 0]),
 ])
 @pytest.mark.parametrize("mode", ["", "consan"])
 def test_bulk_async_load_layout(shared, mode, device, fresh_knobs):
@@ -8638,11 +8639,7 @@ def test_bulk_async_load_layout(shared, mode, device, fresh_knobs):
     src = torch.arange(512, device=device, dtype=torch.int32)
     packed = torch.empty_like(src)
     out = torch.empty_like(src)
-    if isinstance(shared, ttgl.PaddedSharedLayout):
-        # This identity view ends at its first padding boundary.
-        packed = src
-    else:
-        _bulk_layout_kernel[(1, )](src, packed, shared, True)
+    _bulk_layout_kernel[(1, )](src, packed, shared, True)
     _bulk_layout_kernel[(1, )](packed, out, shared, False)
     torch.testing.assert_close(out, src, atol=0, rtol=0)
 
@@ -8652,7 +8649,7 @@ def _run_bulk_iisan_case(offset, take_copy, device):
     out = torch.empty(64, device=device, dtype=torch.int32)
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "iisan"
-        _bulk_copy_kernel[(1, )](src, out, take_copy, 48, 32, offset, 0)
+        _bulk_copy_kernel[(1, )](src, out, take_copy, 12, 32, offset, 0)
         torch.cuda.synchronize()
 
 
@@ -8678,7 +8675,7 @@ def test_bulk_async_load_iisan(offset, take_copy, error, device):
 @gluon.jit
 def _bulk_producer(src, smem, bar):
     hopper.mbarrier.expect(bar, 48)
-    hopper.bulk.async_load(smem, src, 48, bar)
+    hopper.bulk.async_load(smem, src, 12, bar)
 
 
 @gluon.jit

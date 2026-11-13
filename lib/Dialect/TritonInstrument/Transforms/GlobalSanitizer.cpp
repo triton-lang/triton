@@ -4,8 +4,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "triton/Analysis/Alias.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -59,8 +59,8 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
   // source words across the CTA. Keep the mask: a non-power-of-two copy must
   // neither inspect nor record reads beyond its actual source range.
   ImplicitLocOpBuilder b(op.getLoc(), op);
-  auto copyLayout = *ttng::getBulkCopyLayout(op.getDst().getType());
-  int words = op.getNumBytes() / 4;
+  auto copyLayout = ttng::getBulkCopyLayout(op.getDst().getType());
+  int words = op.getNumBytesPerCTA() / 4;
   int numCTAs = ttg::lookupNumCTAs(op);
   int extent = llvm::PowerOf2Ceil(words);
   auto layout = ttg::BlockedEncodingAttr::get(
@@ -76,7 +76,7 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
   offsets = arith::AndIOp::create(b, offsets, localMask);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value sourceOffset = arith::ConstantIntOp::create(b, 0, 32);
-  unsigned stride = copyLayout.bytesPerCTA / 4;
+  unsigned stride = words;
   for (unsigned bit = 1; bit <= copyLayout.splitMask; bit <<= 1) {
     if (!(copyLayout.splitMask & bit))
       continue;

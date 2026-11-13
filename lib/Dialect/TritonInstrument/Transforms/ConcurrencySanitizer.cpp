@@ -760,7 +760,8 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   }
   if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
     if (bulk.getMulticast())
-      return getMulticastRecipientCTAs(b, bulk.getResult());
+      return getRecipientCTAsForBroadcastMasks(
+          b, {getBlockBroadcastMask(bulk.getResult())});
     return currentCTAMask(b);
   }
   if (isa<ttng::CLCTryCancelOp>(op))

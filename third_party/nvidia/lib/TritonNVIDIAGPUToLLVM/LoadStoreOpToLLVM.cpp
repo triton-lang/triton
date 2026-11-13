@@ -1283,14 +1283,13 @@ struct AsyncBulkCopyGlobalToLocalOpConversion
         getTypeConverter()->convertType(
             op.getBarrier().getType().getElementType()),
         rewriter);
-    // Use the same partition-relative issuer as barrier_expect so the
-    // transaction count update and copy need no intervening CTA barrier.
+    // Issue once per warp-specialized partition, matching barrier_expect.
     Value issuer = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     Value pred = b.and_(adaptor.getPred(), issuer);
-    auto layout = *ttng::getBulkCopyLayout(op.getDst().getType());
+    auto layout = ttng::getBulkCopyLayout(op.getDst().getType());
     Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
     Value sourceOffset = b.i32_val(0);
-    unsigned tileBytes = layout.bytesPerCTA;
+    unsigned tileBytes = op.getNumBytesPerCTA();
     for (unsigned bit = 1; bit <= layout.splitMask; bit <<= 1) {
       if (!(layout.splitMask & bit))
         continue;
@@ -1316,7 +1315,7 @@ struct AsyncBulkCopyGlobalToLocalOpConversion
     SmallVector<PTXBuilder::Operand *> args = {
         ptx.newAddrOperand(
             dst.getShmemAffineBase(loc, rewriter, op.getDst().getType()), "r"),
-        ptx.newAddrOperand(src, "l"), ptx.newConstantOperand(op.getNumBytes()),
+        ptx.newAddrOperand(src, "l"), ptx.newConstantOperand(op.getNumBytesPerCTA()),
         ptx.newAddrOperand(barrierPtr, "r")};
     if (op.getMulticast())
       args.push_back(

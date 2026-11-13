@@ -1191,7 +1191,7 @@ def _bulk_load(src, out):
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, 48)
-    hopper.bulk.async_load(smem, src, 48, bar)
+    hopper.bulk.async_load(smem, src, 12, bar)
     hopper.mbarrier.wait(bar, phase=0)
     offsets = gl.arange(0, 16, layout)
     gl.store(out + offsets, smem.load(layout), offsets < 12)

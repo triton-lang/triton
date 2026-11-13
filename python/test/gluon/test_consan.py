@@ -4965,11 +4965,11 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
         bar = hopper.mbarrier.allocate_mbarrier()
         hopper.mbarrier.init(bar, count=1)
         hopper.mbarrier.expect(bar, 16 if FAILURE == "bytes" else 512)
-        hopper.bulk.async_load(smem, src, 512, bar)
+        hopper.bulk.async_load(smem, src, 128, bar)
         if FAILURE == "write":
             smem.store(ttgl.full((128, ), 0, ttgl.int32, layout))
         elif FAILURE == "copy":
-            hopper.bulk.async_load(smem, src, 512, bar)
+            hopper.bulk.async_load(smem, src, 128, bar)
         elif FAILURE == "invalidate":
             hopper.mbarrier.invalidate(bar)
         if FAILURE != "read":
@@ -5007,7 +5007,7 @@ def test_bulk_async_load_multicast_reuse_race(device, run_wrapper, monkeypatch):
         values = ttgl.full((128, ), 0, ttgl.int32, layout)
         for phase in range(2):
             hopper.mbarrier.expect(bar, 512)
-            hopper.bulk.async_load(smem, src, 512, bar, multicast=True)
+            hopper.bulk.async_load(smem, src, 128, bar, multicast=True)
             hopper.mbarrier.wait(bar, phase)
             values += smem.load(layout)
             # Deliberately omit the cluster join before the next multicast.
