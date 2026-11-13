@@ -96,7 +96,7 @@ private:
   bool requiresThreadSync(const BlockInfo &pending,
                           const BlockInfo &effects) override {
     // Pending accesses require a rendezvous before publication.
-    return effects.threadDemands.hasDemand &&
+    return effects.threadDemands.kind != ThreadDemandKind::None &&
            (!pending.syncReadSlices.empty() ||
             !pending.syncWriteSlices.empty());
   }
@@ -143,7 +143,7 @@ private:
       slices[slice].insert(op);
     }
     if (model.boundary == Boundary::Publication)
-      effects.threadDemands.hasDemand = true;
+      effects.threadDemands.kind = ThreadDemandKind::GlobalReadsOnly;
     bool hasScratch = allocation.getBufferId(op) != Allocation::InvalidBufferId;
     if (getLocalBarrierStages(op, hasScratch).hasBarrier()) {
       assert(effects.syncReadSlices.empty() &&
