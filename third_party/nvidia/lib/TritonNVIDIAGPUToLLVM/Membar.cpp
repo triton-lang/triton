@@ -6,7 +6,8 @@
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Membar/Pass.h"
+#include "triton/Analysis/Membar/TmemModel.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -50,8 +51,12 @@ struct TritonNvidiaGPUMembar
     }
     ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
 
-    ModuleMembarAnalysis membarPass(allocation, NVIDIA::canSkipBarSync);
-    membarPass.runAnalysis<MembarAnalysis>(*regions);
+    auto mode = membar::usesTensorMemory(mod)
+                    ? membar::PlacementMode::SharedAndTensorMemory
+                    : membar::PlacementMode::Shared;
+    if (failed(membar::placeBarriers(allocation, *regions,
+                                     NVIDIA::canSkipBarSync, mode)))
+      signalPassFailure();
   }
 };
 
@@ -85,8 +90,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             const AllocationSlice &afterSlice) {
   // Init and inval execute synchronously on the same lane within a region.
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after) &&
-      before->getParentRegion() == after->getParentRegion())
+      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after))
     return true;
 
   auto completesTransactions = [](Operation *op) {

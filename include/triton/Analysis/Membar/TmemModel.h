@@ -1,9 +1,8 @@
 #ifndef TRITON_ANALYSIS_MEMBAR_TMEMMODEL_H
 #define TRITON_ANALYSIS_MEMBAR_TMEMMODEL_H
 
-#include "triton/Analysis/Membar/SmemModel.h"
+#include "triton/Analysis/BufferRegion.h"
 #include <memory>
-#include <optional>
 
 namespace mlir {
 class ModuleOp;
@@ -11,51 +10,13 @@ class ModuleOp;
 
 namespace mlir::triton::membar {
 
+struct OpModel;
+
 struct TMemAccess {
   const BufferRegionFootprint *footprint;
   bool isWrite;
-};
 
-enum class Action { WaitLoad, WaitStore, RegionBarrier, WarpBarrier };
-
-constexpr unsigned bit(Action action) { return 1u << unsigned(action); }
-enum class Need {
-  WaitLoad = unsigned(Action::WaitLoad),
-  WaitStore = unsigned(Action::WaitStore),
-  RegionOrder = unsigned(Action::RegionBarrier),
-  WarpOrder = unsigned(Action::WarpBarrier),
-  WarpConvergence
-};
-
-constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
-constexpr unsigned warpBarrier =
-    bit(Need::WarpOrder) | bit(Need::WarpConvergence);
-constexpr unsigned fullBarrier = bit(Need::RegionOrder) | warpBarrier;
-
-constexpr unsigned coverage(Action action) {
-  if (action == Action::RegionBarrier)
-    return fullBarrier;
-  if (action == Action::WarpBarrier)
-    return warpBarrier;
-  return bit(action) | bit(Need::WarpConvergence);
-}
-
-enum class Boundary {
-  None,
-  WaitAll,     // Complete issued TMEM accesses.
-  Publication, // Order peer-visible TMEM effects.
-};
-
-// Observe the input before the operation and start new producers at its output.
-// A scratch rendezvous lies between those two sets of effects.
-struct OpModel {
-  unsigned fixedBefore = 0, fixedInside = 0, fixedAfter = 0;
-  BlockInfo sharedIn, sharedOut;
-  SmallVector<TMemAccess, 1> tmemAccesses;
-  // Native transfers need a completion wait; descriptor asm needs region order.
-  std::optional<Need> tmemProducerNeed;
-  Boundary boundary = Boundary::None;
-  bool needsWarp = false;
+  bool operator==(const TMemAccess &) const = default;
 };
 
 bool usesTensorMemory(ModuleOp module);
@@ -63,16 +24,19 @@ bool usesTensorMemory(ModuleOp module);
 // These target rules describe TMEM instruction effects and word ownership.
 class TMemModel {
 public:
-  explicit TMemModel(BufferRegionAnalysis &regions);
+  TMemModel(ModuleOp module, BufferRegionAnalysis &regions);
   ~TMemModel();
   void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses);
+  // Transfers in one placement graph execute in the same warp role.
   bool isSameWarp(Operation *lhs, Operation *rhs);
 
 private:
   struct Info;
   const Info *getInfo(Operation *op);
+  bool isPrivate(const BufferRegionFootprint *footprint, Region *issuer) const;
 
   BufferRegionAnalysis &regions;
+  SmallVector<std::pair<const BufferRegionFootprint *, Region *>> allocations;
   DenseMap<Operation *, std::unique_ptr<Info>> info;
 };
 
