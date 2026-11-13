@@ -2,9 +2,10 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import ctypes
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from types import ModuleType
 import os
 import sys
@@ -190,12 +191,53 @@ def _strip_dag_section(text: str) -> str:
     return body[:-len("---")] if body.endswith("---") else body
 
 
+class MIRScheduler(ABC):
+    """Reorders MIR in place of LLVM's machine scheduler.
+
+    Name a subclass in TRITON_MIR_SCHEDULER as MODULE:CLASS to have it called
+    once per kernel, between MIR generation and code generation. LLVM's machine
+    scheduler is disabled when one is installed, so the returned order is final.
+    """
+
+    @abstractmethod
+    def schedule(self, mir: str, dag: str, dump_file_id: str) -> str:
+        """Return rescheduled MIR.
+
+        `mir` and `dag` are the two halves of what TRITON_DUMP_MIR writes, and
+        `dump_file_id` is the name it files them under, so a schedule database
+        can be keyed the same way.
+
+        Legality is the scheduler's responsibility: the result goes straight to
+        the code generator, unchecked, exactly as TRITON_SWAP_MIR's does.
+        """
+
+    def cache_key(self) -> str:
+        """Return a key covering whatever determines this scheduler's output.
+
+        Scheduling runs inside a pipeline stage, and stages are skipped on a
+        cache hit, so a schedule that changes without moving this key yields a
+        stale binary. The default covers the class's identity only; override it
+        to hash what the schedule is derived from, such as a schedule database.
+        """
+        return f"{type(self).__module__}:{type(self).__qualname__}"
+
+
+@functools.lru_cache
+def _mir_scheduler(scheduler_cls):
+    """One instance per class, so cache_key() and schedule() see the same state."""
+    return scheduler_cls()
+
+
 def translate_to_mir(src: str, triple: str, processor: str, features: str, flags: list[str], enable_fp_fusion: bool,
-                     dump_file_id: str, dump_dir: str, disabled_passes: str, dump_ir: bool) -> str:
-    """Dump the pre-machine-scheduler MIR and its scheduling DAG.
+                     dump_file_id: str, dump_dir: Optional[str], disabled_passes: str,
+                     dump_ir: bool) -> tuple[str, str]:
+    """Produce the pre-machine-scheduler MIR and its scheduling DAG.
 
     Runs on the AMD code generator's LLVM, the same one that produces the
-    shipped AMDGCN, so the dumped MIR describes what actually gets compiled.
+    shipped AMDGCN, so the MIR describes what actually gets compiled.
+
+    Writes the dump file only when dump_dir is set; TRITON_MIR_SCHEDULER needs
+    the same two buffers without touching the filesystem.
     """
     library = _load_amd_codegen(get_amd_codegen_path())
     llvm_ir = _serialize_for_amd_codegen(src, enable_fp_fusion)
@@ -218,22 +260,30 @@ def translate_to_mir(src: str, triple: str, processor: str, features: str, flags
         library.triton_amdgpu_free(mir)
         library.triton_amdgpu_free(dag)
 
-    dump_filename = os.path.join(dump_dir, dump_file_id + ".txt")
-    with open(dump_filename, "w") as dump_file:
-        dump_file.write(mir_text)
-        dump_file.write("---")
-        dump_file.write(MIR_DAG_MARKER)
-        dump_file.write(dag_text)
-    print(f"MIR dumped to: {dump_filename}", file=sys.stderr)
-    return mir_text
+    if dump_dir is not None:
+        dump_filename = os.path.join(dump_dir, dump_file_id + ".txt")
+        with open(dump_filename, "w") as dump_file:
+            dump_file.write(mir_text)
+            dump_file.write("---")
+            dump_file.write(MIR_DAG_MARKER)
+            dump_file.write(dag_text)
+        print(f"MIR dumped to: {dump_filename}", file=sys.stderr)
+    return mir_text, dag_text
 
 
 def translate_mir_to_asm(mir_path: str, triple: str, processor: str, features: str, flags: list[str],
                          enable_fp_fusion: bool, is_object: bool, enable_misched: bool, dump_ir: bool) -> str:
     """Resume code generation from a dumped (and possibly rescheduled) MIR file."""
-    library = _load_amd_codegen(get_amd_codegen_path())
     with open(mir_path, "r") as mir_file:
         mir_text = mir_file.read()
+    return translate_mir_text_to_asm(mir_text, triple, processor, features, flags, enable_fp_fusion, is_object,
+                                     enable_misched, dump_ir)
+
+
+def translate_mir_text_to_asm(mir_text: str, triple: str, processor: str, features: str, flags: list[str],
+                              enable_fp_fusion: bool, is_object: bool, enable_misched: bool, dump_ir: bool) -> str:
+    """Resume code generation from in-memory MIR."""
+    library = _load_amd_codegen(get_amd_codegen_path())
     # Drop the scheduling DAG section translate_to_mir appended; it is our own
     # annotation, not MIR.
     source = _strip_dag_section(mir_text).encode("utf-8")
@@ -893,15 +943,24 @@ class HIPBackend(BaseBackend):
                 disabled_passes = requested_passes
         dump_llvm_ir = knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False)
 
-        if knobs.amd.dump_mir:
-            # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
+        scheduler_cls = knobs.amd.mir_scheduler
+        if scheduler_cls is not None and knobs.amd.swap_mir:
+            raise ValueError("TRITON_MIR_SCHEDULER and TRITON_SWAP_MIR are two sources for the same MIR; "
+                             "set only one")
+        if knobs.amd.dump_mir or scheduler_cls is not None:
+            # translate_to_mir produces both the pre-machine-scheduler MIR and, built
             # from that same MachineFunction, the scheduling DAG (a (bb, position)
             # edge list appended after the SCHEDULING DAG marker).
-            _ = translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
-                                 dump_file_id, knobs.amd.dump_mir, disabled_passes, dump_llvm_ir)
+            mir_text, dag_text = translate_to_mir(src, target_triple, options.arch, features, flags,
+                                                  options.enable_fp_fusion, dump_file_id, knobs.amd.dump_mir,
+                                                  disabled_passes, dump_llvm_ir)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
-        if knobs.amd.swap_mir:
+        if scheduler_cls is not None:
+            scheduled = _mir_scheduler(scheduler_cls).schedule(mir_text, dag_text, dump_file_id)
+            amdgcn = translate_mir_text_to_asm(scheduled, target_triple, options.arch, features, flags,
+                                               options.enable_fp_fusion, False, False, dump_llvm_ir)
+        elif knobs.amd.swap_mir:
             amdgcn = translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'), target_triple,
                                           options.arch, features, flags, options.enable_fp_fusion, False,
                                           knobs.amd.swap_mir_enable_misched, dump_llvm_ir)
@@ -954,4 +1013,9 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return f'{self.target}-{get_amd_codegen_revision()}'
+        key = f'{self.target}-{get_amd_codegen_revision()}'
+        # make_amdgcn reschedules inside a pipeline stage, which a cache hit skips.
+        scheduler_cls = knobs.amd.mir_scheduler
+        if scheduler_cls is not None:
+            key += f'-{_mir_scheduler(scheduler_cls).cache_key()}'
+        return key

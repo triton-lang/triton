@@ -415,7 +415,7 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
     # One call, not two: translate_to_mir dumps the MIR and, from that same
     # MachineFunction, the scheduling DAG appended after the marker. The knob
     # gates that single call.
-    monkeypatch.setattr(compiler, "translate_to_mir", lambda *args: events.append("mir"))
+    monkeypatch.setattr(compiler, "translate_to_mir", lambda *args: (events.append("mir"), ("", ""))[1])
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -474,6 +474,23 @@ def test_mir_swap_knobs_invalidate_cache_key(monkeypatch):
     # Compared the way get_cache_key() consumes them.
     keys = {str(sorted(env.items())) for env in (unswapped, swapped_a, swapped_b, misched)}
     assert len(keys) == 4
+
+
+def test_mir_scheduler_knob_invalidates_cache_key(monkeypatch):
+    from triton._C.libtriton import get_cache_invalidating_env_vars
+
+    monkeypatch.delenv("TRITON_MIR_SCHEDULER", raising=False)
+    unset = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_MIR_SCHEDULER", "mod:SchedA")
+    scheduler_a = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_MIR_SCHEDULER", "mod:SchedB")
+    scheduler_b = get_cache_invalidating_env_vars()
+
+    # Compared the way get_cache_key() consumes them.
+    keys = {str(sorted(env.items())) for env in (unset, scheduler_a, scheduler_b)}
+    assert len(keys) == 3
 
 
 def _loop_strength_reduction_kernel():
