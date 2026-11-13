@@ -72,6 +72,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // Warps the layout leaves idle get a NULL descriptor (pred = 0). When
 // `barrierPtr` is set they get a NOP instead (tile_dim0 = 0, workgroup mask
 // cleared, pred kept), so every warp sends exactly one barrier arrive.
+// `sharedLayout`: layout of the whole allocation, with one dimension per
+// descriptor dimension. Each warp starts at its tile origin in it; the
+// verifiers require each transfer region to be contiguous before padding.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,

@@ -36,6 +36,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <limits>
+#include <numeric>
 #include <optional>
 
 // clang-format off
@@ -45,7 +46,6 @@
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
@@ -175,6 +175,8 @@ LogicalResult verifyTDMDescriptor(Operation *op,
 
 // Compare logical views, not allocation sizes: a subview cannot use the
 // storage outside its bounds even when the underlying allocation is larger.
+// Loads may fill a smaller contiguous block, checked separately by
+// verifyTDMBlockFitsSharedMemory.
 LogicalResult verifyTDMBuffer(Operation *op, triton::TensorDescType descTy,
                               gpu::MemDescType smemTy,
                               std::optional<int64_t> numRows = std::nullopt) {
@@ -187,7 +189,8 @@ LogicalResult verifyTDMBuffer(Operation *op, triton::TensorDescType descTy,
   if (cast<gpu::LayoutEncodingTrait>(smemTy.getEncoding()).getRank() !=
       smemTy.getRank())
     return op->emitOpError(
-        "TDM buffer must not have an unsliced pipeline dimension");
+        "TDM buffer must not have an unsliced pipeline dimension; "
+        "select an individual pipeline buffer before the transfer");
 
   auto shape = descTy.getShape();
   if (numRows) {
@@ -199,10 +202,14 @@ LogicalResult verifyTDMBuffer(Operation *op, triton::TensorDescType descTy,
           "TDM gather/scatter buffer shape must match the index count "
           "and descriptor column count");
   } else {
-    // Rank reduction may only remove leading unit dimensions.
+    // Rank reduction may only remove leading unit dimensions. Loads check
+    // block bounds and contiguity separately instead of requiring equality.
     while (shape.size() > smemTy.getRank() && shape.front() == 1)
       shape = shape.drop_front();
-    if (shape != smemTy.getShape())
+    bool isLoad =
+        isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp>(op);
+    if (shape.size() != smemTy.getRank() ||
+        (!isLoad && shape != smemTy.getShape()))
       return op->emitOpError("TDM buffer shape must match the descriptor block "
                              "shape, up to leading unit dimensions");
   }
@@ -235,43 +242,71 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
   Attribute allocLayout = smemTy.getEncoding();
 
   bool compatible = descLayout == allocLayout;
-  // Rank-reducing descriptor loads drop leading unit dimensions from the
+  // Rank-reducing descriptor accesses drop leading unit dimensions from the
   // allocation, so the two swizzled encodings have different ranks even though
-  // they describe the same LDS layout. Compare the physical layouts with the
-  // dropped dimensions projected away.
-  int descRank = descTy.getShape().size();
+  // they describe the same LDS layout. Compare their layouts of the block, with
+  // the dropped dimensions removed from the descriptor's. The block may cover
+  // only part of the allocation, which verifyTDMBlockFitsSharedMemory and
+  // verifyTDMSharedMemorySubview check against the allocation's layout.
+  ArrayRef<int64_t> blockShape = descTy.getShape();
+  int descRank = blockShape.size();
   int allocRank = smemTy.getRank();
-  if (descRank > allocRank &&
-      llvm::isa<gpu::SwizzledSharedEncodingAttr>(descLayout) &&
-      llvm::isa<gpu::SwizzledSharedEncodingAttr>(allocLayout)) {
-    auto descLL = gpu::toLinearLayout(descTy.getShape(), descLayout);
-    for (int i = 0; i < descRank - allocRank; ++i)
+  int numDropped = descRank - allocRank;
+  auto allocSwizzled =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(allocLayout);
+  if (numDropped > 0 &&
+      llvm::isa<gpu::SwizzledSharedEncodingAttr>(descLayout) && allocSwizzled &&
+      allocSwizzled.getRank() == smemTy.getRank() &&
+      llvm::all_of(blockShape.take_front(numDropped),
+                   [](int64_t dim) { return dim == 1; })) {
+    LinearLayout descLL = gpu::toLinearLayout(blockShape, descLayout);
+    for (int i = 0; i < numDropped; ++i)
       descLL = triton::removeStandardDim(descLL, 0);
-    compatible = descLL == gpu::toLinearLayout(smemTy);
+    compatible = descLL == gpu::toLinearLayout(
+                               blockShape.drop_front(numDropped), allocLayout);
   }
   // Padded layouts must match in both padding and coordinate mapping, after
-  // projecting away leading unit dimensions checked by verifyTDMBuffer.
+  // projecting away only leading unit dimensions.
   auto descPad = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(descLayout);
   auto allocPad = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(allocLayout);
-  if (!compatible && descPad && allocPad &&
+  if (!compatible && descPad && allocPad && numDropped >= 0 &&
+      llvm::all_of(blockShape.take_front(numDropped),
+                   [](int64_t dim) { return dim == 1; }) &&
       descPad.getIntervals() == allocPad.getIntervals() &&
       descPad.getPaddings() == allocPad.getPaddings()) {
     auto descLL = descPad.getLinearComponent();
-    for (int i = 0; i < descRank - allocRank; ++i)
+    for (int i = 0; i < numDropped; ++i)
       descLL = triton::removeStandardDim(descLL, 0);
     compatible = descLL == allocPad.getLinearComponent();
-    if (!compatible && isa<AsyncTDMGatherOp, AsyncTDMScatterOp>(op)) {
+    if (!compatible &&
+        isa<AsyncTDMGatherOp, AsyncTDMScatterOp, AsyncTDMCopyGlobalToLocalOp,
+            AsyncTDMFusedCopyGlobalToLocalOp, AsyncTDMCopyLocalToGlobalOp>(
+            op)) {
       // Gather/scatter use one buffer row per index, independently of the
-      // descriptor's row count. This is allowed for canonical row-major
-      // mappings with matching columns, padding and CTA distribution.
+      // descriptor's row count. Loads may fill a contiguous prefix of rows;
+      // stores may read full-row subviews of a larger allocation.
+      // These are allowed for canonical row-major mappings with matching
+      // padding and CTA distribution. Only loads may differ in column count;
+      // bounds and contiguity are checked separately.
       auto descShape = llvm::to_vector_of<int64_t>(descLL.getOutDimSizes());
       auto allocShape = llvm::to_vector_of<int64_t>(
           allocPad.getLinearComponent().getOutDimSizes());
       bool sameColumns =
           ArrayRef(descShape).drop_front() == ArrayRef(allocShape).drop_front();
-      compatible = sameColumns && isCanonicalRowMajor(descPad) &&
-                   isCanonicalRowMajor(allocPad) &&
-                   descPad.getCGALayout() == allocPad.getCGALayout();
+      bool isLoad =
+          isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp>(
+              op);
+      bool sameCTA = descPad.getCGALayout() == allocPad.getCGALayout();
+      if (isLoad && numDropped > 0) {
+        auto allocLL = allocPad.getLinearComponent();
+        auto kBlock = StringAttr::get(op->getContext(), "block");
+        sameCTA =
+            descLL.sublayout({kBlock}, llvm::to_vector(descLL.getOutDimNames()))
+                .equalIgnoringOutDimSizes(allocLL.sublayout(
+                    {kBlock}, llvm::to_vector(allocLL.getOutDimNames())));
+      }
+      compatible = (sameColumns || isLoad) && isCanonicalRowMajor(descPad) &&
+                   isCanonicalRowMajor(allocPad) && sameCTA;
     }
   }
 
@@ -284,6 +319,107 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
               "so the allocation must describe the same physical layout, up to "
               "leading unit dimensions dropped by a rank-reducing access";
   return success();
+}
+
+// The order in which TDM writes each CTA's part of a block of `shape`:
+// row-major, whatever the order of the shared layout `enc`.
+LinearLayout getTDMWriteLayout(Attribute enc, ArrayRef<int64_t> shape) {
+  auto shapePerCTA =
+      llvm::to_vector_of<unsigned>(gpu::getShapePerCTA(enc, shape));
+  SmallVector<unsigned> rowMajor(shape.size());
+  std::iota(rowMajor.rbegin(), rowMajor.rend(), 0);
+  return gpu::combineCtaCgaWithShape(
+      identityStandardND(StringAttr::get(enc.getContext(), "offset"),
+                         shapePerCTA, rowMajor),
+      gpu::getCGALayout(enc), shape);
+}
+
+// TDM transfers each CTA's region as consecutive row-major elements before
+// layout padding, starting at the region's origin in the allocation.
+LogicalResult verifyTDMContiguousRegion(
+    function_ref<InFlightDiagnostic()> emitError, StringRef region,
+    Attribute enc, ArrayRef<int64_t> shape, ArrayRef<int64_t> allocShape) {
+  auto fail = [&](auto &&...msg) -> LogicalResult {
+    if (emitError)
+      (emitError() << ... << msg);
+    return failure();
+  };
+  if (shape == allocShape)
+    return success();
+  bool padded = isa<gpu::PaddedSharedEncodingAttr>(enc);
+  if (!padded && !isa<gpu::SwizzledSharedEncodingAttr>(enc))
+    return fail("TDM only supports a ", region,
+                " of a swizzled or padded shared layout");
+  MLIRContext *ctx = enc.getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+  LinearLayout allocLayout =
+      gpu::toLinearLayoutIgnoringPadding(allocShape, enc);
+  // Map each (offset, block) that TDM writes for the region to its location in
+  // the allocation, before padding. TDM addresses each CTA's part of the region
+  // from that CTA's base, so only offsets within a CTA can differ.
+  LinearLayout viewToAlloc =
+      getTDMWriteLayout(enc, shape).invertAndCompose(allocLayout);
+  if (!viewToAlloc.isIdentityOnOutDim(kBlock) ||
+      !viewToAlloc.sublayoutIsZero({kBlock}, {kOffset}))
+    return fail("the ", region, " is sliced across CTAs");
+  for (int i = 0; i < viewToAlloc.getInDimSizeLog2(kOffset); ++i)
+    if (viewToAlloc.getBasis(kOffset, i, kOffset) != (int64_t(1) << i))
+      return fail("TDM requires the ", region,
+                  " to be contiguous in the allocation");
+  return success();
+}
+
+LogicalResult verifyTDMSharedMemorySubview(Operation *op,
+                                           gpu::MemDescType smemTy) {
+  auto emitSubviewError = [&]() {
+    return op->emitOpError("TDM cannot access the shared memory subview ")
+           << smemTy << ": ";
+  };
+  Attribute enc = smemTy.getEncoding();
+  return verifyTDMContiguousRegion(
+      emitSubviewError, "subview", enc,
+      gpu::dropPipeliningDim(smemTy.getShape(), enc),
+      gpu::dropPipeliningDim(smemTy.getAllocShape(), enc));
+}
+
+// TDM loads the descriptor block into the start of the shared memory.
+// Rank-reducing loads drop leading unit dimensions of the block from the shared
+// memory shape. Loads may fill only the start of the shared memory with a
+// smaller block, which must then be a contiguous region of the allocation like
+// a subview.
+LogicalResult verifyTDMBlockFitsSharedMemory(Operation *op,
+                                             triton::TensorDescType descTy,
+                                             gpu::MemDescType smemTy) {
+  ArrayRef<int64_t> blockShape = descTy.getShape();
+  ArrayRef<int64_t> smemShape = smemTy.getShape();
+  auto emitMismatchError = [&]() {
+    return op->emitOpError("shared memory shape (")
+           << smemShape << ") must match the TDM block shape (" << blockShape
+           << "), up to leading unit dimensions dropped from the block";
+  };
+  if (smemShape.size() > blockShape.size() ||
+      !llvm::all_of(blockShape.drop_back(smemShape.size()),
+                    [](int64_t dim) { return dim == 1; }))
+    return emitMismatchError();
+  ArrayRef<int64_t> blockDims = blockShape.take_back(smemShape.size());
+  if (blockDims == smemShape)
+    return success();
+  for (auto [blockDim, smemDim] : llvm::zip_equal(blockDims, smemShape))
+    if (blockDim > smemDim)
+      return op->emitOpError("TDM block shape (")
+             << blockShape << ") exceeds the shared memory shape (" << smemShape
+             << ")";
+  Attribute enc = smemTy.getEncoding();
+  auto emitBlockError = [&]() {
+    return op->emitOpError("TDM cannot load the block (")
+           << blockShape << ") into the start of the shared memory " << smemTy
+           << ": ";
+  };
+  return verifyTDMContiguousRegion(
+      emitBlockError, "partial block", enc,
+      gpu::dropPipeliningDim(blockDims, enc),
+      gpu::dropPipeliningDim(smemTy.getAllocShape(), enc));
 }
 
 // Verify the TDM layout constraints common to all TDM ops
@@ -308,7 +444,10 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
     return op->emitOpError("TDM does not support swizzling");
 
-  return verifyTDMLayoutConsistency(op, descTy, smemTy);
+  if (failed(verifyTDMLayoutConsistency(op, descTy, smemTy)))
+    return failure();
+
+  return verifyTDMSharedMemorySubview(op, smemTy);
 }
 
 LogicalResult verifyTDMGatherScatterLayout(Operation *op,
@@ -1708,6 +1847,10 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
     return failure();
 
+  if (failed(
+          verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy, smemTy)))
+    return failure();
+
   if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
     return failure();
 
@@ -1773,6 +1916,9 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
       return failure();
     if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
       return failure();
+    if (failed(verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy,
+                                              smemTy)))
+      return failure();
     if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
       return failure();
 
@@ -1800,8 +1946,12 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getSrc().getType();
 
+  // Until store lowering handles rank differences, require one shared memory
+  // dimension per descriptor dimension.
   if (tensorDescTy.getShape().size() != smemTy.getRank())
-    return emitOpError("TDM store buffer rank must match the descriptor rank");
+    return emitOpError("TDM store requires the tensor descriptor and shared "
+                       "memory source to have the same rank; rank-reducing "
+                       "stores are not yet supported");
 
   if (failed(verifyTDMAccessPolicy(getOperation(), getCache(),
                                    getCachePolicyAttr(), getScope(),
