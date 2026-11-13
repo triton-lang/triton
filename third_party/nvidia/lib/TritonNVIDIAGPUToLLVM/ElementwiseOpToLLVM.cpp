@@ -338,14 +338,16 @@ struct FpToFpOpConversion
     auto srcElementType = getElementTypeOrSelf(op.getSrc());
     auto dstElementType = getElementTypeOrSelf(op.getResult());
     auto roundingMode = op.getRounding();
+    bool isF16ToE5M2Rtz = srcElementType.isF16() &&
+                          isa<Float8E5M2Type>(dstElementType) &&
+                          roundingMode == RoundingMode::RTZ;
 
     if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
 
-      // For now only RTNE is supported for conversions from fp16 to fp8
       if (!srcElementType.isF32() &&
-          roundingMode.value() != RoundingMode::RTNE) {
+          roundingMode.value() != RoundingMode::RTNE && !isF16ToE5M2Rtz) {
         llvm::report_fatal_error(
             "Unsupported rounding mode for conversion to fp8: " +
             stringifyRoundingMode(roundingMode.value()) + "\n");
@@ -389,6 +391,16 @@ struct FpToFpOpConversion
     SmallVector<Value> inVals;
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
+    }
+    if (isF16ToE5M2Rtz) {
+      // Canonicalize NaNs so truncating their payload cannot turn them into
+      // infinities.
+      Value nan = LLVM::createNaNConstant(loc, rewriter, f16_ty);
+      for (Value &v : inVals) {
+        Value isNan =
+            LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::uno, v, v);
+        v = b.select(isNan, nan, v);
+      }
     }
     if (useFP16IntermediateSrc) {
       for (Value &v : inVals) {
