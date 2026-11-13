@@ -616,3 +616,68 @@ def test_conditional_store_pipeline(num_stages, device):
     # Expected output: [1, 2, 3, 4, ..., N]
     expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
     assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("BLOCK_K, num_stages", [(32, 3), (64, 2), (64, 3)])
+def test_pipeline_dot_shared_operand_with_register_use(BLOCK_K, num_stages, device):
+    # The loaded tile feeds the dot through registers (scaled LHS) and through
+    # shared memory (transposed RHS). On Hopper the RHS buffer needs the extra
+    # wgmma pipelining slot, otherwise the next iteration's copy overwrites it
+    # while the asynchronous wgmma is still reading it.
+    check_capabilities()
+
+    @triton.jit
+    def scaled_gram_kernel(X, S, Out, K: tl.constexpr, BLOCK_T: tl.constexpr, BLOCK_K: tl.constexpr):
+        pid = tl.program_id(0)
+        offs_t = pid * BLOCK_T + tl.arange(0, BLOCK_T)
+        s = tl.load(S + offs_t)
+        acc = tl.zeros([BLOCK_T, BLOCK_T], dtype=tl.float32)
+        for k in range(0, K, BLOCK_K):
+            x = tl.load(X + offs_t[:, None] * K + (k + tl.arange(0, BLOCK_K))[None, :])
+            acc += tl.dot(x * s[:, None], tl.trans(x))
+        offs = tl.arange(0, BLOCK_T)
+        tl.store(Out + pid * BLOCK_T * BLOCK_T + offs[:, None] * BLOCK_T + offs[None, :], acc)
+
+    BLOCK_T, K, num_blocks = 64, 128, 1024
+    torch.manual_seed(0)
+    x = torch.randn(num_blocks * BLOCK_T, K, device=device).to(torch.bfloat16)
+    s = torch.rand(num_blocks * BLOCK_T, device=device).to(torch.bfloat16)
+    out = torch.empty((num_blocks, BLOCK_T, BLOCK_T), device=device, dtype=torch.float32)
+    scaled_gram_kernel[(num_blocks, )](x, s, out, K, BLOCK_T, BLOCK_K, num_warps=4, num_stages=num_stages)
+
+    xs = (x * s[:, None]).double().view(num_blocks, BLOCK_T, K)
+    ref = xs @ x.double().view(num_blocks, BLOCK_T, K).transpose(1, 2)
+    torch.testing.assert_close(out, ref.float(), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.parametrize("num_stages", [3, 5])
+def test_pipeline_dot_shared_operand_with_earlier_register_use(num_stages, device):
+    # The loaded tile is read in registers (as gather indices) one or more
+    # stages before the dot reads it from shared memory (transposed RHS). The
+    # pipelined buffer has to stay live until the dot.
+    check_capabilities()
+
+    @triton.jit
+    def lut_gram_kernel(X, LUT, S, Out, K: tl.constexpr, BLOCK_T: tl.constexpr, BLOCK_K: tl.constexpr):
+        pid = tl.program_id(0)
+        offs_t = pid * BLOCK_T + tl.arange(0, BLOCK_T)
+        s = tl.load(S + offs_t)
+        acc = tl.zeros([BLOCK_T, BLOCK_T], dtype=tl.float32)
+        for k in range(0, K, BLOCK_K):
+            x = tl.load(X + offs_t[:, None] * K + (k + tl.arange(0, BLOCK_K))[None, :])
+            a = tl.load(LUT + x.to(tl.int32))
+            acc = tl.dot(a.to(tl.bfloat16) * s[:, None], tl.trans(x), acc)
+        offs = tl.arange(0, BLOCK_T)
+        tl.store(Out + pid * BLOCK_T * BLOCK_T + offs[:, None] * BLOCK_T + offs[None, :], acc)
+
+    BLOCK_T, BLOCK_K, K, num_blocks = 64, 64, 1024, 128
+    torch.manual_seed(0)
+    x = torch.randint(0, 16, (num_blocks * BLOCK_T, K), device=device).to(torch.bfloat16)
+    lut = torch.rand(16, device=device)
+    s = torch.rand(num_blocks * BLOCK_T, device=device).to(torch.bfloat16)
+    out = torch.empty((num_blocks, BLOCK_T, BLOCK_T), device=device, dtype=torch.float32)
+    lut_gram_kernel[(num_blocks, )](x, lut, s, out, K, BLOCK_T, BLOCK_K, num_warps=4, num_stages=num_stages)
+
+    lhs = (lut[x.long()].to(torch.bfloat16) * s[:, None]).double().view(num_blocks, BLOCK_T, K)
+    ref = lhs @ x.double().view(num_blocks, BLOCK_T, K).transpose(1, 2)
+    torch.testing.assert_close(out, ref.float(), atol=1e-3, rtol=1e-3)

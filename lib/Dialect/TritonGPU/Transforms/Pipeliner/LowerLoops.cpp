@@ -430,8 +430,20 @@ void createTMABarrierAndWait(
   }
 }
 
-// Check if load requires additional buffer for a mma pipelining
-bool loadRequiresAdditionalBuffer(Operation *loadOp) {
+// Return the number of buffers needed by the wgmma ops that read the pipelined
+// buffer of the load directly.
+//
+// Lowering the load forwards the pipelined buffer, whose shared encoding is
+// `bufferEnc`, into every `local_alloc` user with a matching encoding (see
+// replaceUsesWithLocalLoad). This also happens when the load has other users,
+// which then read the buffer through a `local_load` at the first use. A wgmma
+// reading a forwarded `local_alloc` reads the buffer at its own stage, which
+// can be later than the first use, and may still be in flight when the next
+// iteration's copy into the buffer is issued. So it needs one more buffer than
+// its distance to the load.
+int getNumBuffersForWGMMAUses(Operation *loadOp,
+                              ttg::SharedEncodingTrait bufferEnc,
+                              scf::ForOp forOp, CoarseSchedule &schedule) {
   std::function<void(Operation *, SmallVector<Operation *> & out)>
       collectNonViewUsers = [&](Operation *op, SmallVector<Operation *> &out) {
         for (Operation *user : op->getUsers()) {
@@ -441,20 +453,36 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
             out.push_back(user);
         }
       };
-  // Pattern match the op sequence used for loading mmav3 operands
-  if (!mustLoadToRegisters(loadOp)) {
-    assert(loadOp->hasOneUse());
-    ttg::LocalAllocOp alloc =
-        dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-    if (alloc) {
-      SmallVector<Operation *> nonViewUsers;
-      collectNonViewUsers(alloc, nonViewUsers);
-      return llvm::any_of(nonViewUsers, [&](Operation *op) {
-        return isa<ttng::WarpGroupDotOp>(op);
-      });
+  if (auto load = dyn_cast<tt::LoadOp>(loadOp)) {
+    // A non-zero "other" is applied to a local_load of the buffer, and nothing
+    // is forwarded (see createAsyncCopy).
+    if (load.getOther() && !isZeroFillConst(load.getOther()))
+      return 0;
+  }
+  auto [defStage, defCluster] = schedule[loadOp];
+  int numBuffers = 0;
+  for (Operation *user : loadOp->getUsers()) {
+    auto alloc = dyn_cast<ttg::LocalAllocOp>(user);
+    if (!alloc || !canForwardToLocalAlloc(alloc, bufferEnc))
+      continue;
+    SmallVector<Operation *> readers;
+    collectNonViewUsers(alloc, readers);
+    for (Operation *reader : readers) {
+      if (!isa<ttng::WarpGroupDotOp>(reader))
+        continue;
+      Operation *topLevelReader =
+          forOp.getBody()->findAncestorOpInBlock(*reader);
+      assert(topLevelReader && schedule.contains(topLevelReader) &&
+             "wgmma reader not found in the schedule");
+      auto [useStage, useCluster] = schedule[topLevelReader];
+      int stageDiff = useStage - defStage + 1;
+      // Same adjustment as in getDefUseStageDiff for a use in a later cluster.
+      if (*useCluster > *defCluster && useStage > defStage)
+        stageDiff++;
+      numBuffers = std::max(numBuffers, stageDiff);
     }
   }
-  return false;
+  return numBuffers;
 }
 
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
@@ -509,10 +537,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       }
       bool canUseTMA = isTMALoad(&op) && canPipelineTMALoad(&op);
       if (canUseAsyncCp || canUseTMA) {
-        if (loadRequiresAdditionalBuffer(&op)) {
-          // Allocate additional buffer required by the wgmma pipelining.
-          stageDiff += 1;
-        }
+        stageDiff =
+            std::max(stageDiff, getNumBuffersForWGMMAUses(&op, sharedEncoding,
+                                                          forOp, schedule));
         auto &asyncLoad = asyncLoads[&op];
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.contiguity = contiguity;
