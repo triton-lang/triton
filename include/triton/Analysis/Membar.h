@@ -114,21 +114,16 @@ protected:
       Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
       OpBuilder *builder,
       std::optional<triton::BarrierStages> clusterStages = std::nullopt);
-  /// Returns the inserted barrier, or nullptr when none is inserted.
-  Operation *syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                          MembarInfo *membarInfo, OpBuilder *builder,
-                          bool cluster = false);
-  Operation *insertBarrier(Operation *operation, OpBuilder *builder,
-                           bool cluster = false);
-
-  /// Whether pending thread effects must rendezvous before upcoming demands.
-  virtual bool requiresThreadSync(const BlockInfo &pending,
-                                  const BlockInfo &effects);
+  void insertBarrier(Operation *operation, OpBuilder *builder,
+                     bool cluster = false);
 
   Allocation &allocation;
   MembarFilterFn filter;
 
 private:
+  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
+                    MembarInfo *membarInfo, OpBuilder *builder, bool cluster);
+
   triton::membar::SMemModel shared;
   MembarSliceFilterFn sliceFilter;
 };
