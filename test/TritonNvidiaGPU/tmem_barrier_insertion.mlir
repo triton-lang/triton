@@ -44,6 +44,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // Reuse an existing store wait when Membar runs on previously lowered IR.
+  // CHECK-LABEL: @existing_store_wait
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NOT: ttng.tmem_wait store
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NOT: ttng.tmem_wait
+  // CHECK: tt.return
+  tt.func private @existing_store_wait(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    %tile = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_wait store
+    %value = ttng.tmem_load %tile : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+
   // CHECK-LABEL: @alloc_then_st
   // CHECK: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
