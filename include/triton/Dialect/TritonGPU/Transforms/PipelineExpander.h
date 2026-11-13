@@ -60,7 +60,7 @@ struct PipeliningOption {
   /// If set, use this function to emit the predicate stage ops instead of the
   /// default one.
   using EmitPredicateStageFnType = std::function<Value(
-      RewriterBase &, Value, Value, Value, uint64_t, uint64_t)>;
+      RewriterBase &, Value, Value, Value, uint64_t, uint64_t, bool)>;
   EmitPredicateStageFnType emitPredicateStageFn = nullptr;
 
   // Callback to predicate operations when the prologue or epilogue are not
@@ -103,7 +103,7 @@ FailureOr<scf::ForOp> pipelineForLoop(RewriterBase &rewriter, scf::ForOp forOp,
 
 Value emitPredicateForStage(RewriterBase &rewriter, Value inductionVar,
                             Value upperBound, Value step, uint64_t maxStage,
-                            uint64_t stage);
+                            uint64_t stage, bool unsignedCmp = false);
 
 } // namespace triton
 } // namespace mlir

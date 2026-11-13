@@ -27,10 +27,30 @@ Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   diff = arith::SubIOp::create(
       b, loc, diff,
       arith::ConstantOp::create(b, loc, b.getIntegerAttr(diff.getType(), 1)));
-  Value ceilStep = arith::MulIOp::create(
-      b, loc, arith::DivSIOp::create(b, loc, diff, loop.getStep()),
-      loop.getStep());
+  Value numSteps =
+      loop.getUnsignedCmp()
+          ? Value(arith::DivUIOp::create(b, loc, diff, loop.getStep()))
+          : Value(arith::DivSIOp::create(b, loc, diff, loop.getStep()));
+  Value ceilStep = arith::MulIOp::create(b, loc, numSteps, loop.getStep());
   return arith::AddIOp::create(b, loc, ceilStep, loop.getLowerBound());
+}
+
+Value tt::getUnsignedBoundAfterPeeling(OpBuilder &b, Location loc,
+                                       Value upperBound, Value step,
+                                       uint64_t numIterations) {
+  if (numIterations == 0)
+    return upperBound;
+  auto type = upperBound.getType();
+  Value count =
+      arith::ConstantOp::create(b, loc, b.getIntegerAttr(type, numIterations));
+  Value zero = arith::ConstantOp::create(b, loc, b.getIntegerAttr(type, 0));
+  // Check before multiplying: an overflowing offset must also empty the loop.
+  Value limit = arith::DivUIOp::create(b, loc, upperBound, count);
+  Value fits =
+      arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ule, step, limit);
+  Value offset = arith::MulIOp::create(b, loc, step, count);
+  Value bound = arith::SubIOp::create(b, loc, upperBound, offset);
+  return arith::SelectOp::create(b, loc, fits, bound, zero);
 }
 
 bool tt::isKernel(FunctionOpInterface funcOp) {

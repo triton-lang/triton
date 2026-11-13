@@ -704,6 +704,7 @@ scf::ForOp Prefetcher::createNewForOp() {
   auto newForOp =
       scf::ForOp::create(builder, forOp.getLoc(), forOp.getLowerBound(),
                          forOp.getUpperBound(), forOp.getStep(), loopArgs);
+  newForOp.setUnsignedCmp(forOp.getUnsignedCmp());
 
   builder.setInsertionPointToStart(newForOp.getBody());
   IRMapping mapping;
