@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,GFX9,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,GFX9,COMMON
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
@@ -73,6 +73,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
+    tt.return
+  }
+}
+
+// -----
+
+// COMMON-DAG: [[$REL_LOCAL:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_release_scalar_multi_wave
+  tt.func @atomic_release_scalar_multi_wave(%ptr: !tt.ptr<i32>, %val: i32) {
+    // GFX9: rocdl.s.waitcnt 3952
+    // GFX1250: rocdl.s.wait.storecnt 0
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$REL_LOCAL]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add {{.*}} syncscope("agent") release
+    %0 = tt.atomic_rmw add, release, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // GFX9: rocdl.s.waitcnt 3952
+    // GFX1250: rocdl.s.wait.storecnt 0
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$REL_LOCAL]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add {{.*}} syncscope("agent") acq_rel
+    %1 = tt.atomic_rmw add, acq_rel, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // GFX9: rocdl.s.waitcnt 3952
+    // GFX1250: rocdl.s.wait.storecnt 0
+    // COMMON-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$REL_LOCAL]]}
+    // COMMON-NEXT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add {{.*}} release
+    %2 = tt.atomic_rmw add, release, sys, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // The CTA barrier already orders writes for a workgroup-scope release.
+    // GFX9-NOT: rocdl.s.waitcnt
+    // GFX1250-NOT: rocdl.s.wait.storecnt
+    // COMMON: llvm.atomicrmw add {{.*}} syncscope("workgroup") release
+    %3 = tt.atomic_rmw add, release, cta, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // COMMON: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_release_scalar_single_wave
+  tt.func @atomic_release_scalar_single_wave(%ptr: !tt.ptr<i32>, %val: i32) {
+    // One wave's writes are covered by the atomic's own release.
+    // GFX9-NOT: rocdl.s.waitcnt
+    // GFX1250-NOT: rocdl.s.wait.storecnt
+    // COMMON: llvm.atomicrmw add {{.*}} syncscope("agent") release
+    %0 = tt.atomic_rmw add, release, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // COMMON: llvm.return
     tt.return
   }
 }
