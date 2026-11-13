@@ -16,11 +16,14 @@ struct TMemAccess {
   bool isWrite;
 };
 
+enum class Action { WaitLoad, WaitStore, RegionBarrier, WarpBarrier };
+
+constexpr unsigned bit(Action action) { return 1u << unsigned(action); }
 enum class Need {
-  WaitLoad,
-  WaitStore,
-  RegionOrder,
-  WarpOrder,
+  WaitLoad = unsigned(Action::WaitLoad),
+  WaitStore = unsigned(Action::WaitStore),
+  RegionOrder = unsigned(Action::RegionBarrier),
+  WarpOrder = unsigned(Action::WarpBarrier),
   WarpConvergence
 };
 
@@ -28,6 +31,14 @@ constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
 constexpr unsigned warpBarrier =
     bit(Need::WarpOrder) | bit(Need::WarpConvergence);
 constexpr unsigned fullBarrier = bit(Need::RegionOrder) | warpBarrier;
+
+constexpr unsigned coverage(Action action) {
+  if (action == Action::RegionBarrier)
+    return fullBarrier;
+  if (action == Action::WarpBarrier)
+    return warpBarrier;
+  return bit(action) | bit(Need::WarpConvergence);
+}
 
 enum class Boundary {
   None,
