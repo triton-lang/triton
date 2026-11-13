@@ -1055,6 +1055,33 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Native SM120 FP4 MMA requires K >= 64. Smaller tiles must be decomposed.
+#blocked_small_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_mxfp4_k32_fallback
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK-COUNT-2: ttg.fp4_to_fp
+  // CHECK: tt.dot {{.*}}
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @sm120_mxfp4_k32_fallback(
+    %a: tensor<16x16xi8, #blocked_small_k>,
+    %scale_a: tensor<16x1xi8, #blocked_small_k>,
+    %b: tensor<16x16xi8, #blocked_small_k>,
+    %scale_b: tensor<16x1xi8, #blocked_small_k>
+  ) -> tensor<16x16xf32, #blocked_small_k> {
+    %cst = arith.constant dense<0.0> : tensor<16x16xf32, #blocked_small_k>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false}
+      : tensor<16x16xi8, #blocked_small_k>, tensor<16x1xi8, #blocked_small_k>
+        * tensor<16x16xi8, #blocked_small_k>, tensor<16x1xi8, #blocked_small_k>
+        -> tensor<16x16xf32, #blocked_small_k>
+    tt.return %d : tensor<16x16xf32, #blocked_small_k>
+  }
+}
+
+// -----
+
 // Verify that SM_120 FP4 inputs packed along M/N fall back to decomposition.
 
 #blocked2_mn = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -1158,6 +1185,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked3>
     %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true} : tensor<64x128xi8, #blocked3_2>, tensor<64x16xf8E4M3FN, #blocked3_1> * tensor<128x128xi8, #blocked3>, tensor<128x16xf8E4M3FN, #blocked3_1> -> tensor<64x128xf32, #blocked3>
     tt.return %d : tensor<64x128xf32, #blocked3>
+  }
+
+  // CHECK-LABEL: @sm100_mxfp4_k32_fallback
+  // CHECK-COUNT-2: ttg.fp4_to_fp
+  // CHECK: ttng.tc_gen5_mma {{.*}}
+  // CHECK: tt.return
+  tt.func public @sm100_mxfp4_k32_fallback(
+    %a: tensor<128x16xi8, #blocked3_2>,
+    %scale_a: tensor<128x1xi8, #blocked3_1>,
+    %b: tensor<16x32xi8, #blocked3>,
+    %scale_b: tensor<32x1xi8, #blocked3_1>
+  ) -> tensor<128x32xf32, #blocked3> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf32, #blocked3>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false}
+      : tensor<128x16xi8, #blocked3_2>, tensor<128x1xi8, #blocked3_1>
+        * tensor<16x32xi8, #blocked3>, tensor<32x1xi8, #blocked3_1>
+        -> tensor<128x32xf32, #blocked3>
+    tt.return %d : tensor<128x32xf32, #blocked3>
   }
 }
 
