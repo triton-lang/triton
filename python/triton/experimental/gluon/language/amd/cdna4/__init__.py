@@ -45,11 +45,13 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
         a (tensor): The operand A to be multiplied.
         a_scale (Optional[tensor]): Scale factor for operand A.
         a_format (str): Format of operand A. Available formats: ``e2m1``,
-            ``e4m3``, ``e5m2``.
+            ``e2m3``, ``e3m2``, ``e4m3``, ``e5m2``. FP6 operands are uint8 packed
+            along K: each group of 16 bytes holds 16 codes in 12 bytes followed
+            by 4 padding bytes. They use ``k_width=32``.
         b (tensor): The operand B to be multiplied.
         b_scale (Optional[tensor]): Scale factor for operand B.
         b_format (str): Format of operand B. Available formats: ``e2m1``,
-            ``e4m3``, ``e5m2``.
+            ``e2m3``, ``e3m2``, ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
         cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
             and result (D) of the scaled MFMA instructions, as for ``mfma``: ``"a"`` for AGPRs or
@@ -66,8 +68,8 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
     b_format = _unwrap_if_constexpr(b_format)
     a_scale = _unwrap_if_constexpr(a_scale)
     b_scale = _unwrap_if_constexpr(b_scale)
-    assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
-    assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
+    assert a_format in {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
+    assert b_format in {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
     cd_regclass = _check_cd_regclass(cd_regclass, acc)
     ret = _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)

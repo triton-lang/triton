@@ -640,6 +640,25 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     return rewriter.create(loweredOp)->getResult(0);
   }
 
+  // Packed FP6 operands hold two 16-byte groups, each with 12 bytes of codes
+  // followed by 4 padding bytes. Drop the padding dwords.
+  Value dropFp6Padding(Value bytes) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto vecTy = vec_ty(i32_ty, 6);
+    Value result = b.undef(vecTy);
+    constexpr int dataDwords[] = {0, 1, 2, 4, 5, 6};
+    for (auto [i, src] : llvm::enumerate(dataDwords))
+      result = b.insert_element(
+          vecTy, result, b.extract_element(i32_ty, bytes, b.i32_val(src)),
+          b.i32_val(i));
+    return result;
+  }
+
+  void dropFp6Padding(ValueTable &operands) const {
+    for (auto &[key, value] : operands)
+      value = dropFp6Padding(value);
+  }
+
   LogicalResult convertScaledDot(DotScaledOp op,
                                  DotScaledOpAdaptor adaptor) const {
     // Check if this dot has come with priority set by setprio.
@@ -676,15 +695,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     ScaleDotElemType aElemType = op.getAElemType();
     ScaleDotElemType bElemType = op.getBElemType();
 
-    auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2;
+    auto isFp6 = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M3 ||
+             elemType == ScaleDotElemType::E3M2;
     };
-
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      llvm::report_fatal_error("NYI: mxfp6\n");
-    }
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
@@ -760,6 +774,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
         loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase, bTensorTy,
         bTensorTy.getElementType(), allowXF32,
         /*preserveBF16=*/false);
+
+    // The instruction reads 32 FP6 codes packed into six dwords.
+    if (isFp6(aElemType))
+      dropFp6Padding(operandA);
+    if (isFp6(bElemType))
+      dropFp6Padding(operandB);
 
     // Scales have the same replica distributions as their corresponding
     // operands.

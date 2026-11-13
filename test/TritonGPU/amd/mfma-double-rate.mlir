@@ -151,3 +151,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
  }
 }
+
+// -----
+
+// Packed FP6 operands hold two 16-byte groups per lane (kWidth = 32), each with
+// 12 bytes of codes and 4 padding bytes; the lowering keeps dwords 0-2 and 4-6.
+// CHECK-LABEL: mfma_scaled_fp6_16x16x128
+// CHECK: %[[B:.*]] = llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+// CHECK-NOT: llvm.lshr
+// CHECK-DAG: llvm.extractelement %[[B]][%{{.*}} : i32] : vector<8xi32>
+// CHECK: rocdl.mfma.scale.f32.16x16x128.f8f6f4 {{.*}}, fp6_e3m2, fp6_e2m3, {{.*}} : (vector<6xi32>, vector<6xi32>, vector<4xf32>, i32, i32) -> vector<4xf32>
+// CHECK-NOT: rocdl.mfma
+#linear = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [[16, 0], [32, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [[0, 0], [0, 0]], block = []}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 128], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_scaled_fp6_16x16x128(%arg0: tensor<64x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>, %arg1: tensor<64x4xi8, #linear>, %arg2: tensor<128x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, %arg3: tensor<16x4xi8, #linear1>, %out: !tt.ptr<f32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32, #mma>
+    %d = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e2m3 rhs = e3m2 {fastMath = false} : tensor<64x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>, tensor<64x4xi8, #linear> * tensor<128x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, tensor<16x4xi8, #linear1> -> tensor<64x16xf32, #mma>
+    %p = tt.splat %out : !tt.ptr<f32> -> tensor<64x16x!tt.ptr<f32>, #mma>
+    tt.store %p, %d : tensor<64x16x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: mfma_scaled_fp6_32x32x64
+// CHECK: rocdl.mfma.scale.f32.32x32x64.f8f6f4 {{.*}}, fp6_e2m3, fp6_e3m2, {{.*}} : (vector<6xi32>, vector<6xi32>, vector<16xf32>, i32, i32) -> vector<16xf32>
+// CHECK-NOT: rocdl.mfma
+#linear = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [], block = []}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [32, 32, 64], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_scaled_fp6_32x32x64(%arg0: tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>, %arg1: tensor<32x2xi8, #linear>, %arg2: tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, %arg3: tensor<32x2xi8, #linear>, %out: !tt.ptr<f32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
+    %d = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e3m2 rhs = e2m3 {fastMath = false} : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>, tensor<32x2xi8, #linear> * tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, tensor<32x2xi8, #linear> -> tensor<32x32xf32, #mma>
+    %p = tt.splat %out : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #mma>
+    tt.store %p, %d : tensor<32x32x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// Mixed FP8 x FP6: the FP8 operand stays eight dwords.
+// CHECK-LABEL: mfma_scaled_fp8_fp6
+// CHECK: rocdl.mfma.scale.f32.16x16x128.f8f6f4 {{.*}}, fp6_e2m3, fp8_e4m3, {{.*}} : (vector<6xi32>, vector<8xi32>, vector<4xf32>, i32, i32) -> vector<4xf32>
+#linear = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [[16, 0], [32, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [[0, 0], [0, 0]], block = []}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 128], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_scaled_fp8_fp6(%arg0: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, %arg1: tensor<64x4xi8, #linear>, %arg2: tensor<128x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, %arg3: tensor<16x4xi8, #linear1>, %out: !tt.ptr<f32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32, #mma>
+    %d = tt.dot_scaled %arg0 scale %arg1, %arg2 scale %arg3, %cst lhs = e4m3 rhs = e2m3 {fastMath = false} : tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<64x4xi8, #linear> * tensor<128x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>, tensor<16x4xi8, #linear1> -> tensor<64x16xf32, #mma>
+    %p = tt.splat %out : !tt.ptr<f32> -> tensor<64x16x!tt.ptr<f32>, #mma>
+    tt.store %p, %d : tensor<64x16x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}

@@ -851,6 +851,11 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
     let description = [{
         $d = matrix_multiply(scale($a, $a_scale), scale($b, $b_scale)) + $c.
         Where scale(x, s) is a function that applies the scale per block following microscaling spec.
+
+        An FP6 operand (e2m3 or e3m2) is packed i8 storage along K: each group
+        of 16 bytes holds 16 codes in 12 bytes, least significant bits first,
+        followed by 4 padding bytes. The K dimension counts FP6 values, so the
+        operand has the same shape as the logical matrix.
     }];
 
     let arguments = (

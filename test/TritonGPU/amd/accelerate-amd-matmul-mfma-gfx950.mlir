@@ -133,6 +133,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Packed FP6 operands hold 16 codes in each 16-byte group (12 code bytes and 4
+// padding bytes). Each lane feeds 32 consecutive codes to the instruction, so
+// the operand layout uses kWidth = 32.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-LABEL: mfma_dot_scaled_mxfp6e2m3_mxfp6e3m2
+// MFMA16: #mma = #ttg.amd_mfma<{version = 4, {{.*}}instrShape = [16, 16, 128]
+// MFMA16-LABEL: mfma_dot_scaled_mxfp6e2m3_mxfp6e3m2
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_mxfp6e2m3_mxfp6e3m2(
+      %arg0: tensor<128x128xi8, #blocked>,
+      %arg1: tensor<128x128xi8, #blocked>,
+      %arg2: tensor<128x4xi8, #blocked1>,
+      %arg3: tensor<128x4xi8, #blocked1>,
+      %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    // CHECK-NOT: tt.fp_to_fp
+    // CHECK: %[[C:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #mma>
+    // CHECK: %[[A:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xi8, #blocked> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>
+    // CHECK: %[[B:.+]] = ttg.convert_layout {{.*}} : tensor<128x128xi8, #blocked> -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>
+    // CHECK: %[[SCALE0:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked1> -> tensor<128x4xi8, #linear>
+    // CHECK: %[[SCALE1:.+]] = ttg.convert_layout {{.*}} : tensor<128x4xi8, #blocked1> -> tensor<128x4xi8, #linear1>
+    // CHECK: tt.dot_scaled %[[A]] scale %[[SCALE0]], %[[B]] scale %[[SCALE1]], %[[C]] lhs = e2m3 rhs = e3m2
+    // MFMA16: tt.dot_scaled {{.*}} lhs = e2m3 rhs = e3m2 {fastMath = false} : tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 32}>>
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %1 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e2m3 rhs = e3m2 {fastMath = false} : tensor<128x128xi8, #blocked>, tensor<128x4xi8, #blocked1> * tensor<128x128xi8, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %1 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Mixed FP8 x FP6 keeps the FP8 operand at kWidth = 16.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-LABEL: mfma_dot_scaled_mxfp8e4_mxfp6e2m3
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_mxfp8e4_mxfp6e2m3(
+      %arg0: tensor<128x128xf8E4M3FN, #blocked>,
+      %arg1: tensor<128x128xi8, #blocked>,
+      %arg2: tensor<128x4xi8, #blocked1>,
+      %arg3: tensor<128x4xi8, #blocked1>,
+      %arg4: tensor<128x128x!tt.ptr<f32>, #blocked>
+      ) {
+    // CHECK: tt.dot_scaled {{.*}} lhs = e4m3 rhs = e2m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<128x4xi8, #linear{{.*}}> * tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 32}>>
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %1 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e2m3 {fastMath = false} : tensor<128x128xf8E4M3FN, #blocked>, tensor<128x4xi8, #blocked1> * tensor<128x128xi8, #blocked>, tensor<128x4xi8, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.store %arg4, %1 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK-LABEL: mfma_dot_scaled_fp8e4_mxfp4

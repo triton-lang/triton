@@ -723,6 +723,28 @@ module {
 
 // -----
 
+module {
+  tt.func @dot_scaled_fp6_storage(%a: tensor<128x128xf8E4M3FN>, %b: tensor<128x128xi8>) -> tensor<128x128xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    // expected-error @below {{FP6 lhs requires i8 storage packed along K}}
+    %result = tt.dot_scaled %a, %b, %cst lhs = e2m3 rhs = e2m3 {fastMath = false} : tensor<128x128xf8E4M3FN> * tensor<128x128xi8> -> tensor<128x128xf32>
+    tt.return %result : tensor<128x128xf32>
+  }
+}
+
+// -----
+
+module {
+  tt.func @dot_scaled_fp6_k_pack(%a: tensor<128x128xi8>, %b: tensor<128x128xi8>) -> tensor<128x128xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    // expected-error @below {{FP6 rhs requires i8 storage packed along K}}
+    %result = tt.dot_scaled %a, %b, %cst lhs = e2m3 rhs = e3m2 {fastMath = false, rhs_k_pack = false} : tensor<128x128xi8> * tensor<128x128xi8> -> tensor<128x128xf32>
+    tt.return %result : tensor<128x128xf32>
+  }
+}
+
+// -----
+
 tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
   // expected-error @below {{source tensor must have exactly one element}}
   %0 = tt.unsplat %arg0 : tensor<128xf32>
