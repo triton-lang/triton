@@ -738,11 +738,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: {{.*}} = tt.load
     // CHECK-NEXT: tt.store
+    // CHECK-NEXT: {{.*}} = tt.atomic_load relaxed, cta
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.atomic_store relaxed, cta
     ttng.wait_barrier %ready, %phase : !barrier
     %value = tt.load %src : !tt.ptr<i32>
     tt.store %dst, %value : !tt.ptr<i32>
+    %observed = tt.atomic_load relaxed, cta, %flag : (!tt.ptr<i32>) -> i32
     tt.atomic_store relaxed, cta, %flag, %value : !tt.ptr<i32>
     tt.return
   }
@@ -1036,6 +1038,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 #store_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #payload_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 !barrier = !ttg.memdesc<2xi64, #bar, #ttg.shared_memory, mutable>
+!local_flags = !ttg.memdesc<2xi32, #payload_layout, #ttg.shared_memory, mutable>
+!peer_flags = !ttg.memdesc<2xi32, #bar, #ttg.shared_memory, mutable>
+!updates = tensor<2xi32, #store_layout>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // Complete-tx updates commute, and the wait completes both generic stores.
@@ -1078,6 +1083,30 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
     ttng.arrive_barrier %barrier, 1 {fromCTA = 0 : i32} : !barrier
     ttng.wait_barrier %barrier, %phase : !barrier
     ttng.inval_barrier %barrier : !barrier
+    tt.return
+  }
+
+  // A scatter into a sharded flag array can notify the peer CTA.
+  // CHECK-LABEL: @wait_before_peer_shared_atomic
+  tt.func @wait_before_peer_shared_atomic() {
+    %phase = arith.constant 0 : i32
+    %indices = tt.make_range {start = 0 : i32, end = 2 : i32} : !updates
+    %ones = arith.constant dense<1> : !updates
+    %ready = ttg.local_alloc : () -> !barrier
+    %local = ttg.local_alloc : () -> !local_flags
+    %peer = ttg.local_alloc : () -> !peer_flags
+    ttng.init_barrier %ready, 1 : !barrier
+    ttng.cluster_barrier
+    ttng.arrive_barrier %ready, 1 {fromCTA = 0 : i32} : !barrier
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: {{.*}} = ttg.local_atomic_scatter_rmw
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_atomic_scatter_rmw
+    ttng.wait_barrier %ready, %phase : !barrier
+    %local_old = ttg.local_atomic_scatter_rmw exch, %local[%indices], %ones {axis = 0 : i32} : (!local_flags, !updates, !updates) -> !updates
+    %peer_old = ttg.local_atomic_scatter_rmw exch, %peer[%indices], %ones {axis = 0 : i32} : (!peer_flags, !updates, !updates) -> !updates
+    ttg.local_dealloc %local : !local_flags
+    ttng.inval_barrier %ready : !barrier
     tt.return
   }
 

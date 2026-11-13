@@ -324,23 +324,23 @@ bool MembarAnalysis::mayNotifyPeer(Operation *op) {
   namespace ttg = triton::gpu;
   namespace tti = triton::instrument;
 
-  // We may just notify a different WS partition with barriers or global atomics
   return llvm::TypeSwitch<Operation *, bool>(op)
       // A guarded notification must join pending waits before lanes split.
       .Case<ttg::ThreadPredicateOp>([](auto) { return true; })
+      // Atomic loads and polls model a write to prevent elimination.
       .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
-            tti::ExperimentalGSanAtomicLoadOp, ttng::WaitBarrierOp>(
-          [](auto) { return false; })
-      .Case<tt::AtomicOpInterface>(
-          [&](auto atomic) { return !isRegionLocal(atomic.getPtr()); })
-      .Case<ttg::MBarrierOpInterface>([&](auto) {
-        auto writes =
-            tt::getMemoryAccesses(op, ttg::SharedKind::Barrier, tt::RW::Write);
+            tti::ExperimentalGSanAtomicLoadOp>([](auto) { return false; })
+      .Case<tt::AtomicOpInterface, tt::GridDependencyLaunchDependentsOp>(
+          [](auto) { return true; })
+      .Case<ttg::LocalAtomicScatterRMWOp>(
+          [&](auto atomic) { return !isRegionLocal(atomic.getDst()); })
+      .Case<ttg::MBarrierOpInterface>([&](auto barrier) {
+        auto writes = tt::getMemoryAccesses(barrier, ttg::SharedKind::Barrier,
+                                            tt::RW::Write);
         return llvm::any_of(writes, [&](const tt::MemoryAccess &access) {
           return !isRegionLocal(access.value);
         });
       })
-      .Case<tt::GridDependencyLaunchDependentsOp>([](auto) { return true; })
       .Case<tt::ElementwiseInlineAsmOp, ttg::InlineAsmOp,
             tt::ExternElementwiseOp>(
           [](auto opaque) { return !opaque.getPure(); })
@@ -524,9 +524,8 @@ BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
 
 void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
   effects.threadDemands.hasDemand = true;
+  effects.threadDemands.mayNotifyPeer = mayNotifyPeer(op);
   effects.threadDemands.hasDemandBeyondGlobalReads = !hasOnlyGlobalReads(op);
-  effects.threadDemands.mayNotifyPeer =
-      effects.threadDemands.hasDemandBeyondGlobalReads && mayNotifyPeer(op);
   if (getThreadSyncInfo(op).requiresBefore())
     effects.threadDemands.publicationIssuers =
         IssuerSummary{getThreadIssuer(op)};
