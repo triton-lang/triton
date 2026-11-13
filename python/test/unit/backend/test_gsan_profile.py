@@ -1519,3 +1519,28 @@ def test_gsan_profile_direct_allocator_late_registration_in_new_context(fresh_kn
         profile.track(output, name="output")
         _fill[(1, )](output, 1024)
     assert _allocation(profile, "output")["write_once_candidate"]
+
+
+@pytest.mark.skipif("not is_hopper_or_newer()", reason="Bulk copies require Hopper or newer")
+@pytest.mark.parametrize("words", [12, 132])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_gsan_profile_bulk_store_observes_whole_range(words, take_copy, fresh_knobs):
+
+    @gluon.jit
+    def kernel(out, pred, WORDS: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [256], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                         gl.full((256, ), 17, gl.int32, layout))
+        hopper.bulk.async_store(out + 4, smem, WORDS, pred=pred)
+        hopper.bulk.store_wait(0, read_only=False)
+
+    with AllocationProfile() as profile:
+        out = torch.empty(264, dtype=torch.int32, device="cuda")
+        profile.track(out, name="output")
+        kernel[(1, )](out, take_copy, words)
+    row = _allocation(profile, "output")
+    assert row["cells_read"] == 0
+    assert row["bytes_written"] == (words * 4 if take_copy else 0)
+    assert row["write_once_candidate"] == take_copy
+    if take_copy:
+        torch.testing.assert_close(out[4:4 + words], torch.full_like(out[4:4 + words], 17))

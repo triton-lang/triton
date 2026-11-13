@@ -1253,3 +1253,41 @@ def _bulk_war_kernel(src, out, ready):
 def test_bulk_async_load_write_after_read():
     _run_failure_case("bulk_war", runner=_run_bulk_case, runner_args=(True, ), source_function=_bulk_war_kernel.fn,
                       marker="gl.store(src + 11", error="Write after read race detected")
+
+
+@gluon.jit
+def _bulk_store_after_read(payload, scratch, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(scratch, gl.load(payload + 11))
+        gl.atomic_xchg(ready, 1, sem="release")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed") == 0:
+            pass
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                         gl.full((16, ), 17, gl.int32, layout))
+        hopper.bulk.async_store(payload, smem, 12)
+        hopper.bulk.store_wait(0, read_only=False)
+
+
+@run_with_gsan
+def _run_bulk_store_after_read(acquire=False):
+    payload = torch.zeros(12, device="cuda", dtype=torch.int32)
+    scratch = torch.empty(1, device="cuda", dtype=torch.int32)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    _bulk_store_after_read[(2, )](payload, scratch, ready, acquire)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(payload, torch.full_like(payload, 17))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_write_after_read():
+    _run_failure_case("bulk_store_war", runner=_run_bulk_store_after_read, source_function=_bulk_store_after_read.fn,
+                      marker="hopper.bulk.async_store", error="Write after read race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_acquire_orders_destination():
+    result = run_in_process(_run_bulk_store_after_read, (True, ))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""

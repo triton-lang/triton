@@ -59,9 +59,10 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
-def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface]> {
+def AsyncStoreOpInterface : OpInterface<"AsyncStoreOpInterface"> {
   let description = [{
-    Common interface for asynchronous TMA operations that read shared memory.
+    Common interface for asynchronous stores that read shared memory and commit
+    to the bulk async-group queue.
   }];
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
@@ -78,6 +79,10 @@ def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInter
       /*methodName=*/"getSrcMutable",
       /*args=*/(ins)>,
   ];
+}
+
+def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface, AsyncStoreOpInterface]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
 def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
