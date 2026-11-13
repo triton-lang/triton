@@ -131,6 +131,55 @@ def test_umulhi_truncated_input(seed_type, dtype):
         pytest.fail("PTX stage not found")
 
 
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("ptx_version", [92, 93])
+@pytest.mark.parametrize("accumulate", [False, True])
+def test_clmul_nvptx_lowering(frontend, ptx_version, accumulate):
+    from triton._C.libtriton import ir
+    from triton.compiler.compiler import make_backend
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(a, b, c, out, ACCUMULATE: tl.constexpr):
+        result = lang.clmul(a, b)
+        if ACCUMULATE:
+            result = result ^ c
+        lang.store(out, result)
+
+    source_type = ASTSource if frontend == "triton" else gluon.GluonASTSource
+    signature = {"a": "u64", "b": "u64", "c": "u64", "out": "*u64", "ACCUMULATE": "constexpr"}
+    source = source_type(kernel, signature=signature, constexprs={"ACCUMULATE": accumulate})
+    target = GPUTarget("cuda", 80, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({"num_warps": 1, "ptx_version": ptx_version})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
+                            context)
+    metadata = {"target": target, **vars(options)}
+    stages = {}
+    backend.add_stages(stages, options, source.language)
+    for kind, stage in stages.items():
+        module = stage(module, metadata)
+        if kind == "llir":
+            assert "@llvm.clmul.i64" in str(module)
+        if kind == "ptx":
+            if ptx_version >= 93:
+                accumulator = r"%rd\d+" if accumulate else "0"
+                assert re.search(r"clmad\.lo\.u64\s+%rd\d+, %rd\d+, %rd\d+, " + accumulator + ";", module)
+                assert "xor.b64" not in module
+            else:
+                assert "clmad" not in module
+                assert "mul.lo." in module
+            break
+    else:
+        pytest.fail("PTX stage not found")
+
+
 @pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
 def test_compile_only_nvptx_fabs_preserves_nan_payload(instrumentation_mode):
     from triton._C.libtriton import llvm

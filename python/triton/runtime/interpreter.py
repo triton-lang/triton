@@ -706,6 +706,19 @@ class InterpreterBuilder:
         rhs = TensorHandle(rhs_data, rhs.dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
 
+    def create_clmul(self, lhs, rhs):
+        if lhs.dtype.scalar.is_int1():
+            return self.binary_op(lhs, rhs, np.bitwise_and)
+        dtype = lhs.data.dtype
+        bits = dtype.itemsize * 8
+        unsigned_dtype = getattr(np, f"uint{bits}")
+        x = lhs.data.view(unsigned_dtype)
+        y = rhs.data.view(unsigned_dtype)
+        result = np.zeros_like(x)
+        for bit in range(bits):
+            result ^= np.where((y >> bit) & 1, x << bit, 0)
+        return TensorHandle(result.view(dtype), lhs.dtype.scalar)
+
     def create_umulhi(self, lhs, rhs):
         # umulhi multiplies the operands as unsigned integers, so signed inputs
         # take part through their bit pattern: reinterpret them at their own

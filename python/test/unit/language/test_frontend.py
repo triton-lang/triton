@@ -561,6 +561,64 @@ def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, i
         run_parser(kernel, args=args)
 
 
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("lhs_dtype, rhs_dtype, expected_dtype", [
+    (tl.int8, tl.uint8, tl.uint8),
+    (tl.int16, tl.int32, tl.int32),
+    (tl.uint32, tl.int64, tl.int64),
+    (tl.int64, tl.uint64, tl.uint64),
+    (tl.int1, tl.int1, tl.int1),
+])
+def test_clmul_type_promotion(frontend, lhs_dtype, rhs_dtype, expected_dtype):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, Z, EXPECTED: tl.constexpr):
+        result = lang.clmul(lang.load(X), lang.load(Y))
+        lang.static_assert(result.dtype == EXPECTED)
+        lang.store(Z, result)
+
+    module = run_parser(kernel,
+                        args=(MockTensor(lhs_dtype), MockTensor(rhs_dtype), MockTensor(expected_dtype), expected_dtype))
+    assert module.verify()
+    assert "tt.clmul" in module.str_nodebug()
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype", [tl.int8, tl.uint16, tl.int32, tl.uint64])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_clmul_scalar_promotion(frontend, dtype, reverse):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Z, REVERSE: tl.constexpr, EXPECTED: tl.constexpr):
+        x = lang.load(X)
+        result = lang.clmul(3, x) if REVERSE else lang.clmul(x, 3)
+        lang.static_assert(result.dtype == EXPECTED)
+        lang.store(Z, result)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), MockTensor(dtype), reverse, dtype))
+    assert module.verify()
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype, value", [(tl.float16, 1), (tl.float32, 1), (tl.float64, 1), (tl.int32, 0.5)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_clmul_invalid_dtype(frontend, dtype, value, reverse):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, VALUE: tl.constexpr, REVERSE: tl.constexpr):
+        x = lang.load(X)
+        if REVERSE:
+            lang.clmul(VALUE, x)
+        else:
+            lang.clmul(x, VALUE)
+
+    with pytest.raises(CompilationError, match="clmul requires integer operands"):
+        run_parser(kernel, args=(MockTensor(dtype), value, reverse))
+
+
 def test_umulhi_scalar_out_of_range():
 
     @triton.jit
