@@ -190,11 +190,17 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    rewriter.setInsertionPoint(op);
-    Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
-                            ifOp.getCondition(), pred);
-    ifOp.getConditionMutable().assign(cnd);
-    return op;
+    // Masking only the condition executes the else branch in inactive stages.
+    // Gate the entire conditional when that branch has side effects.
+    if (ifOp.getElseRegion().empty() ||
+        llvm::all_of(ifOp.elseBlock()->without_terminator(),
+                     [](Operation &elseOp) { return isPure(&elseOp); })) {
+      rewriter.setInsertionPoint(op);
+      Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
+                              ifOp.getCondition(), pred);
+      ifOp.getConditionMutable().assign(cnd);
+      return op;
+    }
   }
   if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
     rewriter.setInsertionPoint(op);
