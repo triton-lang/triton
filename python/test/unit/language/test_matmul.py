@@ -343,6 +343,47 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "scf.for" in ttgir
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("snapshot", [False, True])
+@pytest.mark.parametrize("num_stages", [1, 3])
+@pytest.mark.parametrize("iterations", [4, 6])
+def test_tma_matmul_conditional_accumulator_reset(num_ctas, snapshot, num_stages, iterations, device):
+    # A predicated reset must wait for the MMA writing the same TMEM buffer,
+    # including when snapshots are taken on a different condition.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, SNAPSHOT: tl.constexpr, ITERATIONS: tl.constexpr):
+        acc = tl.zeros((256, 16), tl.float32)
+        for k in range(ITERATIONS):
+            acc = tl.dot(A.load([0, k * 128]), B.load([k * 128, 0]), acc)
+            if SNAPSHOT:
+                if k % 2 == 0:
+                    C.store([(k // 2) * 256, 0], acc)
+            if k % 4 == 3:
+                acc = tl.full((256, 16), 1.0, tl.float32)
+        C.store([(ITERATIONS // 2) * 256, 0], acc)
+
+    a = torch.ones((256, iterations * 128), device=device, dtype=torch.float16)
+    b = torch.ones((iterations * 128, 16), device=device, dtype=torch.float16)
+    c = torch.empty(((iterations // 2 + 1) * 256, 16), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 128])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [128, 16])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, snapshot, iterations, num_ctas=num_ctas, num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert ("tcgen05.mma.cta_group::2" in compiled.asm["ptx"]) == (num_ctas == 2)
+    values = [128, 384, 1] if iterations == 4 else [128, 384, 129, 257]
+    expected = torch.tensor(values, device=device, dtype=torch.float32)
+    expected = expected[:, None, None].expand(len(values), 256, 16).reshape_as(c)
+    if snapshot:
+        torch.testing.assert_close(c, expected, atol=0, rtol=0)
+    else:
+        torch.testing.assert_close(c[-256:], expected[-256:], atol=0, rtol=0)
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")
