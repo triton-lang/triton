@@ -2145,33 +2145,69 @@ def test_explicit_graph_storage_survives_executable_close(with_gsan):
 
 
 @gluon.jit
-def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr, CGA: gl.constexpr,
+def _bulk_shadow_kernel(src, out, take_copy, bar, WORDS: gl.constexpr, OFFSET: gl.constexpr, CGA: gl.constexpr,
                         BLOCK: gl.constexpr, MULTICAST: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
     shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=CGA)
     smem = gl.allocate_shared_memory(gl.int32, [BLOCK], shared, gl.full((BLOCK, ), -1, gl.int32, layout))
-    bar = hopper.mbarrier.allocate_mbarrier()
-    hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, WORDS * smem.nbytes_per_cta // smem.numel, pred=take_copy)
     hopper.bulk.async_load(smem, src + OFFSET, WORDS, bar, pred=take_copy, multicast=MULTICAST)
     hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
     gl.store(out + gl.arange(0, BLOCK, layout), smem.load(layout))
-    hopper.mbarrier.invalidate(bar)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("take_copy", [False, True])
-@pytest.mark.parametrize("words,offset", [(4, 0), (12, 4), (28, 4)])
-@pytest.mark.parametrize("cga,multicast", [([], False), ([[1]], False), ([[0]], True), ([[1], [0]], False),
-                                           ([[0], [1]], True)])
-def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy, cga, multicast):
+@pytest.mark.parametrize("cga,multicast,words,offset", [
+    ([], False, 4, 0),
+    ([], False, 12, 4),
+    ([], False, 28, 4),
+    ([], False, 132, 4),
+    ([[1]], False, 32, 0),
+    ([[1]], False, 256, 4),
+    ([[0]], True, 32, 0),
+    ([[0]], True, 256, 4),
+    ([[1], [0]], False, 32, 0),
+    ([[1], [0]], False, 256, 4),
+    ([[0], [1]], True, 32, 0),
+    ([[0], [1]], True, 256, 4),
+])
+@pytest.mark.parametrize("warp_specialized", [False, True])
+@pytest.mark.parametrize("source_granularity", [4, 16])
+def test_bulk_async_load_source_range(fresh_knobs, words, offset, take_copy, cga, multicast, warp_specialized,
+                                      source_granularity):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr, CGA: gl.constexpr, BLOCK: gl.constexpr,
+               MULTICAST: gl.constexpr, WARP_SPECIALIZED: gl.constexpr):
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        if WARP_SPECIALIZED:
+            gl.warp_specialize([(idle, ()),
+                                (_bulk_shadow_kernel,
+                                 (src, out, take_copy, bar, WORDS, OFFSET, CGA, BLOCK, MULTICAST))], [4])
+        else:
+            _bulk_shadow_kernel(src, out, take_copy, bar, WORDS, OFFSET, CGA, BLOCK, MULTICAST)
+        hopper.mbarrier.invalidate(bar)
+
     cga = tuple(map(tuple, cga))
     tiles = 2**sum(any(basis) for basis in cga)
-    block = 32 * tiles
-    src = torch.arange(block + 8, device="cuda", dtype=torch.int32)
-    out = torch.empty(block, device="cuda", dtype=torch.int32)
+    block_per_cta = max(32, triton.next_power_of_2(words))
+    block = block_per_cta * tiles
+    source_pool = create_mem_pool(shadow_granularity=source_granularity)
+    with torch.cuda.use_mem_pool(source_pool):
+        src = torch.arange(block + 8, device="cuda", dtype=torch.int32)
+    output_pool = create_mem_pool(shadow_granularity=4)
+    with torch.cuda.use_mem_pool(output_pool):
+        out = torch.empty(block, device="cuda", dtype=torch.int32)
     before = _shadow_cells_for_tensor(src)
-    _bulk_shadow_kernel[(1, )](src, out, take_copy, words * tiles, offset, cga, block, multicast, num_ctas=2**len(cga))
+    kernel[(1, )](src, out, take_copy, words * tiles, offset, cga, block, multicast, warp_specialized,
+                  num_ctas=2**len(cga))
     torch.cuda.synchronize()
     after = _shadow_cells_for_tensor(src)
     changed = torch.zeros(block + 8, dtype=torch.bool)
@@ -2181,5 +2217,7 @@ def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy, cga, 
     expected = torch.full_like(out, -1)
     if take_copy:
         for tile in range(tiles):
-            expected[tile * 32:tile * 32 + words] = src[offset + tile * words:offset + tile * words + words]
+            dst_start = tile * block_per_cta
+            src_start = offset + tile * words
+            expected[dst_start:dst_start + words] = src[src_start:src_start + words]
     torch.testing.assert_close(out, expected)

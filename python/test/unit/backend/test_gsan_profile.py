@@ -9,6 +9,7 @@ import triton.language as tl
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gsan import create_mem_pool as create_race_mem_pool
 from triton.experimental.gsan.profile import AllocationProfile, is_installed
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -84,6 +85,20 @@ def _ws_fill(output):
     gl.warp_specialize([(_ws_partition, (output, 0)), (_ws_partition, (output, 128))], [4], [24])
 
 
+@gluon.jit
+def _bulk_copy(source, output, pred, WORDS: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    smem = gl.allocate_shared_memory(gl.int32, [256], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                     gl.full((256, ), -1, gl.int32, layout))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, WORDS * 4, pred=pred)
+    hopper.bulk.async_load(smem, source + 4, WORDS, bar, pred=pred)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred)
+    gl.store(output + gl.arange(0, 256, layout), smem.load(layout))
+    hopper.mbarrier.invalidate(bar)
+
+
 def _allocation(profile, name):
     report = profile.report()
     assert report["warnings"] == []
@@ -134,6 +149,26 @@ def test_gsan_profile_cells_read_counts_distinct_cells(count, reads, fresh_knobs
     assert _allocation(profile, "source")["cells_read"] == expected
     assert _allocation(profile, "output")["cells_read"] == 0
     torch.testing.assert_close(output, torch.full_like(output, 17))
+
+
+@pytest.mark.skipif("not is_hopper_or_newer()", reason="Bulk copies require Hopper or newer")
+@pytest.mark.parametrize("words", [12, 132])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_gsan_profile_bulk_copy_observes_whole_range(words, take_copy, fresh_knobs):
+    with AllocationProfile() as profile:
+        source = torch.empty(1024, dtype=torch.int32, device="cuda")
+        output = torch.empty(256, dtype=torch.int32, device="cuda")
+        profile.track(source, name="source")
+        _fill[(1, )](source, source.numel())
+        _bulk_copy[(1, )](source, output, take_copy, words)
+    row = _allocation(profile, "source")
+    assert row["max_granularity"] == 16
+    assert row["write_once_candidate"]
+    assert row["cells_read"] == (words // 4 if take_copy else 0)
+    expected = torch.full_like(output, -1)
+    if take_copy:
+        expected[:words] = 17
+    torch.testing.assert_close(output, expected)
 
 
 def test_gsan_profile_partial_cell_writes_are_not_byte_rewrites(fresh_knobs):

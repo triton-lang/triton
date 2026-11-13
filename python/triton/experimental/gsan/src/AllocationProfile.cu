@@ -134,6 +134,14 @@ extern "C" GSAN_DEVICE void __triton_gsan_store_tensor(void *state,
                                                        const char *, unsigned) {
   gsan_profile::tensor(state, stack, count, bytes, gsan_profile::kWrite);
 }
+extern "C" GSAN_DEVICE void __triton_gsan_load_range(void *state,
+                                                     const void *ptr, int bytes,
+                                                     int pred, const char *,
+                                                     unsigned) {
+  if (pred)
+    gsan_profile::recordRange(state, reinterpret_cast<gsan::uintptr_t>(ptr),
+                              bytes, gsan_profile::kRead, 0, true);
+}
 extern "C" GSAN_DEVICE void
 __triton_gsan_load_tensor_desc(void *state, const void *desc, const int *coords,
                                int rank, const gsan::int16_t *shape, int bytes,

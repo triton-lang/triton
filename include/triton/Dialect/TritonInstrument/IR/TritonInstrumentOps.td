@@ -285,6 +285,21 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanLoadRangeOp
+    : TTI_Op<"experimental_gsan_load_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory read for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
              [FoldTruePredicate, TypesMatchWith<"mask type matches ptr type", "ptr", "mask",

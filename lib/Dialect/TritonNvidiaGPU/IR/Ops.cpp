@@ -951,7 +951,8 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
     return emitOpError("does not support padded shared-memory layouts");
   if (encoding.getAlignment() < 16)
     return emitOpError("destination layout must guarantee 16-byte alignment");
-  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(dstTy.getElementType()) / 8;
+  unsigned elementBytes =
+      getIntOrFloatOrPtrBitWidth(dstTy.getElementType()) / 8;
   if (!elementBytes)
     return emitOpError("destination elements must occupy at least one byte");
 
@@ -959,9 +960,9 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
   if (linear.getNumOutDims() != dstTy.getRank())
     return emitOpError("destination must select a single shared-memory buffer");
   auto withinView = [&](ArrayRef<int32_t> basis) {
-    return llvm::all_of(llvm::zip_equal(basis, dstTy.getShape()), [](auto pair) {
-      return std::get<0>(pair) < std::get<1>(pair);
-    });
+    return llvm::all_of(
+        llvm::zip_equal(basis, dstTy.getShape()),
+        [](auto pair) { return std::get<0>(pair) < std::get<1>(pair); });
   };
   auto block = StringAttr::get(getContext(), "block");
   if (!llvm::all_of(linear.getBases().lookup(block), withinView))
@@ -978,7 +979,8 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
           "destination view must be contiguous in physical shared memory");
   }
   if (layout.bytesPerCTA < 16)
-    return emitOpError("destination view must contain at least 16 bytes per CTA");
+    return emitOpError(
+        "destination view must contain at least 16 bytes per CTA");
   if (getSrc().getType().getAddressSpace() != PtrAddrSpace::Global)
     return emitOpError("requires a global-memory source pointer");
   if (toLinearLayout(getBarrier().getType())
@@ -987,10 +989,16 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
     return emitOpError("requires a separate completion barrier in each CTA");
   unsigned numTiles = 1u << llvm::popcount(layout.splitMask);
   if (getNumBytes() <= 0 || getNumBytes() % (16 * numTiles))
-    return emitOpError("total byte count must be a positive multiple of 16 times "
-                       "the number of distinct CTA tiles");
+    return emitOpError(
+        "total byte count must be a positive multiple of 16 times "
+        "the number of distinct CTA tiles");
   if (getNumBytesPerCTA() > layout.bytesPerCTA)
-    return emitOpError("total byte count exceeds the destination view capacity");
+    return emitOpError(
+        "total byte count exceeds the destination view capacity");
+  if (linear.getInDimSize(block) > 1 &&
+      getNumBytesPerCTA() != layout.bytesPerCTA)
+    return emitOpError(
+        "multi-CTA copies must fill the entire destination view");
   return success();
 }
 

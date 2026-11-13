@@ -2437,8 +2437,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
   tt.func @bulk_partial_total_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
-    // 768 total bytes fit: each CTA copies 384 into its 512-byte destination.
+    // Aligned partial copies are unsupported when the destination spans CTAs.
+    // expected-error @below {{multi-CTA copies must fill the entire destination view}}
     ttng.async_bulk_copy_global_to_local %src, %dst, 768, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+!dst = !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<2xi64, #bar_layout, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_partial_replicated_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // Replicated destinations also require a full-view copy.
+    // expected-error @below {{multi-CTA copies must fill the entire destination view}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }

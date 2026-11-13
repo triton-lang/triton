@@ -18,7 +18,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/MathExtras.h"
 
 #include <optional>
 
@@ -55,28 +54,14 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
 }
 
 static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
-  // Reuse the ordinary range-aware load instrumentation, distributing the
-  // source words across the CTA. Keep the mask: a non-power-of-two copy must
-  // neither inspect nor record reads beyond its actual source range.
+  // Each issuing CTA reads one contiguous row. Pass its exact byte range to
+  // the runtime instead of materializing a tensor of source pointers.
   ImplicitLocOpBuilder b(op.getLoc(), op);
   auto copyLayout = ttng::getBulkCopyLayout(op.getDst().getType());
-  int words = op.getNumBytesPerCTA() / 4;
-  int numCTAs = ttg::lookupNumCTAs(op);
-  int extent = llvm::PowerOf2Ceil(words);
-  auto layout = ttg::BlockedEncodingAttr::get(
-      op.getContext(), {1}, {32}, {unsigned(ttg::lookupNumWarps(op))}, {0},
-      ttg::CGAEncodingAttr::get1DLayout(op.getContext(), numCTAs));
-  // Give every issuing CTA its own instrumentation lanes, even for a
-  // replicated destination. The source address mapping removes replica bits.
-  auto offsetsTy =
-      RankedTensorType::get({extent * numCTAs}, b.getI32Type(), layout);
-  Value offsets = tt::MakeRangeOp::create(b, offsetsTy, 0, extent * numCTAs);
-  Value localMask = arith::ConstantOp::create(
-      b, DenseElementsAttr::get(offsetsTy, b.getI32IntegerAttr(extent - 1)));
-  offsets = arith::AndIOp::create(b, offsets, localMask);
+  int numBytes = op.getNumBytesPerCTA();
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value sourceOffset = arith::ConstantIntOp::create(b, 0, 32);
-  unsigned stride = words;
+  unsigned stride = numBytes;
   for (unsigned bit = 1; bit <= copyLayout.splitMask; bit <<= 1) {
     if (!(copyLayout.splitMask & bit))
       continue;
@@ -89,10 +74,6 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
     sourceOffset = arith::AddIOp::create(b, sourceOffset, delta);
     stride *= 2;
   }
-  Value limit = arith::ConstantOp::create(
-      b, DenseElementsAttr::get(offsetsTy, b.getI32IntegerAttr(words)));
-  Value mask =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::ult, offsets, limit);
   Value issuerPred = op.getPred();
   if (op.getMulticast()) {
     Value replica = arith::AndIOp::create(
@@ -103,15 +84,10 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
                               arith::ConstantIntOp::create(b, 0, 32));
     issuerPred = arith::AndIOp::create(b, issuerPred, leader);
   }
-  Value pred = tt::SplatOp::create(b, mask.getType(), issuerPred);
-  mask = arith::AndIOp::create(b, mask, pred);
-  auto ptrTy = tt::PointerType::get(b.getI32Type());
+  auto ptrTy = tt::PointerType::get(b.getI8Type());
   Value ptr = tt::BitcastOp::create(b, ptrTy, op.getSrc());
   ptr = tt::AddPtrOp::create(b, ptrTy, ptr, sourceOffset);
-  auto ptrsTy = RankedTensorType::get({extent * numCTAs}, ptrTy, layout);
-  Value ptrs = tt::SplatOp::create(b, ptrsTy, ptr);
-  ptrs = tt::AddPtrOp::create(b, ptrsTy, ptrs, offsets);
-  ExperimentalGSanTensorAccessOp::create(b, ptrs, mask, /*isStore=*/false);
+  ExperimentalGSanLoadRangeOp::create(b, ptr, numBytes, issuerPred);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,

@@ -100,9 +100,9 @@ FromCTALowering getFromCTALowering(Location loc,
   pred = b.and_(pred, b.icmp_eq(sourceCTA, b.i32_val(0)));
 
   if (supportsMBarrierMulticast)
-    return {pred, barrierPtr,
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask,
-                                                 ctaId)};
+    return {
+        pred, barrierPtr,
+        LLVM::NVIDIA::createMulticastMask(loc, rewriter, broadcastMask, ctaId)};
 
   Value peerOffset = b.i32_val(0);
   unsigned srcBit = 0;
@@ -451,7 +451,7 @@ struct ArriveBarrierOpConversion
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
     if (op.isMulticast())
-      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+      multicastMask = LLVM::NVIDIA::createMulticastMask(
           loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;

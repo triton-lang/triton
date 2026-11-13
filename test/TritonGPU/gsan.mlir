@@ -524,12 +524,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: tt.func @linear_bulk_range
   tt.func @linear_bulk_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
-    // CHECK: tt.make_range {end = 16 : i32, start = 0 : i32}
-    // CHECK: arith.constant dense<12>
-    // CHECK: arith.cmpi ult
-    // CHECK: arith.andi
+    // CHECK-NOT: tt.make_range
+    // CHECK: tt.bitcast %arg0 : !tt.ptr<i32> -> !tt.ptr<i8>
     // CHECK: tt.addptr
-    // CHECK: tti.experimental_gsan_tensor_access {{.*}}, false,
+    // CHECK: tti.experimental_gsan_load_range {{.*}}, 48, %arg3 : <i8>
     // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
     ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return

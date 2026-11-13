@@ -6127,3 +6127,34 @@ def test_bulk_async_load_requires_compile_time_count():
     source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_elements": "i32"}, {})
     with pytest.raises(CompilationError, match="num_elements must be a compile-time integer"):
         triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga,multicast", [([[1]], False), ([[0]], True), ([[1], [0]], True), ([[0], [1]], False)])
+@pytest.mark.parametrize("num_elements", [128, 256])
+@pytest.mark.parametrize("pred", [False, True])
+def test_bulk_async_load_cluster_count(cga, multicast, num_elements, pred):
+
+    @gluon.jit
+    def kernel(src, SHARED: ttgl.constexpr, NUM_ELEMENTS: ttgl.constexpr, PRED: ttgl.constexpr,
+               MULTICAST: ttgl.constexpr):
+        allocation = ttgl.allocate_shared_memory(ttgl.int32, [2, 256], SHARED)
+        smem = allocation.index(1)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, NUM_ELEMENTS * smem.nbytes_per_cta // smem.numel, pred=PRED)
+        hopper.bulk.async_load(smem, src, NUM_ELEMENTS, bar, pred=PRED, multicast=MULTICAST)
+        hopper.mbarrier.wait(bar, phase=0, pred=PRED)
+        hopper.mbarrier.invalidate(bar)
+
+    shared = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)
+    source = gluon.GluonASTSource(
+        kernel, {"src": "*i32"}, {"SHARED": shared, "NUM_ELEMENTS": num_elements, "PRED": pred, "MULTICAST": multicast})
+    target = GPUTarget("cuda", 90, 32)
+    options = {"num_ctas": 2**len(cga)}
+    if num_elements != 256:
+        with pytest.raises(CompilationError, match="num_elements must equal smem.numel for multi-CTA copies"):
+            triton.compile(source, target=target, options=options)
+    else:
+        # The whole indexed view is sufficient; the allocation is twice as large.
+        compiled = triton.compile(source, target=target, options=options)
+        assert ("cp.async.bulk" in compiled.asm["ptx"]) == pred

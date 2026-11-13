@@ -8423,8 +8423,8 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
 
 
 @gluon.jit
-def _bulk_copy_kernel(src, out, take_copy, NUM_ELEMENTS: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
-                      DST_OFFSET: ttgl.constexpr):
+def _bulk_copy_kernel(src, out, take_copy, NUM_ELEMENTS: ttgl.constexpr, BLOCK: ttgl.constexpr,
+                      SRC_OFFSET: ttgl.constexpr, DST_OFFSET: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
     shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
     initial = ttgl.full((2 * BLOCK, ), -7, src.dtype.element_ty, layout)
@@ -8576,14 +8576,13 @@ def _bulk_cluster_kernel(src, out, num_elements: ttgl.constexpr, take_copy, CGA:
     ([[0], [0]], True, 0),
 ])
 @pytest.mark.parametrize("take_copy", [False, True])
-@pytest.mark.parametrize("elements_per_cta", [12, 128])
 @pytest.mark.parametrize("mode", ["", "consan"])
-def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, elements_per_cta, mode, device, fresh_knobs):
+def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, mode, device, fresh_knobs):
     triton.knobs.compilation.instrumentation_mode = mode
     cga = tuple(map(tuple, cga))
     tiles = 2**sum(any(basis) for basis in cga)
     block = 128 * tiles
-    num_elements = elements_per_cta * tiles
+    num_elements = block
     src = torch.arange(3 * num_elements, dtype=torch.int32, device=device)
     replicas = 1
     out_cga = []
@@ -8595,11 +8594,11 @@ def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, elements_p
             replicas *= 2
     out_layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=out_cga)
     out = torch.empty(3 * replicas * block, dtype=src.dtype, device=device)
-    _bulk_cluster_kernel[(1, )](src, out, num_elements, take_copy, cga, block, multicast, from_cta, replicas, out_layout,
-                                num_ctas=2**len(cga))
+    _bulk_cluster_kernel[(1, )](src, out, num_elements, take_copy, cga, block, multicast, from_cta, replicas,
+                                out_layout, num_ctas=2**len(cga))
     expected = torch.full((3, replicas, tiles, 128), -7, dtype=src.dtype, device=device)
     if take_copy:
-        expected[:, :, :, :elements_per_cta] = src.view(3, 1, tiles, elements_per_cta)
+        expected[:] = src.view(3, 1, tiles, 128)
     torch.testing.assert_close(out, expected.flatten(), atol=0, rtol=0)
 
 
