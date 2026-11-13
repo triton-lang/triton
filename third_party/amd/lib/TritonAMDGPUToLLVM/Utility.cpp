@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/Sys/GetEnv.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::amdgpu::ISAFamily;
@@ -1046,9 +1047,34 @@ static Value resolveLoopBackedge(BlockArgument bbArg) {
   return yieldOp.getOperand(iterArgIdx);
 }
 
+// True if `a` and `b` are the same region, or one is nested in the other
+// through exactly one scf.if.
+static bool isSameOrAcrossOneIfLevel(Region *a, Region *b) {
+  if (a == b)
+    return true;
+  auto nestedViaIf = [](Region *inner, Region *outer) {
+    Operation *parentOp = inner->getParentOp();
+    return isa_and_nonnull<scf::IfOp>(parentOp) &&
+           parentOp->getParentRegion() == outer;
+  };
+  return nestedViaIf(a, b) || nestedViaIf(b, a);
+}
+
+// True if `head`'s result reaches `operandDef`. A forward slice that enters an
+// scf.if through its condition also contains the branch body, so slice
+// membership alone does not mean `head` feeds a dot there.
+static bool headFeedsDotOperand(Operation *head, Operation *operandDef) {
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  SetVector<Operation *> bwdSlices;
+  (void)getBackwardSlice(operandDef, &bwdSlices, bwdOpt);
+  return bwdSlices.contains(head);
+}
+
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return isSameOrAcrossOneIfLevel(op->getParentRegion(),
+                                    dotOp->getParentRegion());
   };
   ForwardSliceOptions fwdOpt;
   fwdOpt.filter = isInSameRegion;
@@ -1060,7 +1086,10 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
                                            : dOp.getB().getDefiningOp();
       if (dotOperand && fwdSlices.contains(dotOperand)) {
-        return true;
+        // Across an scf.if, require that dotOp feeds the operand itself.
+        bool sameRegion = dOp->getParentRegion() == dotOp->getParentRegion();
+        if (sameRegion || headFeedsDotOperand(dotOp, dotOperand))
+          return true;
       }
     }
   }
@@ -1100,7 +1129,8 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
 
 bool isChainDotTail(tt::DotOpInterface dotOp) {
   auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return isSameOrAcrossOneIfLevel(op->getParentRegion(),
+                                    dotOp->getParentRegion());
   };
   BackwardSliceOptions bwdOpt;
   bwdOpt.omitBlockArguments = true;
