@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
+from triton.runtime.errors import OutOfResources
 from dataclasses import dataclass
 import ctypes
 from typing import Any, Dict, Tuple
@@ -856,6 +857,9 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        max_shared = amd.get_shared_memory_size(options.arch)
+        if metadata["shared"] > max_shared:
+            raise OutOfResources(metadata["shared"], max_shared, "shared memory")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -919,10 +923,6 @@ class HIPBackend(BaseBackend):
                 dump_ir=dump_llvm_ir,
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
-        shared_static = re.search(r"^\s*\.amdhsa_group_segment_fixed_size\s+(\d+)\s*$", amdgcn, re.MULTILINE)
-        assert shared_static is not None
-        metadata["shared_static"] = int(shared_static.group(1))
-        metadata["shared"] = metadata["shared_static"]
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
