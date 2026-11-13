@@ -650,6 +650,29 @@ def test_async_shared_store_packed_f16():
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="GDC requires Hopper or newer")
+@pytest.mark.parametrize("arch", [hopper, blackwell, rubin], ids=["hopper", "blackwell", "rubin"])
+@pytest.mark.parametrize("launch_pdl", [False, True])
+def test_gdc_arch_exports(arch, launch_pdl):
+
+    @gluon.jit
+    def kernel(X, Y):
+        arch.gdc.wait()
+        pid = ttgl.program_id(0)
+        ttgl.store(Y + pid, ttgl.load(X + pid) + 1)
+        arch.gdc.launch_dependents()
+
+    x = torch.arange(16, device="cuda", dtype=torch.int32)
+    intermediate = torch.empty_like(x)
+    out = torch.empty_like(x)
+    kernel[(16, )](x, intermediate, launch_pdl=launch_pdl)
+    compiled = kernel[(16, )](intermediate, out, launch_pdl=launch_pdl)
+
+    torch.testing.assert_close(out, x + 2)
+    assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    assert "griddepcontrol.launch_dependents" in compiled.asm["ptx"]
+
+
 @gluon.jit
 def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
