@@ -244,15 +244,20 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_f64_fp8_conversion
-  tt.func @test_f64_fp8_conversion(%in0: tensor<128xf64, #blocked>, %in1: tensor<128xf8E4M3FN, #blocked>) {
+  tt.func private @test_f64_fp8_conversion(%in0: tensor<128xf64, #blocked>, %in1: tensor<128xf8E4M3FN, #blocked>) -> (tensor<128xf8E4M3FN, #blocked>, tensor<128xf64, #blocked>) {
     // CHECK-COUNT-2: llvm.fptrunc %{{.*}} : f64 to f32
-    // CHECK: cvt.rn.satfinite.e4m3x2.f32
+    // CHECK: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E4M3FN)
+    // CHECK-COUNT-2: llvm.fptrunc %{{.*}} : f64 to f32
+    // CHECK: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E4M3FN)
     %out0 = tt.fp_to_fp %in0, rounding = rtne : tensor<128xf64, #blocked> -> tensor<128xf8E4M3FN, #blocked>
-    // CHECK: cvt.rn.f16x2.e4m3x2
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xf16>
+    // CHECK-COUNT-2: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK-COUNT-2: llvm.fpext %{{.*}} : f32 to f64
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xf16>
     // CHECK-COUNT-2: llvm.fpext %{{.*}} : f16 to f32
     // CHECK-COUNT-2: llvm.fpext %{{.*}} : f32 to f64
     %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf64, #blocked>
-    tt.return
+    tt.return %out0, %out1 : tensor<128xf8E4M3FN, #blocked>, tensor<128xf64, #blocked>
   }
 }
 
