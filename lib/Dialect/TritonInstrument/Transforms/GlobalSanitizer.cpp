@@ -346,7 +346,7 @@ static void instrumentClusterBarrierEquivalents(ModuleOp module) {
       if (ttg::lookupNumCTAs(op) == 1)
         continue;
       auto stages = tt::getAtomicBarrierStages(
-          atomic, tt::atomicResultHasCTABroadcast(op));
+          atomic.getMemSemantic(), tt::atomicResultHasCTABroadcast(op));
       if (stages.beforeMemoryEffects)
         addPoint(op, /*before=*/true, /*materializeBarrier=*/true);
       if (stages.afterMemoryEffects || stages.betweenMemoryEffects) {

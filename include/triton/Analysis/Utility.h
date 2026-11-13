@@ -402,8 +402,6 @@ struct BarrierStages {
 // broadcast barrier at that scope supplies the post-atomic rendezvous itself.
 BarrierStages getAtomicBarrierStages(MemSemantic semantic,
                                      bool hasResultBarrier);
-BarrierStages getAtomicBarrierStages(AtomicOpInterface op,
-                                     bool hasResultBarrier);
 
 // Lane bits to clear when shuffling an atomic result from its issuing lane.
 // Returns nullopt when broadcasting the result requires shared memory.

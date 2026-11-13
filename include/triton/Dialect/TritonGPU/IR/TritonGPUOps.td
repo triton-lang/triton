@@ -551,7 +551,6 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
 }
 
 def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
-  AtomicOpInterface,
   FoldTruePredicate,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
@@ -586,10 +585,6 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
   let results = (outs TT_Tensor:$result);
 
   let extraClassDeclaration = [{
-    ::mlir::Value getPtr() { return getDst(); }
-    ::mlir::triton::MemSemantic getMemSemantic() {
-      return ::mlir::triton::MemSemantic::RELAXED;
-    }
     bool isCommutative();
   }];
 

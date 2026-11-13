@@ -432,7 +432,7 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
 
 
 def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
-    [AtomicOpInterface, FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
@@ -441,17 +441,11 @@ def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
-  let extraClassDeclaration = [{
-    ::mlir::Value getPtr() { return getLock(); }
-    ::mlir::triton::MemSemantic getMemSemantic() {
-      return ::mlir::triton::MemSemantic::ACQUIRE;
-    }
-  }];
 }
 
 
 def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
-    [AtomicOpInterface, FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.
@@ -459,12 +453,6 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
   let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
-  }];
-  let extraClassDeclaration = [{
-    ::mlir::Value getPtr() { return getLock(); }
-    ::mlir::triton::MemSemantic getMemSemantic() {
-      return ::mlir::triton::MemSemantic::RELEASE;
-    }
   }];
 }
 

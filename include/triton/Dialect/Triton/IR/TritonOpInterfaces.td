@@ -182,7 +182,7 @@ def EfficientLayoutOpInterface : OpInterface<"EfficientLayoutOpInterface"> {
 
 def AtomicOpInterface : OpInterface<"AtomicOpInterface"> {
   let description = [{
-    Common interface for atomic operations with memory-ordering semantics.
+    Common interface for atomic accesses to global memory.
   }];
 
   let cppNamespace = "::mlir::triton";

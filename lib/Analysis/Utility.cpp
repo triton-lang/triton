@@ -1311,16 +1311,6 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
   return stages;
 }
 
-BarrierStages getAtomicBarrierStages(AtomicOpInterface op,
-                                     bool hasResultBarrier) {
-  // Infer the standard ordering barriers only for an explicit target access.
-  // Opaque synchronization ops such as sanitizer locks have their own lowering.
-  if (!hasEffect<MemoryEffects::Read>(op.getOperation(), op.getPtr()) &&
-      !hasEffect<MemoryEffects::Write>(op.getOperation(), op.getPtr()))
-    return {};
-  return getAtomicBarrierStages(op.getMemSemantic(), hasResultBarrier);
-}
-
 std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
   if (result.use_empty() ||
       result.getDefiningOp()->getParentOfType<gpu::ThreadScopeOp>())
@@ -1365,15 +1355,16 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
       op->getParentOfType<gpu::ThreadScopeOp>())
     return false;
 
-  auto stages = getAtomicBarrierStages(atomic, atomicResultHasCTABroadcast(op));
+  auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
+                                       atomicResultHasCTABroadcast(op));
   return stages.hasBarrier();
 }
 
 bool needsClusterBarrier(Operation *op) {
   if (isa<ClusterBarrierOp>(op))
     return true;
-  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp>(
-          op))
+  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp,
+          gpu::LocalAtomicScatterRMWOp>(op))
     return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);
 }
