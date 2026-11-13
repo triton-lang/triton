@@ -2,10 +2,12 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/CFG.h"
 #include <optional>
 
 namespace mlir {
@@ -39,41 +41,6 @@ struct BufferIndexExpr {
 };
 
 namespace {
-
-enum class DFSState { Visiting, Visited };
-
-/// A CFG is reducible iff every retreating edge in a depth-first traversal is
-/// a backedge, i.e. its target dominates its source. Only blocks reachable
-/// from the function entry matter to membar's forward dataflow analysis.
-bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
-                    DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  states[block] = DFSState::Visiting;
-
-  for (Block *successor : block->getTerminator()->getSuccessors()) {
-    auto it = states.find(successor);
-    if (it == states.end()) {
-      if (!isReducibleCFG(successor, states, dominanceInfo, loopHeaders))
-        return false;
-      continue;
-    }
-    if (it->second == DFSState::Visiting) {
-      if (!dominanceInfo.dominates(successor, block))
-        return false;
-      loopHeaders.insert(successor);
-    }
-  }
-
-  states[block] = DFSState::Visited;
-  return true;
-}
-
-bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  DenseMap<Block *, DFSState> states;
-  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo,
-                        loopHeaders);
-}
 
 std::optional<int64_t> getConstantIntValue(Value v) {
   APInt val;
@@ -262,10 +229,28 @@ triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
 } // namespace
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
-    : dominanceInfo(funcOp),
-      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo, loopHeaders)) {}
+    : dominanceInfo(funcOp), hasReducibleCFG(true) {
+  Region &body = funcOp.getFunctionBody();
+  if (const auto *info = getLoopInfo(&body)) {
+    // A CFG is reducible iff every retreating edge in a depth-first traversal
+    // is a backedge, i.e. its target dominates its source. Only blocks
+    // reachable from the function entry matter to membar's forward dataflow
+    // analysis.
+    llvm::ReversePostOrderTraversal<Block *> blocks(&body.front());
+    hasReducibleCFG = !llvm::containsIrreducibleCFG<Block *>(blocks, *info);
+  }
+}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
+
+const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
+  if (region->hasOneBlock())
+    return nullptr;
+  auto &info = loops[region];
+  if (!info)
+    info = std::make_unique<CFGLoopInfo>(dominanceInfo.getDomTree(region));
+  return info.get();
+}
 
 bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
                                        const AllocationSlice &b) {
@@ -330,12 +315,15 @@ bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
 }
 
 bool BufferIndexAnalysis::entersLoop(Operation *terminator) const {
-  if (!isa<BranchOpInterface>(terminator))
+  if (!isa<BranchOpInterface>(terminator) ||
+      !isa<FunctionOpInterface>(terminator->getParentOp()))
     return false;
-  return llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
-    return loopHeaders.contains(successor) &&
-           !isBackedgeSuccessor(terminator, successor);
-  });
+  const auto *info = getLoopInfo(terminator->getParentRegion());
+  return info &&
+         llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
+           return info->isLoopHeader(successor) &&
+                  !isBackedgeSuccessor(terminator, successor);
+         });
 }
 
 } // namespace mlir

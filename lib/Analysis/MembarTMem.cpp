@@ -1,15 +1,38 @@
 #include "MembarCFG.h"
+#include "triton/Analysis/MembarPlacement.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::nvidia_gpu;
 
 namespace mlir::triton::membar {
+
+TMemModel::TMemModel(ModuleOp module, BufferRegionAnalysis &regions)
+    : regions(regions) {
+  module.walk([&](TMEMAllocOp alloc) {
+    Value root = alloc.getResult();
+    // A noinline function can execute in more than one warp role.
+    Region *owner = isKernel(alloc->getParentOfType<FunctionOpInterface>()) &&
+                            hasRegionLocalUses(root)
+                        ? alloc->getParentRegion()
+                        : nullptr;
+    allocations.emplace_back(regions.getFootprint(root), owner);
+  });
+}
+
+bool TMemModel::isPrivate(const BufferRegionFootprint *footprint,
+                          Region *issuer) const {
+  // Different descriptor roots can reuse the same physical TMEM words.
+  return footprint && llvm::none_of(allocations, [&](const auto &allocation) {
+           auto [other, owner] = allocation;
+           return owner != issuer && mayOverlap(footprint, other);
+         });
+}
 
 struct TMemModel::Info {
   // (row, word column) -> warp.
@@ -26,7 +49,6 @@ struct TMemModel::Info {
   }
 };
 
-TMemModel::TMemModel(BufferRegionAnalysis &regions) : regions(regions) {}
 TMemModel::~TMemModel() = default;
 
 bool TMemModel::isSameWarp(Operation *lhsOp, Operation *rhsOp) {
@@ -125,14 +147,6 @@ static bool isTensorMemory(Value value) {
          isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace());
 }
 
-// TMEM loads and stores require completion through tmem_wait.
-static bool needsTMemWait(Operation *op) {
-  if (isa<TMEMLoadOp, TMEMStoreOp>(op))
-    return true;
-  auto alloc = dyn_cast<TMEMAllocOp>(op);
-  return alloc && alloc.getSrc();
-}
-
 static Boundary getTMemBoundary(Operation *op) {
   // Assumptions do not publish pending TMEM accesses.
   if (isa<LLVM::AssumeOp>(op))
@@ -141,13 +155,12 @@ static Boundary getTMemBoundary(Operation *op) {
   if (isa<WaitBarrierOp>(op))
     return Boundary::None;
   // Defer completion at CTA barriers until a hazard or boundary needs it.
+  // Complete each warp's accesses before its rendezvous, retaining
+  // dependencies on other warps for later hazards and publications.
   if (auto barrier = dyn_cast<gpu::BarrierOp>(op))
     return barrier.isWarp() ? Boundary::WaitAll : Boundary::None;
-  // SCF has been lowered. Complete accesses before every CFG and WS edge.
-  if (isa<BranchOpInterface, gpu::WarpSpecializeOp,
-          gpu::WarpSpecializePartitionsOp, gpu::WarpYieldOp, gpu::WarpReturnOp>(
-          op) ||
-      op->hasTrait<OpTrait::ReturnLike>())
+  // Drain the issuing warps before a role handoff or region exit.
+  if (isa<gpu::WarpSpecializeOp, gpu::WarpYieldOp, gpu::WarpReturnOp>(op))
     return Boundary::WaitAll;
   // A following 2CTA MMA needs completion before the cluster rendezvous.
   if (auto barrier = dyn_cast<ClusterBarrierOp>(op))
@@ -176,25 +189,24 @@ static Boundary getTMemBoundary(Operation *op) {
   SmallVector<MemoryEffects::EffectInstance> effects;
   memory.getEffects(effects);
   // Opaque effects can hide synchronization in inline assembly or externs.
-  Boundary boundary = Boundary::None;
-  for (const auto &effect : effects) {
-    Value value = effect.getValue();
-    if (!value && isa<SideEffects::DefaultResource>(effect.getResource()))
-      return Boundary::Publication;
-    if (value && isTensorMemory(value) &&
-        isa<MemoryEffects::Free>(effect.getEffect()))
-      boundary = Boundary::WaitAll;
-  }
-  return boundary;
+  bool publishes = llvm::any_of(effects, [](const auto &effect) {
+    return !effect.getValue() &&
+           isa<SideEffects::DefaultResource>(effect.getResource());
+  });
+  return publishes ? Boundary::Publication : Boundary::None;
 }
 
 } // namespace
 
 bool usesTensorMemory(ModuleOp module) {
+  if (auto size = module->getAttrOfType<IntegerAttr>("ttg.tensor_memory_size"))
+    return size.getInt() != 0;
+  // Standalone Membar can run before allocation attaches the module size.
   return module
       .walk([](Operation *op) {
-        return needsTMemWait(op) ? WalkResult::interrupt()
-                                 : WalkResult::advance();
+        bool usesTMEM = isa<TMEMAllocOp>(op) ||
+                        llvm::any_of(op->getOperands(), isTensorMemory);
+        return usesTMEM ? WalkResult::interrupt() : WalkResult::advance();
       })
       .wasInterrupted();
 }
@@ -205,28 +217,26 @@ void TMemModel::describe(Operation *op, OpModel &model,
   if (isa<MapElementwiseOp>(op))
     return;
   if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
-    Need kind =
-        wait.getKind() == TMEMWaitKind::LOAD ? Need::WaitLoad : Need::WaitStore;
-    model.fixedAfter |= bit(kind) | bit(Need::WarpConvergence);
+    Action kind = wait.getKind() == TMEMWaitKind::LOAD ? Action::WaitLoad
+                                                       : Action::WaitStore;
+    model.fixedAfter |= coverage(kind);
     return;
   }
-  for (const MemoryAccess &access : accesses) {
-    if (!isTensorMemory(access.value))
-      continue;
-    const auto *footprint = regions.getFootprint(access.value);
-    if (access.isRead)
-      model.tmemAccesses.push_back({footprint, false});
-    if (access.isWrite)
-      model.tmemAccesses.push_back({footprint, true});
-  }
+  // Footprints preserve TMEM rows and columns. Unknown footprints alias all
+  // TMEM.
+  for (const MemoryAccess &access : accesses)
+    if (isTensorMemory(access.value))
+      model.tmemAccesses.push_back(
+          {regions.getFootprint(access.value), access.isWrite});
   model.boundary = getTMemBoundary(op);
   // MMA and copies complete through mbarriers. Other TMEM effects need
   // ordering, but only loads and stores need tmem_wait.
   if (model.tmemAccesses.empty() || isa<MMAv5OpInterface, TMEMCopyOp>(op))
     return;
-  if (needsTMemWait(op)) {
+  if (isa<TMEMLoadOp, TMEMStoreOp, TMEMAllocOp>(op)) {
     const auto &access = llvm::getSingleElement(model.tmemAccesses);
     model.tmemProducerNeed = access.isWrite ? Need::WaitStore : Need::WaitLoad;
+    model.privateTMem = isPrivate(access.footprint, op->getParentRegion());
   } else {
     model.tmemProducerNeed = Need::RegionOrder;
   }

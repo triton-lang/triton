@@ -146,6 +146,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: rocdl.ds_bpermute
     // COMMON-NOT: llvm.{{load|store}}
+    // COMMON: rocdl.s.barrier
+    // COMMON-NOT: llvm.{{load|store}}
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: llvm.return
     %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
@@ -160,6 +162,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COMMON-NOT: llvm.{{load|store}}
     // COMMON-NOT: rocdl.s.barrier
     // COMMON-COUNT-2: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON: rocdl.s.barrier
     // COMMON-NOT: llvm.{{load|store}}
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: llvm.return
@@ -197,6 +201,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // COMMON-NOT: llvm.{{load|store}}
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON: rocdl.s.barrier
     // COMMON-NOT: llvm.{{load|store}}
     // COMMON-NOT: rocdl.s.barrier
     // COMMON: llvm.return

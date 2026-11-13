@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-membar='compute-capability=103 ptx-version=87' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-membar='compute-capability=103 ptx-version=87' --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region -allow-unregistered-dialect -verify-diagnostics=only-expected -o /dev/null
 
 
@@ -104,15 +104,14 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
-  // Layout conversion and reduction lower to CTA barriers. The stores to
-  // %a and %b share one wait before the last barrier.
+  // Layout conversion and reduction lower to CTA barriers. All three
+  // disjoint TMEM stores complete together before return.
   // CHECK-LABEL: @tmem_store_wait_scratch_boundaries
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: nvvm.barrier
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: tcgen05.st.sync.aligned
-  // CHECK: nvvm.tcgen05.wait <store>
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: nvvm.barrier
   // CHECK-NOT: nvvm.tcgen05.wait
@@ -152,17 +151,17 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
-  // Stores to %a and %b complete before their CTA and warp rendezvous.
+  // One store wait completes both disjoint stores and converges the lanes
+  // before the per-warp arrival.
   // The load from %b needs a store wait; the disjoint store to %c needs no
   // load wait. Both accesses complete after the acquire, before invalidation.
   // CHECK-LABEL: @tmem_store_wait_publication
   // CHECK: tcgen05.st.sync.aligned
-  // CHECK-NEXT: nvvm.tcgen05.wait <store>
   // CHECK-NEXT: nvvm.barrier
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
-  // CHECK-NEXT: nvvm.bar.warp.sync
+  // CHECK-NOT: nvvm.bar.warp.sync
   // CHECK-NOT: nvvm.barrier
   // CHECK: mbarrier.arrive.shared::cta
   // CHECK: tcgen05.st.sync.aligned

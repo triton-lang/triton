@@ -43,7 +43,7 @@ enum class ThreadSyncKind {
 struct ThreadSyncInfo {
   // Rendezvous requirements, not barriers provided by the operation itself.
   ThreadSyncKind kind = ThreadSyncKind::Ordinary;
-  ThreadIssuer::Kind issuer = ThreadIssuer::Unknown;
+  ThreadIssuer issuer = ThreadIssuer::Unknown;
 
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
@@ -172,13 +172,6 @@ bool hasOnlyGlobalReads(Operation *op) {
          });
 }
 
-ThreadIssuer getThreadIssuer(Operation *op) {
-  auto kind = getThreadSyncInfo(op).issuer;
-  return kind == ThreadIssuer::Unknown
-             ? ThreadIssuer{}
-             : ThreadIssuer{kind, op->getParentRegion()};
-}
-
 } // namespace
 
 bool SMemModel::isRegionLocal(Value value) {
@@ -201,8 +194,6 @@ bool SMemModel::mayNotifyPeer(Operation *op, ArrayRef<MemoryAccess> accesses) {
 
   // We may just notify a different WS partition with barriers or global atomics
   return llvm::TypeSwitch<Operation *, bool>(op)
-      // A guarded notification must join pending waits before lanes split.
-      .Case<ttg::ThreadPredicateOp>([](auto) { return true; })
       // Atomic loads and polls model a write to prevent elimination.
       .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
             tti::ExperimentalGSanAtomicLoadOp>([](auto) { return false; })
@@ -237,13 +228,9 @@ static bool scratchBufferUsesWarpSync(Operation *op) {
   return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
 }
 
-triton::BarrierStages getLocalBarrierStages(Operation *op, bool hasScratch) {
+static triton::BarrierStages getLocalBarrierStages(Operation *op,
+                                                   bool hasScratch) {
   triton::BarrierStages stages;
-  // The local-memory mask guarantees ordering of local memory accesses.
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-    stages.beforeMemoryEffects = stages.afterMemoryEffects = barrier.hasLocal();
-    return stages;
-  }
   // Explicit barriers have no accesses between their leading and trailing
   // stages. A relaxed cluster rendezvous does not order memory accesses.
   if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
@@ -293,8 +280,6 @@ bool SMemModel::hasThreadEffects(Operation *op) {
   // Assumptions issue no memory access.
   if (isa<triton::gpu::ThreadHandoffOp, LLVM::AssumeOp>(op))
     return false;
-  // ThreadPredicateOp retains unknown effects so pending waits finish before
-  // entering its restricted region, while every enclosing thread participates.
   auto effects = getEffectsRecursively(op);
   return !effects || llvm::any_of(*effects, [](const auto &effect) {
     return !isa<triton::gpu::SharedMemory, ttng::TensorMemory>(
@@ -314,8 +299,8 @@ static CompletionSync getCompletionSync(ThreadSyncInfo sync) {
 
 BlockInfo SMemModel::getThreadEffects(Operation *op) {
   BlockInfo effects;
-  effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
   auto sync = getThreadSyncInfo(op);
+  effects.threadSync.effectIssuer = sync.issuer;
   auto completion = getCompletionSync(sync);
   effects.threadSync.completion =
       completionScope && completion != CompletionSync::None
@@ -334,8 +319,7 @@ void SMemModel::addThreadDemand(BlockInfo &effects, Operation *op,
                                    ? ThreadDemandKind::GlobalReadsOnly
                                    : ThreadDemandKind::General;
   if (getThreadSyncInfo(op).requiresBefore())
-    effects.threadDemands.publicationIssuers =
-        IssuerSummary{getThreadIssuer(op)};
+    effects.threadDemands.publicationIssuer = effects.threadSync.effectIssuer;
 }
 
 SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
@@ -409,10 +393,12 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
 void SMemModel::describe(Operation *op, OpModel &model,
                          ArrayRef<MemoryAccess> accesses,
                          std::optional<BarrierStages> clusterStages) {
+  bool includeShared = accessMode != AccessMode::SynchronizationOnly;
   if (!clusterStages) {
     // A verified callback has no scratch or payload accesses to publish.
     if (isa<triton::MapElementwiseOp>(op))
       return;
+    // The local-memory mask guarantees ordering of local memory accesses.
     if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
       model.fixedAfter = barrier.hasLocal()
                              ? (barrier.isWarp() ? warpBarrier : fullBarrier)
@@ -422,7 +408,8 @@ void SMemModel::describe(Operation *op, OpModel &model,
     if (isa<ttng::TMEMWaitOp>(op)) {
       // A scalar notification must observe completion in every issuing warp.
       // The wait itself converges each warp and adds no memory-order demand.
-      model.sharedOut.threadSync.effectIssuers = IssuerSummary{ThreadIssuer{}};
+      if (includeShared)
+        model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
       model.fixedAfter = bit(Need::WarpConvergence);
       return;
     }
@@ -436,6 +423,8 @@ void SMemModel::describe(Operation *op, OpModel &model,
   model.fixedInside =
       hasScratch && barriers.betweenMemoryEffects ? fullBarrier : 0;
   model.fixedAfter = barriers.afterMemoryEffects ? fullBarrier : 0;
+  if (!includeShared)
+    return;
   if (!clusterStages) {
     auto sync = getThreadSyncInfo(op);
     // Region control flow is visited by the dataflow engine. Its children
@@ -499,7 +488,7 @@ void SMemModel::describe(Operation *op, OpModel &model,
   }
   // A diagnostic can consume a pending completion without publishing payload.
   if (isa<triton::PrintOp, triton::AssertOp>(op))
-    model.sharedOut.threadSync.effectIssuers = {};
+    model.sharedOut.threadSync.effectIssuer = ThreadIssuer::None;
 }
 
 } // namespace mlir

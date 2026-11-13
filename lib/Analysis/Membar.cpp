@@ -4,6 +4,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 
 #include <algorithm>
@@ -119,36 +121,33 @@ AllocationSlice AllocationSlice::translateToCallsite(
   return shifted;
 }
 
-bool IssuerSummary::hasSameKnownIssuer(const IssuerSummary &other) const {
-  return issuer && issuer->kind != ThreadIssuer::Unknown && *this == other;
-}
-
-void IssuerSummary::join(const IssuerSummary &other) {
-  if (other.empty())
-    return;
-  if (empty()) {
-    *this = other;
-  } else if (*this != other) {
-    issuer = ThreadIssuer{};
-  }
+static ThreadIssuer joinIssuers(ThreadIssuer a, ThreadIssuer b) {
+  if (a == ThreadIssuer::None)
+    return b;
+  if (b == ThreadIssuer::None || a == b)
+    return a;
+  return ThreadIssuer::Unknown;
 }
 
 void BlockInfo::joinThreadState(const BlockInfo &other) {
   const auto &sync = other.threadSync;
-  threadSync.effectIssuers.join(sync.effectIssuers);
+  threadSync.effectIssuer =
+      joinIssuers(threadSync.effectIssuer, sync.effectIssuer);
   threadSync.completion = std::max(threadSync.completion, sync.completion);
   threadSync.peerWaitNeedsSync |= sync.peerWaitNeedsSync;
   const auto &demands = other.threadDemands;
   threadDemands.kind = std::max(threadDemands.kind, demands.kind);
-  threadDemands.publicationIssuers.join(demands.publicationIssuers);
+  threadDemands.publicationIssuer =
+      joinIssuers(threadDemands.publicationIssuer, demands.publicationIssuer);
   threadDemands.mayNotifyPeer |= demands.mayNotifyPeer;
 }
 
-bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
-                                        const BlockInfo &effects) {
+bool BlockInfo::requiresThreadSync(const BlockInfo &pending,
+                                   const BlockInfo &effects) {
   const auto &sync = pending.threadSync;
   const auto &demands = effects.threadDemands;
-  if (sync.effectIssuers.empty() || demands.kind == ThreadDemandKind::None)
+  if (sync.effectIssuer == ThreadIssuer::None ||
+      demands.kind == ThreadDemandKind::None)
     return false;
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
@@ -156,37 +155,38 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
   return sync.completion == CompletionSync::All ||
          (sync.completion == CompletionSync::Shared &&
           (hasSharedAccesses || demands.kind == ThreadDemandKind::General)) ||
-         (!demands.publicationIssuers.empty() &&
-          !sync.effectIssuers.hasSameKnownIssuer(demands.publicationIssuers)) ||
+         (demands.publicationIssuer != ThreadIssuer::None &&
+          (sync.effectIssuer == ThreadIssuer::Unknown ||
+           sync.effectIssuer != demands.publicationIssuer)) ||
          // A notification can let a peer advance a pending wait's phase.
          // Private counter updates are already ordered by the slice hazards.
          (sync.peerWaitNeedsSync && demands.mayNotifyPeer);
 }
 
-Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
-                                        MembarInfo *membarInfo,
-                                        OpBuilder *builder, bool cluster) {
+void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
+                                  MembarInfo *membarInfo, OpBuilder *builder,
+                                  bool cluster) {
   if (!builder)
-    return nullptr;
+    return;
   auto &pending = membarInfo->pending;
-  if (!requiresThreadSync(pending, effects) &&
+  if (!BlockInfo::requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, filter, &allocation, sliceFilter))
-    return nullptr;
+    return;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
   builder->setInsertionPoint(op);
-  Operation *barrier = insertBarrier(op, builder, cluster);
+  insertBarrier(op, builder, cluster);
   membarInfo->sync();
-  return barrier;
 }
 
-Operation *MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
-                                         bool cluster) {
+void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
+                                   bool cluster) {
   OpBuilder::InsertionGuard g(*builder);
   if (cluster)
-    return ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-  return triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                        triton::gpu::AddrSpace::Local);
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+  else
+    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                   triton::gpu::AddrSpace::Local);
 }
 
 void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
@@ -241,6 +241,13 @@ void MembarAnalysis::updateMemoryEffects(
   };
   mb::OpModel model;
   shared.describe(op, model, triton::getMemoryAccesses(op), clusterStages);
+  // The flow visits guarded operations separately. Join pending completions
+  // and peer-visible waits before the lanes split.
+  if (!cluster && isa<cf::CondBranchOp, scf::IfOp>(op) &&
+      op->getOperand(0).getDefiningOp<triton::gpu::ThreadPredicateOp>()) {
+    model.sharedIn.threadDemands.kind = ThreadDemandKind::General;
+    model.sharedIn.threadDemands.mayNotifyPeer = true;
+  }
   // Model a leading barrier before handling the operation's effects.
   applyFixed(model.fixedBefore);
   syncIfNeeded(op, model.sharedIn, membarInfo, builder, cluster);

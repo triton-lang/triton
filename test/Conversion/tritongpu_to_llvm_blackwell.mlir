@@ -1548,6 +1548,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %result, %red = ttng.tmem_load %0 {redOp = #ttng.redOp<max>} : !ttg.memdesc<128x256xf32, #tmem_256N, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked_256N_4w>, tensor<128xf32, #blocked_red_256N_4w>
     tt.return %red : tensor<128xf32, #blocked_red_256N_4w>
   }
+
+  tt.func public @call_reductions() {
+    %min = tt.call @tensor_memory_ld_red_min_128x256_4_warps() : () -> tensor<128xf32, #blocked_red_256N_4w>
+    %max = tt.call @tensor_memory_ld_red_max_128x256_4_warps() : () -> tensor<128xf32, #blocked_red_256N_4w>
+    tt.return
+  }
 }
 
 // -----
@@ -1578,6 +1584,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_256N_4w_nan>) -> !ttg.memdesc<128x256xf32, #tmem_256N_nan, #ttng.tensor_memory, mutable>
     %result, %red = ttng.tmem_load %0 {redOp = #ttng.redOp<max>, NaN = true} : !ttg.memdesc<128x256xf32, #tmem_256N_nan, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked_256N_4w_nan>, tensor<128xf32, #blocked_red_256N_4w_nan>
     tt.return %red : tensor<128xf32, #blocked_red_256N_4w_nan>
+  }
+
+  tt.func public @call_nan_reductions() {
+    %min = tt.call @tensor_memory_ld_red_min_128x256_4_warps_nan() : () -> tensor<128xf32, #blocked_red_256N_4w_nan>
+    %max = tt.call @tensor_memory_ld_red_max_128x256_4_warps_nan() : () -> tensor<128xf32, #blocked_red_256N_4w_nan>
+    tt.return
   }
 }
 

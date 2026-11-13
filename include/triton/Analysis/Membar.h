@@ -129,36 +129,18 @@ private:
   Allocation::BufferId bufferId;
 };
 
-struct ThreadIssuer {
-  enum Kind {
-    Unknown,
-    // Thread zero of the current execution partition.
-    Thread0,
-    // A fixed leader of partition-relative warp zero.
-    // The leader's lane may be nonzero.
-    Warp0Leader
-  };
-  Kind kind = Unknown;
-  Region *region = nullptr;
-
-  bool operator==(const ThreadIssuer &) const = default;
-};
-
 // Empty summaries contain no operations. Nonempty summaries preserve an issuer
-// only when every operation has the same known kind and execution region.
-class IssuerSummary {
-public:
-  IssuerSummary() = default;
-  explicit IssuerSummary(ThreadIssuer issuer) : issuer(issuer) {}
-
-  bool empty() const { return !issuer; }
-  bool hasSameKnownIssuer(const IssuerSummary &other) const;
-  void join(const IssuerSummary &other);
-
-  bool operator==(const IssuerSummary &) const = default;
-
-private:
-  std::optional<ThreadIssuer> issuer;
+// only when every operation has the same known kind.
+enum class ThreadIssuer : uint8_t {
+  // No contributing operations.
+  None,
+  // The issuer is unknown or differs across operations.
+  Unknown,
+  // Thread zero of the current execution partition.
+  Thread0,
+  // A fixed leader of partition-relative warp zero.
+  // The leader's lane may be nonzero.
+  Warp0Leader
 };
 
 enum class CompletionSync : uint8_t {
@@ -186,7 +168,7 @@ struct BlockInfo {
 
   // Thread ordering is independent of which physical addresses are accessed.
   struct ThreadSyncState {
-    IssuerSummary effectIssuers;
+    ThreadIssuer effectIssuer = ThreadIssuer::None;
     CompletionSync completion = CompletionSync::None;
     bool peerWaitNeedsSync = false;
 
@@ -195,7 +177,7 @@ struct BlockInfo {
   struct ThreadDemandState {
     ThreadDemandKind kind = ThreadDemandKind::None;
     // Only publication demands contribute to this issuer summary.
-    IssuerSummary publicationIssuers;
+    ThreadIssuer publicationIssuer = ThreadIssuer::None;
     bool mayNotifyPeer = false;
 
     bool operator==(const ThreadDemandState &) const = default;
@@ -204,8 +186,8 @@ struct BlockInfo {
   BlockInfo() = default;
 
   bool hasEffects() const {
-    return !threadSync.effectIssuers.empty() || !syncReadSlices.empty() ||
-           !syncWriteSlices.empty();
+    return threadSync.effectIssuer != ThreadIssuer::None ||
+           !syncReadSlices.empty() || !syncWriteSlices.empty();
   }
 
   /// Unions two BlockInfo objects.
@@ -263,9 +245,9 @@ struct BlockInfo {
   }
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, MembarFilterFn filter,
+  bool isIntersected(const BlockInfo &other, const MembarFilterFn &filter,
                      Allocation *allocation,
-                     MembarSliceFilterFn sliceFilter = nullptr) const {
+                     const MembarSliceFilterFn &sliceFilter = nullptr) const {
     return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
                                  /*lhsIsRead=*/false, /*rhsIsRead=*/true,
                                  filter, sliceFilter, allocation) ||
@@ -278,6 +260,10 @@ struct BlockInfo {
                          /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
                          sliceFilter, allocation);
   }
+
+  /// Whether pending thread effects must rendezvous before upcoming demands.
+  static bool requiresThreadSync(const BlockInfo &pending,
+                                 const BlockInfo &effects);
 
   /// Clears the effects because a barrier is inserted.
   void sync() {
@@ -292,8 +278,8 @@ struct BlockInfo {
   /// Checks one pair of access maps with the same alias and operation filters.
   static bool isIntersected(const SliceMapT &lhsSlices,
                             const SliceMapT &rhsSlices, bool lhsIsRead,
-                            bool rhsIsRead, MembarFilterFn filter,
-                            MembarSliceFilterFn sliceFilter,
+                            bool rhsIsRead, const MembarFilterFn &filter,
+                            const MembarSliceFilterFn &sliceFilter,
                             Allocation *allocation) {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
@@ -374,10 +360,6 @@ struct MembarInfo {
   bool operator==(const MembarInfo &) const = default;
 };
 
-/// Classify the barriers that synchronize local memory accesses in `op`
-/// relative to its memory effects.
-triton::BarrierStages getLocalBarrierStages(Operation *op, bool hasScratch);
-
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
@@ -387,7 +369,11 @@ namespace triton::membar {
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {
 public:
-  enum class AccessMode { AllSharedAccesses, AllocatorAliasesOnly };
+  enum class AccessMode {
+    AllSharedAccesses,
+    AllocatorAliasesOnly,
+    SynchronizationOnly
+  };
 
   SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
             AccessMode accessMode = AccessMode::AllSharedAccesses,
@@ -397,6 +383,7 @@ public:
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
+  /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
   /// Cluster placement supplies its own stages and tracks only memory slices.
   void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses,
                 std::optional<BarrierStages> clusterStages = std::nullopt);
@@ -466,21 +453,16 @@ protected:
       Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
       OpBuilder *builder,
       std::optional<triton::BarrierStages> clusterStages = std::nullopt);
-  /// Returns the inserted barrier, or nullptr when none is inserted.
-  Operation *syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                          MembarInfo *membarInfo, OpBuilder *builder,
-                          bool cluster = false);
-  Operation *insertBarrier(Operation *operation, OpBuilder *builder,
-                           bool cluster = false);
-
-  /// Whether pending thread effects must rendezvous before upcoming demands.
-  virtual bool requiresThreadSync(const BlockInfo &pending,
-                                  const BlockInfo &effects);
+  void insertBarrier(Operation *operation, OpBuilder *builder,
+                     bool cluster = false);
 
   Allocation &allocation;
   MembarFilterFn filter;
 
 private:
+  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
+                    MembarInfo *membarInfo, OpBuilder *builder, bool cluster);
+
   triton::membar::SMemModel shared;
   MembarSliceFilterFn sliceFilter;
 };

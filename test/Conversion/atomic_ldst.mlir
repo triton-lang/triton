@@ -2,6 +2,7 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 --convert-nv-gpu-to-llvm 2>&1 | FileCheck %s --check-prefixes=CHECK-NVGPU2LLVM,CHECK-COMMON
 // RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions | FileCheck %s --check-prefix=THREAD-REGIONS
 // RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=90 --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck %s --check-prefix=THREAD-MEMBAR
+// RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions --convert-scf-to-cf --cse --allocate-shared-memory-nv=compute-capability=90 --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck %s --check-prefix=CSE
 #blocked4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel_r(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
@@ -528,7 +529,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: tt.splat %[[C_BROADCAST]]
   // THREAD-REGIONS: tt.store
   // THREAD-REGIONS: tt.return
+  // THREAD-MEMBAR-LABEL: @thread_regions_cta_tail(
+  // THREAD-MEMBAR: ttg.async_wait
+  // THREAD-MEMBAR-NEXT: %[[OWNER:.*]] = ttg.thread_predicate
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
+  // THREAD-MEMBAR-NEXT: cf.cond_br %[[OWNER]], ^{{bb[0-9]+}}, ^[[INACTIVE:bb[0-9]+]]
+  // THREAD-MEMBAR: cf.br ^[[JOIN:bb[0-9]+]](
+  // THREAD-MEMBAR: ^[[INACTIVE]]:
+  // THREAD-MEMBAR-NEXT: %[[ZERO:.*]] = arith.constant 0 : i32
+  // THREAD-MEMBAR-NEXT: cf.br ^[[JOIN]](%[[ZERO]] : i32)
+  // THREAD-MEMBAR: ^[[JOIN]](%[[RESULT:.*]]: i32):
+  // THREAD-MEMBAR: {{.*}}ttg.thread_handoff %[[RESULT]] <31, 3> -> <0, 0>
   tt.func @thread_regions_cta_tail(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>) {
+    ttg.async_wait {num = 0 : i32}
     %value = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
     %values = tt.splat %value : i32 -> tensor<128xi32, #blocked>
     tt.store %out, %values : tensor<128x!tt.ptr<i32>, #blocked>
@@ -598,8 +611,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: ttg.thread_predicate <0, 3>
   // THREAD-REGIONS: ttg.thread_handoff {{.*}} <31, 3> -> <0, 3> : i32
   // THREAD-REGIONS: tt.return
+  // The shared-copy completion can overlap the guarded global load.
+  // THREAD-MEMBAR-LABEL: @thread_regions_plain_if_warp_tail(
+  // THREAD-MEMBAR: ttg.async_wait
+  // THREAD-MEMBAR-NOT: ttg.barrier
+  // THREAD-MEMBAR: tt.load
+  // THREAD-MEMBAR: %[[WARP:.*]] = ttg.thread_predicate <0, 3>
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
+  // THREAD-MEMBAR-NEXT: cf.cond_br %[[WARP]]
   tt.func @thread_regions_plain_if_warp_tail(%ptr: !tt.ptr<i32>, %out: tensor<32x!tt.ptr<i32>, #blocked>, %condition: i1) {
     %zero = arith.constant 0 : i32
+    ttg.async_wait {num = 0 : i32}
     %value = scf.if %condition -> (i32) {
       %loaded = tt.load %ptr : !tt.ptr<i32>
       scf.yield %loaded : i32
@@ -613,8 +635,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // THREAD-MEMBAR-LABEL: @thread_regions_async_atomic_store(
   // THREAD-MEMBAR: ttg.async_wait
-  // THREAD-MEMBAR-NEXT: ttg.barrier local
   // THREAD-MEMBAR-NEXT: %[[ATOMIC_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
   // THREAD-MEMBAR-NEXT: cf.cond_br %[[ATOMIC_LEADER]]
   // THREAD-MEMBAR-NOT: ttg.barrier
   // THREAD-MEMBAR: tt.atomic_store relaxed, gpu
@@ -629,15 +651,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // THREAD-MEMBAR-LABEL: @thread_regions_async_store(
   // THREAD-MEMBAR: ttg.async_wait
-  // THREAD-MEMBAR-NEXT: ttg.barrier local
   // THREAD-MEMBAR-NEXT: %[[STORE_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
   // THREAD-MEMBAR-NEXT: cf.cond_br %[[STORE_LEADER]]
   // THREAD-MEMBAR-NOT: ttg.barrier
   // THREAD-MEMBAR: tt.store
   // THREAD-MEMBAR-NOT: ttg.barrier
   // THREAD-MEMBAR: tt.return
-  tt.func @thread_regions_async_store(%out: !tt.ptr<i32>) {
+  // CSE-LABEL: @thread_regions_async_store(
+  // CSE: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // CSE-NEXT: cf.cond_br %[[LEADER]]
+  // CSE: tt.store
+  // CSE: ttg.async_wait
+  // CSE-NEXT: ttg.barrier local
+  // CSE-NEXT: cf.cond_br %[[LEADER]]
+  // CSE: tt.store
+  tt.func @thread_regions_async_store(%first: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
     %one = arith.constant 1 : i32
+    tt.store %first, %one : !tt.ptr<i32>
     ttg.async_wait {num = 0 : i32}
     tt.store %out, %one : !tt.ptr<i32>
     tt.return

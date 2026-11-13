@@ -123,8 +123,8 @@ tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>
     // CHECK: cf.br
     scf.yield %8: !ttg.async.token
   }
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: tt.return
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: tt.return
   tt.return
 }
 
