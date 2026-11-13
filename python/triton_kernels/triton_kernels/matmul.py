@@ -14,7 +14,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
-from .matmul_details._matmul import _matmul
+from .matmul_details._matmul import _dense_matmul, _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
@@ -82,7 +82,7 @@ class FusedComm:
     n_reduce_shards: int = 1
 
 specializations = SpecializationModule("matmul",
-    kernels=[("_matmul", _matmul), ("_p_matmul", _p_matmul)],
+    kernels=[("_dense_matmul", _dense_matmul), ("_matmul", _matmul), ("_p_matmul", _p_matmul)],
     closure_args={
         "epilogue": ClosureArg("EPILOGUE_FN", "epilogue_fn_args"), #
         "activation": ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
@@ -719,12 +719,20 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
+    kernel = kernels._matmul
     if opt_flags.is_persistent:
+        kernel = kernels._p_matmul
         extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
+    elif (target_info.cuda_capability_geq(8) and a.ndim == b.ndim == 2 and ragged_dimension is None
+          and not has_gather and not has_scatter and fused_comm is None
+          and isinstance(a.storage.layout, StridedLayout) and isinstance(b.storage.layout, StridedLayout)):
+        kernel = kernels._dense_matmul
+        n_valid_slices = 1  # A two-dimensional weight has one matrix; its first axis is K.
+        extra_kernel_kwargs["DENSE_ROWS"] = True
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
-    n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
-    (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
+    kernel[(grid,)](
                    c_tensor_or_tma, c_data, *out_matmul.stride(),
                    *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
