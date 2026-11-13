@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -13,11 +14,15 @@ struct DotIntrinsic {
   Type outElemTy;
   StringRef intrinsicName;
   SmallVector<Value> additionalArgs;
+  // No int8 dot instruction on this target: widen to i32 and use mul + add,
+  // which stays exact (converting to fp32 would round sums above 2^24).
+  bool integerMulAdd = false;
 };
 
 class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   ConversionPatternRewriter &rewriter;
   Location loc;
+  bool hasVDot;
   DotIntrinsic intrinsic;
 
   DotIntrinsic chooseIntrinsic(DotOp op) {
@@ -36,6 +41,12 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
       chosenOp.intrinsicName =
           aElemTy.isF16() ? "llvm.amdgcn.fdot2" : "llvm.amdgcn.fdot2.f32.bf16";
       chosenOp.additionalArgs = {b.false_val()};
+      return chosenOp;
+    }
+    if (aElemTy.isInteger(8) && dElemTy.isInteger(32) && !hasVDot) {
+      chosenOp.vectorSize = 1;
+      chosenOp.outElemTy = i32_ty;
+      chosenOp.integerMulAdd = true;
       return chosenOp;
     }
     if (aElemTy.isInteger(8) && dElemTy.isInteger(32)) {
@@ -90,6 +101,10 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   }
 
   Value generateDotInstr(Value a, Value b, Value c) {
+    if (intrinsic.integerMulAdd) {
+      auto tb = TritonLLVMOpBuilder(loc, rewriter);
+      return tb.add(c, tb.mul(tb.sext(i32_ty, a), tb.sext(i32_ty, b)));
+    }
     SmallVector<Value> args{a, b, c};
     args.append(intrinsic.additionalArgs.begin(),
                 intrinsic.additionalArgs.end());
@@ -103,7 +118,11 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
 
 public:
   AMDFMAVectorMultiplier(ConversionPatternRewriter &rewriter, DotOp op)
-      : rewriter(rewriter), loc(op.getLoc()), intrinsic(chooseIntrinsic(op)) {}
+      : rewriter(rewriter), loc(op.getLoc()),
+        hasVDot(triton::amdgpu::TargetFeatures::fromModuleOp(
+                    op->getParentOfType<ModuleOp>())
+                    .hasVDotInsts()),
+        intrinsic(chooseIntrinsic(op)) {}
 
   Value multiplyVectors(ArrayRef<Value> a, ArrayRef<Value> b,
                         Value c) override {

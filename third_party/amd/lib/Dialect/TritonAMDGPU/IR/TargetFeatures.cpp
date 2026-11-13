@@ -96,7 +96,11 @@ ISAFamily computeISAFamily(StringRef arch) {
       return ISAFamily::CDNA2;
   }
 
-  // RDNA ISA cases.
+  // RDNA ISA cases. RDNA1/RDNA2 (gfx10) have no WMMA, so tt.dot lowers to FMA.
+  if (major == 10 && minor == 1)
+    return ISAFamily::RDNA1;
+  if (major == 10 && minor == 3)
+    return ISAFamily::RDNA2;
   if (major == 12 && minor == 0)
     return ISAFamily::RDNA4;
   if (major == 11 && minor == 7)
@@ -127,6 +131,10 @@ bool TargetFeatures::isCDNA4() const {
 bool TargetFeatures::isCDNA5() const {
   return getISAFamily() == ISAFamily::CDNA5;
 }
+
+// gfx1010 lacks v_dot2_f32_f16 / v_dot4_i32_i8; the other supported targets
+// have them.
+bool TargetFeatures::hasVDotInsts() const { return baseArch != "gfx1010"; }
 
 bool TargetFeatures::isGFX1250Strict() const {
   return isCDNA5() && arch != baseArch;
@@ -388,6 +396,8 @@ bool isCDNA(ISAFamily isaFamily) {
 
 bool isRDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
+  case ISAFamily::RDNA1:
+  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:

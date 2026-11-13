@@ -1498,8 +1498,9 @@ public:
     int k = aOpType.getShape()[rank - 1];
     // Try Fp16 x Fp16 -> Fp32 v_dot
     // if k % 2 != 0: can not use fp V_DOT instruction
-    if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF32() &&
-        dotTypes.d.isF32() && k % 2 == 0) {
+    if (targetFeatures.hasVDotInsts() && dotTypes.a.isF16() &&
+        dotTypes.b.isF16() && dotTypes.c.isF32() && dotTypes.d.isF32() &&
+        k % 2 == 0) {
       return true;
     }
 
