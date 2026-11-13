@@ -2564,8 +2564,8 @@ struct FpToFpOpConversion
     if (useFp32Intermediate)
       roundingMode = roundingMode.value_or(RoundingMode::RTNE);
     // There is no direct conversion between f64 and fp8: convert from or to
-    // f32 and truncate or extend around it. Truncating to f32 first only
-    // preserves RTNE.
+    // f32 and truncate or extend around it. Truncating to f32 first rounds
+    // twice, which matches torch's f64 to fp8 cast.
     auto isFp8 = [](Type ty) {
       return ty.isFloat() && ty.getIntOrFloatBitWidth() == 8;
     };
