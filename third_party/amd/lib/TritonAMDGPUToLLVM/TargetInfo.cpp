@@ -125,20 +125,6 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 }
 } // namespace
 
-llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
-  return llvm::AMDGPU::parseArchAMDGCN(getArch());
-}
-
-int TargetInfo::getSharedMemoryBanks() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA5:
-  case ISAFamily::CDNA4:
-    return 64;
-  default:
-    return 32;
-  }
-}
-
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
