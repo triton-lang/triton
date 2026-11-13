@@ -12,6 +12,7 @@ from triton import CompilationError
 from triton._internal_testing import (
     assert_no_collectives_in_ptx_loop,
     is_compile_warmup,
+    run_in_process,
     is_cuda,
     is_ampere_or_newer,
     is_blackwell,
@@ -1360,6 +1361,376 @@ def test_mbarrier_dynamic_index_gsan(fresh_knobs, num_ctas, two_ctas, batch, sim
     with torch.cuda.use_mem_pool(create_mem_pool()):
         kernel[(1, )](batch, two_ctas, simultaneous, num_warps=1, num_ctas=num_ctas)
         torch.cuda.synchronize()
+
+
+@gluon.jit
+def _gsan_tma_load(desc, out, offsets):
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, desc.nbytes_per_cta)
+    tma.async_load(desc, [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    ttgl.store(out + offsets, smem.load(offsets.type.layout))
+    mbarrier.invalidate(bar)
+
+
+@gluon.jit
+def _gsan_tma_local_kernel(ptr, desc, out, FENCE: ttgl.constexpr, ACCESS: ttgl.constexpr,
+                           GENERIC_ATOMIC: ttgl.constexpr = False):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 16 + cols[None, :]
+    if FENCE == "before_store":
+        hopper.fence_async_global()
+    if GENERIC_ATOMIC:
+        ttgl.atomic_xchg(ptr + offsets, offsets + 17, sem="release")
+    else:
+        ttgl.store(ptr + offsets, offsets + 17)
+    if FENCE == "global" or FENCE == "new_store":
+        hopper.fence_async_global()
+    elif FENCE == "shared":
+        hopper.fence_async_shared()
+    if FENCE == "new_store":
+        ttgl.store(ptr + offsets, offsets + 19)
+    if ACCESS == "load":
+        _gsan_tma_load(desc, out, offsets)
+    else:
+        smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, offsets + 23)
+        hopper.fence_async_shared()
+        if ACCESS == "store":
+            tma.async_store(desc, [0, 0], smem)
+        else:
+            tma.async_atomic_add(desc, [0, 0], smem)
+        tma.store_wait(0)
+
+
+@gluon.jit
+def _gsan_tma_acquire_kernel(ptr, desc, out, flags, FENCE: ttgl.constexpr, SCOPE: ttgl.constexpr, unrelated_desc,
+                             WAIT: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 16 + cols[None, :]
+    if ttgl.program_id(0) == 0:
+        # Force both CTAs to be resident, on distinct SMs under GSan. This flag
+        # only controls scheduling and does not carry a happens-before edge.
+        while not ttgl.atomic_poll(flags + 1, 1, sem="relaxed", scope=SCOPE):
+            pass
+        ttgl.store(ptr + offsets, offsets + 17)
+        if FENCE == "producer":
+            hopper.fence_async_global()
+        ttgl.atomic_store(flags, 1, sem="release", scope=SCOPE)
+    else:
+        if FENCE == "before_acquire":
+            hopper.fence_async_global()
+        if WAIT == "load":
+            unrelated = ttgl.allocate_shared_memory(unrelated_desc.dtype, unrelated_desc.block_shape,
+                                                    unrelated_desc.layout)
+            bar = mbarrier.allocate_mbarrier()
+            mbarrier.init(bar, count=1)
+            mbarrier.expect(bar, unrelated_desc.nbytes_per_cta)
+            tma.async_load(unrelated_desc, [0, 0], bar, unrelated)
+        elif WAIT == "store":
+            unrelated = ttgl.allocate_shared_memory(unrelated_desc.dtype, unrelated_desc.block_shape,
+                                                    unrelated_desc.layout, offsets + 23)
+            hopper.fence_async_shared()
+            tma.async_store(unrelated_desc, [0, 0], unrelated)
+        ttgl.atomic_store(flags + 1, 1, sem="relaxed", scope=SCOPE)
+        while ttgl.atomic_load(flags, sem="acquire", scope=SCOPE) != 1:
+            pass
+        # The acquire is sufficient for this generic read, even in the cases
+        # where the following TMA read must fail.
+        ttgl.store(out + 256 + offsets, ttgl.load(ptr + offsets))
+        # Completion of this earlier, unrelated operation must not import the
+        # newly acquired generic stores into the consumer's async proxy vector clock.
+        if WAIT == "load":
+            mbarrier.wait(bar, phase=0, deps=[unrelated])
+            ttgl.store(out + 512 + offsets, unrelated.load(layout))
+            mbarrier.invalidate(bar)
+        elif WAIT == "store":
+            tma.store_wait(0, read_only=False)
+        if FENCE == "consumer":
+            hopper.fence_async_global()
+        _gsan_tma_load(desc, out, offsets)
+
+
+@gluon.jit
+def _gsan_tma_completion_kernel(ptr, desc, out, ACCESS: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 16 + cols[None, :]
+    if ACCESS == "load":
+        _gsan_tma_load(desc, out, offsets)
+        # The completed TMA read permits overwriting its global source.
+        ttgl.store(ptr + offsets, offsets + 17)
+    else:
+        smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, offsets + 23)
+        hopper.fence_async_shared()
+        if ACCESS == "store":
+            tma.async_store(desc, [0, 0], smem)
+        else:
+            tma.async_atomic_add(desc, [0, 0], smem)
+        # A source-read-only wait would not make the global writes visible.
+        tma.store_wait(0, read_only=False)
+        ttgl.store(out + offsets, ttgl.load(ptr + offsets))
+
+
+@gluon.jit
+def _gsan_tma_roundtrip_kernel(ptr, desc, out, GENERIC_READ: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+    offsets = rows[:, None] * 16 + cols[None, :]
+    if GENERIC_READ:
+        ttgl.store(out + offsets, ttgl.load(ptr + offsets))
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, desc.nbytes_per_cta)
+    tma.async_load(desc, [0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    # A TMA read must not replace the generic read's shadow entry. Without a
+    # generic read, this same-proxy round trip needs no global proxy fence.
+    tma.async_store(desc, [0, 0], smem)
+    tma.store_wait(0)
+    mbarrier.invalidate(bar)
+
+
+def _run_gsan_tma_case(kind, fence, access="load", scope="gpu", granularity=4, write_once=False, wait="none"):
+    from triton.experimental.gsan import create_mem_pool
+    from triton.experimental.gsan._testing_utils import shadow_cell_from_address, thread_state_from_smid
+
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool(shadow_granularity=granularity, write_once=write_once)
+    auxiliary_pool = create_mem_pool(shadow_granularity=4)
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.full((16, 16), 7, device="cuda", dtype=torch.int32)
+    with torch.cuda.use_mem_pool(auxiliary_pool):
+        out = torch.empty((3, 16, 16), device="cuda", dtype=torch.int32)
+        flags = torch.zeros(2, device="cuda", dtype=torch.int32)
+        if wait != "none":
+            unrelated = torch.full_like(target, 11)
+    layout = ttgl.NVMMASharedLayout.get_default_for([16, 16], ttgl.int32)
+    desc = TensorDescriptor.from_tensor(target, [16, 16], layout)
+    if kind in ("local", "atomic"):
+        compiled = _gsan_tma_local_kernel[(1, )](target, desc, out, fence, access, kind == "atomic")
+    elif kind == "acquire":
+        unrelated_desc = TensorDescriptor.from_tensor(unrelated, [16, 16], layout) if wait != "none" else None
+        compiled = _gsan_tma_acquire_kernel[(2, )](target, desc, out, flags, fence, scope, unrelated_desc, wait)
+    elif kind == "completion":
+        compiled = _gsan_tma_completion_kernel[(1, )](target, desc, out, access)
+    else:
+        compiled = _gsan_tma_roundtrip_kernel[(1, )](target, desc, out, fence == "generic_read")
+    torch.cuda.synchronize()
+    if kind == "roundtrip":
+        torch.testing.assert_close(target, torch.full_like(target, 7))
+        return
+    expected = torch.arange(256, device="cuda", dtype=torch.int32).reshape(16, 16)
+    if kind == "completion":
+        assert "fence.proxy.async.global" not in compiled.asm["ptx"]
+        if access == "load":
+            torch.testing.assert_close(out[0], torch.full_like(target, 7))
+            torch.testing.assert_close(target, expected + 17)
+        else:
+            assert re.search(r"cp\.async\.bulk\.wait_group\s+0;", compiled.asm["ptx"])
+            torch.testing.assert_close(out[0], expected + (23 if access == "store" else 30))
+        return
+    if access == "store":
+        torch.testing.assert_close(target, expected + 23)
+    elif access == "reduce":
+        torch.testing.assert_close(target, 2 * expected + 40)
+    else:
+        torch.testing.assert_close(out[0], expected + 17)
+    assert "fence.proxy.async.global" in compiled.asm["ptx"]
+    if kind == "atomic":
+        clock = shadow_cell_from_address(target.data_ptr()).write_clock
+        assert clock.is_tma
+        assert not clock.is_release
+    if kind == "acquire":
+        torch.testing.assert_close(out[1], expected + 17)
+        if wait == "load":
+            torch.testing.assert_close(out[2], torch.full_like(target, 11))
+        elif wait == "store":
+            torch.testing.assert_close(unrelated, expected + 23)
+        cell = shadow_cell_from_address(target.data_ptr())
+        writer = cell.write_clock.thread_id
+        readers = [c for c in cell.read_clocks if c.epoch]
+        assert {c.is_tma for c in readers} == {False, True}
+        assert all(c.thread_id != writer for c in readers)
+        consumer = thread_state_from_smid(readers[0].thread_id)
+        assert consumer.async_proxy_vector_clock[writer] >= cell.write_clock.epoch
+
+
+@gluon.jit
+def _gsan_tma_launch_producer(ptr, ready, SIGNAL: ttgl.constexpr):
+    offsets = ttgl.program_id(0) * 64 + ttgl.arange(0, 64, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+    ttgl.store(ptr + offsets, offsets + 17)
+    # Force four distinct resident SMs under GSan. No payload ordering is
+    # provided by these relaxed atomics; the launch dependency must provide it.
+    ttgl.atomic_add(ready, 1, sem="relaxed")
+    while not ttgl.atomic_poll(ready, 4, sem="relaxed"):
+        pass
+    if SIGNAL:
+        tl.extra.cuda.gdc_launch_dependents()
+
+
+@gluon.jit
+def _gsan_tma_launch_consumer(desc, out, WAIT: ttgl.constexpr):
+    if WAIT:
+        tl.extra.cuda.gdc_wait()
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))
+    _gsan_tma_load(desc, out, rows[:, None] * 16 + cols[None, :])
+
+
+def _run_gsan_tma_launch_case(dependency):
+    from triton.experimental.gsan import create_mem_pool, graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph, shadow_cell_from_address, thread_state_from_smid
+
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool(shadow_granularity=4)
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.empty((16, 16), device="cuda", dtype=torch.int32)
+        out = torch.empty_like(target)
+        ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    layout = ttgl.NVMMASharedLayout.get_default_for([16, 16], ttgl.int32)
+    desc = TensorDescriptor.from_tensor(target, [16, 16], layout)
+    pdl = dependency == "pdl"
+    if dependency == "event":
+        producer_stream, consumer_stream = torch.cuda.Stream(), torch.cuda.Stream()
+        producer_stream.wait_stream(torch.cuda.current_stream())
+        event = torch.cuda.Event()
+        with torch.cuda.stream(producer_stream):
+            _gsan_tma_launch_producer[(4, )](target, ready, False)
+            completion = graph.record_completion(torch.cuda.current_device(), producer_stream.cuda_stream)
+            event.record()
+        with torch.cuda.stream(consumer_stream):
+            consumer_stream.wait_event(event)
+            # External event waits must explicitly import their GSan snapshot;
+            # the snapshot itself does not establish the CUDA dependency.
+            graph.acquire_completions(torch.cuda.current_device(), consumer_stream.cuda_stream, (completion, ))
+            compiled = _gsan_tma_launch_consumer[(1, )](desc, out, False)
+    elif dependency == "graph":
+        producer = _gsan_tma_launch_producer.warmup(target, ready, False, grid=(4, ))
+        plan = graph.GraphPlan(torch.cuda.current_device(), [graph.GraphNode()])
+        with ExplicitGraph(plan) as executable:
+            executable.add_kernel(producer, (target, ready), 4)
+            executable.instantiate()
+            completion = executable.launch()
+            # Import the graph's completion before the following eager TMA
+            # consumer, just as the native same-stream dependency requires.
+            graph.acquire_completions(torch.cuda.current_device(),
+                                      torch.cuda.current_stream().cuda_stream, (completion, ))
+            compiled = _gsan_tma_launch_consumer[(1, )](desc, out, False)
+    else:
+        _gsan_tma_launch_producer[(4, )](target, ready, pdl)
+        compiled = _gsan_tma_launch_consumer[(1, )](desc, out, pdl, launch_pdl=pdl)
+    torch.cuda.synchronize()
+    expected = torch.arange(256, device="cuda", dtype=torch.int32).reshape(16, 16) + 17
+    torch.testing.assert_close(out, expected)
+    assert "fence.proxy.async.global" not in compiled.asm["ptx"]
+    if pdl:
+        assert "griddepcontrol.wait" in compiled.asm["ptx"]
+    cells = [shadow_cell_from_address(target.data_ptr() + offset * 4) for offset in range(0, 256, 64)]
+    assert len({cell.write_clock.thread_id for cell in cells}) == 4
+    reader = next(clock for clock in cells[0].read_clocks if clock.epoch)
+    assert reader.is_tma
+    state = thread_state_from_smid(reader.thread_id)
+    # At least three writers differ from the consumer's SM. This must exercise
+    # importing remote epochs, rather than just the persistent local epoch.
+    for cell in cells:
+        writer = cell.write_clock
+        assert not writer.is_tma
+        assert state.async_proxy_vector_clock[writer.thread_id] >= writer.epoch
+
+
+def _check_gsan_tma_case(*args, error=None, runner=_run_gsan_tma_case, **kwargs):
+    if is_compile_warmup():
+        pytest.skip("GSan assertion tests require isolated GPU processes")
+    result = run_in_process(runner, args, kwargs)
+    if error is None:
+        assert result.exc is None, (result.exc, result.driver_stderr_output)
+        assert "race detected" not in result.driver_stderr_output
+    else:
+        assert isinstance(result.exc, RuntimeError), (result.exc, result.driver_stderr_output)
+        assert error in result.driver_stderr_output
+        assert "test_core.py:" in result.driver_stderr_output
+        assert "GSanLibrary.cu" not in result.driver_stderr_output
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+def test_tma_global_proxy_fence(fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = ""
+    target = torch.empty((16, 16), device="cuda", dtype=torch.int32)
+    output = torch.empty_like(target)
+    layout = ttgl.NVMMASharedLayout.get_default_for([16, 16], ttgl.int32)
+    desc = TensorDescriptor.from_tensor(target, [16, 16], layout)
+    compiled = _gsan_tma_local_kernel[(1, )](target, desc, output, "global", "load")
+    torch.testing.assert_close(output, torch.arange(256, device="cuda", dtype=torch.int32).reshape(16, 16) + 17)
+    assert "fence.proxy.async.global" in compiled.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("fence", ["none", "shared", "before_store", "new_store", "global"])
+@pytest.mark.parametrize("access", ["load", "store", "reduce"])
+def test_tma_gsan_local_proxy_fence(fence, access):
+    error = None if fence == "global" else f"{'Write' if access == 'store' else 'Read'} after write race detected"
+    _check_gsan_tma_case("local", fence, access, error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("fence", ["none", "global"])
+def test_tma_gsan_generic_atomic_proxy_fence(fence):
+    error = None if fence == "global" else "Read after write race detected"
+    _check_gsan_tma_case("atomic", fence, "reduce", error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("fence", ["none", "producer", "before_acquire", "consumer"])
+@pytest.mark.parametrize("scope", ["gpu", "sys"])
+def test_tma_gsan_acquire_proxy_fence(fence, scope):
+    error = None if fence == "consumer" else "Read after write race detected"
+    _check_gsan_tma_case("acquire", fence, scope=scope, error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("access", ["load", "store", "reduce"])
+def test_tma_gsan_completion_implicit_proxy_fence(access):
+    _check_gsan_tma_case("completion", "none", access)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("wait", ["load", "store"])
+@pytest.mark.parametrize("fence", ["none", "consumer"])
+@pytest.mark.parametrize("scope", ["gpu", "sys"])
+def test_tma_gsan_unrelated_wait_does_not_fence_acquire(wait, fence, scope):
+    error = None if fence == "consumer" else "Read after write race detected"
+    _check_gsan_tma_case("acquire", fence, scope=scope, wait=wait, error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("dependency", ["stream", "event", "graph", "pdl"])
+def test_tma_gsan_launch_dependency_implicit_proxy_fence(dependency):
+    _check_gsan_tma_case(dependency, runner=_run_gsan_tma_launch_case)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("fence", ["none", "global"])
+@pytest.mark.parametrize("granularity,write_once", [(16, False), (4, True)])
+def test_tma_gsan_proxy_fence_pool_layout(fence, granularity, write_once):
+    error = None if fence == "global" else "Read after write race detected"
+    _check_gsan_tma_case("local", fence, granularity=granularity, write_once=write_once, error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("generic_read", [False, True])
+def test_tma_gsan_same_proxy_roundtrip(generic_read):
+    error = "Write after read race detected" if generic_read else None
+    _check_gsan_tma_case("roundtrip", "generic_read" if generic_read else "none", error=error)
 
 
 def test_warp_specialize_without_workers(device):

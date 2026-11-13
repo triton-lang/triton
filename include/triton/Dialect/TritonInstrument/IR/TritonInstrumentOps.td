@@ -130,6 +130,13 @@ def TTI_ExperimentalGSanKernelExitOp
   let assemblyFormat = "attr-dict";
 }
 
+def TTI_ExperimentalGSanFenceAsyncGlobalOp
+    : TTI_Op<"experimental_gsan_fence_async_global",
+             [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+  let summary = "Copy the generic vector clock into this CTA's async proxy vector clock";
+  let assemblyFormat = "attr-dict";
+}
+
 def TTI_ExperimentalGSanGridDependencyWaitOp
     : TTI_Op<"experimental_gsan_grid_dependency_wait", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire completed predecessor clocks after a grid dependency wait";
