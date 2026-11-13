@@ -88,6 +88,28 @@ def test_popc(device):
     assert torch.equal(y.cpu(), torch.tensor([0, 1, 1, 2, 1, 3, 1, 4], dtype=torch.int32))
 
 
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_ffs(device, dtype):
+
+    @triton.jit
+    def triton_ffs(in_ptr, out_ptr, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        tl.store(out_ptr + offsets, libdevice.ffs(tl.load(in_ptr + offsets)))
+
+    bits = torch.iinfo(dtype).bits
+    vals = [0, 1, -1, 6, 0x50, torch.iinfo(dtype).min, torch.iinfo(dtype).max]
+    vals += [1 << i for i in range(bits - 1)]
+    vals += [0] * (triton.next_power_of_2(len(vals)) - len(vals))
+    x = torch.tensor(vals, dtype=dtype, device=device)
+    y = torch.empty(x.shape, dtype=torch.int32, device=device)
+
+    triton_ffs[(1, )](x, y, SIZE=x.numel())
+
+    # ffs returns the 1-based index of the least significant set bit, or 0.
+    ref = [0 if v == 0 else ((v & -v).bit_length()) for v in vals]
+    assert torch.equal(y.cpu(), torch.tensor(ref, dtype=torch.int32))
+
+
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_isinf(device, dtype_str):
 
