@@ -258,6 +258,12 @@ static Value getFpSanTmemSource(Value value) {
   return {};
 }
 
+static Value getFpSanBufferRoot(Value value) {
+  while (Value source = getFpSanTmemSource(value))
+    value = source;
+  return value;
+}
+
 static bool hasTwoCTAMma(ModuleOp module) {
   bool twoCTAs = false;
   module.walk([&](ttng::MMAv5OpInterface mma) { twoCTAs |= mma.getTwoCtas(); });
@@ -503,6 +509,43 @@ public:
 
     return std::nullopt;
   }
+
+  struct ProbabilityView {
+    Value ptr;
+    int64_t columnStride;
+    int64_t elementBytes;
+  };
+
+  // Address the residual by byte offset in the *same* backing store used by
+  // FPSan's TMEM reads and writes. An i32 score store therefore aliases four
+  // residual entries when the storage is later viewed as packed FP8.
+  std::optional<ProbabilityView>
+  getProbabilityView(Value memdesc, PatternRewriter &rewriter, Region *scope) {
+    Value base = getFpSanBufferRoot(memdesc);
+    Value shadow = probabilityBuffers.lookup(base);
+    if (!shadow)
+      return {};
+    auto ty = cast<ttg::MemDescType>(memdesc.getType());
+    if (!isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace()))
+      return ProbabilityView{shadow, ty.getShape().front(), 1};
+    auto root = getOrCreate(base, rewriter, scope);
+    auto view = getOrCreate(memdesc, rewriter, scope);
+    if (!root || !view || view->scaleSourceType)
+      return {};
+    auto loc = memdesc.getLoc();
+    shadow = remapToScope(shadow, rewriter, scope, loc);
+    auto address = [&](Value ptr) {
+      return tt::PtrToIntOp::create(rewriter, loc, rewriter.getI64Type(), ptr);
+    };
+    Value offset = arith::SubIOp::create(rewriter, loc, address(view->ptr),
+                                         address(root->ptr));
+    Value ptr =
+        tt::AddPtrOp::create(rewriter, loc, shadow.getType(), shadow, offset);
+    return ProbabilityView{ptr, view->tensorType.getShape().front(),
+                           ty.getElementType().getIntOrFloatBitWidth() / 8};
+  }
+
+  DenseMap<Value, Value> probabilityBuffers;
 
 private:
   Value remapToScope(Value value, PatternRewriter &rewriter, Region *scope,
@@ -2909,7 +2952,9 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
   }
 
   LogicalResult rewriteMma(ttng::TCGen5MMAOp op, PatternRewriter &rewriter,
-                           Value aResidual, Value bResidual) const {
+                           Value aResidual, Value bResidual,
+                           function_ref<LogicalResult()> updateDestination =
+                               [] { return success(); }) const {
     auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
@@ -2997,6 +3042,9 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     if (!mLoop)
       return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
+
+    if (failed(updateDestination()))
+      return failure();
 
     // The emulation loop also writes D through scratch memory from multiple
     // warps, so make those stores visible before signaling completion.
@@ -3525,69 +3573,156 @@ LogicalResult instrumentProbabilityCasts(ModuleOp module,
       stores.push_back({op, alloc.getResult(), alloc.getSrc(), {}});
   });
 
-  DenseMap<Value, Value> shadows;
   for (auto &store : stores) {
-    if (!probabilityResidual(rewriter, store.src, residuals) ||
-        shadows.contains(store.buffer))
+    if (!probabilityResidual(rewriter, store.src, residuals))
       continue;
-    auto ty = cast<ttg::MemDescType>(store.buffer.getType());
-    auto *alloc = store.buffer.getDefiningOp();
+    Value root = getFpSanBufferRoot(store.buffer);
+    if (scratch.probabilityBuffers.contains(root))
+      continue;
+    auto ty = cast<ttg::MemDescType>(root.getType());
+    auto *alloc = root.getDefiningOp();
     if (!isa_and_nonnull<ttg::LocalAllocOp, ttng::TMEMAllocOp>(alloc) ||
-        ty.getRank() != 2 || scratch.usesSharedClusterState())
+        (ty.getRank() != 2 && ty.getRank() != 3) ||
+        scratch.usesSharedClusterState())
       return store.op->emitError(
-          "probability_cast prototype requires a dedicated 2D single-CTA SMEM "
-          "or TMEM allocation");
-    for (auto &use : store.buffer.getUses()) {
-      auto *user = use.getOwner();
-      if (isa<ttg::LocalStoreOp, ttng::TMEMStoreOp, ttng::WaitBarrierOp,
-              ttg::LocalDeallocOp>(user))
+          "probability_cast requires single-CTA SMEM or TMEM storage");
+
+    // Validate all aliases, including descriptors explicitly captured by the
+    // producer and consumer warp partitions. Fail closed on unknown writers.
+    SmallVector<Value> work{root};
+    DenseSet<Value> visited;
+    while (!work.empty()) {
+      Value view = work.pop_back_val();
+      if (!visited.insert(view).second)
         continue;
-      if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(user);
-          mma && (mma.getA() == store.buffer || mma.getB() == store.buffer) &&
-          mma.getD().getType().getElementType().isF32())
-        continue;
-      return user->emitError(
-          "unsupported alias or consumer of a probability_cast shadow buffer");
+      for (OpOperand &use : view.getUses()) {
+        Operation *user = use.getOwner();
+        if (isa<ttg::LocalStoreOp, ttng::TMEMStoreOp, ttng::TMEMLoadOp,
+                ttng::WaitBarrierOp, ttg::LocalDeallocOp>(user))
+          continue;
+        if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(user);
+            mma && getFpSanMmaKind(mma) == FpSanMmaKind::Floating &&
+            mma.getD().getType().getElementType().isF32())
+          continue;
+        if (isa<ttng::TMEMAllocOp>(alloc)) {
+          if (isa<ttng::TMEMSubSliceOp, ttg::MemDescIndexOp,
+                  ttg::MemDescReinterpretOp>(user)) {
+            work.push_back(user->getResult(0));
+            continue;
+          }
+          if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
+            for (Region &region : ws.getPartitionRegions())
+              work.push_back(region.getArgument(use.getOperandNumber()));
+            continue;
+          }
+          if (auto loop = dyn_cast<scf::ForOp>(user)) {
+            auto arg = loop.getTiedLoopRegionIterArg(&use);
+            if (arg && loop.getYieldedValues()[arg.getArgNumber() - 1] == arg &&
+                loop.getResult(arg.getArgNumber() - 1).use_empty()) {
+              work.push_back(arg);
+              continue;
+            }
+          }
+          if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+            auto loop = dyn_cast<scf::ForOp>(yield->getParentOp());
+            if (loop && loop.getRegionIterArgs()[use.getOperandNumber()] == view)
+              continue;
+          }
+        }
+        return user->emitError("unsupported alias or consumer of a "
+                               "probability_cast shadow buffer");
+      }
     }
     rewriter.setInsertionPoint(alloc);
     auto ptrTy = tt::getPointerType(rewriter.getI32Type());
-    shadows[store.buffer] = scratch.createScratchAlloc(
-        rewriter, alloc->getLoc(), ptrTy, product(ty.getShape()) * 4, 16);
+    int64_t bytes = product(ty.getShape()) *
+                    ty.getElementType().getIntOrFloatBitWidth() / 8;
+    scratch.probabilityBuffers[root] = scratch.createScratchAlloc(
+        rewriter, alloc->getLoc(), ptrTy, bytes * 4, 16);
   }
 
-  // Every store to a tracked allocation updates its shadow, including stores
-  // of unmarked bytes, which clear the previous residual. Use the real store's
-  // predicate so an inactive TMEM store preserves both halves.
-  for (auto &store : stores) {
-    Value ptr = shadows.lookup(store.buffer);
-    if (!ptr)
-      continue;
-    rewriter.setInsertionPoint(store.op);
-    auto loc = store.op->getLoc();
-    auto ty = cast<RankedTensorType>(store.src.getType())
-                  .clone(rewriter.getI32Type());
-    Value residual = probabilityResidual(rewriter, store.src, residuals);
+  auto writeShadow = [&](Operation *op, Value dst, RankedTensorType ty,
+                         Value residual, Value pred) -> LogicalResult {
+    if (!scratch.probabilityBuffers.contains(getFpSanBufferRoot(dst)))
+      return success();
+    auto loc = op->getLoc();
+    auto view =
+        scratch.getProbabilityView(dst, rewriter, getScratchScopeRegion(op));
+    if (!view || ty.getRank() != 2)
+      return op->emitError("unsupported probability shadow store view");
+    ty = ty.clone(rewriter.getI32Type());
     if (!residual)
       residual = getIntConstantLike(rewriter, loc, ty, 0);
-    Value ptrs = createPointerTensorStrided2D(rewriter, loc, ptr, ty, 1,
-                                              ty.getShape()[0]);
+    auto ptrs = createPointerTensorStrided2D(
+        rewriter, loc, view->ptr, ty, view->elementBytes,
+        view->columnStride * view->elementBytes);
     Value mask;
-    if (store.predicate)
+    if (pred)
       mask = tt::SplatOp::create(rewriter, loc, ty.clone(rewriter.getI1Type()),
-                                 store.predicate);
-    tt::StoreOp::create(rewriter, loc, ptrs, residual, mask);
+                                 pred);
+    for (int i = 0; i < view->elementBytes; ++i) {
+      Value dest = ptrs;
+      if (i)
+        dest = tt::AddPtrOp::create(rewriter, loc, ptrs.getType(), ptrs,
+                                    getIntConstantLike(rewriter, loc, ty, i));
+      tt::StoreOp::create(rewriter, loc, dest, residual, mask);
+    }
+    return success();
+  };
+
+  for (auto &store : stores) {
+    // An allocating store's backing pointer must dominate the shadow write.
+    if (isa<ttng::TMEMAllocOp>(store.op))
+      rewriter.setInsertionPointAfter(store.op);
+    else
+      rewriter.setInsertionPoint(store.op);
+    if (failed(writeShadow(store.op, store.buffer,
+                           cast<RankedTensorType>(store.src.getType()),
+                           probabilityResidual(rewriter, store.src, residuals),
+                           store.predicate)))
+      return failure();
   }
 
   SmallVector<ttng::TCGen5MMAOp> mmas;
   module.walk([&](ttng::TCGen5MMAOp op) {
-    if (shadows.contains(op.getA()) || shadows.contains(op.getB()))
+    if (llvm::any_of(ArrayRef<Value>{op.getA(), op.getB(), op.getD()},
+                     [&](Value v) {
+                       return scratch.probabilityBuffers.contains(getFpSanBufferRoot(v));
+                     }))
       mmas.push_back(op);
   });
   for (auto op : mmas) {
     rewriter.setInsertionPoint(op);
+    auto scope = getScratchScopeRegion(op);
+    auto operandResidual = [&](Value v, Value &ptr) -> LogicalResult {
+      auto ty = cast<ttg::MemDescType>(v.getType());
+      if (ty.getElementType().getIntOrFloatBitWidth() != 8 ||
+          !scratch.probabilityBuffers.contains(getFpSanBufferRoot(v)))
+        return success();
+      auto view = scratch.getProbabilityView(v, rewriter, scope);
+      if (!view)
+        return op.emitError("unsupported probability shadow MMA operand view");
+      ptr = view->ptr;
+      return success();
+    };
+    Value a, b;
+    if (failed(operandResidual(op.getA(), a)) ||
+        failed(operandResidual(op.getB(), b)))
+      return failure();
+
+    auto clearDestination = [&]() -> LogicalResult {
+      if (!scratch.probabilityBuffers.contains(getFpSanBufferRoot(op.getD())))
+        return success();
+      // QK overwrites score bytes. Invalidate their residuals after reading
+      // both MMA operands and before signaling completion to the P producer.
+      auto ty = op.getD().getType();
+      auto layout = scratch.getScratchEncoding(rewriter, op.getD(), ty);
+      auto tileTy =
+          RankedTensorType::get(ty.getShape(), rewriter.getI32Type(), layout);
+      return writeShadow(op, op.getD(), tileTy, {}, op.getPred());
+    };
     TCGen5MMAPattern pattern(module.getContext(), &scratch);
-    if (failed(pattern.rewriteMma(op, rewriter, shadows.lookup(op.getA()),
-                                  shadows.lookup(op.getB()))))
+    if (failed(pattern.rewriteMma(op, rewriter, a, b, clearDestination)))
       return op.emitError("failed to instrument probability_cast MMA");
   }
   return success();

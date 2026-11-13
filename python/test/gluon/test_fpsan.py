@@ -3669,7 +3669,18 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, STORAGE: gl.const
     if MUTATION == "narrow_math":
         p = (p.to(gl.float32) + 1.0).to(gl.float8e5)
 
-    if STORAGE == "tmem":
+    if STORAGE == "borrowed":
+        # P occupies the second half of an FP32 score allocation. The producer
+        # and MMA reach the same bytes through independently constructed views.
+        score_layout: gl.constexpr = TensorMemoryLayout((M, WIDTH // 2), col_stride=1)
+        score_mem = allocate_tensor_memory(gl.float32, (M, WIDTH // 2), score_layout)
+        packed = score_mem.reinterpret(gl.float8e5, (M, WIDTH * 2), TensorMemoryLayout((M, WIDTH), col_stride=1))
+        dst = packed.slice(WIDTH, WIDTH)
+        dst.store(gl.convert_layout(p, dst.get_reg_layout()))
+        pmem = packed.slice(WIDTH, WIDTH)
+        other = score_mem.slice(0, WIDTH // 4)
+        other.store(gl.full((M, WIDTH // 4), 0, gl.float32, layout=other.get_reg_layout()))
+    elif STORAGE == "tmem":
         pmem = allocate_tensor_memory(gl.float8e5, (M, WIDTH), TensorMemoryLayout((M, WIDTH), col_stride=1))
         pmem.store(gl.convert_layout(p, pmem.get_reg_layout()))
     else:
@@ -3678,7 +3689,10 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, STORAGE: gl.const
 
     if MUTATION == "overwrite":
         zero = gl.full_like(p, 0)
-        if STORAGE == "tmem":
+        if STORAGE == "borrowed":
+            overlap = score_mem.slice(WIDTH // 4, WIDTH // 4)
+            overlap.store(gl.full((M, WIDTH // 4), 0, gl.float32, layout=overlap.get_reg_layout()))
+        elif STORAGE == "tmem":
             pmem.store(gl.convert_layout(zero, pmem.get_reg_layout()))
         else:
             pmem.store(zero)
@@ -3718,7 +3732,7 @@ def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("storage", ["smem", "tmem"])
+@pytest.mark.parametrize("storage", ["smem", "tmem", "borrowed"])
 def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     # Increasing maxima make both omitted and reversed alpha observable.
