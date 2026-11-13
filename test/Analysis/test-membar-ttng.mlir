@@ -712,17 +712,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
-  // A global read leaves the wait pending. Finish it on every thread before
-  // the store can notify a peer that advances the barrier's phase.
+  // Ordinary payload accesses leave the wait pending until the atomic notification.
   // CHECK-LABEL: @mbarrier_wait_before_global_notification
-  tt.func private @mbarrier_wait_before_global_notification(%ready: !barrier, %phase: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>) {
+  tt.func private @mbarrier_wait_before_global_notification(%ready: !barrier, %phase: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %flag: !tt.ptr<i32>) {
     // CHECK: ttng.wait_barrier
     // CHECK-NEXT: {{.*}} = tt.load
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.store
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.atomic_store relaxed, cta
     ttng.wait_barrier %ready, %phase : !barrier
     %value = tt.load %src : !tt.ptr<i32>
     tt.store %dst, %value : !tt.ptr<i32>
+    tt.atomic_store relaxed, cta, %flag, %value : !tt.ptr<i32>
     tt.return
   }
 
