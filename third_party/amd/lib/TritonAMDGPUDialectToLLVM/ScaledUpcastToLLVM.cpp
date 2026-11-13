@@ -6,6 +6,8 @@
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#include <cmath>
+
 using namespace mlir;
 using namespace mlir::triton;
 using mlir::LLVM::AMD::convertF8ToF32_SW;
@@ -494,9 +496,90 @@ struct ScaledUpcastFp8OpPattern
 };
 } // anonymous namespace
 
+namespace {
+
+// Decodes 16 packed FP6 codes (12 bytes followed by 4 padding bytes) per group
+// with integer ops. A code's six bits start at bit 6 * j of the group, so they
+// lie in byte (6 * j) / 8 and, when the code crosses a byte boundary, the next
+// byte; both are among the first 12 bytes.
+struct UpcastFp6OpPattern : ConvertOpToLLVMPattern<amdgpu::UpcastFp6Op> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(amdgpu::UpcastFp6Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto inputTy = op.getInput().getType();
+    LinearLayout layout = triton::gpu::toLinearLayout(inputTy);
+    const auto &regBases = layout.getBases().lookup(kReg);
+    for (int i = 0; i < 4; ++i) {
+      SmallVector<int32_t> expected(inputTy.getRank(), 0);
+      expected[op.getAxis()] = 1 << i;
+      if (i >= static_cast<int>(regBases.size()) ||
+          ArrayRef(regBases[i]) != ArrayRef(expected))
+        return op.emitError("FP6 upcast requires each thread to hold 16 "
+                            "consecutive values along the axis in "
+                            "consecutive registers");
+    }
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto bytes = unpackLLElements(loc, adaptor.getInput(), rewriter);
+    bool isE2M3 = op.getFormat() == ScaleDotElemType::E2M3;
+    int mantissaBits = isE2M3 ? 3 : 2;
+    int bias = isE2M3 ? 1 : 3;
+    Type outTy = getTypeConverter()->convertType(
+        op.getOutput().getType().getElementType());
+
+    SmallVector<Value> results;
+    results.reserve(bytes.size());
+    for (size_t group = 0; group < bytes.size(); group += 16) {
+      for (int j = 0; j < 16; ++j) {
+        int bit = 6 * j;
+        Value word = b.zext(i32_ty, bytes[group + bit / 8]);
+        if (bit % 8 > 2)
+          word = b.or_(word, b.shl(b.zext(i32_ty, bytes[group + bit / 8 + 1]),
+                                   b.i32_val(8)));
+        Value code = b.and_(b.lshr(word, b.i32_val(bit % 8)), b.i32_val(63));
+        // (max(e, 1) - bias + 127) << 23 | m << (23 - mantissaBits) is
+        // (1 + m / 2^mantissaBits) * 2^(max(e, 1) - bias); subnormals then
+        // subtract the implicit 2^(1 - bias).
+        Value exp = b.and_(b.lshr(code, b.i32_val(mantissaBits)),
+                           b.i32_val((1 << (5 - mantissaBits)) - 1));
+        Value mantissa = b.and_(code, b.i32_val((1 << mantissaBits) - 1));
+        Value isSubnormal = b.icmp_eq(exp, b.i32_val(0));
+        Value biasedExp =
+            b.add(b.umax(exp, b.i32_val(1)), b.i32_val(127 - bias));
+        Value value =
+            b.bitcast(b.or_(b.shl(biasedExp, b.i32_val(23)),
+                            b.shl(mantissa, b.i32_val(23 - mantissaBits))),
+                      f32_ty);
+        Value implicitOne = b.f32_val(std::ldexp(1.0f, 1 - bias));
+        value = b.select(
+            isSubnormal,
+            LLVM::FSubOp::create(rewriter, loc, value, implicitOne).getResult(),
+            value);
+        Value isNegative = b.icmp_ne(b.and_(code, b.i32_val(32)), b.i32_val(0));
+        value = b.select(isNegative,
+                         LLVM::FNegOp::create(rewriter, loc, value).getResult(),
+                         value);
+        results.push_back(outTy == f32_ty ? value : b.fptrunc(outTy, value));
+      }
+    }
+    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
+                                  op.getOutput().getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+} // namespace
+
 void mlir::triton::AMD::populateScaledUpcastOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const AMD::TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<ScaledUpcastFp4OpPattern>(typeConverter, targetInfo, benefit);
   patterns.add<ScaledUpcastFp8OpPattern>(typeConverter, targetInfo, benefit);
+  patterns.add<UpcastFp6OpPattern>(typeConverter, benefit);
 }

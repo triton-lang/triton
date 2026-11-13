@@ -112,3 +112,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: mfma_dot_scaled_bf16_fp6e2m3
+// Packed FP6 is decoded in a layout where each thread holds 16 consecutive K
+// values (one 16-byte group), then scaled like the other formats.
+// DIRECT-DAG: #[[GROUPS:.+]] = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+// DIRECT: tt.func public @mfma_dot_scaled_bf16_fp6e2m3
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_bf16_fp6e2m3(
+      %arg0: tensor<32x64x!tt.ptr<bf16>, #blocked2>,
+      %arg1: tensor<64x32x!tt.ptr<i8>, #blocked>,
+      %arg2: tensor<32x2x!tt.ptr<i8>, #blocked1>,
+      %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>
+    ) {
+    // DIRECT: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<64x32xi8, #{{.*}}> -> tensor<64x32xi8, #[[GROUPS]]>
+    // DIRECT: %[[UB:.*]] = amdg.upcast_fp6 %[[B]] {axis = 0 : i32, format = 2 : i32} : tensor<64x32xi8, #[[GROUPS]]> -> tensor<64x32xbf16, #[[GROUPS]]>
+    // DIRECT: arith.mulf %[[UB]], %{{.*}} : tensor<64x32xbf16, #[[GROUPS]]>
+    // CHECK: amdg.upcast_fp6 %{{.*}} {axis = 0 : i32, format = 2 : i32} : tensor<64x32xi8, #[[GROUPS_RLC:.+]]> -> tensor<64x32xbf16, #[[GROUPS_RLC]]>
+    // CHECK: tt.dot {{.*}} : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %1 = tt.load %arg0 : tensor<32x64x!tt.ptr<bf16>, #blocked2>
+    %2 = tt.load %arg1 : tensor<64x32x!tt.ptr<i8>, #blocked>
+    %3 = tt.load %arg2 : tensor<32x2x!tt.ptr<i8>, #blocked1>
+    %4 = tt.dot_scaled %1, %2 scale %3, %cst lhs = bf16 rhs = e2m3 {fastMath = true} : tensor<32x64xbf16, #blocked2> * tensor<64x32xi8, #blocked>, tensor<32x2xi8, #blocked1> -> tensor<32x32xf32, #blocked>
+    tt.store %arg3, %4 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

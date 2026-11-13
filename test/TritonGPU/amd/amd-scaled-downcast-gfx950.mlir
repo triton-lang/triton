@@ -3,6 +3,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
 #unpacked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
 #scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#fp6 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @scaled_downcast_fp4(
       %input: tensor<1x512xbf16, #unpacked>,
@@ -72,6 +73,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK: rocdl.cvt.scalef32.pk.fp8.f32
     %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xf32, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E4M3FN, #unpacked>
     tt.store %output, %result : tensor<1x512x!tt.ptr<f8E4M3FN>, #unpacked>
+    tt.return
+  }
+
+  // amdg.upcast_fp6 decodes each 16-value group from its 12 code bytes with
+  // integer ops; the 4 padding bytes are not read.
+  tt.func public @upcast_fp6(
+      %input: tensor<1x2048xi8, #fp6>,
+      %output: tensor<1x2048x!tt.ptr<bf16>, #fp6>) {
+    // CHECK-LABEL: llvm.func @upcast_fp6
+    // CHECK-COUNT-32: llvm.fptrunc {{.*}} : f32 to bf16
+    // CHECK-NOT: llvm.fptrunc
+    %result = amdg.upcast_fp6 %input {axis = 1 : i32, format = 2 : i32} : tensor<1x2048xi8, #fp6> -> tensor<1x2048xbf16, #fp6>
+    tt.store %output, %result : tensor<1x2048x!tt.ptr<bf16>, #fp6>
     tt.return
   }
 }

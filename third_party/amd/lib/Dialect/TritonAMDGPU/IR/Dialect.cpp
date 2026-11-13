@@ -1208,6 +1208,24 @@ LogicalResult ScaledDowncastFp8Op::verify() {
       /*blockDescription=*/"a multiple of 8 elements");
 }
 
+LogicalResult UpcastFp6Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  if (getFormat() != ScaleDotElemType::E2M3 &&
+      getFormat() != ScaleDotElemType::E3M2)
+    return emitError() << "format must be e2m3 or e3m2";
+  if (inputTy.getShape() != outputTy.getShape() ||
+      inputTy.getEncoding() != outputTy.getEncoding())
+    return emitError() << "input and output must have the same shape and "
+                          "encoding";
+  int64_t axis = getAxis();
+  if (axis < 0 || axis >= inputTy.getRank())
+    return emitError() << "axis out of range: " << axis;
+  if (inputTy.getDimSize(axis) % 16 != 0)
+    return emitError() << "the axis extent must be a multiple of 16";
+  return success();
+}
+
 Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,
                                                 Attribute srcEnc) {
   if (opIdx == 1) {

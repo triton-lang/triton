@@ -804,6 +804,39 @@ public:
         blocked.getWarpsPerCTA(), order, ttg::getCGALayout(blocked));
   }
 
+  bool supportsFp6Upcast() const override { return true; }
+
+  TensorValue upcastFp6(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
+                        int opIdx, FloatType computeType) const {
+    TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+    TensorValue scale = (opIdx == 0) ? dotOp.getAScale() : dotOp.getBScale();
+    ScaleDotElemType elemType =
+        (opIdx == 0) ? dotOp.getAElemType() : dotOp.getBElemType();
+    RankedTensorType vType = v.getType();
+    int32_t kDim = opIdx == 0 ? vType.getRank() - 1 : vType.getRank() - 2;
+    auto loc = dotOp.getLoc();
+
+    auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(vType.getEncoding());
+    if (!blocked)
+      blocked = ttg::getDefaultBlockedEncoding(
+          dotOp.getContext(), vType.getShape(), ttg::lookupNumWarps(dotOp),
+          ttg::lookupThreadsPerWarp(rewriter), ttg::lookupNumCTAs(rewriter));
+    Attribute encoding = getPackedScaledUpcastEncoding(
+        vType.cloneWithEncoding(blocked), kDim, /*groupSize=*/16);
+    v = ttg::ConvertLayoutOp::create(rewriter, loc,
+                                     vType.cloneWithEncoding(encoding), v);
+    TensorValue result = triton::amdgpu::UpcastFp6Op::create(
+        rewriter, loc, v.getType().clone(computeType), v, kDim, elemType);
+    if (!scale)
+      return result;
+
+    auto reshapeScale =
+        extendAndBroadcastScale(rewriter, dotOp, scale, computeType,
+                                result.getType(), opIdx, !dotOp.getFastMath());
+    return cast<TensorValue>(
+        arith::MulFOp::create(rewriter, loc, result, reshapeScale).getResult());
+  }
+
   TensorValue scaleArg(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
                        int opIdx, FloatType computeType) const override {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
@@ -816,7 +849,13 @@ public:
         elemType == ScaleDotElemType::FP16)
       return v;
 
-    // 2) If it's non-scaled F8F4, we reuse the common path
+    // 2) Packed FP6: each thread decodes whole 16-value groups along K, then
+    // the scale is applied like in the common path.
+    if (elemType == ScaleDotElemType::E2M3 ||
+        elemType == ScaleDotElemType::E3M2)
+      return upcastFp6(rewriter, dotOp, opIdx, computeType);
+
+    // 3) If it's non-scaled F8F4, we reuse the common path
     if (!scale) {
       return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
                                                    computeType);

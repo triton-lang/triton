@@ -1810,17 +1810,20 @@ def _fp6_dot_scaled_operand(fmt, shape, k_dim, device):
     if fmt in ("e2m3", "e3m2"):
         codes = torch.randint(0, 64, shape, dtype=torch.int32, device=device)
         return _pad_packed_fp6(codes, k_dim), fp6_values(fmt, codes).double()
-    assert fmt == "e4m3"
-    # Magnitudes in [0.5, 4.5) with random signs keep the FP8 range from
-    # dominating the FP6 terms.
-    bits = torch.randint(48, 72, shape, dtype=torch.uint8, device=device)
-    bits |= torch.randint(0, 2, shape, dtype=torch.uint8, device=device) << 7
-    value = bits.view(torch.float8_e4m3fn)
+    if fmt == "e4m3":
+        # Magnitudes in [0.5, 4.5) with random signs keep the FP8 range from
+        # dominating the FP6 terms.
+        bits = torch.randint(48, 72, shape, dtype=torch.uint8, device=device)
+        bits |= torch.randint(0, 2, shape, dtype=torch.uint8, device=device) << 7
+        value = bits.view(torch.float8_e4m3fn)
+        return value, value.double()
+    assert fmt == "bf16"
+    value = torch.randn(shape, dtype=torch.bfloat16, device=device)
     return value, value.double()
 
 
 @pytest.mark.parametrize("A_FMT, B_FMT", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2"), ("e4m3", "e2m3"),
-                                          ("e3m2", "e4m3")])
+                                          ("e3m2", "e4m3"), ("bf16", "e2m3"), ("e3m2", "bf16")])
 @pytest.mark.parametrize("SCALED", [True, False])
 @pytest.mark.parametrize("M, N, K, BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256, 64, 64, 128),
                                                                 (64, 128, 512, 64, 64, 256)])
@@ -1831,10 +1834,11 @@ def test_dot_scaled_fp6(A_FMT, B_FMT, SCALED, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
     a, a_ref = _fp6_dot_scaled_operand(A_FMT, (M, K), 1, device)
     b, b_ref = _fp6_dot_scaled_operand(B_FMT, (K, N), 0, device)
     a_scale = b_scale = None
-    if SCALED:
+    # Scales apply only to microscaled operands.
+    if SCALED and A_FMT != "bf16":
         a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device=device)
         a_ref = a_ref * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
-    if SCALED:
+    if SCALED and B_FMT != "bf16":
         b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device=device)
         b_ref = b_ref * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1).T
     out = torch.empty((M, N), dtype=torch.float32, device=device)
@@ -1843,9 +1847,12 @@ def test_dot_scaled_fp6(A_FMT, B_FMT, SCALED, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K
                                                                   matrix_instr_nonkdim=mfma_nonkdim)
     if is_compile_warmup():
         return
+    # bf16 x FP6 is decomposed: the FP6 operand is upcast to bf16 first.
+    native = "bf16" not in (A_FMT, B_FMT)
+    assert ("amdg.upcast_fp6" in kernel.asm["ttgir"]) == (not native)
     # Without scales, LLVM selects the unscaled form of the same instruction.
     shape = "16x16x128" if mfma_nonkdim == 16 else "32x32x64"
-    assert re.search(f"v_mfma_(scale_)?f32_{shape}_f8f6f4", kernel.asm["amdgcn"])
+    assert bool(re.search(f"v_mfma_(scale_)?f32_{shape}_f8f6f4", kernel.asm["amdgcn"])) == native
     # The FP6 MFMA accumulates in fixed point relative to the largest product, so
     # bound the error by the magnitude of the terms rather than of the result.
     magnitude = a_ref.abs() @ b_ref.abs()

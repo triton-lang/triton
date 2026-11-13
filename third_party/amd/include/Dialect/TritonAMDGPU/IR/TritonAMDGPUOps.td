@@ -919,6 +919,38 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
 }
 
 //===----------------------------------------------------------------------===//
+// UpcastFp6Op
+//===----------------------------------------------------------------------===//
+
+def UpcastFp6Op : TT_AMDGPU_Op<"upcast_fp6", [Pure]> {
+  let summary = "Upcast packed FP6 values to FP16, BF16 or FP32";
+
+  let description = [{
+    Decode packed FP6 (`format` is e2m3 or e3m2), the operand form of
+    `tt.dot_scaled`: each group of 16 bytes along `axis` holds 16 codes in 12
+    bytes, least significant bits first, followed by 4 padding bytes. The
+    result has the shape and encoding of the input and holds one value per
+    element. Decoding is exact.
+
+    Each thread must hold whole groups: 16 consecutive elements along `axis`,
+    starting at a multiple of 16, in consecutive registers. The op therefore
+    keeps its encoding and does not take part in layout propagation.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$input,
+    I32Attr:$axis,
+    TT_ScaleDotElemTypeAttr:$format);
+  let results = (outs RankedTensorOf<[F16, BF16, F32]>:$output);
+
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($output)
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
 

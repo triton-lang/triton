@@ -1375,3 +1375,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @upcast_fp6_format(%input: tensor<1x1024xi8, #blocked>) {
+    // expected-error @+1 {{format must be e2m3 or e3m2}}
+    %0 = amdg.upcast_fp6 %input {axis = 1 : i32, format = 0 : i32} : tensor<1x1024xi8, #blocked> -> tensor<1x1024xbf16, #blocked>
+    tt.return
+  }
+}
