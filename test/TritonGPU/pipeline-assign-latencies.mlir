@@ -1334,3 +1334,32 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Two-CTA MMAs with inputs loaded before the loop stay synchronous.
+  // CHECK-LABEL: @two_cta_mma_invariant_inputs
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: tt.self_latency
+  // CHECK-NOT: tt.latency
+  // CHECK: scf.yield
+  tt.func @two_cta_mma_invariant_inputs(%a: !ttg.memdesc<256x64xf16, #sharedA, #smem>, %b: !ttg.memdesc<64x128xf16, #sharedB, #smem>, %n: i32) -> tensor<256x128xf32, #blocked> {
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blocked>
+    %acc, %init = ttng.tmem_alloc %zero : (tensor<256x128xf32, #blocked>) -> (!ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %mma = ttng.tc_gen5_mma %a, %b, %acc[%tok], %true, %true {two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem>, !ttg.memdesc<64x128xf16, #sharedB, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %mma : !ttg.async.token
+    }
+    %value, %done = ttng.tmem_load %acc[%last] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blocked>
+    tt.return %value : tensor<256x128xf32, #blocked>
+  }
+}
