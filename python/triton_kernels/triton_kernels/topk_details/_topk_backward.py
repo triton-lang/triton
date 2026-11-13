@@ -7,7 +7,8 @@ def _topk_backward(
     Yi,
     stride_ym,  # topk indices
     DY,
-    stride_dym,  # output gradient values
+    stride_dym,
+    stride_dyn,  # output gradient values
     X,
     stride_xm,  # input values
     DX,
@@ -40,7 +41,7 @@ def _topk_backward(
     x = x.to(tl.float32)
     y = tl.softmax(x)
     # compute input-gradient
-    dy = tl.load(DY + offs_yn, mask=mask_yn, other=0.0)
+    dy = tl.load(DY + offs_yn * stride_dyn, mask=mask_yn, other=0.0)
     dy = dy.to(tl.float32)
     s = tl.sum(y * dy, 0)
     # write-back input gradient
