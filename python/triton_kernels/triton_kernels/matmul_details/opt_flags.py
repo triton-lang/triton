@@ -146,7 +146,10 @@ def make_default_opt_flags_amd(
         if is_cdna4:
             split_k = 1
             if m <= 1024:
-                target_kernel_kwargs["waves_per_eu"] = 3
+                # With block_m=128 the tiles use ~85 KB of LDS, which leaves room for
+                # one 4-warp workgroup per CU (1 wave per EU), so 3 is unachievable.
+                final_block_m = constraints.get("block_m") or block_m
+                target_kernel_kwargs["waves_per_eu"] = 3 if final_block_m < 128 else 0
                 block_n = 128
                 block_k = 128
                 num_warps = 4
