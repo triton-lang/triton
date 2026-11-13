@@ -3,12 +3,14 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
 
@@ -318,15 +320,31 @@ bool MembarAnalysis::isRegionLocal(Value value) {
 }
 
 bool MembarAnalysis::mayNotifyPeer(Operation *op) {
-  // Nested operations are checked separately; region scratch is private.
-  if (isa<RegionBranchOpInterface, triton::AtomicLoadOp, triton::AtomicPollOp,
-          triton::gpu::ThreadHandoffOp>(op))
-    return false;
-  auto effects = getEffectsRecursively(op);
-  return !effects || llvm::any_of(*effects, [&](const auto &effect) {
-    return isa<MemoryEffects::Write>(effect.getEffect()) &&
-           (!effect.getValue() || !isRegionLocal(effect.getValue()));
-  });
+  namespace tt = triton;
+  namespace ttg = triton::gpu;
+  namespace tti = triton::instrument;
+
+  return llvm::TypeSwitch<Operation *, bool>(op)
+      // A guarded notification must join pending waits before lanes split.
+      .Case<ttg::ThreadPredicateOp>([](auto) { return true; })
+      // Atomic loads and polls model a write to prevent elimination.
+      .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
+            tti::ExperimentalGSanAtomicLoadOp>([](auto) { return false; })
+      .Case<tt::AtomicOpInterface, tt::GridDependencyLaunchDependentsOp>(
+          [](auto) { return true; })
+      .Case<ttg::LocalAtomicScatterRMWOp>(
+          [&](auto atomic) { return !isRegionLocal(atomic.getDst()); })
+      .Case<ttg::MBarrierOpInterface>([&](auto barrier) {
+        auto writes = tt::getMemoryAccesses(barrier, ttg::SharedKind::Barrier,
+                                            tt::RW::Write);
+        return llvm::any_of(writes, [&](const tt::MemoryAccess &access) {
+          return !isRegionLocal(access.value);
+        });
+      })
+      .Case<tt::ElementwiseInlineAsmOp, ttg::InlineAsmOp,
+            tt::ExternElementwiseOp>(
+          [](auto opaque) { return !opaque.getPure(); })
+      .Default(false);
 }
 
 bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
