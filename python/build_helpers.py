@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import filecmp
 import hashlib
 import io
 import json
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import sysconfig
 import tarfile
 import time
@@ -55,6 +57,7 @@ class BuildHelperArgs:
     cupti_include_path: Optional[str]
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
+    amd_codegen_llvm_path: Optional[str] = None
 
     @cached_property
     def archives_path(self):
@@ -588,13 +591,16 @@ def download_codegen_llvm(backend: str, llvm_info: dict, helper_args: BuildHelpe
 
 
 def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
-    llvm_path = download_codegen_llvm("amd", amd_llvm_info, helper_args)
-    revision = f'{amd_llvm_info["llvm_hash"]}-{amd_llvm_info["build_number"]}'
+    llvm_path = helper_args.amd_codegen_llvm_path or download_codegen_llvm("amd", amd_llvm_info, helper_args)
+    revision = (f"local:{llvm_path}" if helper_args.amd_codegen_llvm_path else
+                f'{amd_llvm_info["llvm_hash"]}-{amd_llvm_info["build_number"]}')
     system_suffix = get_llvm_system_suffix(helper_args)
     source_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "codegen")
-    checkout_hash = hashlib.sha256(os.path.realpath(source_path).encode()).hexdigest()[:12]
+    checkout_hash = hashlib.sha256(
+        (os.path.realpath(source_path) + os.path.realpath(llvm_path)).encode()).hexdigest()[:12]
+    build_revision = "local" if helper_args.amd_codegen_llvm_path else revision
     build_path = os.path.join(helper_args.cache_path, "amd",
-                              f"codegen-bootstrap-{revision}-{system_suffix}-{checkout_hash}")
+                              f"codegen-bootstrap-{build_revision}-{system_suffix}-{checkout_hash}")
     install_path = os.path.join(build_path, "install")
     llvm_cmake_path = os.path.join(llvm_path, "lib", "cmake", "llvm")
     command = [
@@ -632,10 +638,16 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
                 f"-DCMAKE_EXE_LINKER_FLAGS={linker_flag}",
                 f"-DCMAKE_SHARED_LINKER_FLAGS={linker_flag}",
             ])
-    subprocess.check_call(command)
+    configuration_path = Path(build_path) / "triton-configuration.json"
+    configuration = json.dumps(command)
+    if (not (Path(build_path) / "build.ninja").is_file() or not configuration_path.is_file()
+            or configuration_path.read_text() != configuration):
+        subprocess.check_call(command)
+        configuration_path.write_text(configuration)
     subprocess.check_call(["cmake", "--build", build_path, "--config", "Release", "--target", "triton_amd_codegen"])
-    subprocess.check_call(["cmake", "--install", build_path, "--config", "Release"])
-    return os.path.join(install_path, "lib", amd_codegen_library_name())
+    global _amd_fast_build
+    _amd_fast_build = (build_path, ninja_path)
+    return os.path.join(build_path, amd_codegen_library_name())
 
 
 def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
@@ -647,10 +659,10 @@ def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
     with open(amd_llvm_info_path, "r") as amd_llvm_info_file:
         amd_llvm_info = json.load(amd_llvm_info_file)
 
-    package = get_amd_codegen_package_info(helper_args)
-    if package.sha256sum is None:
-        # Until standalone artifacts are published, use the SDK pinned in this
-        # backend's manifest, regardless of Triton's core LLVM configuration.
+    package = None if helper_args.amd_codegen_llvm_path else get_amd_codegen_package_info(helper_args)
+    if package is None or package.sha256sum is None:
+        # Build checkout sources against the local override or independent SDK
+        # when no standalone artifact is available.
         source_path = build_amd_codegen(amd_llvm_info, helper_args)
     else:
         package_root = os.path.join(helper_args.cache_path, package.package)
@@ -664,16 +676,41 @@ def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
         raise RuntimeError(f"Cannot find AMD code generation at {source_path}; set TRITON_AMD_CODEGEN_PATH")
 
     destination_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "lib", library)
-    if os.path.isfile(destination_path):
-        source_stat = os.stat(source_path)
-        destination_stat = os.stat(destination_path)
-        if (source_stat.st_size == destination_stat.st_size
-                and source_stat.st_mtime_ns == destination_stat.st_mtime_ns):
-            return
+    # A receipt avoids scanning the library on unchanged builds.  Include inode
+    # and change time so replacement or edits preserving size/mtime invalidate it.
+    delivery_key = hashlib.sha256(os.path.realpath(destination_path).encode()).hexdigest()
+    receipt_path = Path(helper_args.cache_path) / "amd" / "delivery" / (delivery_key + ".json")
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def delivery_state():
+        result = []
+        for path in (source_path, destination_path):
+            stat = os.stat(path)
+            result.append(
+                [os.path.realpath(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+        return result
+
+    if os.path.isfile(destination_path):
+        state = delivery_state()
+        try:
+            if json.loads(receipt_path.read_text()) == state:
+                return
+        except (OSError, ValueError):
+            pass
+        if filecmp.cmp(source_path, destination_path, shallow=False):
+            receipt_path.write_text(json.dumps(state))
+            return
     os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-    print(f"copy {source_path} to {destination_path} ...")
-    shutil.copy2(source_path, destination_path)
+    # Replace the inode so already loaded libraries are not modified in place.
+    with tempfile.NamedTemporaryFile(dir=os.path.dirname(destination_path), delete=False) as temporary:
+        temporary_path = temporary.name
+    try:
+        shutil.copy2(source_path, temporary_path)
+        os.replace(temporary_path, destination_path)
+        receipt_path.write_text(json.dumps(delivery_state()))
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 
 def download_and_copy(name, src_func, dst_path, override_path, version, url_func, helper_args: BuildHelperArgs):
@@ -822,6 +859,7 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--triton-llvm-system-suffix", default="", help="Override LLVM system suffix")
     parser.add_argument("--llvm-syspath", default="", help="Path override for LLVM_SYSPATH")
     parser.add_argument("--json-syspath", default="", help="Path override for JSON_SYSPATH")
+    parser.add_argument("--triton-amd-codegen-llvm-path", default="", help="Local AMD LLVM build or SDK")
     parser.add_argument("--triton-amd-codegen-path", default="", help="Path override for TRITON_AMD_CODEGEN_PATH")
     parser.add_argument("--triton-ptxas-path", default="", help="Path override for TRITON_PTXAS_PATH")
     parser.add_argument("--triton-cuobjdump-path", default="", help="Path override for TRITON_CUOBJDUMP_PATH")
@@ -846,6 +884,7 @@ def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
         llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath),
         json_syspath=_normalize_optional_path(parsed_args.json_syspath),
         amd_codegen_path=_normalize_optional_path(parsed_args.triton_amd_codegen_path),
+        amd_codegen_llvm_path=_normalize_optional_path(parsed_args.triton_amd_codegen_llvm_path),
         ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
         cuobjdump_path=_normalize_optional_path(parsed_args.triton_cuobjdump_path),
         nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
@@ -867,6 +906,9 @@ def main(argv=None):
     )
     add_common_args(download_parser)
 
+    amd_parser = subparsers.add_parser("prepare_amd_codegen", help="Build or download standalone AMD codegen")
+    add_common_args(amd_parser)
+
     write_vars_parser = subparsers.add_parser(
         "write_thirdparty_cmake_vars",
         help="Resolve third-party packages and write CMake variable assignments",
@@ -885,8 +927,23 @@ def main(argv=None):
     helper_args = normalize_parsed_args(parsed_args)
     if parsed_args.command == "download_and_copy_dependencies":
         download_and_copy_dependencies(helper_args)
+    elif parsed_args.command == "prepare_amd_codegen":
+        download_and_copy_amd_codegen(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
+    if parsed_args.command == "prepare_amd_codegen" and "_amd_fast_build" in globals():
+        from amd_codegen_build import save
+        build, ninja = _amd_fast_build
+        if ninja:
+            library = amd_codegen_library_name()
+            save(list(argv if argv is not None else sys.argv[1:]), build, ninja, os.path.join(build, library),
+                 os.path.join(get_base_dir(), "third_party", "amd", "backend", "lib", library), [
+                     __file__,
+                     os.path.join(get_base_dir(), "python", "amd_codegen_build.py"),
+                     os.path.join(get_base_dir(), "cmake", "amd-llvm-info.json"),
+                     os.path.join(build, "triton-configuration.json"),
+                     os.path.join(build, "CMakeCache.txt"), ninja
+                 ])
     if os.path.exists(helper_args.archives_path) and not check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS"):
         shutil.rmtree(helper_args.archives_path)
 
