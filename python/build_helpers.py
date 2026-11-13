@@ -800,8 +800,27 @@ def get_nvidia_toolchain_packages():
     ]
 
 
+def _nvidia_toolchain_available():
+    """Check whether pre-built NVIDIA toolchain binaries exist for this platform.
+
+    NVIDIA publishes the CUDA toolkit versions Triton requires (12.9+) only
+    for x86_64 and aarch64/sbsa.  Older versions were available for ppc64le
+    (up to CUDA 12.4) but not at the versions Triton pins.  On unsupported
+    platforms the downloads would 404, so skip them with a warning rather
+    than failing the build.
+    """
+    import platform as _plat
+    return _plat.machine() in ("x86_64", "aarch64", "arm64")
+
+
 def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     download_and_copy_amd_codegen(helper_args)
+
+    if not _nvidia_toolchain_available():
+        print("WARNING: NVIDIA toolchain binaries are not available for this "
+              f"platform ({platform.system()}-{platform.machine()}). "
+              "Skipping NVIDIA runtime tool downloads (ptxas, nvcc, etc.).")
+        return
 
     for package in get_nvidia_toolchain_packages():
         download_and_copy(
