@@ -160,17 +160,17 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
                 visitOperation(node, &op);
 
         } else if (auto reduceOp = dyn_cast<tt::ReduceOp>(op)) {
-
-          auto node = graph->addNode(op, 1, 1);
+          // A reduce can carry several operands and results (e.g. tl.max with
+          // return_indices=True reduces values and indices together), so give
+          // each one a port.
+          auto node =
+              graph->addNode(op, op->getNumOperands(), op->getNumResults());
           nodes[op] = node;
-
-          // input
-          operands[std::make_pair(op, 0)] = InputPort(node, 0);
-
-          // result
-          assert(reduceOp.getResults().size() == 1);
-          auto result = reduceOp.getResults().front();
-          values.push_back(std::make_pair(OutputPort(node, 0), result));
+          for (size_t idx = 0; idx < op->getNumOperands(); idx++)
+            operands[std::make_pair(op, idx)] = InputPort(node, idx);
+          for (auto result : reduceOp.getResults())
+            values.push_back(std::make_pair(
+                OutputPort(node, result.getResultNumber()), result));
 
           for (auto &region : op->getRegions())
             for (auto &block : region)
@@ -1330,10 +1330,11 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
     if (node->isOp()) {
       setPartitionsAttr(node->getOp(), node);
 
-      if (auto ret = dyn_cast<tt::ReduceReturnOp>(node->getOp())) {
-        // result of a reduce
+      if (isa<tt::ReduceReturnOp>(node->getOp())) {
+        // results of a reduce
         auto reduce = node->getParent()->getOp();
-        setPartitionOutputsAttr(reduce, 0, 1, node);
+        for (size_t idx = 0; idx < reduce->getNumResults(); idx++)
+          setPartitionOutputsAttr(reduce, idx, reduce->getNumResults(), node);
       } else if (isa<tt::ScanReturnOp>(node->getOp())) {
         // results of a scan
         auto scan = node->getParent()->getOp();
