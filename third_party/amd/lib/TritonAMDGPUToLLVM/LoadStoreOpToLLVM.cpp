@@ -803,7 +803,9 @@ struct BufferLoadOpConversion
       return failure();
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     // original values
     Value ptr = op.getPtr();
@@ -916,7 +918,9 @@ struct BufferLoadToLocalOpConversion
       return failure();
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     // Original values
     Value ptr = op.getPtr();
@@ -1949,7 +1953,9 @@ struct BufferAtomicRMWOpConversion
     auto loc = op->getLoc();
     insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     // original values
     Value ptr = op.getPtr();
@@ -2077,7 +2083,9 @@ struct BufferAtomicCASOpConversion
     auto loc = op->getLoc();
     insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     // original values
     Value ptr = op.getPtr();
@@ -2193,7 +2201,9 @@ struct BufferAtomicLoadOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
     insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     Type resultTy = op.getType();
     Type valueElemTy =
@@ -2259,7 +2269,9 @@ struct BufferAtomicStoreOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     Type valueTy = op.getValue().getType();
     Type valueElemTy =
@@ -2320,7 +2332,9 @@ struct BufferStoreOpConversion
       return failure();
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+    LLVM::AMD::BufferEmitter bufferEmitter(
+        rewriter, loc, targetInfo,
+        isa<triton::amdgpu::BufferDescType>(op.getPtr().getType()));
 
     // original values
     Value ptr = op.getPtr();
