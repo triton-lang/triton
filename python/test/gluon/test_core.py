@@ -2531,11 +2531,6 @@ def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
     skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
-    # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
-    # This is fixed in PTXAS 13.0.88. Remove once we upgrade
-    if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
-                           (not transpose_b and swizzling_b == 0 and shape_n > 1)):
-        pytest.skip("Skipped due to a bug in PTXAS when the shared layout is transposed and the swizzling is 0")
     if ctas_per_cga[0] == 1 and two_ctas:
         pytest.skip("Need at least 2 CTAs for 2CTA mode")
 
