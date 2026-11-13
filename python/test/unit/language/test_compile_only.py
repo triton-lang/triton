@@ -412,9 +412,7 @@ def test_compile_only_dot() -> None:
     assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
 
     ptx = k.asm["ptx"]
-    pattern = (r"mov\.b32 	%r(?P<G>\d+), global_smem;"
-               r"(.|\n)*"
-               r"tcgen05\.alloc\.cta_group::1\.sync\.aligned\.shared::cta\.b32 \[%r(?P=G)], 64"
+    pattern = (r"tcgen05\.alloc\.cta_group::1\.sync\.aligned\.shared::cta\.b32 \[%r\d+], 64"
                r"(.|\n)*"
                r"tcgen05\.relinquish_alloc_permit\.cta_group::1\.sync\.aligned"
                r"(.|\n)*"
@@ -430,6 +428,8 @@ def test_compile_only_dot() -> None:
                r"(.|\n)*"
                r"tcgen05.wait::ld.sync.aligned")
     assert re.search(pattern, str(ptx)), "The PTX does not match the expected pattern."
+    # The tensor memory base address is read back from the last 4 bytes of shared memory.
+    assert f"[global_smem+{k.metadata.shared - 4}]" in ptx
     assert k.asm["cubin"] != b""
 
 

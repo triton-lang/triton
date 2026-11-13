@@ -89,6 +89,11 @@ inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
 
+// Module attribute holding the offset of the shared memory slot that
+// tcgen05.alloc writes the tensor memory base address to.
+inline constexpr llvm::StringLiteral kTensorMemoryBaseSmemOffsetAttrName =
+    "ttg.tensor_memory_base_smem_offset";
+
 // Return the declared MMA N, restricted to a true N subview.
 unsigned getMMAv5InstructionN(gpu::MemDescType type);
 
