@@ -790,19 +790,10 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   int numStages = mainWaitStage - schedule[mma].first + 1;
-  if (mma.getTwoCtas()) {
-    // With four prefetched operand tiles, two completion-barrier slots are
-    // insufficient:
-    //   tc_gen5_mma ... %bar0 ...  // MMA 0
-    //   tc_gen5_mma ... %bar1 ...  // MMA 1
-    //   wait_barrier %bar0, %phase0
-    //   tc_gen5_mma ... %bar0 ...  // MMA 2 reuses bar0
-    // The leader can issue MMA 2 before the peer observes MMA 0's completion.
-    // Both completions flip %bar0's phase, so the peer may miss the first
-    // completion and deadlock. Size the barrier ring for the full pipeline
-    // depth to prevent premature slot reuse.
+  // Keep enough slots for the full pipeline; acknowledgments below protect
+  // reuse when one CTA falls behind even further.
+  if (mma.getTwoCtas())
     numStages = std::max(numStages, schedule.getNumStages());
-  }
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
   Value barrierAlloc = createBarrierAlloc(forOp, numStages, /*arriveCount=*/1,
@@ -822,6 +813,16 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   Value barrierSlice =
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+  Value ackAlloc, ackSlice;
+  if (mma.getTwoCtas()) {
+    // Completion is local to each CTA's barrier copy. Before reusing a slot,
+    // the leader must know that both CTAs observed its previous completion.
+    ackAlloc = createBarrierAlloc(forOp, numStages, /*arriveCount=*/1,
+                                        /*twoCTAs=*/true);
+    ackSlice = triton::createSingleBufferView(builder, ackAlloc, barrierIdx);
+    Value previousPhase = arith::XOrIOp::create(builder, phase, one);
+    ttng::WaitBarrierOp::create(builder, ackSlice, previousPhase);
+  }
   mma.addCompletionBarrier(barrierSlice, vTrue);
   mma.setIsAsync(true);
 
@@ -839,6 +840,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  if (ackSlice)
+    ttng::ArriveBarrierOp::create(builder, ackSlice, 1);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
@@ -873,6 +876,25 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
   yieldOp->replaceUsesOfWith(phase, newPhase);
   yieldOp->replaceUsesOfWith(barrierIdx, newBarrierIdx);
+
+  if (ackAlloc) {
+    // The last arrivals have no subsequent slot reuse to wait for them. Drain
+    // every slot before invalidating the pair-shared acknowledgment barriers.
+    ImplicitLocOpBuilder after(mma.getLoc(), forOp);
+    after.setInsertionPointAfter(forOp);
+    Value finalPhase = forOp.getResult(phaseArgIdx);
+    Value finalIndex = forOp.getResult(barrierIdxArgIdx);
+    for (int i = 0; i < numStages; ++i) {
+      Value slot = arith::ConstantIntOp::create(after, i, 32);
+      Value wrapped = arith::CmpIOp::create(
+          after, arith::CmpIPredicate::sge, slot, finalIndex);
+      Value toggle =
+          arith::ExtUIOp::create(after, after.getI32Type(), wrapped);
+      Value lastPhase = arith::XOrIOp::create(after, finalPhase, toggle);
+      Value barrier = triton::createSingleBufferView(after, ackAlloc, slot);
+      ttng::WaitBarrierOp::create(after, barrier, lastPhase);
+    }
+  }
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
