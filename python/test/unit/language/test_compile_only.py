@@ -349,6 +349,22 @@ def test_num_ctas_invalid(num_ctas):
         backend.parse_options({"num_ctas": num_ctas})
 
 
+def test_consan_requires_sm90():
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 89, 32))
+    with pytest.raises(ValueError, match=r"ConSan requires NVIDIA SM90\+.*sm_89"):
+        backend.parse_options({"instrumentation_mode": "consan"})
+
+
+def test_consan_accepts_sm90():
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    options = backend.parse_options({"instrumentation_mode": "consan"})
+    assert options.instrumentation_mode == "consan"
+
+
 def test_compile_only_expect_zero() -> None:
 
     @triton.jit
