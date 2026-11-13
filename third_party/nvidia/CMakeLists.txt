@@ -2,7 +2,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 add_subdirectory(include)
 add_subdirectory(lib)
-if(TRITON_BUILD_PYTHON_MODULE)
+if(TRITON_BUILD_PYTHON_MODULE AND "nvidia" IN_LIST TRITON_CODEGEN_BACKENDS)
   if(TRITON_BUILD_NVIDIA_GSAN_RUNTIME)
     set(GSAN_RUNTIME_DIR "${triton_SOURCE_DIR}/python/triton/experimental/gsan/src")
     set(GSAN_RUNTIME_HDRS
