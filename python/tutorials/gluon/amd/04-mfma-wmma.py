@@ -489,15 +489,24 @@ if __name__ == "__main__" and is_cdna4():
 
 
 @gluon.constexpr_function
-def get_smem_layout_for_async_copies():
+def get_smem_layout_for_async_copies(shape, dtype):
+    # One copy instruction writes 1 KB, and we pad 32 bytes after it.
+    rows, cols = shape
+    elem_bytes = dtype.primitive_bitwidth // 8
+    rows_per_copy = 1024 // (cols * elem_bytes)
+    # The values of a row
+    col_bases = [[0, 2**i] for i in range(cols.bit_length() - 1)]
+    # Rows 16 apart within one copy instruction
+    row_bases = [[16 * 2**i, 0] for i in range(rows_per_copy.bit_length() - 1)]
+    # The next copy instructions
+    row_bases += [[1, 0], [2, 0], [4, 0], [8, 0]]
+    # The rest of the tile
+    row_bases += [[2**i, 0] for i in range((16 * rows_per_copy).bit_length() - 1, rows.bit_length() - 1)]
     return gl.PaddedSharedLayout(  #
-        interval_padding_pairs=[[512, 16]],  #
-        offset_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32],  #
-                      [16, 0], [32, 0], [64, 0],  #
-                      [1, 0], [2, 0], [4, 0], [8, 0],  #
-                      [128, 0]],  #
+        interval_padding_pairs=[[1024 // elem_bytes, 32 // elem_bytes]],  #
+        offset_bases=col_bases + row_bases,  #
         cga_layout=[],  #
-        shape=[256, 64])
+        shape=shape)
 
 
 # %%
@@ -514,18 +523,26 @@ def get_smem_layout_for_async_copies():
 
 
 @gluon.constexpr_function
-def get_gmem_layout_for_async_copies():
+def get_gmem_layout_for_async_copies(shape, dtype):
+    # Each lane copies 16 bytes, in the order of the shared memory layout. The
+    # bases go to the registers of one lane, the 64 lanes, and the 4 warps.
+    bases = get_smem_layout_for_async_copies(shape, dtype).offset_bases
+    vec_end = (128 // dtype.primitive_bitwidth).bit_length() - 1
+    lane_end = vec_end + 6
+    warp_end = lane_end + 2
     return gl.DistributedLinearLayout(  #
-        reg_bases=[[0, 1], [0, 2], [0, 4], [4, 0], [8, 0], [128, 0]],  #
-        lane_bases=[[0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0]],  #
-        warp_bases=[[1, 0], [2, 0]],  #
+        reg_bases=bases[:vec_end] + bases[warp_end:],  #
+        lane_bases=bases[vec_end:lane_end],  #
+        warp_bases=bases[lane_end:warp_end],  #
         block_bases=[],  #
-        shape=[256, 64])
+        shape=shape)
 
 
 if __name__ == "__main__" and is_cdna4():
-    assert try_compile_async_copy(get_gmem_layout_for_async_copies(), get_smem_layout_for_async_copies())
-    bank_conflicts_kernel[(1, )](a_layout, get_smem_layout_for_async_copies(), 0)
+    gmem_layout = get_gmem_layout_for_async_copies([256, 64], gl.bfloat16)
+    smem_layout = get_smem_layout_for_async_copies([256, 64], gl.bfloat16)
+    assert try_compile_async_copy(gmem_layout, smem_layout)
+    bank_conflicts_kernel[(1, )](a_layout, smem_layout, 0)
 
 # %%
 # Now we combine these features into a pipelined matmul kernel. To keep the
@@ -558,8 +575,8 @@ def get_mfma_layouts():
     b_reg_layout = gl.DotOperandLayout(1, acc_layout, 8)
 
     # Both operands use the padded layout and the copy layout from above.
-    gmem_layout = get_gmem_layout_for_async_copies()
-    smem_layout = get_smem_layout_for_async_copies()
+    gmem_layout = get_gmem_layout_for_async_copies([256, 64], gl.bfloat16)
+    smem_layout = get_smem_layout_for_async_copies([256, 64], gl.bfloat16)
     return MfmaLayouts(gmem_layout, smem_layout, a_reg_layout,  #
                        gmem_layout, smem_layout, b_reg_layout,  #
                        acc_layout)
@@ -995,13 +1012,14 @@ if __name__ == "__main__" and is_cdna5():
 
 @gluon.aggregate
 class WmmaLayouts:
-    # Accumulator and operand register layouts
-    acc_layout: gl.constexpr
-    a_reg_layout: gl.constexpr
-    b_reg_layout: gl.constexpr
-    # Shared memory layouts of A, B and C
+    # Operand A's shared memory and register layouts
     a_smem_layout: gl.constexpr
+    a_reg_layout: gl.constexpr
+    # Operand B's shared memory and register layouts
     b_smem_layout: gl.constexpr
+    b_reg_layout: gl.constexpr
+    # Accumulator's register layout and output's shared memory layout
+    acc_layout: gl.constexpr
     c_smem_layout: gl.constexpr
 
 
@@ -1021,7 +1039,9 @@ def get_wmma_layouts(partitioned):
     a_reg_layout = gl.DotOperandLayout(0, acc_layout, 8)
     b_reg_layout = gl.DotOperandLayout(1, acc_layout, 8)
     c_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 8]], [256, 256], [1, 0])
-    return WmmaLayouts(acc_layout, a_reg_layout, b_reg_layout, a_smem_layout, b_smem_layout, c_smem_layout)
+    return WmmaLayouts(a_smem_layout, a_reg_layout,  #
+                       b_smem_layout, b_reg_layout,  #
+                       acc_layout, c_smem_layout)
 
 
 @gluon.jit
