@@ -1,5 +1,5 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
