@@ -19,11 +19,14 @@ namespace {
 
 class AMDMembarAnalysis : public MembarAnalysis {
 public:
-  using MembarAnalysis::MembarAnalysis;
+  AMDMembarAnalysis(Allocation &allocation, MembarFilterFn filter,
+                    BufferRegionAnalysis &regions)
+      : MembarAnalysis(allocation, std::move(filter), regions, nullptr,
+                       AccessMode::AllSharedAccesses, getCompletionSync) {}
 
-protected:
   // Consume the earlier wait-count pass's scope proof before merging state.
-  CompletionSync getCompletionSync(Operation *op) override {
+  static CompletionSync getCompletionSync(Operation *op,
+                                          CompletionSync fallback) {
     if (isa<gpu::AsyncWaitOp, amdgpu::AsyncWaitOp, amdgpu::AsyncTDMWait,
             amdgpu::AsyncTDMIntrinsicWait>(op)) {
       if (auto scope = op->getAttrOfType<StringAttr>(
@@ -33,7 +36,7 @@ protected:
     }
     // Preserve the default classification for IR that has not gone through
     // UpdateAsyncWaitCount, including standalone Membar analysis tests.
-    return MembarAnalysis::getCompletionSync(op);
+    return fallback;
   }
 };
 

@@ -17,6 +17,10 @@
 
 namespace mlir {
 
+namespace triton::membar {
+struct OpModel;
+}
+
 class OpBuilder;
 struct AllocationSlice;
 
@@ -163,6 +167,9 @@ enum class CompletionSync : uint8_t {
   Shared,
   All,
 };
+
+/// Completion scope, refined by a backend before joining pending state.
+using CompletionScopeFn = CompletionSync (*)(Operation *, CompletionSync);
 
 struct BlockInfo {
   using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
@@ -364,16 +371,61 @@ struct MembarInfo {
 
 /// Classify the barriers that synchronize local memory accesses in `op`
 /// relative to its memory effects.
-triton::BarrierStages getLocalBarrierStages(Operation *op,
-                                            Allocation *allocation);
+triton::BarrierStages getLocalBarrierStages(Operation *op, bool hasScratch);
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
+namespace triton::membar {
+
+/// Describes shared-memory accesses and synchronization for one operation.
+class SMemModel {
 public:
   enum class AccessMode { AllSharedAccesses, AllocatorAliasesOnly };
+
+  SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
+            AccessMode accessMode = AccessMode::AllSharedAccesses,
+            CompletionScopeFn completionScope = nullptr)
+      : allocation(allocation), regions(regions), accessMode(accessMode),
+        completionScope(completionScope),
+        bufferIndexAnalysis(
+            cast<FunctionOpInterface>(allocation.getOperation())) {}
+
+  /// Cluster placement supplies its own stages and tracks only memory slices.
+  void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses,
+                std::optional<BarrierStages> clusterStages = std::nullopt);
+  MembarInfo translateCallSummary(CallOpInterface call,
+                                  FunctionOpInterface callee,
+                                  MembarInfo summary);
+  /// Shared-memory lifetime markers do not issue memory accesses.
+  static bool hasThreadEffects(Operation *operation);
+  const BufferIndexAnalysis &getBufferIndexAnalysis() const {
+    return bufferIndexAnalysis;
+  }
+
+private:
+  SmallVector<AllocationSlice>
+  getAllocationSlices(Value value, std::optional<gpu::SharedKind> sharedKind);
+  bool isRegionLocal(Value value);
+  bool mayNotifyPeer(Operation *op, ArrayRef<MemoryAccess> accesses);
+  BlockInfo getThreadEffects(Operation *op);
+  void addThreadDemand(BlockInfo &effects, Operation *op,
+                       ArrayRef<MemoryAccess> accesses);
+
+  Allocation &allocation;
+  BufferRegionAnalysis &regions;
+  AccessMode accessMode;
+  CompletionScopeFn completionScope;
+  BufferIndexAnalysis bufferIndexAnalysis;
+  DenseMap<Value, bool> regionLocalAllocations;
+};
+
+} // namespace triton::membar
+
+class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
+public:
+  using AccessMode = triton::membar::SMemModel::AccessMode;
 
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
@@ -381,21 +433,18 @@ public:
   /// their addresses are intersected, a barrier is inserted.
   /// - WAR: If a shared memory read is followed by a shared memory write, and
   /// their addresses are intersected, a barrier is inserted.
-  /// The following circumstances do not require a barrier:
-  /// - WAW: not possible because overlapped memory allocation is not allowed.
-  /// - RAR: no write is performed.
-  /// Temporary storage of operations such as Reduce are considered as both
-  /// a shared memory read. If the temporary storage is written but not read,
-  /// it is considered as the problem of the operation itself but not the membar
-  /// analysis.
+  /// - WAW: Successive writes to intersecting addresses require ordering.
+  /// RAR needs no barrier because no write is performed.
+  /// Temporary storage of operations such as Reduce contributes an incoming
+  /// scratch write and an outgoing scratch read.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                  triton::BufferRegionAnalysis &regions,
                  MembarSliceFilterFn sliceFilter = nullptr,
-                 AccessMode accessMode = AccessMode::AllSharedAccesses)
-      : allocation(allocation), filter(std::move(filter)), regions(regions),
-        sliceFilter(std::move(sliceFilter)), accessMode(accessMode),
-        bufferIndexAnalysis(
-            cast<FunctionOpInterface>(allocation.getOperation())) {}
+                 AccessMode accessMode = AccessMode::AllSharedAccesses,
+                 CompletionScopeFn completionScope = nullptr)
+      : allocation(allocation), filter(std::move(filter)),
+        shared(allocation, regions, accessMode, completionScope),
+        sliceFilter(std::move(sliceFilter)) {}
 
 private:
   void updateSuccessor(Operation *terminator, Block *successor,
@@ -404,26 +453,20 @@ private:
   void updateExitState(MembarInfo *membarInfo) override;
 
 protected:
-  /// Shared-memory lifetime markers do not issue memory accesses.
-  static bool hasThreadEffects(Operation *operation);
-
   /// A null builder analyzes existing synchronization without inserting any.
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
-  void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
-                           FuncMapT *funcMap, OpBuilder *builder,
-                           bool cluster = false, BlockInfo effects = {});
+  void updateMemoryEffects(
+      Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
+      OpBuilder *builder,
+      std::optional<triton::BarrierStages> clusterStages = std::nullopt);
   /// Returns the inserted barrier, or nullptr when none is inserted.
   Operation *syncIfNeeded(Operation *operation, const BlockInfo &effects,
                           MembarInfo *membarInfo, OpBuilder *builder,
                           bool cluster = false);
   Operation *insertBarrier(Operation *operation, OpBuilder *builder,
                            bool cluster = false);
-  virtual triton::BarrierStages getBarrierStages(Operation *operation);
-
-  /// Completion scope, refined by a backend before joining pending state.
-  virtual CompletionSync getCompletionSync(Operation *operation);
 
   /// Whether pending thread effects must rendezvous before upcoming demands.
   virtual bool requiresThreadSync(const BlockInfo &pending,
@@ -431,21 +474,10 @@ protected:
 
   Allocation &allocation;
   MembarFilterFn filter;
-  triton::BufferRegionAnalysis &regions;
 
 private:
-  SmallVector<AllocationSlice>
-  getAllocationSlices(Value value,
-                      std::optional<triton::gpu::SharedKind> sharedKind);
-  bool isRegionLocal(Value value);
-  bool mayNotifyPeer(Operation *op);
-  BlockInfo getThreadEffects(Operation *op);
-  void addThreadDemand(BlockInfo &effects, Operation *op);
-
+  triton::membar::SMemModel shared;
   MembarSliceFilterFn sliceFilter;
-  AccessMode accessMode;
-  BufferIndexAnalysis bufferIndexAnalysis;
-  DenseMap<Value, bool> regionLocalAllocations;
 };
 
 /// Inserts shared-memory and operation rendezvous barriers across a module,

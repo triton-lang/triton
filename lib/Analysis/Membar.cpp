@@ -1,16 +1,10 @@
 #include "triton/Analysis/Membar.h"
+#include "MembarCFG.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/TypeSwitch.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 
 #include <algorithm>
 
@@ -125,160 +119,6 @@ AllocationSlice AllocationSlice::translateToCallsite(
   return shifted;
 }
 
-namespace {
-
-enum class ThreadSyncKind {
-  Ordinary,
-  Publication,
-  // Each warp publishes its completed effects without a CTA rendezvous.
-  WarpPublication,
-  // Completions only establish completion or acquire state; they do
-  // not access payload or consume another completion's unpublished effects.
-  Completion,
-  CompletionNeedsSync,
-  // These completions do not publish writes to global memory.
-  SharedCompletionNeedsSync,
-  // Finish waits before a notification can let a peer advance their phase.
-  MBarrierWait,
-};
-
-struct ThreadSyncInfo {
-  // Rendezvous requirements, not barriers provided by the operation itself.
-  ThreadSyncKind kind = ThreadSyncKind::Ordinary;
-  ThreadIssuer::Kind issuer = ThreadIssuer::Unknown;
-
-  bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
-
-  bool requiresWarpBefore() const {
-    return kind == ThreadSyncKind::WarpPublication;
-  }
-
-  bool requiresAfter() const {
-    return kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync;
-  }
-
-  bool hasThreadDemand() const {
-    return kind == ThreadSyncKind::Ordinary ||
-           kind == ThreadSyncKind::Publication;
-  }
-};
-
-ThreadSyncInfo getThreadSyncInfo(Operation *op) {
-  // Acquires and proxy fences do not consume payload. Wait deps only keep
-  // allocations live; each thread fences its own completed accesses.
-  if (isa<ttng::WaitBarrierOp>(op))
-    return {ThreadSyncKind::MBarrierWait};
-  if (isa<ttng::FenceAsyncSharedOp>(op))
-    return {ThreadSyncKind::Completion};
-  if (isa<triton::gpu::AsyncWaitOp>(op))
-    return {ThreadSyncKind::SharedCompletionNeedsSync};
-  if (auto wait = dyn_cast<ttng::TMAStoreWaitOp>(op);
-      wait && wait.getReadOnly())
-    return {ThreadSyncKind::SharedCompletionNeedsSync};
-  if (op->hasTrait<OpTrait::MemWaitOpTrait>() ||
-      isa<ttng::TensormapFenceproxyAcquireOp>(op))
-    return {ThreadSyncKind::CompletionNeedsSync};
-  if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-    // WGMMA waits only synchronize the issuing warp group.
-    return {!wait.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4
-                ? ThreadSyncKind::CompletionNeedsSync
-                : ThreadSyncKind::Completion};
-  }
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
-          ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp>(op)) {
-    // Each issuing CTA elects a lane in its partition's warp zero.
-    // Init and inval use thread zero before SM90.
-    return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
-  }
-  if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
-      barrier && barrier.isPerWarp())
-    return {ThreadSyncKind::WarpPublication};
-  if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
-    auto fromCTA = isa<ttng::ArriveBarrierOp>(op)
-                       ? cast<ttng::ArriveBarrierOp>(op).getFromCTA()
-                       : cast<ttng::BarrierExpectOp>(op).getFromCTA();
-    // Nonidentity routing may use several lanes to signal the peer CTAs.
-    return {ThreadSyncKind::Publication,
-            !fromCTA ? ThreadIssuer::Thread0 : ThreadIssuer::Unknown};
-  }
-  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
-    return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
-                                                : ThreadSyncKind::Publication,
-            ThreadIssuer::Warp0Leader};
-  if (isa<ttng::TCGen5CommitOp>(op))
-    return {ThreadSyncKind::Publication, ThreadIssuer::Warp0Leader};
-  return {};
-}
-
-// Every observer stays in this region and CTA. Follow views and selects;
-// calls, captures and raw-address escapes reject the proof.
-bool hasRegionLocalUses(Value root) {
-  if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
-    return false;
-  SmallVector<Value> worklist{root};
-  llvm::SmallPtrSet<Value, 8> seen;
-  while (!worklist.empty()) {
-    Value value = worklist.pop_back_val();
-    if (!seen.insert(value).second)
-      continue;
-    for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      if (user->hasTrait<OpTrait::MemDescViewTrait>() ||
-          isa<arith::SelectOp>(user)) {
-        llvm::append_range(worklist, user->getResults());
-        continue;
-      }
-      if (user->getParentRegion() != root.getParentRegion())
-        return false;
-      // TMEM loads and stores only access the issuing CTA's tensor memory.
-      if (isa<triton::gpu::LocalDeallocOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp>(
-              user))
-        continue;
-      // Wait dependencies only keep allocations live.
-      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(user);
-          wait && wait.getAlloc() != value)
-        continue;
-      auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(user);
-      if (barrier && llvm::is_contained(barrier.getBarriers(), value)) {
-        if (ttng::hasCrossCTAMBarrierUse(barrier) ||
-            ttng::hasCGABroadcast(
-                cast<triton::gpu::MemDescType>(value.getType())))
-          return false;
-        if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(user))
-          continue;
-        for (const auto &access : triton::getMemoryAccesses(user))
-          if (access.value == value &&
-              access.sharedKind != triton::gpu::SharedKind::Barrier)
-            return false;
-        continue;
-      }
-      auto crossCTA = ttng::hasCrossCTASharedAccess(user);
-      if (!crossCTA || *crossCTA)
-        return false;
-    }
-  }
-  return true;
-}
-
-bool hasOnlyGlobalReads(Operation *op) {
-  auto effects = getEffectsRecursively(op);
-  return effects && !effects->empty() &&
-         llvm::all_of(*effects, [](const auto &effect) {
-           return isa<MemoryEffects::Read>(effect.getEffect()) &&
-                  isa<triton::GlobalMemory>(effect.getResource());
-         });
-}
-
-ThreadIssuer getThreadIssuer(Operation *op) {
-  auto kind = getThreadSyncInfo(op).issuer;
-  return kind == ThreadIssuer::Unknown
-             ? ThreadIssuer{}
-             : ThreadIssuer{kind, op->getParentRegion()};
-}
-
-} // namespace
-
 bool IssuerSummary::hasSameKnownIssuer(const IssuerSummary &other) const {
   return issuer && issuer->kind != ThreadIssuer::Unknown && *this == other;
 }
@@ -304,47 +144,6 @@ void BlockInfo::joinThreadState(const BlockInfo &other) {
       demands.hasDemandBeyondGlobalReads;
   threadDemands.publicationIssuers.join(demands.publicationIssuers);
   threadDemands.mayNotifyPeer |= demands.mayNotifyPeer;
-}
-
-bool MembarAnalysis::isRegionLocal(Value value) {
-  auto *footprint = regions.getFootprint(value);
-  return footprint &&
-         llvm::all_of(footprint->regionInfo.views, [&](auto &view) {
-           Value root = view.allocation->getResult(0);
-           auto [it, inserted] =
-               regionLocalAllocations.try_emplace(root, false);
-           if (inserted)
-             it->second = hasRegionLocalUses(root);
-           return it->second;
-         });
-}
-
-bool MembarAnalysis::mayNotifyPeer(Operation *op) {
-  namespace tt = triton;
-  namespace ttg = triton::gpu;
-  namespace tti = triton::instrument;
-
-  return llvm::TypeSwitch<Operation *, bool>(op)
-      // A guarded notification must join pending waits before lanes split.
-      .Case<ttg::ThreadPredicateOp>([](auto) { return true; })
-      // Atomic loads and polls model a write to prevent elimination.
-      .Case<tt::AtomicLoadOp, tt::AtomicPollOp,
-            tti::ExperimentalGSanAtomicLoadOp>([](auto) { return false; })
-      .Case<tt::AtomicOpInterface, tt::GridDependencyLaunchDependentsOp>(
-          [](auto) { return true; })
-      .Case<ttg::LocalAtomicScatterRMWOp>(
-          [&](auto atomic) { return !isRegionLocal(atomic.getDst()); })
-      .Case<ttg::MBarrierOpInterface>([&](auto barrier) {
-        auto writes = tt::getMemoryAccesses(barrier, ttg::SharedKind::Barrier,
-                                            tt::RW::Write);
-        return llvm::any_of(writes, [&](const tt::MemoryAccess &access) {
-          return !isRegionLocal(access.value);
-        });
-      })
-      .Case<tt::ElementwiseInlineAsmOp, ttg::InlineAsmOp,
-            tt::ExternElementwiseOp>(
-          [](auto opaque) { return !opaque.getPure(); })
-      .Default(false);
 }
 
 bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
@@ -392,86 +191,10 @@ Operation *MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
                                         triton::gpu::AddrSpace::Local);
 }
 
-static Allocation::BufferId getScratchBufferId(Operation *op,
-                                               Allocation *allocation) {
-  // A call's allocation belongs to the callee and is translated separately.
-  if (isa<CallOpInterface>(op))
-    return Allocation::InvalidBufferId;
-  return allocation->getBufferId(op);
-}
-
-static bool scratchBufferUsesWarpSync(Operation *op) {
-  if (isa<ttng::TensormapCreateOp>(op))
-    return true;
-  auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-  if (!cvt)
-    return false;
-
-  auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
-  auto dstTy = cast<RankedTensorType>(cvt.getType());
-  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-  auto dstLayout = triton::gpu::toLinearLayout(dstTy);
-  auto kWarp = StringAttr::get(op->getContext(), "warp");
-  return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
-}
-
-triton::BarrierStages getLocalBarrierStages(Operation *op,
-                                            Allocation *allocation) {
-  triton::BarrierStages stages;
-  // The local-memory mask guarantees ordering of local memory accesses.
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-    stages.beforeMemoryEffects = stages.afterMemoryEffects = barrier.hasLocal();
-    return stages;
-  }
-  // Explicit barriers have no accesses between their leading and trailing
-  // stages. A relaxed cluster rendezvous does not order memory accesses.
-  if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-    stages.beforeMemoryEffects = stages.afterMemoryEffects =
-        !barrier.getRelaxed();
-    return stages;
-  }
-  // Pure layout conversions and reductions can still use shared scratch and
-  // internal barriers even without descriptor memory effects.
-  auto scratchBufferId = getScratchBufferId(op, allocation);
-  bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
-                           !scratchBufferUsesWarpSync(op);
-
-  // Atomic polls always end in a rendezvous. With scratch, the rendezvous is
-  // between the scratch write and read; otherwise it follows all effects.
-  if (isa<triton::AtomicPollOp>(op)) {
-    stages.betweenMemoryEffects = hasScratchBarrier;
-    stages.afterMemoryEffects = !hasScratchBarrier;
-    return stages;
-  }
-
-  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
-    if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
-      return stages;
-    // Atomic result broadcast uses a scratch write, rendezvous, and read for
-    // every memory semantic, including relaxed.
-    return triton::getAtomicBarrierStages(atomic.getMemSemantic(),
-                                          hasScratchBarrier);
-  }
-
-  // Scratch-backed operations contain a rendezvous between their scratch
-  // write and read phases. Warp-specialization boundaries synchronize before
-  // the operation.
-  stages.betweenMemoryEffects = hasScratchBarrier;
-  stages.beforeMemoryEffects =
-      isa<triton::gpu::WarpYieldOp, triton::gpu::WarpReturnOp>(op);
-
-  // The first launch rendezvous publishes captures. The second finishes their
-  // reads before any partition starts its body and reuses capture storage.
-  if (isa<triton::gpu::WarpSpecializeOp>(op)) {
-    stages.beforeMemoryEffects = !hasScratchBarrier;
-    stages.afterMemoryEffects = true;
-  }
-  return stages;
-}
-
 void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
                                      MembarInfo *membarInfo) {
-  if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor)) {
+  if (shared.getBufferIndexAnalysis().isBackedgeSuccessor(terminator,
+                                                          successor)) {
     membarInfo->pending.invalidateIterationInfo();
     membarInfo->entryBlockInfo.invalidateIterationInfo();
   }
@@ -484,247 +207,62 @@ void MembarAnalysis::updateExitState(MembarInfo *membarInfo) {
   membarInfo->entryBlockInfo.invalidateIterationInfo();
 }
 
-triton::BarrierStages MembarAnalysis::getBarrierStages(Operation *op) {
-  return getLocalBarrierStages(op, &allocation);
-}
-
-bool MembarAnalysis::hasThreadEffects(Operation *op) {
-  // A handoff only accesses its private scratch, modeled separately below.
-  if (isa<triton::gpu::ThreadHandoffOp>(op))
-    return false;
-  // ThreadPredicateOp retains unknown effects so pending waits finish before
-  // entering its restricted region, while every enclosing thread participates.
-  auto effects = getEffectsRecursively(op);
-  return !effects || llvm::any_of(*effects, [](const auto &effect) {
-    return !isa<triton::gpu::SharedMemory>(effect.getResource()) ||
-           !isa<MemoryEffects::Allocate, MemoryEffects::Free>(
-               effect.getEffect());
-  });
-}
-
-CompletionSync MembarAnalysis::getCompletionSync(Operation *op) {
-  auto sync = getThreadSyncInfo(op);
-  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
-    return CompletionSync::All;
-  if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
-    return CompletionSync::Shared;
-  return CompletionSync::None;
-}
-
-BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
-  BlockInfo effects;
-  effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
-  effects.threadSync.completion = getCompletionSync(op);
-  auto sync = getThreadSyncInfo(op);
-  effects.threadSync.peerWaitNeedsSync =
-      sync.kind == ThreadSyncKind::MBarrierWait &&
-      !isRegionLocal(cast<ttng::WaitBarrierOp>(op).getAlloc());
-  return effects;
-}
-
-void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
-  effects.threadDemands.hasDemand = true;
-  effects.threadDemands.mayNotifyPeer = mayNotifyPeer(op);
-  effects.threadDemands.hasDemandBeyondGlobalReads = !hasOnlyGlobalReads(op);
-  if (getThreadSyncInfo(op).requiresBefore())
-    effects.threadDemands.publicationIssuers =
-        IssuerSummary{getThreadIssuer(op)};
-}
-
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
-      barrier && barrier.isWarp()) {
-    membarInfo->syncWarps();
-    return;
-  }
-  auto sync = getThreadSyncInfo(op);
-  // Region control flow is visited by the dataflow engine. Its children
-  // contribute their own effects; implicit scratch belongs to this op.
-  bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,
-                         RegionBranchTerminatorOpInterface>(op);
-  bool isReturn = op->hasTrait<OpTrait::ReturnLike>();
-  // Cluster barriers contribute synchronization stages, not payload effects.
-  bool hasEffects =
-      sync.requiresBefore() || sync.requiresAfter() ||
-      getScratchBufferId(op, &allocation) != Allocation::InvalidBufferId ||
-      (!controlFlow && !isReturn && !isa<ttng::ClusterBarrierOp>(op) &&
-       hasThreadEffects(op));
-
-  BlockInfo effects;
-  if (hasEffects) {
-    effects = getThreadEffects(op);
-    if (sync.hasThreadDemand())
-      addThreadDemand(effects, op);
-  }
-  if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
-    addThreadDemand(effects, op);
-
   // Finish completions that block every memory demand once before a loop.
   // Shared-copy completions can still overlap independent global reads.
-  if (builder && bufferIndexAnalysis.entersLoop(op) &&
+  if (builder && shared.getBufferIndexAnalysis().entersLoop(op) &&
       membarInfo->pending.threadSync.completion == CompletionSync::All) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     membarInfo->sync();
   }
-  updateMemoryEffects(op, membarInfo, funcMap, builder, /*cluster=*/false,
-                      std::move(effects));
+  updateMemoryEffects(op, membarInfo, funcMap, builder);
 }
 
-SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(
-    Value value, std::optional<triton::gpu::SharedKind> sharedKind) {
-  auto function = cast<FunctionOpInterface>(allocation.getOperation());
-  // Device-function views use their own frame until imported at a call;
-  // foreign or mixed frames, including returned descriptors, stay unknown.
-  auto *footprint = regions.getFootprint(value, function);
-  SmallVector<AllocationSlice> slices;
-  auto addSlice = [&](Interval<size_t> interval,
-                      Allocation::BufferId bufferId) {
-    auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
-    slice.physicalFootprint = footprint;
-    slice.sharedKind = sharedKind;
-    slices.push_back(std::move(slice));
-  };
-  Allocation::BufferIdSetT bufferIds;
-  if (accessMode == AccessMode::AllocatorAliasesOnly) {
-    // Allocation identity survives unknown geometry. Argument effects
-    // have no local IDs; retain them until a caller binds their allocation.
-    bufferIds = allocation.getAllBufferIdsWithAliases(value);
-    for (unsigned argument : allocation.getAliasedArgumentIndices(value)) {
-      AllocationSlice slice(Interval<size_t>{});
-      slice.argumentIndex = argument;
-      slice.sharedKind = sharedKind;
-      slices.push_back(std::move(slice));
-    }
-  } else if (footprint) {
-    // Use every lattice origin: function-local alias analysis can miss roots
-    // returned through calls or joined with descriptor arguments.
-    for (const auto &view : footprint->regionInfo.views) {
-      auto ids = view.allocation
-                     ? allocation.getBufferIds(view.allocation->getResult(0))
-                     : SmallVector<Allocation::BufferId>{};
-      if (ids.empty()) {
-        bufferIds.clear();
-        break;
-      }
-      bufferIds.insert(ids.begin(), ids.end());
-    }
-  }
-  // Unknown allocations use an unbounded interval. View disjointness and
-  // RAW/WAR/WAW checks still determine whether a barrier is needed.
-  if (accessMode == AccessMode::AllSharedAccesses && bufferIds.empty())
-    addSlice(Interval<size_t>{}, Allocation::InvalidBufferId);
-  for (auto bufferId : bufferIds)
-    addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
-  return slices;
-}
-
-void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
-                                         FuncMapT *funcMap, OpBuilder *builder,
-                                         bool cluster, BlockInfo curBlockInfo) {
-  auto barrierStages = getBarrierStages(op);
-  if (barrierStages.beforeMemoryEffects) {
-    // Model a leading barrier before handling the operation's effects.
-    membarInfo->sync();
-  }
-
+void MembarAnalysis::updateMemoryEffects(
+    Operation *op, MembarInfo *membarInfo, FuncMapT *funcMap,
+    OpBuilder *builder, std::optional<triton::BarrierStages> clusterStages) {
+  bool cluster = clusterStages.has_value();
+  // A call's allocation belongs to the callee and is translated separately.
   if (auto call = dyn_cast<CallOpInterface>(op)) {
-    auto summary = getCallSummary(
-        call, *funcMap, [&](MembarInfo &summary, FunctionOpInterface callee) {
-          summary.transformSlices([&](const AllocationSlice &slice) {
-            if (!slice.argumentIndex)
-              return SmallVector<AllocationSlice>{
-                  slice.translateToCallsite(call, callee, regions)};
-            Value actual = call.getArgOperands()[*slice.argumentIndex];
-            auto slices = getAllocationSlices(actual, slice.sharedKind);
-            // A callee can reinterpret the argument's view. Retain the caller's
-            // allocation IDs, but cover each whole allocation without shifting.
-            for (AllocationSlice &bound : slices) {
-              bound.physicalFootprint = nullptr;
-              bound.invalidateIterationInfo();
-            }
-            return slices;
-          });
-        });
-    assert(summary && "expected callee summary");
-    syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder, cluster);
-    membarInfo->applyCallSummary(*summary);
+    auto callee = cast<FunctionOpInterface>(call.resolveCallable());
+    auto summary =
+        shared.translateCallSummary(call, callee, funcMap->at(callee));
+    syncIfNeeded(op, summary.entryBlockInfo, membarInfo, builder, cluster);
+    membarInfo->applyCallSummary(summary);
     return;
   }
 
-  // Intra-function dependencies
-  // Explicit buffer
-  for (const auto &access : triton::getMemoryAccesses(op)) {
-    Value value = access.value;
-    auto memory = cast<triton::gpu::MemDescType>(value.getType());
-    if (!isa<triton::gpu::SharedMemorySpaceAttr>(memory.getMemorySpace()))
-      continue;
-    // Footprints include allocation padding and retain subviews, partitions
-    // and CTA identity.
-    for (const AllocationSlice &slice :
-         getAllocationSlices(value, access.sharedKind)) {
-      if (access.isWrite)
-        curBlockInfo.syncWriteSlices[slice].insert(op);
-      if (access.isRead)
-        curBlockInfo.syncReadSlices[slice].insert(op);
-    }
-  }
-
-  // Scratch buffer operations consist of a series of shared memory operations
-  // starting from a shared memory write, followed by a series of shared memory
-  // read/write operations, and ending with a shared memory read, i.e., shared
-  // memory write -> ... -> shared memory read.
-  auto scratchBufferId = getScratchBufferId(op, &allocation);
-  std::optional<AllocationSlice> scratchSlice;
-  if (scratchBufferId != Allocation::InvalidBufferId) {
-    bool hasExplicitSharedDeps = !curBlockInfo.syncReadSlices.empty() ||
-                                 !curBlockInfo.syncWriteSlices.empty();
-    if (hasExplicitSharedDeps &&
-        !isa<triton::gpu::LocalAtomicScatterRMWOp>(op)) {
-      llvm::report_fatal_error(
-          "scratch buffer operations should not have any shared memory "
-          "dependencies");
-    }
-    auto interval = allocation.getAllocatedInterval(scratchBufferId);
-    scratchSlice.emplace(interval);
-    scratchSlice->physicalFootprint = regions.getScratchFootprint(op);
-    curBlockInfo.syncWriteSlices[*scratchSlice].insert(op);
-  }
-
-  syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
-
-  if (builder && !cluster && getThreadSyncInfo(op).requiresWarpBefore() &&
-      !membarInfo->warpsSynced) {
+  namespace mb = triton::membar;
+  auto applyFixed = [&](unsigned mask) {
+    if (mask & mb::bit(mb::Need::RegionOrder))
+      membarInfo->sync();
+    else if (mask & mb::bit(mb::Need::WarpOrder))
+      membarInfo->syncWarps();
+  };
+  mb::OpModel model;
+  shared.describe(op, model, triton::getMemoryAccesses(op), clusterStages);
+  // Model a leading barrier before handling the operation's effects.
+  applyFixed(model.fixedBefore);
+  syncIfNeeded(op, model.sharedIn, membarInfo, builder, cluster);
+  if (builder && model.needsWarp && !membarInfo->warpsSynced) {
     builder->setInsertionPoint(op);
     triton::gpu::BarrierOp::create(*builder, op->getLoc(),
                                    triton::gpu::AddrSpace::Local,
                                    triton::gpu::BarrierScope::Warp);
     membarInfo->syncWarps();
   }
-
-  if (scratchSlice) {
-    if (barrierStages.betweenMemoryEffects) {
-      // The internal barrier synchronizes all incoming effects. Do not carry
-      // them past the operation; only effects after the barrier are outgoing.
-      bool hasThreadEffects = !curBlockInfo.threadSync.effectIssuers.empty();
-      membarInfo->addBlockInfo(curBlockInfo);
-      membarInfo->sync();
-      curBlockInfo.sync();
-      // Final scratch reads still need to finish before a later publication.
-      if (hasThreadEffects)
-        curBlockInfo = getThreadEffects(op);
-    }
-    curBlockInfo.syncReadSlices[*scratchSlice].insert(op);
+  if (model.fixedInside) {
+    // Preserve effects reachable from entry before the scratch rendezvous.
+    if (!membarInfo->allPathsFromEntrySynced)
+      membarInfo->entryBlockInfo.join(model.sharedIn);
+    applyFixed(model.fixedInside);
   }
-  // Update the region info, even if barrier is inserted, we have to maintain
-  // the current op's read/write buffers.
-  membarInfo->addBlockInfo(curBlockInfo);
-
-  if (barrierStages.afterMemoryEffects) {
-    // Model a trailing barrier after handling the operation's effects.
-    membarInfo->sync();
-  }
+  // Even if a barrier was inserted, retain the operation's outgoing effects.
+  membarInfo->addBlockInfo(model.sharedOut);
+  // Model a trailing barrier after handling the operation's effects.
+  applyFixed(model.fixedAfter);
 }
 
 void ModuleMembarAnalysis::run() { run<MembarAnalysis>(); }
