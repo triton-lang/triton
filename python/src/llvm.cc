@@ -326,18 +326,19 @@ void lowerNVPTXFCopySign(llvm::Module &module) {
   }
 }
 
-std::string
-translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
-                     const std::string &proc, const std::string &features,
-                     const std::vector<std::string> &flags,
-                     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-                     bool enableFpSan, const std::string &abi) {
+std::string translateLLVMIRToASM(
+    llvm::Module &module, const std::string &triple, const std::string &proc,
+    const std::string &features, const std::vector<std::string> &flags,
+    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
+    bool enableFpSan, const std::string &abi, bool enableReflectPrecSqrt) {
   using namespace mlir;
 
   LLVMOptionSettings options;
   options.enable(flags);
   options.enablePrintAfterAllIfRequested();
   options.enableFlagsFromDisableLLVMOptEnv();
+  if (enableReflectPrecSqrt && Triple(triple).isNVPTX())
+    options.set("nvvm-reflect-add", "__CUDA_PREC_SQRT=1");
   ScopedLLVMOptions optionScope(options.settings);
 
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
@@ -752,7 +753,7 @@ void init_triton_llvm(py::module_ &m) {
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
          bool sched4reg, bool enableFpSan, bool disableLSR,
-         const std::string &abi) -> py::object {
+         const std::string &abi, bool enableReflectPrecSqrt) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -772,9 +773,10 @@ void init_triton_llvm(py::module_ &m) {
                 "failed to parse IR: " + error.getMessage() +
                 "lineno: " + std::to_string(error.getLineNo()));
           }
-          obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject,
-                                     canonicalizeGEP, enableFpSan, abi);
+          obj =
+              translateLLVMIRToASM(*module, triple, proc, features, flags,
+                                   enable_fp_fusion, isObject, canonicalizeGEP,
+                                   enableFpSan, abi, enableReflectPrecSqrt);
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));
@@ -785,7 +787,8 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false, py::arg("enable_fpsan") = false,
-      py::arg("disable_lsr") = false, py::arg("abi") = "");
+      py::arg("disable_lsr") = false, py::arg("abi") = "",
+      py::arg("enable_reflect_prec_sqrt") = false);
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;

@@ -1,5 +1,7 @@
 # fmt: off
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pytest
 import torch
@@ -13,6 +15,84 @@ from triton.language.extra import libdevice
 # -----------------------
 # test extern functions
 # -----------------------
+
+
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_libdevice_sqrt_precision_reflection(enable_fp_fusion, fresh_knobs, fresh_triton_cache):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    fresh_knobs.language.allow_fp_fusion = True
+
+    @triton.jit
+    def kernel(X, Out, N: tl.constexpr, TAG: tl.constexpr):
+        offsets = tl.arange(0, 1024)
+        x = tl.load(X + offsets, offsets < N)
+        tl.store(Out + offsets, libdevice.sqrt(x), offsets < N)
+
+    generator = torch.Generator(device="cuda").manual_seed(42)
+    x = torch.rand(1024, generator=generator, device="cuda") * 100
+    tiny = torch.finfo(torch.float32).tiny
+    min_subnormal = tiny * torch.finfo(torch.float32).eps
+    x[:6] = torch.tensor([0., -0., tiny, min_subnormal, tiny / 2, float("inf")], device="cuda")
+    out = torch.empty_like(x)
+    expected = torch.sqrt(x)
+    metadata = {}
+    default_hash = None
+    # Compile defaults again after the precise variant to check that the LLVM
+    # reflection setting does not escape its compilation scope. TAG prevents
+    # these checks from reusing the JIT cache instead of translating again.
+    for tag, precise in enumerate([None, False, True, None, False]):
+        options = {"enable_fp_fusion": enable_fp_fusion, "enable_reflect_ftz": False}
+        if precise is not None:
+            options["enable_reflect_prec_sqrt"] = precise
+        compiled = kernel[(1,)](x, out, x.numel(), tag, **options)
+        assert compiled.metadata.enable_fp_fusion == enable_fp_fusion
+        if tag == 0:
+            default_hash = compiled.hash
+        metadata[precise] = compiled.metadata
+        ptx = compiled.asm["ptx"]
+        if precise:
+            assert "sqrt.rn.f32" in ptx
+            assert "sqrt.approx.f32" not in ptx
+            assert torch.equal(out.view(torch.int32), expected.view(torch.int32))
+        else:
+            assert "sqrt.approx.f32" in ptx
+            assert "sqrt.rn.f32" not in ptx
+
+    from triton.backends.nvidia.compiler import CUDAOptions
+    assert CUDAOptions().hash() == CUDAOptions(enable_reflect_prec_sqrt=False).hash()
+    assert CUDAOptions().hash() != CUDAOptions(enable_reflect_prec_sqrt=True).hash()
+    assert not metadata[None].enable_reflect_prec_sqrt
+    assert not metadata[False].enable_reflect_prec_sqrt
+    assert metadata[True].enable_reflect_prec_sqrt
+
+    # The same source and specialization must select different binary-cache
+    # entries when precision changes, and retain the existing default entry.
+    common = {"enable_fp_fusion": enable_fp_fusion, "enable_reflect_ftz": False}
+    approximate = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_reflect_prec_sqrt=False, **common)
+    precise = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_reflect_prec_sqrt=True, **common)
+    restored = kernel.warmup(x, out, x.numel(), 0, grid=(1,), **common)
+    assert approximate.hash == default_hash == restored.hash
+    assert approximate.hash != precise.hash
+
+    # Exercise opposite native reflection settings concurrently without the
+    # JIT or binary cache hiding the option registry's compilation scopes.
+    from triton.backends.nvidia.compiler import CUDABackend, llvm
+    # JIT calls above can reuse cached binaries and skip make_llir's target
+    # initialization. Direct backend stage calls must initialize it explicitly.
+    llvm.init_targets()
+    target = triton.runtime.driver.active.get_current_target()
+    backend = CUDABackend(target)
+
+    def translate(precise):
+        options = backend.parse_options({**common, "enable_reflect_prec_sqrt": precise})
+        assert options.enable_fp_fusion == enable_fp_fusion
+        ptx = backend.make_ptx(approximate.asm["llir"], {}, options, target.arch)
+        assert ("sqrt.rn.f32" in ptx) == precise
+        assert ("sqrt.approx.f32" in ptx) != precise
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(translate, [False, True] * 4))
 
 
 @pytest.mark.parametrize("rounding", ["rna", "rn"])

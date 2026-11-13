@@ -136,6 +136,7 @@ class CUDAOptions:
     # Disable LLVM loop strength reduction for this kernel's code generation.
     disable_lsr: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
+    enable_reflect_prec_sqrt: bool = False  # Correctly rounded sqrt in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     clc: bool = False
@@ -555,7 +556,7 @@ class CUDABackend(BaseBackend):
         enable_fpsan = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, enable_fpsan,
                                     sched4reg=opt.sched4reg, enable_fpsan=enable_fpsan, disable_lsr=opt.disable_lsr,
-                                    abi="shortptr")
+                                    abi="shortptr", enable_reflect_prec_sqrt=opt.enable_reflect_prec_sqrt)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
