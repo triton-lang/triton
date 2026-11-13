@@ -138,9 +138,11 @@ configs = [
     for w in [4, 8]\
 ]
 if "PYTEST_VERSION" in os.environ:
-    # Use a single config in testing for reproducibility. Its num_stages comes from
-    # the backend's search space; on HIP, two stages need too much LDS for the
-    # requested waves_per_eu on targets with 64 KB of LDS (e.g. gfx942).
+    # Use a single config in testing for reproducibility. With only one config the
+    # autotuner uses it without benchmarking and has nothing to prune to, so it must
+    # be valid on every target: take num_stages from the backend's search space. On
+    # HIP, two stages use too much LDS for the requested waves_per_eu on targets with
+    # 64 KB of LDS (e.g. gfx942), which Triton rejects with OutOfResources.
     configs = [
         triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=NUM_STAGES_OPTIONS[0], num_warps=4,
                       pre_hook=_host_descriptor_pre_hook),
