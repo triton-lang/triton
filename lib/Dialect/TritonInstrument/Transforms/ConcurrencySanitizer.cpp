@@ -1710,6 +1710,14 @@ class ConcurrencySanitizerPass
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    auto walk = module.walk([](ttng::TCGen5CommitOp op) {
+      if (!op.getEarlyARelease())
+        return WalkResult::advance();
+      op.emitError("ConSan does not yet support early A release");
+      return WalkResult::interrupt();
+    });
+    if (walk.wasInterrupted())
+      return signalPassFailure();
     auto targetAttr = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
     if (!targetAttr) {
       module.emitError("ConSan requires a ttg.target module attribute");
