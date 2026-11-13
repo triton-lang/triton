@@ -198,6 +198,16 @@ def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
     let hasVerifier = 1;
 }
 
+def TT_FpSanProbabilityCastOp : TT_Op<"fpsan_probability_cast", [Elementwise,
+                                      SameOperandsAndResultShape,
+                                      SameOperandsAndResultEncoding, Pure]> {
+    let summary = "Mark an FP32 to FP8 probability cast for FPSan shadow storage";
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {

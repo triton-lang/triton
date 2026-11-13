@@ -49,3 +49,17 @@ def homomorphic_cast(input, dtype: core.dtype, fp_downcast_rounding: Optional[st
     """
     return _semantic.fpsan_homomorphic_cast(_semantic.to_tensor(input), core._unwrap_if_constexpr(dtype),
                                             core._unwrap_if_constexpr(fp_downcast_rounding))
+
+
+@core.builtin
+def probability_cast(input, dtype: core.dtype, _semantic=None):
+    """
+    Cast a float32 probability tile to FP8 for an unscaled Blackwell PV MMA.
+
+    Normal execution performs the ordinary FP8 conversion. Under FPSan the
+    compiler stores a residual in shadow memory. The MMA combines the stored
+    byte and the residual to recover a tagged wide payload. The format-specific
+    tag commutes with online softmax rescaling. Arithmetic on the narrowed
+    value uses ordinary FP8 payload semantics.
+    """
+    return _semantic.fpsan_probability_cast(_semantic.to_tensor(input), core._unwrap_if_constexpr(dtype))

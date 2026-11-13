@@ -1251,6 +1251,13 @@ LogicalResult FpToFpOp::verify() {
   return success();
 }
 
+LogicalResult FpSanProbabilityCastOp::verify() {
+  if (!getElementTypeOrSelf(getInput()).isF32() ||
+      !isa<Float8E4M3FNType, Float8E5M2Type>(getElementTypeOrSelf(getType())))
+    return emitOpError("requires f32 input and e4m3fn or e5m2 output");
+  return success();
+}
+
 LogicalResult FpSanHomomorphicCastOp::verify() {
   unsigned srcWidth =
       getElementTypeOrSelf(getInput().getType()).getIntOrFloatBitWidth();
