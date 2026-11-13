@@ -1,0 +1,6 @@
+﻿triton.language.fpsan.homomorphic\_cast
+=======================================
+
+.. currentmodule:: triton.language.fpsan
+
+.. autofunction:: homomorphic_cast

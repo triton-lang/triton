@@ -207,6 +207,11 @@
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.multiple_of.html">triton.language.multiple_of</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#floating-point-sanitization">Floating-Point Sanitization</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.fpsan.barrier.html">triton.language.fpsan.barrier</a></li>
+<li class="toctree-l3"><a class="reference internal" href="generated/triton.language.fpsan.homomorphic_cast.html">triton.language.fpsan.homomorphic_cast</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#debug-ops">Debug Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.static_print.html">triton.language.static_print</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generated/triton.language.static_assert.html">triton.language.static_assert</a></li>
@@ -668,6 +673,19 @@
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.multiple_of.html#triton.language.multiple_of" title="triton.language.multiple_of"><code class="xref py py-obj docutils literal notranslate"><span class="pre">multiple_of</span></code></a></p></td>
 <td><p>Let the compiler know that <code class="docutils literal notranslate"><span class="pre">values[d]</span></code> is the largest power of two that divides the first element of every contiguous group along dimension <code class="docutils literal notranslate"><span class="pre">d</span></code> of <code class="code docutils literal notranslate"><span class="pre">input</span></code> (see <a class="reference internal" href="generated/triton.language.max_contiguous.html#triton.language.max_contiguous" title="triton.language.max_contiguous"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_contiguous()</span></code></a> for the definition of contiguous group).</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="floating-point-sanitization">
+<h2>Floating-Point Sanitization<a class="headerlink" href="#floating-point-sanitization" title="Link to this heading"></a></h2>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.language.fpsan.barrier.html#triton.language.fpsan.barrier" title="triton.language.fpsan.barrier"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fpsan.barrier</span></code></a></p></td>
+<td><p>Mark an intermediate expression as significant to floating-point sanitization.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.language.fpsan.homomorphic_cast.html#triton.language.fpsan.homomorphic_cast" title="triton.language.fpsan.homomorphic_cast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fpsan.homomorphic_cast</span></code></a></p></td>
+<td><p>Cast to a same-width or narrower floating-point type, preserving FPSan algebra.</p></td>
 </tr>
 </tbody>
 </table>

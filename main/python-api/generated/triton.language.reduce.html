@@ -90,6 +90,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#iterators">Iterators</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#inline-assembly">Inline Assembly</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#compiler-hint-ops">Compiler Hint Ops</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../triton.language.html#floating-point-sanitization">Floating-Point Sanitization</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../triton.language.html#debug-ops">Debug Ops</a></li>
 </ul>
 </li>
@@ -153,7 +154,8 @@
 <li><p><strong>axis</strong> (<em>int</em><em> | </em><em>None</em>) – the dimension along which the reduction should be done. If None, reduce all dimensions</p></li>
 <li><p><strong>combine_fn</strong> (<em>Callable</em>) – a function to combine two groups of scalar tensors (must be marked with &#64;triton.jit).
 The function and its callees must be pure, except for <code class="code docutils literal notranslate"><span class="pre">assume</span></code>,
-<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.</p></li>
+<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.
+They must lower without shared-memory scratch.</p></li>
 <li><p><strong>keep_dims</strong> (<em>bool</em>) – if true, keep the reduced dimensions with length 1</p></li>
 </ul>
 </dd>

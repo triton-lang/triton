@@ -92,6 +92,8 @@
 <li class="toctree-l3"><a class="reference internal" href="#division">Division</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#remainder">Remainder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#fma">FMA</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#opt-in-expression-boundaries">Opt-in Expression Boundaries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#local-homomorphic-casts">Local Homomorphic Casts</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#unary-math-ops">Unary Math Ops</a><ul>
@@ -404,6 +406,55 @@ trapping.</p></li>
 <ul class="simple">
 <li><p>There is no special fused-rounding behavior.</p></li>
 </ul>
+</section>
+<section id="opt-in-expression-boundaries">
+<h3>Opt-in Expression Boundaries<a class="headerlink" href="#opt-in-expression-boundaries" title="Link to this heading"></a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">tl.fpsan.barrier(x)</span></code> (or <code class="docutils literal notranslate"><span class="pre">gl.fpsan.barrier(x)</span></code> in Gluon) to make an
+intermediate result significant to a FpSan comparison. The input must be a
+floating-point scalar or tensor; its type, shape, and layout are preserved.</p>
+<p>With FpSan enabled, the barrier applies a deterministic, non-homomorphic
+transformation to each element’s payload. For example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">left</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">barrier</span><span class="p">(</span><span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">)</span> <span class="o">*</span> <span class="n">c</span>
+<span class="n">right</span> <span class="o">=</span> <span class="n">a</span> <span class="o">*</span> <span class="n">tl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">barrier</span><span class="p">(</span><span class="n">b</span> <span class="o">*</span> <span class="n">c</span><span class="p">)</span>
+
+<span class="n">unfused</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">barrier</span><span class="p">(</span><span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">)</span> <span class="o">+</span> <span class="n">c</span>
+<span class="n">fused</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">fma</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>These pairs can have different FpSan results. Without the barriers, each pair
+has identical payload algebra. Put the barrier around the intermediate whose
+boundary matters: wrapping only the final result does not distinguish
+expressions that already have identical payloads.</p>
+<p>Every barrier uses the same transformation, independent of source location.
+Equivalent annotated computations therefore still agree across kernels. Each
+call applies the transformation again; nested barriers are not redundant.
+As with other FpSan checks, different computations can collide for particular
+inputs, so a matching result is not proof of equivalence.</p>
+<p>When FpSan is disabled, this function returns its input unchanged and emits no
+operation. It does not enforce rounding, prevent fusion or reassociation in
+normal compilation, or synchronize execution.</p>
+</section>
+<section id="local-homomorphic-casts">
+<h3>Local Homomorphic Casts<a class="headerlink" href="#local-homomorphic-casts" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">tl.fpsan.homomorphic_cast(x,</span> <span class="pre">dtype)</span></code> (also available in Gluon) explicitly
+retains the low payload bits when converting to a narrower floating-point type.
+It preserves addition and multiplication across the conversion. Other casts
+retain their existing FpSan semantics.</p>
+<p>Use a barrier to mark how far such a cast may move without changing the FpSan
+signature:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">result</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">homomorphic_cast</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">barrier</span><span class="p">(</span><span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">),</span> <span class="n">tl</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The barrier mixes high payload bits into low bits before they are discarded.
+Moving the downcast ahead of the barrier therefore generally changes the result,
+including when the narrowed value is cast back to the original width before
+the barrier. This is a signature distinction, not a compiler optimization
+restriction; collisions remain possible.</p>
+<p>The source and destination must be floating-point types, and the destination
+must be the same width or narrower. Same-width conversions preserve the payload.
+Widening is rejected because signed extension is not a ring homomorphism.
+Without FpSan, this function performs an ordinary floating-point cast, with the
+optional <code class="docutils literal notranslate"><span class="pre">fp_downcast_rounding</span></code> argument interpreted as for <code class="docutils literal notranslate"><span class="pre">tl.cast</span></code>.</p>
 </section>
 </section>
 <section id="unary-math-ops">

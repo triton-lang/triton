@@ -171,7 +171,8 @@ with an if we only execute one side.</p>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>scalar_fn</strong> – the function to map over.
 The function and its callees must be pure, except for <code class="code docutils literal notranslate"><span class="pre">assume</span></code>,
-<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.</p></li>
+<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.
+They must lower without shared-memory scratch.</p></li>
 <li><p><strong>pack</strong> – the number of elements to be processed by one function call.</p></li>
 </ul>
 </dd>

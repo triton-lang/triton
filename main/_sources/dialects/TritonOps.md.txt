@@ -942,6 +942,79 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.fpsan_barrier` (triton::FpSanBarrierOp)
+
+_Mark an expression boundary for floating-point sanitization_
+
+Syntax:
+
+```
+operation ::= `tt.fpsan_barrier` $input attr-dict `:` type($input)
+```
+
+Apply a deterministic, non-homomorphic transformation to the input's
+FPSan payload. This makes the placement of the boundary observable
+without changing the input's shape, element type, or layout.
+
+The frontend emits this operation only when FPSan is enabled. It is
+neither a synchronization barrier nor a floating-point rounding mode.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | floating-point or ranked tensor of floating-point values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values |
+
+
+
+### `tt.fpsan_homomorphic_cast` (triton::FpSanHomomorphicCastOp)
+
+_Project an FPSan payload into a same-width or narrower ring_
+
+Syntax:
+
+```
+operation ::= `tt.fpsan_homomorphic_cast` $input attr-dict `:` type($input) `->` type($result)
+```
+
+Preserve the low bits of the input's FPSan payload in the destination
+floating-point type. Unlike an ordinary FPSan downcast, this operation
+preserves addition and multiplication. Widening is not supported.
+
+The frontend emits this operation only when FPSan is enabled.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | floating-point or ranked tensor of floating-point values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values |
+
+
+
 ### `tt.func` (triton::FuncOp)
 
 _An operation with a name containing a single `SSACFG` region_
@@ -1369,6 +1442,7 @@ _Map a scalar subregion over a tensor_
 
 The scalar function and its callees may contain memory-effect-free
 operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+These operations must lower without shared-memory scratch.
 
 Traits: `RecursiveMemoryEffects`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
@@ -1587,6 +1661,7 @@ _Reduction using generic combination algorithm_
 
 The combiner and its callees may contain memory-effect-free operations,
 `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+These operations must lower without shared-memory scratch.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsEncoding`, `SameOperandsShape`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
@@ -1725,6 +1800,7 @@ _Associative scan using generic combination algorithm_
 
 The combiner and its callees may contain memory-effect-free operations,
 `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+These operations must lower without shared-memory scratch.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`, `SingleBlock`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 

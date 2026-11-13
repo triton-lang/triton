@@ -152,7 +152,8 @@
 <li><p><strong>axis</strong> (<em>int</em>) – the dimension along which the reduction should be done</p></li>
 <li><p><strong>combine_fn</strong> (<em>Callable</em>) – a function to combine two groups of scalar tensors (must be marked with &#64;triton.jit).
 The function and its callees must be pure, except for <code class="code docutils literal notranslate"><span class="pre">assume</span></code>,
-<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.</p></li>
+<code class="code docutils literal notranslate"><span class="pre">device_assert</span></code>, and <code class="code docutils literal notranslate"><span class="pre">device_print</span></code>.
+They must lower without shared-memory scratch.</p></li>
 <li><p><strong>reverse</strong> (<em>bool</em>) – whether to apply the associative scan in the reverse direction along axis</p></li>
 </ul>
 </dd>

@@ -1,0 +1,6 @@
+﻿triton.language.fpsan.barrier
+=============================
+
+.. currentmodule:: triton.language.fpsan
+
+.. autofunction:: barrier
