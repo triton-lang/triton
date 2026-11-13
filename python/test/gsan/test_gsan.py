@@ -74,7 +74,8 @@ ACQUIRE_SEMANTIC_CASES = (
 )
 
 
-def _assert_atomic_rmw_shadow(real_address: int, expected_scope: AtomicScope, *, is_release: bool) -> None:
+def _assert_atomic_rmw_shadow(real_address: int, expected_scope: AtomicScope, *, is_release: bool,
+                              is_tma: bool = False) -> None:
     cell = shadow_cell_from_address(real_address)
     tid = cell.write_clock.thread_id
     state = thread_state_from_smid(tid)
@@ -84,15 +85,15 @@ def _assert_atomic_rmw_shadow(real_address: int, expected_scope: AtomicScope, *,
         snapshot_idx = _clock_buffer_snapshot_idx(token, state, tid)
         published_epoch = state.clock_buffer[snapshot_idx]
 
-        assert cell.write_clock == ScalarClock(token, tid, expected_scope, is_release=True)
+        assert cell.write_clock == ScalarClock(token, tid, expected_scope, is_release=True, is_tma=is_tma)
         assert token == state.clock_buffer_head
         assert state.clock_buffer_dirty
-        assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, expected_scope)
+        assert cell.read_clocks[0] == ScalarClock(published_epoch, tid, expected_scope, is_tma=is_tma)
         assert state.vector_clock[tid] == published_epoch + 1
     else:
         epoch = state.vector_clock[tid]
-        assert cell.write_clock == ScalarClock(epoch, tid, expected_scope)
-        assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope)
+        assert cell.write_clock == ScalarClock(epoch, tid, expected_scope, is_tma=is_tma)
+        assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope, is_tma=is_tma)
 
     assert cell.num_reads == 1
 
@@ -2009,7 +2010,7 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
         for col in range(block_y):
             for byte_offset in range(0, target.element_size(), with_gsan):
                 address = target[row, col].data_ptr() + byte_offset
-                _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+                _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False, is_tma=True)
 
 
 @triton.jit

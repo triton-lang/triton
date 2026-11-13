@@ -21,6 +21,7 @@ struct PyScalarClock {
   uint32_t threadId = 0;
   gsan::AtomicScope scope = gsan::AtomicScope::NonAtomic;
   bool isRelease = false;
+  bool isTma = false;
 };
 
 struct PyShadowCell {
@@ -31,7 +32,8 @@ struct PyShadowCell {
 
 bool scalarClockEquals(const PyScalarClock &lhs, const PyScalarClock &rhs) {
   return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
-         lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
+         lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease &&
+         lhs.isTma == rhs.isTma;
 }
 
 bool shadowCellEquals(const PyShadowCell &lhs, const PyShadowCell &rhs) {
@@ -66,6 +68,7 @@ struct PyGSanThreadState {
   uint32_t numThreads = 0;
   uint32_t clockBufferSize = 0;
   std::vector<uint32_t> vectorClock;
+  std::vector<uint32_t> asyncProxyVectorClock;
   std::vector<uint32_t> clockBuffer;
 };
 
@@ -106,7 +109,8 @@ std::string scalarClockStr(const PyScalarClock &c) {
   oss << "ScalarClock(epoch=" << static_cast<uint64_t>(c.epoch)
       << ", thread_id=" << static_cast<uint64_t>(c.threadId)
       << ", scope=" << atomicScopeStr(c.scope)
-      << ", is_release=" << (c.isRelease ? "True" : "False") << ")";
+      << ", is_release=" << (c.isRelease ? "True" : "False")
+      << ", is_tma=" << (c.isTma ? "True" : "False") << ")";
   return oss.str();
 }
 
@@ -173,6 +177,7 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
   out.threadId = static_cast<uint16_t>(clock.threadId);
   out.scope = clock.scope;
   out.isRelease = clock.isRelease;
+  out.isTma = clock.isTma;
   return out;
 }
 
@@ -206,7 +211,8 @@ inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
 }
 
 size_t threadStateStrideBytes(uint16_t numThreads, uint16_t clockBufferSize) {
-  auto clocksPerThread = static_cast<size_t>(1) + clockBufferSize;
+  auto clocksPerThread =
+      static_cast<size_t>(gsan::ThreadState::kNumLocalClocks) + clockBufferSize;
   auto clockWords = static_cast<size_t>(numThreads) * clocksPerThread;
   return kThreadStateSize + sizeof(gsan::epoch_t) * clockWords;
 }
@@ -241,10 +247,15 @@ PyGSanThreadState decodeThreadStateBytes(const char *bytes, size_t size,
   for (size_t i = 0; i < numThreads; ++i)
     out.vectorClock[i] = epochs[i];
 
+  out.asyncProxyVectorClock.resize(numThreads);
+  for (size_t i = 0; i < numThreads; ++i)
+    out.asyncProxyVectorClock[i] = epochs[numThreads + i];
+
   size_t clockBufferElems = static_cast<size_t>(numThreads) * clockBufferSize;
   out.clockBuffer.resize(clockBufferElems);
   for (size_t i = 0; i < clockBufferElems; ++i)
-    out.clockBuffer[i] = epochs[numThreads + i];
+    out.clockBuffer[i] =
+        epochs[gsan::ThreadState::kNumLocalClocks * numThreads + i];
 
   return out;
 }
@@ -266,16 +277,17 @@ void init_gsan_testing(py::module_ &m) {
 
   py::class_<PyScalarClock>(m, "ScalarClock")
       .def(py::new_([](uint64_t epoch, uint64_t threadId,
-                       gsan::AtomicScope scope, bool isRelease) {
+                       gsan::AtomicScope scope, bool isRelease, bool isTma) {
              auto *self = new PyScalarClock();
              self->epoch = static_cast<uint32_t>(epoch);
              self->threadId = static_cast<uint32_t>(threadId);
              self->scope = scope;
              self->isRelease = isRelease;
+             self->isTma = isTma;
              return self;
            }),
            py::arg("epoch"), py::arg("thread_id"), py::arg("scope"),
-           py::arg("is_release") = false)
+           py::arg("is_release") = false, py::arg("is_tma") = false)
       .def_prop_ro(
           "epoch",
           [](const PyScalarClock &c) { return static_cast<uint64_t>(c.epoch); })
@@ -287,6 +299,7 @@ void init_gsan_testing(py::module_ &m) {
       .def_prop_ro(
           "scope_name",
           [](const PyScalarClock &c) { return atomicScopeName(c.scope); })
+      .def_prop_ro("is_tma", [](const PyScalarClock &c) { return c.isTma; })
       .def_prop_ro("is_release",
                    [](const PyScalarClock &c) { return c.isRelease; })
       .def(
@@ -356,6 +369,9 @@ void init_gsan_testing(py::module_ &m) {
                    [](const PyGSanThreadState &s) { return s.clockBufferSize; })
       .def_prop_ro("vector_clock",
                    [](const PyGSanThreadState &s) { return s.vectorClock; })
+      .def_prop_ro(
+          "async_proxy_vector_clock",
+          [](const PyGSanThreadState &s) { return s.asyncProxyVectorClock; })
       .def_prop_ro("clock_buffer",
                    [](const PyGSanThreadState &s) { return s.clockBuffer; })
       .def("__str__",

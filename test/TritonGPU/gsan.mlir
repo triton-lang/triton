@@ -523,3 +523,18 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tt.func @global_proxy_fence
+  tt.func @global_proxy_fence() {
+    // CHECK: ttng.fence_async_shared
+    // CHECK-NOT: tti.experimental_gsan_fence_async_global
+    // CHECK: ttng.fence_async_global
+    // CHECK-NEXT: tti.experimental_gsan_fence_async_global
+    ttng.fence_async_shared {bCluster = false}
+    ttng.fence_async_global
+    tt.return
+  }
+}
