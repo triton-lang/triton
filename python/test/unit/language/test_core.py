@@ -7790,6 +7790,42 @@ def test_tl_range_fuse_empty_inner_bounds(bounds, flatten, device):
     assert out.item() == expected
 
 
+@pytest.mark.parametrize("store_before", [False, True])
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("m", [0, 4])
+def test_tl_range_fuse_mutable_inner_bound(store_before, alias, m, device):
+
+    @triton.jit
+    def kernel(Read, Write, Out, M: tl.constexpr, STORE_BEFORE: tl.constexpr):
+        count = 0
+        for i in tl.range(0, M, flatten=True):
+            if STORE_BEFORE:
+                tl.store(Write, i + 1)
+            bound = tl.load(Read)
+            for j in range(0, bound):
+                count += 1
+            if not STORE_BEFORE:
+                tl.store(Write, i + 1)
+        tl.store(Out, count)
+
+    read = torch.ones(1, dtype=torch.int32, device=device)
+    write = read if alias else read.clone()
+    out = torch.empty(1, dtype=torch.int32, device=device)
+    kernel[(1, )](read, write, out, m, store_before)
+
+    bound = 1
+    expected = 0
+    for i in range(m):
+        if alias and store_before:
+            bound = i + 1
+        expected += len(range(bound))
+        if alias and not store_before:
+            bound = i + 1
+    assert out.item() == expected
+    assert read.item() == bound
+    assert write.item() == (m if m else 1)
+
+
 def test_tl_range_fuse_dependent(device):
 
     @triton.jit
