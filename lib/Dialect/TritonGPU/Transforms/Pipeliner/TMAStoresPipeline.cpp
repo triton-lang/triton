@@ -35,23 +35,13 @@ static SmallVector<TMAStore> getTMAStores(LoopLikeOpInterface loop) {
   return tmaStores;
 }
 
-static bool hasAcquireOrReleaseSemantic(tt::MemSemantic sem) {
-  return sem != tt::MemSemantic::RELAXED;
-}
-
 static bool hasAcquireOrReleaseOp(LoopLikeOpInterface loop) {
-  bool hasAcquireOrRelease = false;
-  loop->walk([&](Operation *op) {
-    if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
-      hasAcquireOrRelease =
-          hasAcquireOrReleaseSemantic(atomic.getMemSemantic());
-    } else if (auto atomicPoll = dyn_cast<tt::AtomicPollOp>(op)) {
-      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicPoll.getSem());
-    }
-    return hasAcquireOrRelease ? WalkResult::interrupt()
-                               : WalkResult::advance();
+  auto result = loop->walk([](tt::AtomicOpInterface atomic) {
+    return atomic.getMemSemantic() == tt::MemSemantic::RELAXED
+               ? WalkResult::advance()
+               : WalkResult::interrupt();
   });
-  return hasAcquireOrRelease;
+  return result.wasInterrupted();
 }
 
 static Value createAlloc(LoopLikeOpInterface loop, const TMAStore &store) {

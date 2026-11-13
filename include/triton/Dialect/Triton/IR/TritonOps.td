@@ -457,6 +457,7 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  AtomicOpInterface,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">,
@@ -1458,7 +1459,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
   let hasVerifier = 1;
 }
 
-def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
+def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [AtomicOpInterface, TT_DescriptorStoreLikeOpInterface]> {
   let summary = "performs a reducing store operation based on a descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1477,6 +1478,12 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
+  }];
 }
 
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {

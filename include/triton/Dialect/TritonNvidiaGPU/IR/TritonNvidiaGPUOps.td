@@ -627,7 +627,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [AtomicOpInterface, TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -649,6 +649,10 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
   let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
     static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
                                       ::mlir::Type elementType);
   }];
