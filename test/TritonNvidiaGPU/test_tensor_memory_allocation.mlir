@@ -560,3 +560,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// The tensor memory base address gets a 4-byte slot after all other shared
+// memory buffers.
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65538 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.shared = 65544 : i32
+  // CHECK-SAME: ttg.tensor_memory_base_smem_offset = 65540 : i32
+  // CHECK-LABEL: @tensor_memory_base_slot
+  tt.func @tensor_memory_base_slot() {
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
+    "use"(%a) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65538 : i32, ttg.target = "cuda:100"} {
+  // CHECK: ttg.shared = 65538 : i32
+  // CHECK-NOT: ttg.tensor_memory_base_smem_offset
+  // CHECK-LABEL: @no_tensor_memory_base_slot
+  tt.func @no_tensor_memory_base_slot() {
+    tt.return
+  }
+}
