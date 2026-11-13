@@ -20,17 +20,19 @@ def async_load(smem, pointer, num_elements, barrier, pred=True, multicast=False,
 
     ``num_elements`` counts destination elements across all distinct CTA tiles,
     excluding replicas, and must be a positive compile-time integer at most
-    ``smem.numel``. The total is split equally between those tiles, and each
-    per-CTA byte count must be a multiple of 16. If there are ``T`` distinct
-    tiles, source tile ``i`` starts at element ``i * num_elements // T``,
-    including for partial copies. Thus the source is one contiguous range.
+    ``smem.numel``. With multiple CTAs, including replicated layouts,
+    ``num_elements`` must equal ``smem.numel``; partial copies are supported
+    only with one CTA. The total is split equally between distinct tiles,
+    and each per-CTA byte count must be a multiple of 16. If there are ``T``
+    distinct tiles, source tile ``i`` starts at element
+    ``i * smem.numel // T``. Thus the source is one contiguous range.
     Tiles follow increasing CTA-id order with replicated bits omitted:
     replicas read the same range, or one representative multicasts to them
     and their barriers when ``multicast=True``.
 
-    Only the per-CTA prefix is copied, but compiler dependencies and
-    ConSan cover the entire destination view. Use sliced views to reuse
-    other parts of the allocation independently.
+    For a single-CTA partial copy, only the prefix is copied, but compiler
+    dependencies and ConSan cover the entire destination view. Use sliced
+    views to reuse other parts of the allocation independently.
 
     Use separate completion barriers in each CTA, as returned by
     ``mbarrier.allocate_mbarrier()``; shared logical barriers are unsupported.
@@ -60,6 +62,8 @@ def async_load(smem, pointer, num_elements, barrier, pred=True, multicast=False,
     _check(isinstance(num_elements, int), lambda: "num_elements must be a compile-time integer")
     num_bytes = num_elements * smem.dtype.primitive_bitwidth // 8
     _check(0 < num_elements <= smem.numel, lambda: "num_elements must be positive and fit in the destination view")
+    _check(_semantic.builder.options.num_ctas == 1 or num_elements == smem.numel,
+           lambda: "num_elements must equal smem.numel for multi-CTA copies")
     _check(num_bytes <= 0x7fffffff, lambda: "total byte count must fit in a signed 32-bit integer")
     pointer = _semantic.to_tensor(pointer)
     pred = _semantic.to_tensor(pred)

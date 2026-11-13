@@ -154,8 +154,8 @@ Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
-Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits, Value ctaId) {
+Value createMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                          uint16_t broadcastBits, Value ctaId) {
   int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
   auto encoding =
       triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);

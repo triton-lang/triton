@@ -529,11 +529,13 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
     cp.async.bulk with mbarrier completion. The total is divided equally among
     the distinct CTA tiles of the destination; replicated CTAs do not increase
     the total. Each per-CTA count must be a positive multiple of 16 and fit in
-    the contiguous destination view. Source and destination addresses must be
+    the contiguous destination view. With multiple CTAs, including replicated
+    layouts, the copy must fill the entire destination view. Partial copies
+    are supported only with one CTA. Source and destination addresses must be
     16-byte aligned.
 
     Source tiles are packed in increasing CTA-id order, omitting broadcast
-    bits, with a stride of numBytes / numTiles, including for partial copies.
+    bits, with a stride of numBytes / numTiles.
     This is a raw physical byte copy: a swizzled destination is supported, but
     the source must already have the desired physical ordering. With multicast,
     only the representative CTA issues a copy to the destination replicas.

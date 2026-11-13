@@ -1317,11 +1317,12 @@ struct AsyncBulkCopyGlobalToLocalOpConversion
     SmallVector<PTXBuilder::Operand *> args = {
         ptx.newAddrOperand(
             dst.getShmemAffineBase(loc, rewriter, op.getDst().getType()), "r"),
-        ptx.newAddrOperand(src, "l"), ptx.newConstantOperand(op.getNumBytesPerCTA()),
+        ptx.newAddrOperand(src, "l"),
+        ptx.newConstantOperand(op.getNumBytesPerCTA()),
         ptx.newAddrOperand(barrierPtr, "r")};
     if (op.getMulticast())
       args.push_back(
-          ptx.newOperand(LLVM::NVIDIA::createTMAMulticastMask(
+          ptx.newOperand(LLVM::NVIDIA::createMulticastMask(
                              loc, rewriter, layout.broadcastMask, ctaId),
                          "h"));
     copy(args).predicate(pred);
@@ -1506,7 +1507,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         }
       }
       if (multicast) {
-        auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+        auto multicastMask = LLVM::NVIDIA::createMulticastMask(
             loc, rewriter, maskCGABroadcast, targetCTA);
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
@@ -1865,7 +1866,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
       operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
     operands.push_back(ptxBuilder.newOperand(barrierPtr, "r"));
     if (multicast) {
-      auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+      auto multicastMask = LLVM::NVIDIA::createMulticastMask(
           loc, rewriter, maskCGABroadcast, targetCTA);
       operands.push_back(ptxBuilder.newOperand(multicastMask, "h"));
     }
