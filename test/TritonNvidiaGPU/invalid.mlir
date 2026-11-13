@@ -2419,7 +2419,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @bulk_shared_completion_barrier(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
     // expected-error @below {{requires a separate completion barrier in each CTA}}
-    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    ttng.async_bulk_copy_global_to_local %src, %dst, 512, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }
@@ -2496,6 +2496,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @bulk_swizzled_view_with_holes(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
     // expected-error @below {{destination view must be contiguous in physical shared memory}}
     ttng.async_bulk_copy_global_to_local %src, %dst, 16, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+!src = !ttg.memdesc<16x16xi32, #shared, #ttg.shared_memory, mutable, 16x32>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_store_strided_view(%ptr: !tt.ptr<i32>, %smem: !src, %pred: i1) {
+    // expected-error @below {{source view must be contiguous in physical shared memory}}
+    ttng.async_bulk_copy_local_to_global %ptr, %smem, 16, %pred : !tt.ptr<i32>, !src
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[16:+4] {offset = [[1], [2], [4], [8], [16], [32]], block = []}>
+!src = !ttg.memdesc<64xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_store_padded_view(%ptr: !tt.ptr<i32>, %smem: !src, %pred: i1) {
+    // expected-error @below {{does not support padded shared-memory layouts}}
+    ttng.async_bulk_copy_local_to_global %ptr, %smem, 16, %pred : !tt.ptr<i32>, !src
     tt.return
   }
 }

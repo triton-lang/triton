@@ -1168,6 +1168,12 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::AsyncBulkCopyGlobalToLocalOp>(
                  dst, src, numBytes, barrier, pred, multicast);
            })
+      .def("create_async_bulk_copy_local_to_global",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value pred) {
+             self.create<ttng::AsyncBulkCopyLocalToGlobalOp>(dst, src, numBytes,
+                                                             pred);
+           })
       .def(
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,

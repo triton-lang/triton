@@ -429,7 +429,7 @@ def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
 @builtin
 def store_wait(pendings, read_only=True, _semantic=None):
     """
-    Wait for pending TMA stores.
+    Wait for pending bulk and TMA stores in their shared completion queue.
 
     Args:
         pendings (int | ttgl.constexpr): Maximum number of TMA stores allowed to remain pending.

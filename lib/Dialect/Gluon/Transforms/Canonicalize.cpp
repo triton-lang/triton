@@ -74,6 +74,8 @@ void Canonicalize::runOnOperation() {
   ttng::AsyncTMAGatherOp::getCanonicalizationPatterns(patterns, ctx);
   ttng::AsyncBulkCopyGlobalToLocalOp::getCanonicalizationPatterns(patterns,
                                                                   ctx);
+  ttng::AsyncBulkCopyLocalToGlobalOp::getCanonicalizationPatterns(patterns,
+                                                                  ctx);
   ttng::TCGen5CommitOp::getCanonicalizationPatterns(patterns, ctx);
   ttng::TMEMStoreOp::getCanonicalizationPatterns(patterns, ctx);
 

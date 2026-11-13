@@ -43,7 +43,8 @@ class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp,
-               ttng::AsyncBulkCopyGlobalToLocalOp>(op);
+               ttng::AsyncBulkCopyGlobalToLocalOp,
+               ttng::AsyncBulkCopyLocalToGlobalOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {
@@ -126,7 +127,7 @@ public:
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
-    if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
+    if (auto storeOp = dyn_cast<ttng::AsyncStoreOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
     if (op->hasAttr("allocation.size"))
       mask = getResultScratchBroadcastMask(op).value_or(mask);
@@ -250,11 +251,13 @@ public:
            /*txCount=*/
            -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
     }
-    if (isa<ttng::TMAStoreLikeOpInterface>(op)) {
+    if (isa<ttng::AsyncStoreOpInterface>(op)) {
       info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info->commitKind = tti::CommitKind::TmaStore;
       info->implicitCommit = true;
     }
+    if (auto storeOp = dyn_cast<ttng::AsyncBulkCopyLocalToGlobalOp>(op))
+      info->pred = storeOp.getPred();
     if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
@@ -293,7 +296,7 @@ public:
     bool needsTmaStore = false;
     bool needsWgmma = false;
     module.walk([&](Operation *op) {
-      if (isa<ttng::TMAStoreLikeOpInterface, ttng::TMAStoreWaitOp>(op))
+      if (isa<ttng::AsyncStoreOpInterface, ttng::TMAStoreWaitOp>(op))
         needsTmaStore = true;
       if (isa<ttng::WarpGroupDotOp, ttng::WarpGroupDotWaitOp>(op))
         needsWgmma = true;

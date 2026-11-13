@@ -266,3 +266,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // BARRIER-LABEL: @false_bulk_store
+  // BARRIER-NEXT: tt.return
+  tt.func @false_bulk_store(%dst: !tt.ptr<i32>, %src: !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>) {
+    %false = arith.constant false
+    ttng.async_bulk_copy_local_to_global %dst, %src, 48, %false : !tt.ptr<i32>, !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>
+    tt.return
+  }
+}

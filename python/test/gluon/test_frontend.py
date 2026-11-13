@@ -6158,3 +6158,61 @@ def test_bulk_async_load_cluster_count(cga, multicast, num_elements, pred):
         # The whole indexed view is sufficient; the allocation is twice as large.
         compiled = triton.compile(source, target=target, options=options)
         assert ("cp.async.bulk" in compiled.asm["ptx"]) == pred
+
+
+@gluon.jit
+def _bulk_store_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    values = ttgl.load(src + ttgl.arange(0, 4096, layout))
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
+    hopper.bulk.async_store(out, smem, 2560, pred=pred)
+    hopper.bulk.store_wait(0, read_only=False)
+
+
+@pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])
+def test_bulk_async_store_codegen(capability, ptx_version):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.global.shared::cta.bulk_group") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.global.shared::cta.bulk_group.*(0x2800|10240)", ptx)
+    assert re.search(r"@%?\w+ cp.async.bulk.commit_group", ptx)
+    assert re.search(r"cp\.async\.bulk\.wait_group\s+0;", ptx)
+    assert "fence.proxy.async.shared::cta" in ptx
+
+
+@pytest.mark.parametrize("num_elements", [0, 3, 129, None])
+def test_bulk_async_store_invalid_count(num_elements):
+
+    @gluon.jit
+    def kernel(out, count, COUNT: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        hopper.bulk.async_store(out, smem, count if COUNT is None else COUNT)
+        hopper.bulk.store_wait(0)
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32", "count": "i32"}, {"COUNT": num_elements})
+    with pytest.raises((CompilationError, RuntimeError)):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga", [[[1]], [[0]], [[0], [1]]])
+def test_bulk_async_store_partial_cluster_rejected(cga):
+
+    @gluon.jit
+    def kernel(out, SHARED: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], SHARED)
+        hopper.bulk.async_store(out, smem, 128)
+        hopper.bulk.store_wait(0)
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32"},
+                                  {"SHARED": ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)})
+    with pytest.raises(CompilationError, match="num_elements must equal smem.numel"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_ctas": 2**len(cga)})
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [(80, 80, "compute capability 9.0"), (90, 78, "PTX 8.0")])
+def test_bulk_async_store_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err

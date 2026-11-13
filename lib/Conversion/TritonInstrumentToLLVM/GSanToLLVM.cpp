@@ -30,6 +30,8 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanStoreRangeRuntimeFn =
+    "__triton_gsan_store_range";
 static constexpr StringLiteral kGSanLoadRangeRuntimeFn =
     "__triton_gsan_load_range";
 static constexpr StringLiteral kGSanLoadTensorDescRuntimeFn =
@@ -104,7 +106,8 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn ||
-             funcName == kGSanLoadRangeRuntimeFn) {
+             funcName == kGSanLoadRangeRuntimeFn ||
+             funcName == kGSanStoreRangeRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorDescRuntimeFn ||
              funcName == kGSanStoreTensorDescRuntimeFn) {
@@ -441,12 +444,13 @@ public:
   }
 };
 
-struct GSanLoadRangeOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanLoadRangeOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+template <typename AccessOp>
+struct GSanRangeOpConversion : public ConvertOpToLLVMPattern<AccessOp> {
+  using ConvertOpToLLVMPattern<AccessOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename AccessOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalGSanLoadRangeOp op, OpAdaptor adaptor,
+  matchAndRewrite(AccessOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
@@ -459,8 +463,10 @@ struct GSanLoadRangeOpConversion
     Value warpId = getLaneAndWarpId(rewriter, loc).second;
     Value pred = ttg::maybeAnd(rewriter, loc, adaptor.getPred(),
                                b.icmp_eq(warpId, b.i32_val(0)));
-    auto runtimeFunc =
-        getOrCreateGSanRuntimeFunction(rewriter, kGSanLoadRangeRuntimeFn);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, std::is_same_v<AccessOp, tti::ExperimentalGSanLoadRangeOp>
+                      ? kGSanLoadRangeRuntimeFn
+                      : kGSanStoreRangeRuntimeFn);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     b.call(runtimeFunc,
            ValueRange{*gsanGlobalStatePtr,
@@ -1385,5 +1391,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, axisInfoAnalysis,
                                              targetInfo);
-  patterns.add<GSanLoadRangeOpConversion>(typeConverter);
+  patterns.add<GSanRangeOpConversion<tti::ExperimentalGSanLoadRangeOp>,
+               GSanRangeOpConversion<tti::ExperimentalGSanStoreRangeOp>>(
+      typeConverter);
 }

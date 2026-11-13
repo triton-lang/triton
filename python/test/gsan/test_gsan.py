@@ -2221,3 +2221,34 @@ def test_bulk_async_load_source_range(fresh_knobs, words, offset, take_copy, cga
             src_start = offset + tile * words
             expected[dst_start:dst_start + words] = src[src_start:src_start + words]
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("take_copy", [False, True])
+@pytest.mark.parametrize("words,granularity", [(12, 4), (132, 4), (12, 16), (132, 16)])
+def test_bulk_async_store_destination_range(fresh_knobs, take_copy, words, granularity):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+
+    @gluon.jit
+    def kernel(out, pred, WORDS: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [256], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                         gl.full((256, ), 17, gl.int32, layout))
+        hopper.bulk.async_store(out + 4, smem, WORDS, pred=pred)
+        hopper.bulk.store_wait(0, read_only=False)
+
+    pool = create_mem_pool(shadow_granularity=granularity)
+    with torch.cuda.use_mem_pool(pool):
+        out = torch.full((264, ), -1, device="cuda", dtype=torch.int32)
+    before = _shadow_cells_for_tensor(out)
+    kernel[(1, )](out, take_copy, words)
+    torch.cuda.synchronize()
+    after = _shadow_cells_for_tensor(out)
+    changed = torch.zeros(264, dtype=torch.bool)
+    if take_copy:
+        changed[4:4 + words] = True
+    _assert_shadow_mask([before], [after], changed[None, :], access_kind="write")
+    expected = torch.full_like(out, -1)
+    if take_copy:
+        expected[4:4 + words] = 17
+    torch.testing.assert_close(out, expected)
