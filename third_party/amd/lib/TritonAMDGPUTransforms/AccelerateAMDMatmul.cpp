@@ -949,11 +949,13 @@ public:
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
              elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2;
+             elemType == ScaleDotElemType::E5M2 ||
+             elemType == ScaleDotElemType::E2M3 ||
+             elemType == ScaleDotElemType::E3M2;
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+      return rewriter.notifyMatchFailure(dotOp, "unsupported scaled type");
     }
 
     bool bothScalesAbsent = !aScale && !bScale;
@@ -1010,10 +1012,17 @@ public:
                                                newRetType, dotOp.getC());
 
     // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
-    // elements. But since two fp4 elements are packed into one int8, the
-    // kWidth is 16 for fp4.
+    // elements. Two fp4 elements are packed into one int8, so 16 bytes hold
+    // 32 consecutive values. FP8 uses two blocks of 16 consecutive values,
+    // 64 apart for 16x16x128 and 32 apart for 32x32x64. FP6 operands hold 16
+    // values per 16-byte group (12 code bytes and 4 padding bytes), and the
+    // instruction reads 32 consecutive values.
     const unsigned kWidth = kBase;
     assert(kWidth == 32);
+    auto isFp6 = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M3 ||
+             elemType == ScaleDotElemType::E3M2;
+    };
 
     auto aShape = a.getType().getShape();
     auto bShape = b.getType().getShape();
@@ -1022,8 +1031,9 @@ public:
                                   unsigned opIdx) -> TensorValue {
       auto vType = v.getType();
 
-      auto newEnc =
-          DotOperandEncodingAttr::get(ctx, opIdx, mfmaEnc, kWidth / 2);
+      bool fp6 = isFp6(opIdx == 0 ? aElemType : bElemType);
+      auto newEnc = DotOperandEncodingAttr::get(ctx, opIdx, mfmaEnc,
+                                                fp6 ? kWidth : kWidth / 2);
 
       bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
       if (!kPacked) {

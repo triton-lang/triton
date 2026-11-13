@@ -30,6 +30,16 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
   if (isa_and_nonnull<MmaEncodingTrait>(
           scaledDotOp.getResult().getType().getEncoding()))
     return failure();
+  // Decoding packed FP6 needs bytes from neighboring elements, so it needs a
+  // target-specific upcast.
+  auto isFp6 = [](ScaleDotElemType type) {
+    return type == ScaleDotElemType::E2M3 || type == ScaleDotElemType::E3M2;
+  };
+  if (!supportsFp6Upcast() && (isFp6(scaledDotOp.getAElemType()) ||
+                               isFp6(scaledDotOp.getBElemType()))) {
+    scaledDotOp.emitError("FP6 scaled dot is not supported on this target");
+    return failure();
+  }
 
   // Types
   auto computeType = getComputeType(scaledDotOp.getAElemType(),

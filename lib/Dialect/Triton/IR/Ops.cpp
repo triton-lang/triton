@@ -418,6 +418,23 @@ LogicalResult DotScaledOp::verify() {
     if (this->getLhsKPack())
       k *= 2;
   }
+  auto verifyFp6 = [&](ScaleDotElemType format, bool kPack, Type elemType,
+                       StringRef operand) -> LogicalResult {
+    if (format != ScaleDotElemType::E2M3 && format != ScaleDotElemType::E3M2)
+      return success();
+    if (!kPack || !elemType.isInteger(8))
+      return emitError() << "FP6 " << operand
+                         << " requires i8 storage packed along K";
+    if (k % 16 != 0)
+      return emitError() << "FP6 " << operand
+                         << " requires K to be a multiple of 16";
+    return success();
+  };
+  if (failed(verifyFp6(getAElemType(), getLhsKPack(),
+                       getA().getType().getElementType(), "lhs")) ||
+      failed(verifyFp6(getBElemType(), getRhsKPack(),
+                       getB().getType().getElementType(), "rhs")))
+    return failure();
   auto cShape = this->getC().getType().getShape();
   int64_t mDim = cShape[cShape.size() - 2];
   int64_t nDim = cShape[cShape.size() - 1];

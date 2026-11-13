@@ -959,6 +959,14 @@ public:
       return failure();
     }
 
+    // FP6 operands are 12 code bytes plus 4 padding bytes per 16 values, but
+    // tcgen05 reads b6x16_p32 shared tiles. Decompose them instead.
+    auto isFp6 = [](ScaleDotElemType type) {
+      return type == ScaleDotElemType::E2M3 || type == ScaleDotElemType::E3M2;
+    };
+    if (isFp6(dotOp.getAElemType()) || isFp6(dotOp.getBElemType()))
+      return failure();
+
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = lookupNumWarps(dotOp);

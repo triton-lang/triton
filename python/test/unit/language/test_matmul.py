@@ -1773,3 +1773,138 @@ def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knob
     assert "ttg.warp_specialize" in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
     torch.testing.assert_close(y, x.float().reshape(128, 16, 64).sum(1), atol=0.001, rtol=0.001)
+
+
+@triton.jit
+def _fp6_dot_scaled_kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, out_ptr, N, K, A_FMT: tl.constexpr,
+                           B_FMT: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.program_id(1) * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    offs_ks = tl.arange(0, BLOCK_K // 32)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        a = tl.load(a_ptr + offs_m[:, None] * K + (k + offs_k)[None, :])
+        b = tl.load(b_ptr + (k + offs_k)[:, None] * N + offs_n[None, :])
+        a_scale = None
+        b_scale = None
+        if a_scale_ptr is not None:
+            a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (K // 32) + (k // 32 + offs_ks)[None, :])
+        if b_scale_ptr is not None:
+            b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (K // 32) + (k // 32 + offs_ks)[None, :])
+        acc = tl.dot_scaled(a, a_scale, A_FMT, b, b_scale, B_FMT, acc)
+    tl.store(out_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+
+
+def _pad_packed_fp6(codes, k_dim):
+    """Packs FP6 codes along k_dim into the dot_scaled operand form: 12 code bytes and 4 zero bytes per 16 values."""
+    from triton._internal_testing import pack_fp6
+    codes = codes.movedim(k_dim, -1)
+    groups = pack_fp6(codes).reshape(*codes.shape[:-1], -1, 12)
+    padded = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(codes.shape)
+    return padded.movedim(-1, k_dim).contiguous()
+
+
+def _fp6_dot_scaled_operand(fmt, shape, k_dim, device):
+    from triton._internal_testing import fp6_values
+    if fmt in ("e2m3", "e3m2"):
+        codes = torch.randint(0, 64, shape, dtype=torch.int32, device=device)
+        return _pad_packed_fp6(codes, k_dim), fp6_values(fmt, codes).double()
+    assert fmt == "e4m3"
+    # Magnitudes in [0.5, 4.5) with random signs keep the FP8 range from
+    # dominating the FP6 terms.
+    bits = torch.randint(48, 72, shape, dtype=torch.uint8, device=device)
+    bits |= torch.randint(0, 2, shape, dtype=torch.uint8, device=device) << 7
+    value = bits.view(torch.float8_e4m3fn)
+    return value, value.double()
+
+
+@pytest.mark.parametrize("A_FMT, B_FMT", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2"), ("e4m3", "e2m3"),
+                                          ("e3m2", "e4m3")])
+@pytest.mark.parametrize("SCALED", [True, False])
+@pytest.mark.parametrize("M, N, K, BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256, 64, 64, 128),
+                                                                (64, 128, 512, 64, 64, 256)])
+@pytest.mark.parametrize("mfma_nonkdim", [16, 32])
+@pytest.mark.skipif(not is_hip_cdna4(), reason="FP6 scaled dot is implemented for CDNA4")
+def test_dot_scaled_fp6(A_FMT, B_FMT, SCALED, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_nonkdim, device):
+    torch.manual_seed(0)
+    a, a_ref = _fp6_dot_scaled_operand(A_FMT, (M, K), 1, device)
+    b, b_ref = _fp6_dot_scaled_operand(B_FMT, (K, N), 0, device)
+    a_scale = b_scale = None
+    if SCALED:
+        a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device=device)
+        a_ref = a_ref * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
+    if SCALED:
+        b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device=device)
+        b_ref = b_ref * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1).T
+    out = torch.empty((M, N), dtype=torch.float32, device=device)
+    kernel = _fp6_dot_scaled_kernel[(M // BLOCK_M, N // BLOCK_N)](a, a_scale, b, b_scale, out, N, K, A_FMT, B_FMT,
+                                                                  BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                  matrix_instr_nonkdim=mfma_nonkdim)
+    if is_compile_warmup():
+        return
+    # Without scales, LLVM selects the unscaled form of the same instruction.
+    shape = "16x16x128" if mfma_nonkdim == 16 else "32x32x64"
+    assert re.search(f"v_mfma_(scale_)?f32_{shape}_f8f6f4", kernel.asm["amdgcn"])
+    # The FP6 MFMA accumulates in fixed point relative to the largest product, so
+    # bound the error by the magnitude of the terms rather than of the result.
+    magnitude = a_ref.abs() @ b_ref.abs()
+    error = (out.double() - a_ref @ b_ref).abs()
+    assert (error <= 1e-4 * magnitude + 1e-6).all(), f"max error {error.max().item()}"
+
+
+@triton.jit
+def _fp6_dense_global_dot_scaled_kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, out_ptr, N, K, A_FMT: tl.constexpr,
+                                        B_FMT: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                                        BLOCK_K: tl.constexpr):
+    # A is [M, K] and B is stored as [N, K]; global memory packs 4 codes into 3
+    # bytes along K, while dot_scaled operands add 4 padding bytes per 16 values.
+    offs_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = tl.program_id(1) * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_ks = tl.arange(0, BLOCK_K // 32)
+    row_bytes = K // 4 * 3
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        # Each group of 16 values holds 12 packed bytes followed by 4 padding bytes.
+        offs_k = k + tl.arange(0, BLOCK_K)
+        byte = offs_k // 16 * 12 + offs_k % 16
+        is_data = offs_k % 16 < 12
+        a = tl.load(a_ptr + offs_m[:, None] * row_bytes + byte[None, :], mask=is_data[None, :], other=0)
+        b = tl.load(b_ptr + offs_n[None, :] * row_bytes + byte[:, None], mask=is_data[:, None], other=0)
+        a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (K // 32) + (k // 32 + offs_ks)[None, :])
+        b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (K // 32) + (k // 32 + offs_ks)[None, :])
+        acc = tl.dot_scaled(a, a_scale, A_FMT, b, b_scale, B_FMT, acc)
+    tl.store(out_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("A_FMT, B_FMT", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
+@pytest.mark.parametrize("M, N, K, BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256, 64, 64, 128),
+                                                                (64, 128, 512, 64, 64, 256)])
+@pytest.mark.parametrize("mfma_nonkdim", [16, 32])
+def test_dot_scaled_fp6_dense_global(A_FMT, B_FMT, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, mfma_nonkdim, device):
+    from triton._internal_testing import fp6_values, is_interpreter, pack_fp6
+    if not (is_hip_cdna4() or is_interpreter()):
+        pytest.skip("Packed FP6 scaled dot is implemented for CDNA4")
+    torch.manual_seed(0)
+    a_codes = torch.randint(0, 64, (M, K), dtype=torch.int32, device=device)
+    b_codes = torch.randint(0, 64, (N, K), dtype=torch.int32, device=device)
+    a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device=device)
+    a_ref = fp6_values(A_FMT, a_codes).double() * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
+    b_ref = fp6_values(B_FMT, b_codes).double() * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1)
+    out = torch.empty((M, N), dtype=torch.float32, device=device)
+    kwargs = {} if is_interpreter() else {"matrix_instr_nonkdim": mfma_nonkdim}
+    kernel = _fp6_dense_global_dot_scaled_kernel[(M // BLOCK_M, N // BLOCK_N)](pack_fp6(a_codes), a_scale,
+                                                                               pack_fp6(b_codes), b_scale, out, N, K,
+                                                                               A_FMT, B_FMT, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                               **kwargs)
+    if is_compile_warmup():
+        return
+    if not is_interpreter():
+        shape = "16x16x128" if mfma_nonkdim == 16 else "32x32x64"
+        assert re.search(f"v_mfma_scale_f32_{shape}_f8f6f4", kernel.asm["amdgcn"])
+    ref = a_ref @ b_ref.T
+    magnitude = a_ref.abs() @ b_ref.abs().T
+    error = (out.double() - ref).abs()
+    assert (error <= 1e-4 * magnitude + 1e-6).all(), f"max error {error.max().item()}"

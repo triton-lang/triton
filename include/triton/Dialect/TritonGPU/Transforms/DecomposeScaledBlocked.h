@@ -12,6 +12,8 @@ public:
                                 PatternRewriter &rewriter) const override;
 
 protected:
+  // Targets that override scaleArg to upcast packed FP6 operands return true.
+  virtual bool supportsFp6Upcast() const { return false; }
   FloatType getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
                            PatternRewriter &rewriter) const;
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,

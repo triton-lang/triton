@@ -320,6 +320,23 @@ def _e2m1_to_f32(value):
     return np.where(signs, -abs_values, abs_values)
 
 
+def _fp6_to_f32(codes, mantissa_bits, bias):
+    codes = codes.astype(np.int32)
+    exp = (codes & 31) >> mantissa_bits
+    fraction = (codes & ((1 << mantissa_bits) - 1)).astype(np.float32) / np.float32(1 << mantissa_bits)
+    magnitude = np.ldexp(fraction + (exp != 0), np.maximum(exp, 1) - bias).astype(np.float32)
+    return np.where(codes & 32, -magnitude, magnitude)
+
+
+def _unpack_fp6_padded(data, axis):
+    # Each 16 bytes along K hold 16 codes in 12 bytes, LSB first, then padding.
+    data = np.moveaxis(data.view(np.uint8), axis, -1)
+    groups = data.reshape(*data.shape[:-1], -1, 16)[..., :12].reshape(*data.shape[:-1], -1, 4, 3).astype(np.uint32)
+    words = groups[..., 0] | groups[..., 1] << 8 | groups[..., 2] << 16
+    codes = np.stack([(words >> (6 * i)) & 63 for i in range(4)], axis=-1).astype(np.uint8)
+    return np.moveaxis(codes.reshape(data.shape), -1, axis)
+
+
 def _mxfp_value_handle_to_float32(value_handle):
     if value_handle.dtype == tl.uint8:
         value_float = _e2m1_to_f32(value_handle.data)
@@ -367,6 +384,10 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
         else:
             unpack_axis = -1 if k_pack else -2
         value = _unpack_e2m1(value_handle.data, unpack_axis)
+    elif format_enum == _ir.ScaleDotElemTypeTY.E2M3:
+        value = _fp6_to_f32(_unpack_fp6_padded(value_handle.data, -2 if is_rhs else -1), 3, 1)
+    elif format_enum == _ir.ScaleDotElemTypeTY.E3M2:
+        value = _fp6_to_f32(_unpack_fp6_padded(value_handle.data, -2 if is_rhs else -1), 2, 3)
     else:
         value = _mxfp_value_handle_to_float32(value_handle)
 
