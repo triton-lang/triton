@@ -1037,6 +1037,27 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     assert re.search(pattern, ttgir)
 
 
+@pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
+def test_lhs_in_tmem_block_m_64_interleaved_acc(device, monkeypatch):
+    # The 64x512 accumulator is interleaved across TMEM lane offsets 0 and 16,
+    # which a TMEM LHS cannot match, so A must stay in shared memory.
+    M, N, K = 1024, 512, 256
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 512, 32
+    _knob_promote_lhs_to_tmem(monkeypatch)
+    torch.manual_seed(42)
+    a = torch.randn(M, K, dtype=torch.float16, device=device)
+    b = torch.randn(K, N, dtype=torch.float16, device=device)
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=1, SCALE_A=None, PRECISION="tf32",
+                            A_TRANS=False)
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output, atol=0.03, rtol=0.03)
+    assert re.search(r"ttng\.tc_gen5_mma [^:]*:\s*!ttg\.memdesc<[^>]*#smem>", k.asm["ttgir"])
+
+
 @triton.jit
 def lhs_in_tmem_kernel_mxfp(  #
         a_ptr, b_ptr, output_ptr,  #
