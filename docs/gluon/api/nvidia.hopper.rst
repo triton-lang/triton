@@ -10,6 +10,7 @@ NVIDIA Hopper
 
     async_copy
     cluster
+    gdc
     mbarrier
     tma
 

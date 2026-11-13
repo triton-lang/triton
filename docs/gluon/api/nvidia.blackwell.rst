@@ -13,6 +13,7 @@ rejected on unsupported targets before instrumentation and lowering.
 
     async_copy
     clc
+    gdc
     mbarrier
     tma
 
