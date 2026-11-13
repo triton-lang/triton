@@ -138,9 +138,12 @@ configs = [
     for w in [4, 8]\
 ]
 if "PYTEST_VERSION" in os.environ:
-    # Use a single config in testing for reproducibility
+    # Use a single config in testing for reproducibility. Its num_stages comes from
+    # the backend's search space; on HIP, two stages need too much LDS for the
+    # requested waves_per_eu on targets with 64 KB of LDS (e.g. gfx942).
     configs = [
-        triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+        triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=NUM_STAGES_OPTIONS[0], num_warps=4,
+                      pre_hook=_host_descriptor_pre_hook),
     ]
 
 
