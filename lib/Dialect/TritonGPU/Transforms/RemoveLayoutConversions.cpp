@@ -157,7 +157,8 @@ public:
   void rewriteSlice(
       SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
       const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-      ConvertLayoutOp convertOp, IRMapping &mapping);
+      ConvertLayoutOp convertOp, IRMapping &mapping,
+      const DenseMap<OpOperand *, Value> *yieldOverrides = nullptr);
   void rewriteSlice(
       SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
       const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
@@ -694,7 +695,8 @@ void LayoutRematerialization::updateRematMapping(
 void LayoutRematerialization::rewriteSlice(
     SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
     const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
-    ConvertLayoutOp convertOp, IRMapping &mapping) {
+    ConvertLayoutOp convertOp, IRMapping &mapping,
+    const DenseMap<OpOperand *, Value> *yieldOverrides) {
   for (const auto &[value, encoding] : layout) {
     if (Value remat = existingRemats.lookup({value, encoding}))
       mapping.map(value, remat);
@@ -808,7 +810,11 @@ void LayoutRematerialization::rewriteSlice(
       // results/arguments.
       std::sort(operandsToRewrite.begin(), operandsToRewrite.end());
       for (int operandIdx : operandsToRewrite) {
-        yieldOperands.push_back(mapping.lookup(yieldOp.getOperand(operandIdx)));
+        OpOperand &yieldOperand = yieldOp->getOpOperand(operandIdx);
+        Value mapped =
+            yieldOverrides ? yieldOverrides->lookup(&yieldOperand) : Value();
+        yieldOperands.push_back(mapped ? mapped
+                                       : mapping.lookup(yieldOperand.get()));
       }
       scf::YieldOp::create(builder, op->getLoc(), yieldOperands);
       op->erase();
@@ -1507,27 +1513,32 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   if (hoistAbove.empty())
     return false;
 
-  // Rematerialize failed hoists right before the condtional, and hoist those
+  // Rematerialize failed hoists right before the conditional, and hoist those
   // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;
+  // A value may be yielded from multiple branches. A conversion inserted on
+  // one edge must only replace that edge's yield operand, even when the same
+  // value has a cached rematerialization on another edge.
+  DenseMap<OpOperand *, Value> yieldOverrides;
   auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
     auto tensorType = cast<RankedTensorType>(v.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
     Value newCvt = ConvertLayoutOp::create(b, convertOp.getLoc(), newType, v);
 
-    mapping.map(v, newCvt);
     slice.remove(v);
+    return newCvt;
   };
   for (Value v : terminals) {
     OpBuilder b(v.getContext());
     b.setInsertionPointAfter(v.getDefiningOp());
-    hoistRemat(b, v, layout.at(v));
+    mapping.map(v, hoistRemat(b, v, layout.at(v)));
   }
   for (auto [result, edge] : hoistAbove) {
     OpBuilder b(edge->getOwner());
-    hoistRemat(b, edge->get(), layout.at(result));
+    yieldOverrides[edge] = hoistRemat(b, edge->get(), layout.at(result));
   }
-  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
+  rewriteSlice(slice, layout, existingRemats, convertOp, mapping,
+               &yieldOverrides);
   return true;
 }
 
