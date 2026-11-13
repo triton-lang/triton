@@ -465,7 +465,8 @@ bool canInitializeAllocation(Value alloc) {
 uint16_t getBlockBroadcastMask(Value alloc) {
   auto allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto kBlock = StringAttr::get(alloc.getContext(), "block");
-  return toLinearLayout(allocTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(allocTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
@@ -757,6 +758,12 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     }
     return getLocalMemoryRecipientCTAs(b, messageToShared, broadcastMask);
   }
+  if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+    if (bulk.getMulticast())
+      return getRecipientCTAsForBroadcastMasks(
+          b, {getBlockBroadcastMask(bulk.getResult())});
+    return currentCTAMask(b);
+  }
   if (isa<ttng::CLCTryCancelOp>(op))
     return allCTAsMask(b);
   if (isa<ttng::MMAv5OpInterface, ttng::TMEMCopyOp>(op))
@@ -818,7 +825,7 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   }
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
-  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+  if (auto tmaLoad = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastBarrierRecipientCTAs(b, tmaLoad.getResult(),
                                               tmaLoad.getBarrier());

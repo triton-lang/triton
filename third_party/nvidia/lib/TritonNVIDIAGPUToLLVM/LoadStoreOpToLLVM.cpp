@@ -1255,6 +1255,141 @@ FailureOr<Value> createTMACachePolicy(Operation *op, Attribute attr,
                            computeCapability, op);
 }
 
+struct AsyncBulkCopyGlobalToLocalOpConversion
+    : public ConvertOpToLLVMPattern<ttng::AsyncBulkCopyGlobalToLocalOp> {
+  const NVIDIA::TargetInfo &targetInfo;
+
+  AsyncBulkCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
+                                         const NVIDIA::TargetInfo &targetInfo,
+                                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::AsyncBulkCopyGlobalToLocalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.isSupported(targetInfo.getComputeCapability()))
+      return op.emitError(
+          "linear bulk copy requires compute capability 9.0 or newer");
+    if (targetInfo.getPtxVersion() < 86)
+      return op.emitError("linear bulk copy requires PTX 8.6 or newer");
+    auto loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto dst = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getDst(),
+        getTypeConverter()->convertType(op.getDst().getType().getElementType()),
+        rewriter);
+    auto barrier = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(),
+        getTypeConverter()->convertType(
+            op.getBarrier().getType().getElementType()),
+        rewriter);
+    // Issue once per warp-specialized partition, matching barrier_expect.
+    Value issuer = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
+    Value pred = b.and_(adaptor.getPred(), issuer);
+    auto layout = ttng::getBulkCopyLayout(op.getDst().getType());
+    Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    Value sourceOffset = b.i32_val(0);
+    unsigned tileBytes = op.getNumBytesPerCTA();
+    for (unsigned bit = 1; bit <= layout.splitMask; bit <<= 1) {
+      if (!(layout.splitMask & bit))
+        continue;
+      Value set = b.icmp_ne(b.and_(ctaId, b.i32_val(bit)), b.i32_val(0));
+      sourceOffset = b.add(sourceOffset,
+                           b.select(set, b.i32_val(tileBytes), b.i32_val(0)));
+      tileBytes *= 2;
+    }
+    Value src = b.gep(adaptor.getSrc().getType(), i8_ty, adaptor.getSrc(),
+                      sourceOffset);
+    if (op.getMulticast()) {
+      Value leader = b.icmp_eq(b.and_(ctaId, b.i32_val(layout.broadcastMask)),
+                               b.i32_val(0));
+      pred = b.and_(pred, leader);
+    }
+    Value barrierPtr = barrier.getBase();
+    bool cluster = op.getMulticast();
+    PTXBuilder ptx;
+    auto &copy = *ptx.create(std::string("cp.async.bulk.shared::") +
+                             (cluster ? "cluster" : "cta") +
+                             ".global.mbarrier::complete_tx::bytes" +
+                             (op.getMulticast() ? ".multicast::cluster" : ""));
+    SmallVector<PTXBuilder::Operand *> args = {
+        ptx.newAddrOperand(
+            dst.getShmemAffineBase(loc, rewriter, op.getDst().getType()), "r"),
+        ptx.newAddrOperand(src, "l"),
+        ptx.newConstantOperand(op.getNumBytesPerCTA()),
+        ptx.newAddrOperand(barrierPtr, "r")};
+    if (op.getMulticast())
+      args.push_back(
+          ptx.newOperand(LLVM::NVIDIA::createMulticastMask(
+                             loc, rewriter, layout.broadcastMask, ctaId),
+                         "h"));
+    copy(args).predicate(pred);
+    ptx.launch(rewriter, loc, void_ty(op.getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncBulkCopyLocalToGlobalOpConversion
+    : public ConvertOpToLLVMPattern<ttng::AsyncBulkCopyLocalToGlobalOp> {
+  const NVIDIA::TargetInfo &targetInfo;
+
+  AsyncBulkCopyLocalToGlobalOpConversion(LLVMTypeConverter &converter,
+                                         const NVIDIA::TargetInfo &targetInfo,
+                                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::AsyncBulkCopyLocalToGlobalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op.isSupported(targetInfo.getComputeCapability()))
+      return op.emitError(
+          "linear bulk copy requires compute capability 9.0 or newer");
+    if (targetInfo.getPtxVersion() < 80)
+      return op.emitError("linear bulk copy requires PTX 8.0 or newer");
+    auto loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto src = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(),
+        getTypeConverter()->convertType(op.getSrc().getType().getElementType()),
+        rewriter);
+    // Issue from thread zero of the current warp-specialized partition.
+    Value issuer = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
+    Value pred = b.and_(adaptor.getPred(), issuer);
+    auto layout = ttng::getBulkCopyLayout(op.getSrc().getType());
+    Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+    Value destinationOffset = b.i32_val(0);
+    unsigned tileBytes = op.getNumBytesPerCTA();
+    for (unsigned bit = 1; bit <= layout.splitMask; bit <<= 1) {
+      if (!(layout.splitMask & bit))
+        continue;
+      Value set = b.icmp_ne(b.and_(ctaId, b.i32_val(bit)), b.i32_val(0));
+      destinationOffset = b.add(
+          destinationOffset, b.select(set, b.i32_val(tileBytes), b.i32_val(0)));
+      tileBytes *= 2;
+    }
+    Value dst = b.gep(adaptor.getDst().getType(), i8_ty, adaptor.getDst(),
+                      destinationOffset);
+    Value leader =
+        b.icmp_eq(b.and_(ctaId, b.i32_val(layout.broadcastMask)), b.i32_val(0));
+    pred = b.and_(pred, leader);
+    PTXBuilder ptx;
+    auto &copy = *ptx.create("cp.async.bulk.global.shared::cta.bulk_group");
+    copy(ptx.newAddrOperand(dst, "l"),
+         ptx.newAddrOperand(
+             src.getShmemAffineBase(loc, rewriter, op.getSrc().getType()), "r"),
+         ptx.newConstantOperand(op.getNumBytesPerCTA()))
+        .predicate(pred);
+    // Match TMA's per-thread group numbering, including threads that did not
+    // issue this copy. A disabled store must not advance any thread's queue.
+    auto &commit = *ptx.create("cp.async.bulk.commit_group");
+    commit().predicate(adaptor.getPred());
+    ptx.launch(rewriter, loc, void_ty(op.getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncTMACopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp> {
@@ -1430,7 +1565,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         }
       }
       if (multicast) {
-        auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+        auto multicastMask = LLVM::NVIDIA::createMulticastMask(
             loc, rewriter, maskCGABroadcast, targetCTA);
         operands.push_back(ptxBuilderTMA.newOperand(multicastMask, "h"));
         tmaInst += ", $" + std::to_string(operandIdx++);
@@ -1789,7 +1924,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
       operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
     operands.push_back(ptxBuilder.newOperand(barrierPtr, "r"));
     if (multicast) {
-      auto multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+      auto multicastMask = LLVM::NVIDIA::createMulticastMask(
           loc, rewriter, maskCGABroadcast, targetCTA);
       operands.push_back(ptxBuilder.newOperand(multicastMask, "h"));
     }
@@ -1971,6 +2106,9 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
                AtomicRMWOpConversion>(typeConverter, targetInfo,
                                       axisInfoAnalysis, benefit);
+  patterns.add<AsyncBulkCopyGlobalToLocalOpConversion,
+               AsyncBulkCopyLocalToGlobalOpConversion>(typeConverter,
+                                                       targetInfo, benefit);
   patterns.add<LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,

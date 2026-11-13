@@ -12,6 +12,7 @@ from triton import CompilationError
 from triton._internal_testing import (
     assert_no_collectives_in_ptx_loop,
     is_compile_warmup,
+    run_in_process,
     is_cuda,
     is_ampere_or_newer,
     is_blackwell,
@@ -8419,3 +8420,467 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     if not atomic:
         assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
+
+
+@gluon.jit
+def _bulk_copy_kernel(src, out, take_copy, NUM_ELEMENTS: ttgl.constexpr, BLOCK: ttgl.constexpr,
+                      SRC_OFFSET: ttgl.constexpr, DST_OFFSET: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    initial = ttgl.full((2 * BLOCK, ), -7, src.dtype.element_ty, layout)
+    allocation = ttgl.allocate_shared_memory(src.dtype.element_ty, [2 * BLOCK], shared, initial)
+    dst = allocation.slice(DST_OFFSET, BLOCK)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, NUM_ELEMENTS * src.dtype.element_ty.primitive_bitwidth // 8, pred=take_copy)
+    hopper.bulk.async_load(dst, src + SRC_OFFSET, NUM_ELEMENTS, bar, pred=take_copy)
+    hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
+    hopper.mbarrier.invalidate(bar)
+    values = allocation.load(layout)
+    ttgl.store(out + ttgl.arange(0, 2 * BLOCK, layout), values)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_bytes", [16, 48, 4096, 10240])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.float32])
+@pytest.mark.parametrize("offset", [False, True])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_bulk_async_load_copy(num_bytes, dtype, offset, take_copy, device):
+    element_bytes = torch.empty((), dtype=dtype).element_size()
+    count = num_bytes // element_bytes
+    block = triton.next_power_of_2(count)
+    src_offset = 16 // element_bytes if offset else 0
+    dst_offset = block if offset else 0
+    src = (torch.arange(count + src_offset, device=device) % 113).to(dtype)
+    out = torch.empty(2 * block, device=device, dtype=dtype)
+    compiled = _bulk_copy_kernel[(1, )](src, out, take_copy, count, block, src_offset, dst_offset)
+    expected = torch.full_like(out, -7)
+    if take_copy:
+        expected[dst_offset:dst_offset + count] = src[src_offset:]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    if not is_compile_warmup():
+        assert compiled.asm["ptx"].count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
+
+
+@gluon.jit
+def _bulk_rms_kernel(x, gains, out, N: ttgl.constexpr, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK], shared)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, N * 4)
+    hopper.bulk.async_load(smem, gains, N, bar)
+    offsets = ttgl.arange(0, BLOCK, layout)
+    values = ttgl.load(x + ttgl.program_id(0) * N + offsets, offsets < N, other=0)
+    inv_rms = ttgl.rsqrt(ttgl.sum(values * values, 0) / N + 1.e-6)
+    hopper.mbarrier.wait(bar, phase=0)
+    scale = smem.load(layout)
+    hopper.mbarrier.invalidate(bar)
+    ttgl.store(out + ttgl.program_id(0) * N + offsets, values * inv_rms * scale, offsets < N)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_compute_overlap(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+    torch.manual_seed(7)
+    x = torch.randn((73, 2560), device=device)
+    gains = torch.randn((2560, ), device=device)
+    out = torch.empty_like(x)
+    _bulk_rms_kernel[(x.shape[0], )](x, gains, out, 2560, 4096)
+    expected = x * torch.rsqrt((x * x).mean(-1, keepdim=True) + 1.e-6) * gains
+    torch.testing.assert_close(out, expected, atol=1.e-5, rtol=1.e-5)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_buffer_reuse(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+
+    @gluon.jit
+    def kernel(src, out, iterations):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        buffers = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        offsets = ttgl.arange(0, 128, layout)
+        for iteration in range(iterations):
+            dst = buffers.index(iteration % 2)
+            hopper.mbarrier.expect(bar, 512)
+            hopper.bulk.async_load(dst, src + iteration * 128, 128, bar)
+            hopper.mbarrier.wait(bar, phase=iteration % 2)
+            ttgl.store(out + iteration * 128 + offsets, dst.load(layout))
+        hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(5 * 128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, 5)
+    torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+
+    @gluon.jit
+    def kernel(src, out):
+        # The worker partition must issue with its own thread zero.
+        ttgl.warp_specialize([
+            (_bulk_copy_kernel, (src, out, True, 128, 128, 0, 0)),
+            (_bulk_copy_kernel, (src + 128, out + 256, True, 128, 128, 0, 0)),
+        ], [4])
+
+    src = torch.arange(256, device=device, dtype=torch.int32)
+    out = torch.empty((2, 256), device=device, dtype=torch.int32)
+    kernel[(1, )](src, out)
+    expected = torch.full_like(out, -7)
+    expected[:, :128] = src.reshape(2, 128)
+    torch.testing.assert_close(out, expected)
+
+
+@gluon.jit
+def _bulk_cluster_kernel(src, out, num_elements: ttgl.constexpr, take_copy, CGA: ttgl.constexpr, BLOCK: ttgl.constexpr,
+                         MULTICAST: ttgl.constexpr, FROM_CTA: ttgl.constexpr, REPLICAS: ttgl.constexpr,
+                         OUT_LAYOUT: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=CGA)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared, ttgl.full((BLOCK, ), -7, ttgl.int32, layout))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    rows = ttgl.arange(0, REPLICAS, ttgl.SliceLayout(1, OUT_LAYOUT))
+    cols = ttgl.arange(0, BLOCK, ttgl.SliceLayout(0, OUT_LAYOUT))
+    offsets = rows[:, None] * BLOCK + cols[None, :]
+    for i in range(3):
+        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
+        if MULTICAST:
+            ttgl.barrier(cluster=True)
+        hopper.bulk.async_load(smem, src + i * num_elements, num_elements, bar, pred=take_copy, multicast=MULTICAST)
+        hopper.mbarrier.wait(bar, phase=i % 2, pred=take_copy)
+        values = smem.load(ttgl.SliceLayout(0, OUT_LAYOUT))
+        ttgl.store(out + i * REPLICAS * BLOCK + offsets, values[None, :])
+    hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("cga,multicast,from_cta", [
+    ([[1]], False, None),
+    ([[0]], False, None),
+    ([[0]], True, 0),
+    ([[1], [2]], False, 0),
+    ([[0], [1]], True, None),
+    ([[1], [0]], True, 0),
+    ([[1], [0]], True, 1),
+    ([[0], [0]], True, 0),
+])
+@pytest.mark.parametrize("take_copy", [False, True])
+@pytest.mark.parametrize("mode", ["", "consan"])
+def test_bulk_async_load_cluster(cga, multicast, from_cta, take_copy, mode, device, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = mode
+    cga = tuple(map(tuple, cga))
+    tiles = 2**sum(any(basis) for basis in cga)
+    block = 128 * tiles
+    num_elements = block
+    src = torch.arange(3 * num_elements, dtype=torch.int32, device=device)
+    replicas = 1
+    out_cga = []
+    for basis in cga:
+        if basis[0]:
+            out_cga.append([0, basis[0]])
+        else:
+            out_cga.append([replicas, 0])
+            replicas *= 2
+    out_layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=out_cga)
+    out = torch.empty(3 * replicas * block, dtype=src.dtype, device=device)
+    _bulk_cluster_kernel[(1, )](src, out, num_elements, take_copy, cga, block, multicast, from_cta, replicas,
+                                out_layout, num_ctas=2**len(cga))
+    expected = torch.full((3, replicas, tiles, 128), -7, dtype=src.dtype, device=device)
+    if take_copy:
+        expected[:] = src.view(3, 1, tiles, 128)
+    torch.testing.assert_close(out, expected.flatten(), atol=0, rtol=0)
+
+
+@gluon.jit
+def _bulk_layout_kernel(src, out, SHARED: ttgl.constexpr, ENCODE: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    flat_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+    cols = ttgl.arange(0, 32, ttgl.SliceLayout(0, layout))
+    indices = rows[:, None] * 32 + cols[None, :]
+    flat_indices = ttgl.arange(0, 512, flat_layout)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [16, 32], SHARED)
+    if ENCODE:
+        raw = smem.reinterpret(shape=[512], layout=ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        smem.store(ttgl.load(src + indices))
+        ttgl.store(out + flat_indices, raw.load(flat_layout))
+    else:
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, 2048)
+        hopper.bulk.async_load(smem, src, 512, bar)
+        hopper.mbarrier.wait(bar, phase=0)
+        ttgl.store(out + indices, smem.load(layout))
+        hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("shared", [
+    ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+    ttgl.SwizzledSharedLayout(4, 1, 8, [1, 0]),
+    ttgl.NVMMASharedLayout(128, 32),
+    ttgl.SharedLinearLayout([[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]]),
+])
+@pytest.mark.parametrize("mode", ["", "consan"])
+def test_bulk_async_load_layout(shared, mode, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = mode
+    src = torch.arange(512, device=device, dtype=torch.int32)
+    packed = torch.empty_like(src)
+    out = torch.empty_like(src)
+    _bulk_layout_kernel[(1, )](src, packed, shared, True)
+    _bulk_layout_kernel[(1, )](packed, out, shared, False)
+    torch.testing.assert_close(out, src, atol=0, rtol=0)
+
+
+def _run_bulk_iisan_case(offset, take_copy, device):
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty(64, device=device, dtype=torch.int32)
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "iisan"
+        _bulk_copy_kernel[(1, )](src, out, take_copy, 12, 32, offset, 0)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("offset,take_copy,error", [
+    (0, True, None),
+    (1, True, "source must be 16-byte aligned"),
+    (1, False, None),
+])
+def test_bulk_async_load_iisan(offset, take_copy, error, device):
+    if is_compile_warmup():
+        _run_bulk_iisan_case(offset, take_copy, device)
+        return
+    result = run_in_process(_run_bulk_iisan_case, (offset, take_copy, device))
+    if error:
+        assert result.exc is not None
+        assert error in result.driver_stderr_output
+    else:
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+
+
+@gluon.jit
+def _bulk_producer(src, smem, bar):
+    hopper.mbarrier.expect(bar, 48)
+    hopper.bulk.async_load(smem, src, 12, bar)
+
+
+@gluon.jit
+def _bulk_consumer(out, smem, bar):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    hopper.mbarrier.wait(bar, phase=0)
+    ttgl.store(out + ttgl.arange(0, 128, layout), smem.load(layout))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("mode", ["", "consan"])
+def test_bulk_async_load_partition_handoff(mode, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = mode
+
+    @gluon.jit
+    def kernel(src, out):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared, ttgl.full((128, ), -7, ttgl.int32, layout))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        ttgl.warp_specialize([(_bulk_consumer, (out, smem, bar)), (_bulk_producer, (src, smem, bar))], [4])
+        hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out)
+    expected = torch.full_like(src, -7)
+    expected[:12] = src[:12]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
+@gluon.jit
+def _bulk_store_kernel(src, out, take_copy, COUNT: ttgl.constexpr, BLOCK: ttgl.constexpr, OFFSET: ttgl.constexpr,
+                       CGA: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=CGA)
+    offsets = ttgl.arange(0, BLOCK, layout)
+    allocation = ttgl.allocate_shared_memory(src.dtype.element_ty, [2, BLOCK], shared)
+    smem = allocation.index(1)
+    smem.store(ttgl.load(src + offsets))
+    hopper.bulk.async_store(out + OFFSET, smem, COUNT, pred=take_copy)
+    hopper.bulk.store_wait(0, read_only=False)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_bytes", [16, 48, 4096, 10240])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.float32])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_bulk_async_store_copy(num_bytes, dtype, take_copy, device):
+    element_bytes = torch.empty((), dtype=dtype).element_size()
+    count = num_bytes // element_bytes
+    block = triton.next_power_of_2(count)
+    offset = 16 // element_bytes
+    src = (torch.arange(block, device=device) % 113).to(dtype)
+    out = torch.full((offset + block + 16, ), -7, device=device, dtype=dtype)
+    compiled = _bulk_store_kernel[(1, )](src, out, take_copy, count, block, offset, ())
+    expected = torch.full_like(out, -7)
+    if take_copy:
+        expected[offset:offset + count] = src[:count]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    if not is_compile_warmup():
+        assert "cp.async.bulk.global.shared::cta.bulk_group" in compiled.asm["ptx"]
+
+
+@pytest.fixture
+def bulk_store_instrumentation(mode, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = mode
+    if mode == "gsan":
+        from triton.experimental.gsan import create_mem_pool
+        with torch.cuda.use_mem_pool(create_mem_pool()):
+            yield
+    else:
+        yield
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("cga", [[[1]], [[0]], [[1], [0]], [[0], [1]], [[1], [2]]])
+@pytest.mark.parametrize("take_copy", [False, True])
+@pytest.mark.parametrize("mode", ["", "consan", "gsan"])
+def test_bulk_async_store_cluster(cga, take_copy, mode, device, bulk_store_instrumentation):
+    cga = tuple(map(tuple, cga))
+    src = torch.arange(256, device=device, dtype=torch.int32)
+    out = torch.full((264, ), -7, device=device, dtype=torch.int32)
+    _bulk_store_kernel[(1, )](src, out, take_copy, 256, 256, 4, cga, num_ctas=2**len(cga))
+    expected = torch.full_like(out, -7)
+    if take_copy:
+        expected[4:260] = src
+    torch.testing.assert_close(out, expected)
+
+
+@gluon.jit
+def _bulk_store_reuse(out, take_copy):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    for i in range(4):
+        smem.store(ttgl.full((128, ), i, ttgl.int32, layout))
+        hopper.bulk.async_store(out + i * 128, smem, 128, pred=take_copy)
+        hopper.bulk.store_wait(0)
+    hopper.bulk.store_wait(0, read_only=False)
+    # Full completion must make writes visible to an ordinary load in this CTA.
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.store(out + 512 + offsets, ttgl.load(out + 384 + offsets))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("mode", ["", "consan", "gsan"])
+@pytest.mark.parametrize("warp_specialized", [False, True])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_bulk_async_store_buffer_reuse(mode, warp_specialized, take_copy, device, bulk_store_instrumentation):
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(out, pred, WS: ttgl.constexpr):
+        if WS:
+            ttgl.warp_specialize([(idle, ()), (_bulk_store_reuse, (out, pred))], [4])
+        else:
+            _bulk_store_reuse(out, pred)
+
+    out = torch.full((640, ), -7, device=device, dtype=torch.int32)
+    kernel[(1, )](out, take_copy, warp_specialized)
+    expected = torch.full_like(out, -7)
+    if take_copy:
+        expected[:512] = torch.arange(4, device=device).repeat_interleave(128)
+        expected[512:] = 3
+    torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("shared", [ttgl.SwizzledSharedLayout(4, 1, 8, [1, 0]), ttgl.NVMMASharedLayout(128, 32)])
+@pytest.mark.parametrize("mode", ["", "consan"])
+def test_bulk_async_store_swizzled_layout(shared, mode, device, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = mode
+
+    @gluon.jit
+    def kernel(src, out, SHARED: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 32, ttgl.SliceLayout(0, layout))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [16, 32], SHARED,
+                                           ttgl.load(src + rows[:, None] * 32 + cols[None, :]))
+        hopper.bulk.async_store(out, smem, 512)
+        hopper.bulk.store_wait(0, read_only=False)
+
+    src = torch.arange(512, device=device, dtype=torch.int32)
+    reference = torch.empty_like(src)
+    out = torch.empty_like(src)
+    _bulk_layout_kernel[(1, )](src, reference, shared, True)
+    kernel[(1, )](src, out, shared)
+    torch.testing.assert_close(out, reference, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("bulk_first", [False, True])
+@pytest.mark.parametrize("mode", ["", "consan"])
+def test_bulk_async_store_tma_queue(bulk_first, mode, device, fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = mode
+
+    @gluon.jit
+    def kernel(desc, out, BULK_FIRST: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 32)
+        a = ttgl.allocate_shared_memory(ttgl.int32, [16, 256], shared, ttgl.full((16, 256), 7, ttgl.int32, layout))
+        b = ttgl.allocate_shared_memory(ttgl.int32, [16, 256], shared, ttgl.full((16, 256), 9, ttgl.int32, layout))
+        if BULK_FIRST:
+            hopper.bulk.async_store(out, a, 4096)
+            hopper.tma.async_store(desc, [0, 0], b)
+        else:
+            hopper.tma.async_store(desc, [0, 0], a)
+            hopper.bulk.async_store(out, b, 4096)
+        hopper.bulk.store_wait(1)
+        a.store(ttgl.full((16, 256), 17, ttgl.int32, layout))
+        hopper.tma.store_wait(0)
+        b.store(ttgl.full((16, 256), 19, ttgl.int32, layout))
+        hopper.bulk.store_wait(0, read_only=False)
+
+    out = torch.empty((16, 256), device=device, dtype=torch.int32)
+    tensor_out = torch.empty_like(out)
+    desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(tensor_out, [16, 256], ttgl.NVMMASharedLayout(128, 32))
+    kernel[(1, )](desc, out, bulk_first)
+    torch.testing.assert_close(out, torch.full_like(out, 7 if bulk_first else 9))
+    torch.testing.assert_close(tensor_out, torch.full_like(out, 9 if bulk_first else 7))
+
+
+def _run_bulk_store_iisan_case(offset, take_copy, device):
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty(64, device=device, dtype=torch.int32)
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "iisan"
+        _bulk_store_kernel[(1, )](src, out, take_copy, 12, 32, offset, ())
+        torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("offset,take_copy", [(0, True), (1, True), (1, False)])
+def test_bulk_async_store_iisan(offset, take_copy, device):
+    if is_compile_warmup():
+        _run_bulk_store_iisan_case(offset, take_copy, device)
+        return
+    result = run_in_process(_run_bulk_store_iisan_case, (offset, take_copy, device))
+    if offset and take_copy:
+        assert result.exc is not None
+        assert "destination must be 16-byte aligned" in result.driver_stderr_output
+    else:
+        assert result.exc is None
+        assert result.driver_stderr_output == ""

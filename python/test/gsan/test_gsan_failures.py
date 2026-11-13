@@ -727,8 +727,9 @@ def _run_failure_case(case: str, shadow_granularity: int | None = None, *, runne
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
     assert "GSanLibrary.cu" not in result.driver_stderr_output
-    assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
-    assert _expected_file_line(source_function, marker) in result.driver_stderr_output
+    if not triton.knobs.compilation.disable_line_info:
+        assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
+        assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
 
 
@@ -1181,3 +1182,112 @@ def test_transitive_cta_scope_read_after_write(shadow_granularity, release_sem, 
                       source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")
+
+
+@gluon.jit
+def _bulk_load(src, out):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, 48)
+    hopper.bulk.async_load(smem, src, 12, bar)
+    hopper.mbarrier.wait(bar, phase=0)
+    offsets = gl.arange(0, 16, layout)
+    gl.store(out + offsets, smem.load(layout), offsets < 12)
+    hopper.mbarrier.invalidate(bar)
+
+
+@gluon.jit
+def _bulk_raw_kernel(src, out, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(src + 11, 123)
+        gl.inline_asm("fence.proxy.async.global;")
+        gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed", scope="gpu") == 0:
+            pass
+        gl.inline_asm("fence.proxy.async.global;")
+        _bulk_load(src, out)
+
+
+@run_with_gsan
+def _run_bulk_case(write_after_read=False, acquire=False):
+    src = torch.zeros(12, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(src)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    if write_after_read:
+        _bulk_war_kernel[(2, )](src, out, ready)
+    else:
+        _bulk_raw_kernel[(2, )](src, out, ready, acquire)
+    torch.cuda.synchronize()
+    if not write_after_read:
+        torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_read_after_write():
+    _run_failure_case("bulk_raw", runner=_run_bulk_case, source_function=_bulk_load.fn, marker="hopper.bulk.async_load",
+                      error="Read after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_acquire_orders_source():
+    result = run_in_process(_run_bulk_case, (False, True))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""
+
+
+@gluon.jit
+def _bulk_war_kernel(src, out, ready):
+    if gl.program_id(0) == 0:
+        _bulk_load(src, out)
+        gl.atomic_xchg(ready, 1, sem="relaxed")
+    else:
+        while gl.atomic_add(ready, 0, sem="relaxed") == 0:
+            pass
+        gl.store(src + 11, 123)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_write_after_read():
+    _run_failure_case("bulk_war", runner=_run_bulk_case, runner_args=(True, ), source_function=_bulk_war_kernel.fn,
+                      marker="gl.store(src + 11", error="Write after read race detected")
+
+
+@gluon.jit
+def _bulk_store_after_read(payload, scratch, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(scratch, gl.load(payload + 11))
+        gl.atomic_xchg(ready, 1, sem="release")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed") == 0:
+            pass
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                         gl.full((16, ), 17, gl.int32, layout))
+        hopper.bulk.async_store(payload, smem, 12)
+        hopper.bulk.store_wait(0, read_only=False)
+
+
+@run_with_gsan
+def _run_bulk_store_after_read(acquire=False):
+    payload = torch.zeros(12, device="cuda", dtype=torch.int32)
+    scratch = torch.empty(1, device="cuda", dtype=torch.int32)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    _bulk_store_after_read[(2, )](payload, scratch, ready, acquire)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(payload, torch.full_like(payload, 17))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_write_after_read():
+    _run_failure_case("bulk_store_war", runner=_run_bulk_store_after_read, source_function=_bulk_store_after_read.fn,
+                      marker="hopper.bulk.async_store", error="Write after read race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_acquire_orders_destination():
+    result = run_in_process(_run_bulk_store_after_read, (True, ))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""

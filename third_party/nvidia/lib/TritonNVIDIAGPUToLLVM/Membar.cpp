@@ -90,7 +90,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
     return true;
 
   auto completesTransactions = [](Operation *op) {
-    return isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
+    return isa<ttng::AsyncLoadOpInterface, ttng::CLCTryCancelOp,
                ttng::AsyncSharedStoreOp>(op);
   };
   // Accessing these live destinations requires completion, which makes their

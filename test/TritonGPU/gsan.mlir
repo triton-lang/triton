@@ -523,3 +523,40 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @linear_bulk_range
+  tt.func @linear_bulk_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // CHECK-NOT: tt.make_range
+    // CHECK: tt.bitcast %arg0 : !tt.ptr<i32> -> !tt.ptr<i8>
+    // CHECK: tt.addptr
+    // CHECK: tti.experimental_gsan_load_range {{.*}}, 48, %arg3 : <i8>
+    // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @linear_bulk_store_range
+  tt.func @linear_bulk_store_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // CHECK-NOT: tt.make_range
+    // CHECK: [[PRED:%.*]] = arith.andi %arg3,
+    // CHECK: tt.bitcast %arg0 : !tt.ptr<i32> -> !tt.ptr<i8>
+    // CHECK: tt.addptr
+    // CHECK: tti.experimental_gsan_store_range {{.*}}, 48, [[PRED]] : <i8>
+    // CHECK-NEXT: ttng.async_bulk_copy_local_to_global
+    ttng.async_bulk_copy_local_to_global %src, %dst, 48, %pred : !tt.ptr<i32>, !dst
+    tt.return
+  }
+}

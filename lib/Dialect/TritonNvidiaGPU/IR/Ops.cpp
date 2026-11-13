@@ -920,6 +920,143 @@ static LogicalResult verifyTMACachePolicy(Operation *op, Attribute attr) {
   return success();
 }
 
+// -- AsyncBulkCopyGlobalToLocalOp --
+BulkCopyLayout getBulkCopyLayout(gpu::MemDescType type) {
+  auto layout = toLinearLayout(type);
+  auto block = StringAttr::get(type.getContext(), "block");
+  unsigned broadcastMask = layout.getFreeVariableMasks().lookup(block);
+  unsigned splitMask = (layout.getInDimSize(block) - 1) & ~broadcastMask;
+  unsigned numTiles = 1u << llvm::popcount(splitMask);
+  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(type.getElementType()) / 8;
+  return {unsigned(type.getNumElements() / numTiles) * elementBytes, splitMask,
+          broadcastMask};
+}
+
+int64_t AsyncBulkCopyGlobalToLocalOp::getNumBytesPerCTA() {
+  auto layout = getBulkCopyLayout(getDst().getType());
+  return getNumBytes() / (1u << llvm::popcount(layout.splitMask));
+}
+
+static LogicalResult verifyBulkCopy(Operation *op, gpu::MemDescType sharedTy,
+                                    PointerType ptrTy, int64_t numBytes,
+                                    bool isStore) {
+  StringRef role = isStore ? "source" : "destination";
+  auto emitOpError = [&](const Twine &message) {
+    return op->emitOpError(message);
+  };
+  if (!isa<SharedMemorySpaceAttr>(sharedTy.getMemorySpace()))
+    return emitOpError(role + " must be in shared memory");
+  if (!isStore && !sharedTy.getMutableMemory())
+    return emitOpError("cannot copy into immutable memory");
+  auto encoding = cast<SharedEncodingTrait>(sharedTy.getEncoding());
+  if (isa<PartitionedSharedEncodingAttr>(encoding))
+    return emitOpError(
+        "cannot span separately allocated shared-memory partitions");
+  if (isPaddedEncoding(encoding))
+    return emitOpError("does not support padded shared-memory layouts");
+  if (encoding.getAlignment() < 16)
+    return emitOpError(role + " layout must guarantee 16-byte alignment");
+  unsigned elementBytes =
+      getIntOrFloatOrPtrBitWidth(sharedTy.getElementType()) / 8;
+  if (!elementBytes)
+    return emitOpError(role + " elements must occupy at least one byte");
+
+  auto linear = toLinearLayout(sharedTy);
+  if (linear.getNumOutDims() != sharedTy.getRank())
+    return emitOpError(role + " must select a single shared-memory buffer");
+  auto withinView = [&](ArrayRef<int32_t> basis) {
+    return llvm::all_of(
+        llvm::zip_equal(basis, sharedTy.getShape()),
+        [](auto pair) { return std::get<0>(pair) < std::get<1>(pair); });
+  };
+  auto block = StringAttr::get(op->getContext(), "block");
+  if (!llvm::all_of(linear.getBases().lookup(block), withinView))
+    return emitOpError(role + " view must not slice across CTAs");
+  auto layout = getBulkCopyLayout(sharedTy);
+  unsigned elements = layout.bytesPerCTA / elementBytes;
+  auto offset = StringAttr::get(op->getContext(), "offset");
+  // The low offset bits must cover exactly the view; higher bits select its
+  // origin. This admits dense swizzled tiles (copied in physical byte order),
+  // but rejects strided or swizzled subviews with holes. No inverse is needed.
+  for (auto [bit, basis] : llvm::enumerate(linear.getBases().lookup(offset))) {
+    if (withinView(basis) != ((uint64_t{1} << bit) < elements))
+      return emitOpError(role +
+                         " view must be contiguous in physical shared memory");
+  }
+  if (layout.bytesPerCTA < 16)
+    return emitOpError(role + " view must contain at least 16 bytes per CTA");
+  if (ptrTy.getAddressSpace() != PtrAddrSpace::Global)
+    return emitOpError(isStore ? "requires a global-memory destination pointer"
+                               : "requires a global-memory source pointer");
+  unsigned numTiles = 1u << llvm::popcount(layout.splitMask);
+  if (numBytes <= 0 || numBytes % (16 * numTiles))
+    return emitOpError(
+        "total byte count must be a positive multiple of 16 times "
+        "the number of distinct CTA tiles");
+  if ((numBytes / numTiles) > layout.bytesPerCTA)
+    return emitOpError("total byte count exceeds the " + role +
+                       " view capacity");
+  if (linear.getInDimSize(block) > 1 &&
+      (numBytes / numTiles) != layout.bytesPerCTA)
+    return emitOpError("multi-CTA copies must fill the entire " + role +
+                       " view");
+  return success();
+}
+
+LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
+  if (failed(verifyBulkCopy(*this, getDst().getType(), getSrc().getType(),
+                            getNumBytes(), /*isStore=*/false)))
+    return failure();
+  auto block = StringAttr::get(getContext(), "block");
+  if (toLinearLayout(getBarrier().getType())
+          .getFreeVariableMasks()
+          .lookup(block))
+    return emitOpError("requires a separate completion barrier in each CTA");
+  return success();
+}
+
+int64_t AsyncBulkCopyLocalToGlobalOp::getNumBytesPerCTA() {
+  auto layout = getBulkCopyLayout(getSrc().getType());
+  return getNumBytes() / (1u << llvm::popcount(layout.splitMask));
+}
+
+LogicalResult AsyncBulkCopyLocalToGlobalOp::verify() {
+  return verifyBulkCopy(*this, getSrc().getType(), getDst().getType(),
+                        getNumBytes(), /*isStore=*/true);
+}
+
+LogicalResult
+AsyncBulkCopyLocalToGlobalOp::canonicalize(AsyncBulkCopyLocalToGlobalOp op,
+                                           PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
+Value AsyncBulkCopyLocalToGlobalOp::getPredicateOperand() { return getPred(); }
+
+void AsyncBulkCopyLocalToGlobalOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type AsyncBulkCopyLocalToGlobalOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
+LogicalResult
+AsyncBulkCopyGlobalToLocalOp::canonicalize(AsyncBulkCopyGlobalToLocalOp op,
+                                           PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
+Value AsyncBulkCopyGlobalToLocalOp::getPredicateOperand() { return getPred(); }
+
+void AsyncBulkCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type AsyncBulkCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult
 AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,

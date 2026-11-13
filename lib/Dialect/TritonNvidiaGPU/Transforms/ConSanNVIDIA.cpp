@@ -33,7 +33,8 @@ Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
 uint32_t getBlockBroadcastMask(Type type) {
   auto memDescTy = cast<ttg::MemDescType>(type);
   auto kBlock = StringAttr::get(type.getContext(), "block");
-  return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(memDescTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 } // namespace
@@ -41,7 +42,9 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
+    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp,
+               ttng::AsyncBulkCopyGlobalToLocalOp,
+               ttng::AsyncBulkCopyLocalToGlobalOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {
@@ -120,11 +123,11 @@ public:
       if (fromCTA)
         mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
     }
-    if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (auto loadOp = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
-    if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
+    if (auto storeOp = dyn_cast<ttng::AsyncStoreOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
     if (op->hasAttr("allocation.size"))
       mask = getResultScratchBroadcastMask(op).value_or(mask);
@@ -227,6 +230,13 @@ public:
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/-txCount});
     }
+    if (auto copyOp = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+      info->pred = copyOp.getPred();
+      info->barriers.push_back(
+          {copyOp.getBarrier(), nullptr, /*count=*/0,
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/-static_cast<int>(copyOp.getNumBytesPerCTA())});
+    }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(
           {storeOp.getBarrier(), nullptr, /*count=*/0,
@@ -241,11 +251,13 @@ public:
            /*txCount=*/
            -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
     }
-    if (isa<ttng::TMAStoreLikeOpInterface>(op)) {
+    if (isa<ttng::AsyncStoreOpInterface>(op)) {
       info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info->commitKind = tti::CommitKind::TmaStore;
       info->implicitCommit = true;
     }
+    if (auto storeOp = dyn_cast<ttng::AsyncBulkCopyLocalToGlobalOp>(op))
+      info->pred = storeOp.getPred();
     if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
@@ -284,7 +296,7 @@ public:
     bool needsTmaStore = false;
     bool needsWgmma = false;
     module.walk([&](Operation *op) {
-      if (isa<ttng::TMAStoreLikeOpInterface, ttng::TMAStoreWaitOp>(op))
+      if (isa<ttng::AsyncStoreOpInterface, ttng::TMAStoreWaitOp>(op))
         needsTmaStore = true;
       if (isa<ttng::WarpGroupDotOp, ttng::WarpGroupDotWaitOp>(op))
         needsWgmma = true;

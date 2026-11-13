@@ -1,7 +1,7 @@
 from __future__ import annotations
 from triton.compiler.code_generator import unflatten_ir_values
 from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
-from . import cluster, mbarrier, tma
+from . import bulk, cluster, mbarrier, tma
 from ... import _core
 
 from typing import List, Tuple, TYPE_CHECKING
@@ -13,6 +13,7 @@ __all__ = [
     "FractionalEvictionPolicy",
     "async_copy",
     "async_store",
+    "bulk",
     "cluster",
     "fence_async_shared",
     "mbarrier",
