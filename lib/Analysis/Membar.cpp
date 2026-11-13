@@ -14,14 +14,14 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
                                         const BlockInfo &effects) {
   const auto &sync = pending.threadSync;
   const auto &demands = effects.threadDemands;
-  if (sync.effectIssuers.empty() || !demands.hasDemand)
+  if (sync.effectIssuers.empty() || demands.kind == ThreadDemandKind::None)
     return false;
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
       !effects.syncReadSlices.empty() || !effects.syncWriteSlices.empty();
   return sync.completion == CompletionSync::All ||
          (sync.completion == CompletionSync::Shared &&
-          (hasSharedAccesses || demands.hasDemandBeyondGlobalReads)) ||
+          (hasSharedAccesses || demands.kind == ThreadDemandKind::General)) ||
          (!demands.publicationIssuers.empty() &&
           !sync.effectIssuers.hasSameKnownIssuer(demands.publicationIssuers)) ||
          // A notification can let a peer advance a pending wait's phase.

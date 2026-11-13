@@ -201,6 +201,9 @@ bool usesTensorMemory(ModuleOp module) {
 
 void TMemModel::describe(Operation *op, OpModel &model,
                          ArrayRef<MemoryAccess> accesses) {
+  // A verified scalar callback cannot access or publish TMEM.
+  if (isa<MapElementwiseOp>(op))
+    return;
   for (const MemoryAccess &access : accesses) {
     if (!isTensorMemory(access.value))
       continue;
