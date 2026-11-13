@@ -3042,7 +3042,8 @@ def test_clmul_broadcast(dtype_str, frontend, device):
     compiled = kernel[(1, )](x_tri, y_tri, z_tri, n, frontend == "gluon", THREADS_PER_WARP)
     np.testing.assert_array_equal(to_numpy(z_tri), expected)
     if not is_interpreter() and bits > 1:
-        assert f"@llvm.clmul.i{bits}" in compiled.asm["llir"]
+        # LLVM may vectorize elementwise intrinsics, particularly on AMD.
+        assert re.search(rf"@llvm\.clmul\.(?:v\d+)?i{bits}\(", compiled.asm["llir"])
 
 
 @pytest.mark.interpreter
