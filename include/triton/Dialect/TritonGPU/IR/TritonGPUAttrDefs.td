@@ -1274,8 +1274,24 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
     LinearLayoutParam:$ctaLayout,
     "bool":$isTransposed,
     "CGAEncodingAttr":$CGALayout,
-    ArrayRefParameter<"unsigned">:$instrShape
+    ArrayRefParameter<"unsigned">:$instrShape,
+    // Per-warp-bit XOR of the dot operands' K coordinate, in whole-instruction
+    // K steps (kWarp[i] * instrShape[2] elements). Empty means all zero. Only
+    // the dot operand layouts use it; the result layout ignores it.
+    ArrayRefParameter<"unsigned">:$kWarp
   );
+
+  let builders = [
+    AttrBuilder<(ins "unsigned":$version,
+                     "LinearLayout":$ctaLayout,
+                     "bool":$isTransposed,
+                     "CGAEncodingAttr":$CGALayout,
+                     "ArrayRef<unsigned>":$instrShape,
+                     CArg<"ArrayRef<unsigned>", "{}">:$kWarp), [{
+      return $_get($_ctxt, version, std::move(ctaLayout), isTransposed, CGALayout, instrShape, kWarp);
+    }]>
+  ];
+  let skipDefaultBuilders = 1;
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
@@ -1284,6 +1300,9 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
     LinearLayout getTileLayout(unsigned rank) const;
+    bool hasKWarp() const {
+      return llvm::any_of(getKWarp(), [](unsigned x) { return x != 0; });
+    }
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }

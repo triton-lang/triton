@@ -200,7 +200,22 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
     outCoords.push_back({dim1, nCoord});
   }
 
-  auto inDims = dotLayout.pseudoinvert().apply(outCoords);
+  // The caller asks for coordinates as seen by warp 0. With a kWarp parent a
+  // warp basis also moves K, so the same K coordinate is reachable from a
+  // register bit and from a warp bit; drop the warp K component before
+  // inverting so the answer is always this wave's own register.
+  LinearLayout invLayout = dotLayout;
+  if (wmmaLayout.hasKWarp()) {
+    auto bases = dotLayout.getBases();
+    auto kWarpDim = StringAttr::get(ctx, "warp");
+    int kOut = (opIdx == 0) ? rank - 1 : rank - 2;
+    for (auto &basis : bases[kWarpDim])
+      basis[kOut] = 0;
+    invLayout = LinearLayout(std::move(bases),
+                             llvm::to_vector(dotLayout.getOutDims()),
+                             /*requireSurjective=*/false);
+  }
+  auto inDims = invLayout.pseudoinvert().apply(outCoords);
 
   // inDims are ("register", "lane") of the chunk start; offset the register to
   // this instruction's part of the chunk.

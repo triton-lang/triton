@@ -118,6 +118,8 @@ class AMDWMMALayout(DistributedLayout):
         instr_shape (Optional[List[int]]): Instruction shape (M, N, K). Defaults to (16, 16, 16).
         cga_layout (Optional[List[List[int]]]): Bases describing CTA tiling.
         rank (Optional[int]): rank of warp and register bases. Default to 2 if missing.
+        k_warp_bases (Optional[List[int]]): one entry per warp basis; warp bit i also XORs the dot
+            operands' K coordinate by k_warp_bases[i] whole instruction K steps. Empty means none.
 
     Current supported versions:
 
@@ -132,10 +134,14 @@ class AMDWMMALayout(DistributedLayout):
     instr_shape: Optional[List[int]] = None
     cga_layout: List[List[int]] = field(default_factory=list)
     rank: Optional[int] = None
+    k_warp_bases: Optional[List[int]] = None
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
+        k_warp = _unwrap_if_constexpr(self.k_warp_bases)
+        k_warp = [int(_unwrap_if_constexpr(x)) for x in k_warp] if k_warp else []
+        super().__setattr__("k_warp_bases", k_warp if any(k_warp) else [])
         super().__setattr__("warp_bases", [list(inner) for inner in _unwrap_if_constexpr(self.warp_bases)])
         super().__setattr__("reg_bases",
                             [list(inner)
@@ -156,6 +162,7 @@ class AMDWMMALayout(DistributedLayout):
             self.cga_layout,
             self.instr_shape,
             self.rank,
+            self.k_warp_bases,
         )
 
     def mangle(self) -> str:
@@ -171,13 +178,16 @@ class AMDWMMALayout(DistributedLayout):
         warp_bases = nested_stringify(self.warp_bases)
         reg_bases = nested_stringify(self.reg_bases)
         cga_layout = nested_stringify(self.cga_layout)
-        return f"WMMA_{self.version}_{self.transposed}_{warp_bases}_{reg_bases}_{stringify(self.instr_shape)}_{cga_layout}_{self.rank}_WMMA"
+        k_warp = f"_KW{stringify(self.k_warp_bases)}" if self.k_warp_bases else ""
+        return f"WMMA_{self.version}_{self.transposed}_{warp_bases}_{reg_bases}_{stringify(self.instr_shape)}_{cga_layout}_{self.rank}{k_warp}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
         if len(self.warp_bases) > 0:
             assert len(self.warp_bases[0]) == self.rank, "warp_bases basis rank mismatch"
         assert all(len(vec) == self.rank for vec in self.cga_layout), "cga_layout basis rank mismatch"
+        if self.k_warp_bases:
+            assert len(self.k_warp_bases) == len(self.warp_bases), "k_warp_bases needs one entry per warp basis"
 
     def __hash__(self):
         return hash((
@@ -188,4 +198,5 @@ class AMDWMMALayout(DistributedLayout):
             tuple(self.instr_shape) if self.instr_shape else None,
             tuple(tuple(vec) for vec in self.cga_layout),
             self.rank,
+            tuple(self.k_warp_bases),
         ))

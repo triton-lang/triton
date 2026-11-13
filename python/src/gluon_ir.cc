@@ -280,7 +280,8 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     return getLayoutClass("AMDWMMALayout")(
         amdWmma.getVersion(), amdWmma.getIsTransposed(),
         ctaLayout.getBases().lookup(kWarp), ctaLayout.getBases().lookup(kReg),
-        toStdVector(amdWmma.getInstrShape()), cgaBases, amdWmma.getRank());
+        toStdVector(amdWmma.getInstrShape()), cgaBases, amdWmma.getRank(),
+        toStdVector(amdWmma.getKWarp()));
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
     auto *ctx = paddedShared.getContext();
@@ -577,7 +578,8 @@ void init_gluon_ir(py::module_ &m) {
               std::vector<std::vector<int32_t>> &warpBases,
               std::vector<std::vector<int32_t>> &regBases,
               std::vector<std::vector<int32_t>> &cgaBases,
-              std::vector<unsigned> &instrShape, unsigned rank) -> Attribute {
+              std::vector<unsigned> &instrShape, unsigned rank,
+              std::vector<unsigned> &kWarpXor) -> Attribute {
              auto ctx = self.getContext();
              auto kReg = mlir::StringAttr::get(ctx, "register");
              auto kWarp = mlir::StringAttr::get(ctx, "warp");
@@ -586,7 +588,8 @@ void init_gluon_ir(py::module_ &m) {
                                   tt::standardOutDimNames(ctx, rank));
              auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
              return ttg::AMDWmmaEncodingAttr::get(
-                 ctx, version, ctaLayout, transposed, cgaLayout, instrShape);
+                 ctx, version, ctaLayout, transposed, cgaLayout, instrShape,
+                 kWarpXor);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,

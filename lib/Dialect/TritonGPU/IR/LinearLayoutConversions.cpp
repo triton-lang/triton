@@ -867,8 +867,26 @@ AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
       permuteDimNames(standardOutDimNames(ctx, rank), order);
   dotOperanLayout = dotOperanLayout.transposeOuts(repDimNames);
 
-  return combineCtaCgaWithShape(dotOperanLayout, dotWmmaLayout.getCGALayout(),
-                                shape);
+  auto result = combineCtaCgaWithShape(dotOperanLayout,
+                                       dotWmmaLayout.getCGALayout(), shape);
+  if (!wmmaLayout.hasKWarp())
+    return result;
+  // kWarp: warp bit i also XORs the operand's K coordinate by kWarp[i] whole
+  // instruction K steps, so the waves walk K in different orders. Each wave
+  // still covers all of K through its register bases.
+  auto bases = result.getBases();
+  auto kWarpDim = S("warp");
+  int kOut = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  auto &warpBases = bases[kWarpDim];
+  auto kWarp = wmmaLayout.getKWarp();
+  assert(kWarp.size() == warpBases.size() && "kWarp size must match warps");
+  for (auto [i, kx] : llvm::enumerate(kWarp)) {
+    int32_t delta = kx * kDim;
+    assert(delta < shape[kOut] && "kWarp XOR must stay inside K");
+    warpBases[i][kOut] ^= delta;
+  }
+  return LinearLayout(std::move(bases), llvm::to_vector(result.getOutDims()),
+                      /*requireSurjective=*/false);
 }
 
 LinearLayout
