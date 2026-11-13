@@ -15,7 +15,6 @@ its importance for performance.
 """
 
 import importlib
-import re
 import pytest
 import torch
 import triton
@@ -529,77 +528,6 @@ if __name__ == "__main__" and is_cdna4():
     bank_conflicts_kernel[(1, )](a_layout, get_smem_layout_for_async_copies(), 0)
 
 # %%
-# With these layouts, the operands move from global memory to shared memory, and
-# from shared memory to registers without bank conflicts. The last resource to
-# consider before we build the matrix multiplication is the registers. The
-# accumulator of a large tile takes many of them.
-#
-# On CDNA4, there are two types of vector registers, the regular VGPRs and the
-# AGPRs for accumulation. Each lane has 256 VGPRs and 256 AGPRs. All vector
-# instructions can use VGPRs, but only a few can use AGPRs. MFMA instructions
-# can read their operands and accumulator from AGPRs and write their result to
-# AGPRs. Some memory instructions, like `ds_read_b128`, can also load data into
-# AGPRs.
-#
-# The compiler decides which type to use. By default, it uses VGPRs, and only
-# moves values to AGPRs when it runs out of VGPRs. The `mfma` operation in Gluon
-# has an experimental argument `cd_regclass`, which sets the register class of
-# the accumulator (C) and the output (D). With `cd_regclass="a"`, both go to
-# AGPRs.
-
-
-@gluon.jit
-def mfma_w_agpr_kernel(a_ptr, b_ptr, c_ptr, K, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr,
-                       CD_REGCLASS: gl.constexpr):
-    mfma_layout: gl.constexpr = gl.amd.AMDMFMALayout(  #
-        version=4, instr_shape=[16, 16, 32], transposed=True, warps_per_cta=[1, 1])
-    a_offs = offs_2d(BLOCK_M, BLOCK_K, K, gl.DotOperandLayout(0, mfma_layout, 8))
-    b_offs = offs_2d(BLOCK_K, BLOCK_N, BLOCK_N, gl.DotOperandLayout(1, mfma_layout, 8))
-    acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, mfma_layout)
-    for k in range(0, K, BLOCK_K):
-        a = gl.load(a_ptr + k + a_offs)
-        b = gl.load(b_ptr + k * BLOCK_N + b_offs)
-        acc = cdna4.mfma(a, b, acc, cd_regclass=CD_REGCLASS)
-    gl.store(c_ptr + offs_2d(BLOCK_M, BLOCK_N, BLOCK_N, mfma_layout), acc)
-
-
-if __name__ == "__main__" and is_cdna4():
-    for BLOCK_N, cd_regclass in [(64, None), (64, "a"), (128, None), (128, "a")]:
-        A = torch.randn(128, 256, device="cuda", dtype=torch.bfloat16)
-        B = torch.randn(256, BLOCK_N, device="cuda", dtype=torch.bfloat16)
-        C = torch.empty(128, BLOCK_N, device="cuda", dtype=torch.float32)
-        kernel = mfma_w_agpr_kernel[(1, )](A, B, C, 256, 128, BLOCK_N, 32, cd_regclass, num_warps=1)
-        torch.testing.assert_close(A.float() @ B.float(), C, atol=1e-2, rtol=1e-2)
-        asm = kernel.asm["amdgcn"]
-        num_vgprs = re.search(r"; NumVgprs: (\d+)", asm).group(1)
-        num_agprs = re.search(r"; NumAgprs: (\d+)", asm).group(1)
-        print(f"128x{BLOCK_N}, cd_regclass={cd_regclass}: {num_vgprs} VGPRs, {num_agprs} AGPRs")
-
-# %%
-# ```
-# 128x64, cd_regclass=None: 222 VGPRs, 0 AGPRs
-# 128x64, cd_regclass=a: 100 VGPRs, 128 AGPRs
-# 128x128, cd_regclass=None: 256 VGPRs, 70 AGPRs
-# 128x128, cd_regclass=a: 144 VGPRs, 256 AGPRs
-# ```
-#
-# With a single warp, the fp32 accumulator of a 128x64 tile takes
-# 128 * 64 / 64 = 128 registers per lane, and a 128x128 tile takes 256. The
-# 128x64 tile fits in the VGPRs, so the compiler uses no AGPRs by default. For
-# the 128x128 tile, the compiler uses all 256 VGPRs and puts the remaining
-# values in AGPRs. With `cd_regclass="a"`, the accumulator takes 128 AGPRs for
-# the 128x64 tile and 256 AGPRs for the 128x128 tile, and the VGPR count drops.
-#
-# The rule of thumb here is to keep the default when the kernel needs at most
-# 256 VGPRs, and only use AGPRs when it exceeds this limit. What matters is
-# which values go to AGPRs. If a kernel needs more than 256 VGPRs, the compiler
-# by default moves some values to AGPRs. Ideally, these values should be the
-# accumulator, because the MFMA instructions read and write it in AGPRs
-# directly, without copies. Sometimes they are other values that other
-# instructions need in VGPRs, so the compiler copies them back and forth, which
-# impacts the performance of the MFMA instructions.
-
-# %%
 # Now we combine these features into a pipelined matmul kernel. To keep the
 # search space small, we only use 256x256x64 blocks and 4 warps.
 
@@ -829,7 +757,7 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 
 # %%
-# This section shows how important layouts are in Gluon for AMD GPUs. Many
+# This tutorial shows how important layouts are in Gluon for AMD GPUs. Many
 # optimizations come from choosing the right layout and letting the compiler
 # generate the expected instructions. Layouts control how data flows from global
 # memory to shared memory, from shared memory to registers, and between
@@ -841,18 +769,20 @@ if __name__ == "__main__" and is_cdna4():
 # ----------
 #
 # CDNA5 replaces MFMA with WMMA, the wave matrix multiply-accumulate
-# instructions. The idea stays the same, but a CDNA5 warp has 32 lanes, so the
-# instructions and their layouts change. For bf16, there is only one shape,
-# `v_wmma_f32_16x16x32_bf16`, which multiplies a 16x32 tile by a 32x16 tile. Its
-# Gluon operation is `cdna5.wmma(a, b, acc)`. The layouts work as for `mfma`,
-# with `AMDWMMALayout` in place of `AMDMFMALayout`. So we set `instr_shape` to
-# `[16, 16, 32]` and `k_width=8`.
+# instructions. The idea stays the same, but the instructions and their layouts
+# change slightly, given CDNA5 has a warp size of 32. WMMA is exposed in Gluon
+# as `wmma(a, b, acc)`. Same as `mfma`, the accumulator and the operands need
+# specific layouts, here based on `AMDWMMALayout` instead of `AMDMFMALayout`.
 #
 # `AMDWMMALayout` describes the placement of the warps in a different way.
-# Instead of `warps_per_cta`, `warp_bases` gives the tile offset of each bit of
-# the warp ID, in units of instruction tiles. With `[[0, 1], [1, 0]]`, warp 1
-# takes the next tile along N and warp 2 the next tile along M, which is the
-# same 2x2 warp grid as `warps_per_cta=[2, 2]`.
+# Instead of `warps_per_cta`, it uses bases in the style of a linear layout,
+# for both the warps and the registers. Each basis is an offset in units of
+# instruction tiles. `warp_bases` gives the offset of each bit of the warp ID,
+# and `reg_bases` gives the offset of each bit of the index of the instruction
+# tiles that one warp repeats in its registers. With
+# `warp_bases=[[0, 1], [1, 0]]`, warp 1 takes the next tile along N and warp 2
+# the next tile along M, which is the same 2x2 warp grid as
+# `warps_per_cta=[2, 2]`.
 
 if __name__ == "__main__" and is_cdna5():
     wmma_layout = gl.amd.AMDWMMALayout(  #
@@ -871,11 +801,8 @@ if __name__ == "__main__" and is_cdna5():
 # ```
 #
 # Each warp has 32 lanes and owns one 16x16 tile of the 32x32 block. Warp 0
-# (lanes T0-T31) has the top left tile, warp 1 (T32-T63) the top right tile,
-# warp 2 (T64-T95) the bottom left tile, and warp 3 (T96-T127) the bottom right
-# tile.
-#
-# `wmma_kernel` loads A and B into registers and multiplies them with `wmma`.
+# (lanes T0-T31) has the top left tile, warp 1 (T32-T63) the top right tile, and
+# so on.
 
 
 @gluon.jit
@@ -910,57 +837,61 @@ def test_wmma(M, N, K, warp_bases):
 # The LDS also changes from CDNA4 to CDNA5. On CDNA5, a CTA runs on a workgroup
 # processor (WGP), which takes the place of the compute unit (CU) of CDNA4. A
 # WGP has 320 KB of LDS, twice the 160 KB of a CDNA4 CU, so a kernel can keep
-# more and larger tiles in flight. The banks stay the same, 64 banks of 4 bytes.
-# With 32 lanes per warp, `ds_load_b128` serves the lanes of a warp in two
-# groups of 16 consecutive lanes, while `ds_read_b128` on CDNA4 serves four
-# groups of 16 lanes that are not consecutive.
+# more and larger tiles in flight. CDNA5 still uses 64 banks of 4 bytes. With 32
+# lanes per warp, `ds_load_b128` can be served in 2 groups of lanes instead of
+# 4.
 #
-# The tiles also reach the LDS in a different way. On CDNA4, an async copy
-# writes the data of each lane to consecutive LDS addresses, so a kernel shapes
-# the shared memory layout through the global addresses that it loads. On
-# CDNA5, TDM copies a whole tile, and writes it into LDS in the shared memory
-# layout, including any padding.
-#
-# `wmma_smem_kernel` copies A and B into LDS with TDM, and the warps read the
-# operands from there. `bank_conflicts_kernel` then counts the bank conflicts of
-# these reads with `gl.bank_conflicts`, for operand A of a 256x64 tile.
+# Another big change, as mentioned in `02-async-copy.py`, is async copies. On
+# CDNA4, an async copy writes the data of each lane to consecutive LDS
+# addresses. On CDNA5, an async copy takes a shared memory address for each
+# lane, so it no longer has this requirement, and the padded layouts work
+# without any trick. Moreover, CDNA5 also adds TDM, as shown in `03-tdm.py`. TDM
+# makes copies a lot easier, without much consideration of the layout details,
+# so TDM is what we prefer to use.
 
 
 @gluon.jit
-def wmma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: gl.constexpr, smem_layout: gl.constexpr):
+def wmma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: gl.constexpr,
+                     B_K_CONTIGUOUS: gl.constexpr, smem_layout: gl.constexpr):
     wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(  #
         version=3, instr_shape=[16, 16, 32], transposed=True, warp_bases=[[0, 1], [1, 0]], reg_bases=[])
-    gl.static_assert(a_ptr.dtype.element_ty == gl.bfloat16 and b_ptr.dtype.element_ty == gl.bfloat16)
     a_desc = tdm.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [M, K], smem_layout)
-    b_desc = tdm.make_tensor_descriptor(b_ptr, [N, K], [K, 1], [N, K], smem_layout)
     a_smem = gl.allocate_shared_memory(gl.bfloat16, [M, K], smem_layout)
-    b_smem = gl.allocate_shared_memory(gl.bfloat16, [N, K], smem_layout)
     tdm.async_load(a_desc, [0, 0], a_smem)
+    if B_K_CONTIGUOUS:
+        b_desc = tdm.make_tensor_descriptor(b_ptr, [N, K], [K, 1], [N, K], smem_layout)
+        b_smem = gl.allocate_shared_memory(gl.bfloat16, [N, K], smem_layout)
+    else:
+        b_desc = tdm.make_tensor_descriptor(b_ptr, [K, N], [N, 1], [K, N], smem_layout)
+        b_smem = gl.allocate_shared_memory(gl.bfloat16, [K, N], smem_layout)
     tdm.async_load(b_desc, [0, 0], b_smem)
     tdm.async_wait(0)
 
     a = a_smem.load(gl.DotOperandLayout(0, wmma_layout, 8))
-    # View the [N, K] buffer as [K, N].
-    b = b_smem.permute([1, 0]).load(gl.DotOperandLayout(1, wmma_layout, 8))
+    if B_K_CONTIGUOUS:
+        b = b_smem.permute([1, 0]).load(gl.DotOperandLayout(1, wmma_layout, 8))
+    else:
+        b = b_smem.load(gl.DotOperandLayout(1, wmma_layout, 8))
     acc = cdna5.wmma(a, b, gl.zeros([M, N], gl.float32, wmma_layout))
     gl.store(c_ptr + offs_2d(M, N, N, wmma_layout), acc)
 
 
-def wmma_smem(A, B):
+def wmma_smem(A, B, b_k_contiguous):
     M, K = A.shape
-    N = B.shape[0]
+    N = B.shape[0] if b_k_contiguous else B.shape[1]
     C = torch.empty(M, N, device=A.device, dtype=torch.float32)
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    wmma_smem_kernel[(1, )](A, B, C, M, N, K, smem_layout, num_warps=4)
-    return C
+    compiled = wmma_smem_kernel[(1, )](A, B, C, M, N, K, b_k_contiguous, smem_layout, num_warps=4)
+    return C, compiled
 
 
+@pytest.mark.parametrize("b_k_contiguous", [True, False])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_wmma_smem():
+def test_wmma_smem(b_k_contiguous):
     A = torch.randn(64, 64, device="cuda", dtype=torch.bfloat16)
     B = torch.randn(64, 64, device="cuda", dtype=torch.bfloat16)
-    C = wmma_smem(A, B)
-    torch.testing.assert_close(A.float() @ B.float().T, C, atol=1e-3, rtol=1e-3)
+    C, _ = wmma_smem(A, B.T.contiguous() if b_k_contiguous else B, b_k_contiguous)
+    torch.testing.assert_close(A.float() @ B.float(), C, atol=1e-3, rtol=1e-3)
 
 
 if __name__ == "__main__" and is_cdna5():
@@ -971,21 +902,17 @@ if __name__ == "__main__" and is_cdna5():
     bank_conflicts_kernel[(1, )](a_layout, plain_layout, 7)
 
 # %%
-# Without swizzling or padding, the read costs 7 extra accesses, an 8-way
-# conflict. One row of 64 bf16 values is 128 bytes, so every row covers half of
-# the banks, and the lanes that read different rows collide.
-#
-# Both fixes from MFMA apply. For swizzling, two rows still fill all 64 banks,
-# so the swizzle pattern advances every second row (`per_phase=2`). For
-# padding, 8 extra values (16 bytes) after each row shift the next row by 4
-# banks. Padding is the natural choice on CDNA5, because TDM adds it on the fly
-# while it writes the tile.
+# When using TDM, we still need to consider bank conflicts. TDM only supports
+# padding but not swizzling on CDNA5, and it adds the padding on the fly while
+# it writes the tile. Without padding, the read has 8-way conflicts. We can use
+# the similar heuristics as on CDNA4 to decide the padded layout. The interval
+# stays one row of 64 values, so that each row can start at different banks.
+# For the amount, we again count the different columns that a group reads. On
+# CDNA5, a group has 16 consecutive lanes, and lanes 0-15 all read columns 0-7,
+# each from a different row. This is only 8 columns, so the interval-padding
+# pair becomes [64, 8].
 
 if __name__ == "__main__" and is_cdna5():
-    swizzled_layout = gl.SwizzledSharedLayout(  #
-        vec=8, per_phase=2, max_phase=8, order=[1, 0])
-    bank_conflicts_kernel[(1, )](a_layout, swizzled_layout, 0)
-
     padded_layout = gl.PaddedSharedLayout.with_identity_for(  #
         interval_padding_pairs=[[64, 8]],  #
         shape=[256, 64],  #
@@ -993,24 +920,30 @@ if __name__ == "__main__" and is_cdna5():
     bank_conflicts_kernel[(1, )](a_layout, padded_layout, 0)
 
 # %%
-# Padding keeps the lanes of one read on different banks. But on CDNA5, reads
-# of different warps can still slow each other down, because of how the WGP
-# connects its SIMDs to the LDS. Warp `i` runs on SIMD `i % 4`, and the 4 SIMDs
-# work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3.
+# Only considering bank conflicts on CDNA5 is not enough. Reads of different
+# warps can still slow each other down, which we call a partition conflict. A
+# WGP has 4 SIMDs, which are the units that run the warps. Warp `i` runs on SIMD
+# `i % 4`, and the 4 SIMDs work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3.
 # Each pair has its own port into the LDS. Behind the ports, the 320 KB of LDS
 # consists of 5 physical partitions of 64 KB. Both pairs can read in the same
 # cycle only if they access different partitions. Otherwise their reads take
-# turns, and each pair gets half the bandwidth. This is a partition conflict.
+# turns, and each pair gets half the bandwidth.
 #
 # The simple `warp_bases=[[0, 1], [1, 0]]` runs into it. Warps 0 and 1 sit on
 # different SIMD pairs but compute tiles in the same rows, so both read the
 # same rows of A, which live in the same partition.
 #
 # To avoid it, the two SIMD pairs must read different rows of A and B, and these
-# rows must sit in different partitions. `make_partitioned_dot_layouts` returns
-# a WMMA layout that places the warps this way, and a `PartitionedSharedLayout`
-# that splits each buffer into pieces in different partitions. Each piece keeps
+# rows must sit in different partitions. Gluon describes this placement with
+# another shared memory layout, `PartitionedSharedLayout`. It cuts a buffer
+# into pieces along `partition_dim`, places the pieces in `num_partitions`
+# different partitions, and lays out each piece with `partition_layout`, here
 # the padded layout from above.
+#
+# To help generate such a layout, we can use `make_partitioned_dot_layouts`. It
+# takes the padded layouts of A and B, and returns a `PartitionedSharedLayout`
+# for each of them, together with a WMMA layout that places the warps of each
+# SIMD pair on their own pieces.
 
 if __name__ == "__main__" and is_cdna5():
     a_smem_layout, b_smem_layout, wmma_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
@@ -1028,17 +961,32 @@ if __name__ == "__main__" and is_cdna5():
 #         interval_padding_pairs=[[64, 8]], ...))
 # ```
 #
-# Warp 1 moved 8 tiles (128 elements) down and 8 tiles right of warp 0. Now one
-# SIMD pair works on the upper half of the rows of A and B, and the other pair
-# on the lower half. The shared layout cuts A into these two halves along
-# dimension 0 and stores them in different partitions, and B is cut the same
-# way. TDM follows the cut, so each warp copies into one half.
+# The bases are in units of 16x16 instruction tiles. Warp 1 starts 8 tiles
+# (128 values) down and 8 tiles right of warp 0, and the last register basis
+# moves each warp 8 tiles down. The 256x256 output tile is split among the warps
+# like this, where "1st" and "2nd" mark which half of its rows a warp reads
+# first:
+#
+# ```
+#              N 0-127       N 128-255
+# M   0-63     warp 0, 1st   warp 1, 2nd
+# M  64-127    warp 2, 1st   warp 3, 2nd
+# M 128-191    warp 0, 2nd   warp 1, 1st
+# M 192-255    warp 2, 2nd   warp 3, 1st
+# ```
+#
+# Warps 0 and 2 form one SIMD pair, and warps 1 and 3 the other. For B, the
+# first pair reads rows 0-127, and the second pair reads rows 128-255. For A,
+# the first pair reads rows 0-127 while the second pair reads rows 128-255, and
+# then they swap. The shared layout cuts A and B into these two halves along
+# dimension 0 and stores them in different partitions, so the two pairs always
+# read from different partitions. TDM follows the cut, so each warp copies into
+# one half.
 
 # %%
-# The matrix multiplication kernel computes a 256x256 tile per CTA with 4 warps
-# and BLOCK_K = 64, and TDM copies the tiles into a ring of LDS buffers. The
-# accumulator takes 256 * 256 / 128 = 512 fp32 values per lane, which fits in
-# the 1024 VGPRs of a CDNA5 lane.
+# Now let's combine these CDNA5 features together to write a matmul kernel. TDM
+# copies the tiles into two LDS buffers, and the warps read them with the padded
+# or the partitioned layouts.
 #
 # Similar to the MFMA kernel, each K block is split into two sub-tiles of 32.
 # While the WMMAs work on one sub-tile, the LDS reads for the other are in
@@ -1099,10 +1047,11 @@ def store_output(acc, c_ptr, M, N, stride_cm, off_m, off_n, c_smem_layout: gl.co
 @gluon.jit
 def wmma_matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                        stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
-                       PARTITIONED: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
+                       PARTITIONED: gl.constexpr):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 64
+    NUM_BUFFERS: gl.constexpr = 2
     layouts = get_wmma_layouts(PARTITIONED)
 
     SUB_K: gl.constexpr = BLOCK_K // 2
@@ -1149,31 +1098,30 @@ def wmma_matmul_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     store_output(acc, c_ptr, M, N, stride_cm, off_m, off_n, layouts.c_smem_layout)
 
 
-def wmma_matmul(A, B, partitioned, num_buffers=2):
+def wmma_matmul(A, B, partitioned):
     M, K = A.shape
     N = B.shape[0]
-    assert triton.cdiv(K, 64) >= num_buffers
+    assert triton.cdiv(K, 64) >= 2
     C = torch.empty(M, N, device=A.device, dtype=A.dtype)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
     compiled = wmma_matmul_kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1),
-                                        C.stride(0), partitioned, num_buffers, num_warps=4)
+                                        C.stride(0), partitioned, num_warps=4)
     return C, compiled
 
 
 @pytest.mark.parametrize("M, N, K", [(256, 256, 256), (500, 300, 512), (1024, 512, 1024)])
 @pytest.mark.parametrize("partitioned", [False, True])
-@pytest.mark.parametrize("num_buffers", [2, 3])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_wmma_matmul(M, N, K, partitioned, num_buffers):
+def test_wmma_matmul(M, N, K, partitioned):
     A = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
     B = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
-    C, _ = wmma_matmul(A, B, partitioned, num_buffers)
+    C, _ = wmma_matmul(A, B, partitioned)
     torch.testing.assert_close(A.float() @ B.float().T, C.float(), atol=1e-1, rtol=1e-2)
 
 
 # %%
-# We run the kernel with the partitioned layouts and 2, 3 and 4 buffers on an
-# MI455X GPU with M = N = K = 8192.
+# We can compare the padded and the partitioned layouts on an MI455X GPU with
+# M = N = K = 8192.
 
 if __name__ == "__main__" and is_cdna5():
     print("Benchmarking matmul")
@@ -1182,13 +1130,12 @@ if __name__ == "__main__" and is_cdna5():
     A = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
     B = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
 
-    for num_buffers in [2, 3, 4]:
-        ms = triton.testing.do_bench(lambda: wmma_matmul(A, B, True, num_buffers), warmup=200, rep=1000)
-        print(f"{num_buffers} buffers: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
+    for name, partitioned in [("padded", False), ("partitioned", True)]:
+        ms = triton.testing.do_bench(lambda: wmma_matmul(A, B, partitioned), warmup=200, rep=1000)
+        print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
 # %%
 # ```
-# 2 buffers: 2318 TFLOPS
-# 3 buffers: 2711 TFLOPS
-# 4 buffers: 2736 TFLOPS
+# padded: 2206 TFLOPS
+# partitioned: 2304 TFLOPS
 # ```
