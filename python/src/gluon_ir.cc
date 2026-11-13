@@ -1217,6 +1217,10 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("descPtr"), py::arg("xOffsets"), py::arg("yOffset"),
           py::arg("src"), py::arg("cachePolicy") = Attribute())
+      .def("create_fence_async_global",
+           [](GluonOpBuilder &self) -> OpState {
+             return self.create<ttng::FenceAsyncGlobalOp>();
+           })
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);

@@ -724,3 +724,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @global_proxy_fence
+  tt.func @global_proxy_fence() {
+    // CHECK: nvvm.fence.proxy <async.shared>, space = <cta>
+    // CHECK-NOT: llvm.call @__triton_gsan_fence_async_global
+    // CHECK: nvvm.fence.proxy <async.global>
+    // CHECK: llvm.call @__triton_gsan_fence_async_global({{.*}}) : (!llvm.ptr, i32, i32, i32, !llvm.ptr, i32) -> ()
+    ttng.fence_async_shared {bCluster = false}
+    ttng.fence_async_global
+    tt.return
+  }
+}

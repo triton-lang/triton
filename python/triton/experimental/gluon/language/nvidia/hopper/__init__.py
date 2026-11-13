@@ -14,6 +14,7 @@ __all__ = [
     "async_copy",
     "async_store",
     "cluster",
+    "fence_async_global",
     "fence_async_shared",
     "mbarrier",
     "mma_v2",
@@ -26,6 +27,19 @@ __all__ = [
 def _check(cond, msg_fn, category=ValueError):
     if not cond:
         raise category(msg_fn())
+
+
+@_core.builtin
+def fence_async_global(_semantic=None):
+    """
+    Order generic-proxy and asynchronous-proxy global memory accesses.
+
+    When another CTA publishes generic stores with release/acquire atomics,
+    issue this fence in the consuming CTA after the acquire and before TMA
+    accesses those stores. This fence does not wait for asynchronous operations
+    to complete.
+    """
+    _semantic.builder.create_fence_async_global()
 
 
 @_core.builtin

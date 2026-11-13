@@ -44,6 +44,8 @@ static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
     "__triton_gsan_atomic_begin_scalar";
 static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
     "__triton_gsan_atomic_end_scalar";
+static constexpr StringLiteral kGSanFenceAsyncGlobalRuntimeFn =
+    "__triton_gsan_fence_async_global";
 static constexpr StringLiteral kGSanInitRuntimeFn = "__triton_gsan_init";
 static constexpr StringLiteral kGSanKernelExitRuntimeFn =
     "__triton_gsan_kernel_exit";
@@ -77,7 +79,9 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
 
   auto *ctx = rewriter.getContext();
   SmallVector<Type> argTys;
-  if (funcName == kGSanInitRuntimeFn) {
+  if (funcName == kGSanFenceAsyncGlobalRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanInitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanKernelExitRuntimeFn) {
@@ -990,6 +994,33 @@ public:
   }
 };
 
+struct GSanFenceAsyncGlobalOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanFenceAsyncGlobalOp> {
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanFenceAsyncGlobalOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanFenceAsyncGlobalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto state = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(state))
+      return failure();
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanFenceAsyncGlobalRuntimeFn);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto threadIdx = mlir::getThreadId(rewriter, loc);
+    auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
+                                ttg::lookupThreadsPerWarp(rewriter));
+    Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+    b.call(runtimeFunc, ValueRange{*state, threadIdx, numThreads, barrierId,
+                                   sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct GSanInitOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanInitOp> {
 public:
@@ -1323,7 +1354,8 @@ void mlir::triton::populateGSanToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis,
     const TargetInfoBase &targetInfo) {
-  patterns.add<GSanInitOpConversion>(typeConverter);
+  patterns.add<GSanInitOpConversion, GSanFenceAsyncGlobalOpConversion>(
+      typeConverter);
   patterns.add<
       GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
       GSanStreamClockOpConversion<tti::ExperimentalGSanGridDependencyWaitOp>>(

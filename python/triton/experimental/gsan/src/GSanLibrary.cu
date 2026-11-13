@@ -145,7 +145,8 @@ GSAN_DEVICE void syncThreads(uint32_t barrierId, uint32_t numThreads) {
 }
 
 GSAN_DEVICE uintptr_t getThreadStateStrideBytes(GlobalState *globals) {
-  auto clocksPerThread = 1u + globals->clockBufferSize;
+  auto clocksPerThread =
+      ThreadState::kNumLocalClocks + globals->clockBufferSize;
   return sizeof(ThreadState) +
          sizeof(epoch_t) * globals->numThreads * clocksPerThread;
 }
@@ -182,9 +183,13 @@ GSAN_DEVICE ThreadState *getThreadState(GlobalState *globals) {
   return reinterpret_cast<ThreadState *>(stateBase + stateStride * smid);
 }
 
+GSAN_DEVICE epoch_t *getAsyncProxyVectorClock(ThreadState *state) {
+  return state->vectorClock + getGlobalState(state)->numThreads;
+}
+
 GSAN_DEVICE epoch_t *getClockBufferBase(ThreadState *state) {
-  auto *globals = getGlobalState(state);
-  return state->vectorClock + globals->numThreads;
+  return state->vectorClock +
+         ThreadState::kNumLocalClocks * getGlobalState(state)->numThreads;
 }
 
 GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
@@ -302,6 +307,10 @@ GSAN_DEVICE void acquireLaunchClocks(ThreadState *state,
       epoch = epoch < launch.waitClocks[j][i] ? launch.waitClocks[j][i] : epoch;
     if (state->vectorClock[i] < epoch)
       state->vectorClock[i] = static_cast<epoch_t>(epoch);
+    // Launch dependencies order both proxies. Do not import unrelated accesses
+    // from this CTA's generic clock into the async proxy vector clock.
+    if (getAsyncProxyVectorClock(state)[i] < epoch)
+      getAsyncProxyVectorClock(state)[i] = static_cast<epoch_t>(epoch);
   }
   if (threadIdx == 0) {
     state->clockBufferDirty = 1;
@@ -374,12 +383,14 @@ GSAN_DEVICE void initThread(GlobalState *globals, const LaunchState &launch,
       epoch =
           epoch < launch.entryClocks[j][i] ? launch.entryClocks[j][i] : epoch;
     state->vectorClock[i] = static_cast<epoch_t>(epoch);
+    getAsyncProxyVectorClock(state)[i] = static_cast<epoch_t>(epoch);
   }
 
   if (threadIdx == 0) {
     // Advance the SM's local epoch; nonlocal components came from the explicit
     // entry frontier above.
     auto *clock = state->vectorClock;
+    getAsyncProxyVectorClock(state)[tid] = clock[tid];
     assert_msg(loc, clock[tid] != kMaxEpoch, "Vector clock overflowed");
     clock[tid] += 1;
     state->clockBufferDirty = 1;
@@ -510,6 +521,28 @@ GSAN_DEVICE void incrementThreadEpoch(ThreadState *state, Location loc) {
   state->clockBufferDirty = 1;
 }
 
+// The fence only changes visibility for this CTA. Generic release/acquire
+// snapshots exclude the async proxy vector clock: another CTA must fence after
+// acquiring the generic accesses it wants to use through its own async proxy.
+GSAN_DEVICE void fenceAsyncGlobal(ThreadState *state, uint32_t threadIdx,
+                                  uint32_t numThreads, uint32_t barrierId,
+                                  Location loc) {
+  syncThreads(barrierId, numThreads);
+  if (threadIdx == 0)
+    rwLockAcquireWrite(state->lock);
+  syncThreads(barrierId, numThreads);
+  auto *globals = getGlobalState(state);
+  for (int i = threadIdx; i < globals->numThreads; i += numThreads)
+    getAsyncProxyVectorClock(state)[i] = state->vectorClock[i];
+  syncThreads(barrierId, numThreads);
+  if (threadIdx == 0) {
+    // A later generic access must not share the epoch covered by this fence.
+    incrementThreadEpoch(state, loc);
+    rwLockReleaseWrite(state->lock);
+  }
+  syncThreads(barrierId, numThreads);
+}
+
 // A publisher that has not advanced its local epoch can only transfer its
 // completed epochs. All other entries retain their usual acquire semantics.
 GSAN_DEVICE bool mergeVectorClock(ThreadState *state, const epoch_t *snapshot,
@@ -530,37 +563,48 @@ GSAN_DEVICE bool mergeVectorClock(ThreadState *state, const epoch_t *snapshot,
   return changed;
 }
 
-GSAN_DEVICE bool dominatesSnapshot(ThreadState *state,
-                                   const epoch_t *snapshot) {
+GSAN_DEVICE bool dominatesSnapshot(ThreadState *state, const epoch_t *snapshot,
+                                   const epoch_t *currentClock = nullptr) {
+  if (!currentClock)
+    currentClock = state->vectorClock;
   auto *globals = getGlobalState(state);
   for (int i = 0; i < globals->numThreads; ++i) {
-    if (state->vectorClock[i] < snapshot[i])
+    if (currentClock[i] < snapshot[i])
       return false;
   }
   return true;
 }
 
 GSAN_DEVICE bool clockHappensBefore(ThreadState *state,
-                                    const ScalarClock &clock, Location loc) {
+                                    const ScalarClock &clock, Location loc,
+                                    bool isTma = false) {
   if (clock.epoch == 0)
     return true;
+  // Accesses in this CTA's async proxy do not need a proxy fence between
+  // themselves. GSan's existing synchronous-CTA model handles completion;
+  // this extra clock checks generic-to-async visibility.
+  bool sameTmaProxy = clock.isTma && clock.threadId == state->threadId;
+  const auto *currentClock = isTma && !sameTmaProxy
+                                 ? getAsyncProxyVectorClock(state)
+                                 : state->vectorClock;
   if (const epoch_t *snapshot = getSnapshotForWrite(state, clock, loc))
-    return dominatesSnapshot(state, snapshot);
-  return state->vectorClock[clock.threadId] >= clock.epoch;
+    return dominatesSnapshot(state, snapshot, currentClock);
+  return currentClock[clock.threadId] >= clock.epoch;
 }
 
 GSAN_DEVICE void assertOrderedOrCompatible(ThreadState *state,
                                            AtomicScope currentScope,
                                            const ScalarClock &prior,
-                                           Location loc, const char *message) {
+                                           Location loc, const char *message,
+                                           bool isTma = false) {
   if (prior.epoch == 0)
     return;
-  if (isAtomicScope(currentScope) &&
+  if (isTma == prior.isTma && isAtomicScope(currentScope) &&
       areAtomicScopesCompatible(currentScope, state->threadId, prior.scope,
                                 prior.threadId, getGlobalState(state))) {
     return;
   }
-  assert_msg(loc, clockHappensBefore(state, prior, loc), message);
+  assert_msg(loc, clockHappensBefore(state, prior, loc, isTma), message);
 }
 
 GSAN_DEVICE void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
@@ -828,18 +872,19 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
   rwLockReleaseWrite(threadState->lock);
 }
 
-GSAN_DEVICE ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope) {
+GSAN_DEVICE ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope,
+                                        bool isTma = false) {
   auto tid = state->threadId;
-  return ScalarClock{state->vectorClock[tid], tid, scope, false};
+  return ScalarClock{state->vectorClock[tid], tid, scope, false, isTma};
 }
 
 GSAN_DEVICE ScalarClock makePublishedClock(ThreadState *state,
                                            AtomicScope scope, epoch_t token) {
-  return ScalarClock{token, state->threadId, scope, true};
+  return ScalarClock{token, state->threadId, scope, true, false};
 }
 
 GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
-                            AtomicScope scope) {
+                            AtomicScope scope, bool isTma = false) {
   auto numReads =
       __scoped_atomic_load_n(&cell->readCountAndLock, __ATOMIC_RELAXED,
                              __MEMORY_SCOPE_SYSTEM) &
@@ -851,10 +896,11 @@ GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
                             ShadowCell::kLockBit | (numReads + 1),
                             __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
 
-  auto scalarClock = makeScalarClock(state, scope);
+  auto scalarClock = makeScalarClock(state, scope, isTma);
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
     auto readClock = cell->readClocks[iRead];
-    if (readClock.threadId == state->threadId || readClock.epoch == 0) {
+    if ((readClock.threadId == state->threadId && readClock.isTma == isTma) ||
+        readClock.epoch == 0) {
       cell->readClocks[iRead] = scalarClock;
       return;
     }
@@ -870,23 +916,24 @@ GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
   }
 }
 
-GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
+GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc,
+                         bool isTma = false) {
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
     assertOrderedOrCompatible(state, AtomicScope::NonAtomic,
                               cell->readClocks[iRead], loc,
-                              "Write after read race detected");
+                              "Write after read race detected", isTma);
   }
   // Check WAW
   assertOrderedOrCompatible(state, AtomicScope::NonAtomic, cell->writeClock,
-                            loc, "Write after write race detected");
+                            loc, "Write after write race detected", isTma);
   // Update write
-  cell->writeClock = makeScalarClock(state, AtomicScope::NonAtomic);
+  cell->writeClock = makeScalarClock(state, AtomicScope::NonAtomic, isTma);
 }
 
 GSAN_DEVICE void doWrite(ThreadState *state, WriteOnceShadowCell *cell,
-                         Location loc) {
-  auto clock = makeScalarClock(state, AtomicScope::NonAtomic);
+                         Location loc, bool isTma = false) {
+  auto clock = makeScalarClock(state, AtomicScope::NonAtomic, isTma);
   ScalarClock expected{};
   bool firstWrite = __scoped_atomic_compare_exchange(
       &cell->writeClock, &expected, &clock, false, __ATOMIC_RELAXED,
@@ -895,14 +942,14 @@ GSAN_DEVICE void doWrite(ThreadState *state, WriteOnceShadowCell *cell,
 }
 
 GSAN_DEVICE void doRead(ThreadState *state, WriteOnceShadowCell *cell,
-                        Location loc) {
+                        Location loc, bool isTma = false) {
   ScalarClock clock;
   __scoped_atomic_load(&cell->writeClock, &clock, __ATOMIC_RELAXED,
                        __MEMORY_SCOPE_SYSTEM);
   assert_msg(loc, clock.epoch != 0,
              "Read of write-once memory before its first write");
   assertOrderedOrCompatible(state, AtomicScope::NonAtomic, clock, loc,
-                            "Read after write race detected");
+                            "Read after write race detected", isTma);
 }
 
 GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
@@ -955,10 +1002,11 @@ GSAN_DEVICE void tensorStore(ThreadState *state, const char *stackPtr,
     rwLockReleaseRead(state->lock);
 }
 
-GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
+GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc,
+                        bool isTma = false) {
   assertOrderedOrCompatible(state, AtomicScope::NonAtomic, cell->writeClock,
-                            loc, "Read after write race detected");
-  recordRead(state, cell, AtomicScope::NonAtomic);
+                            loc, "Read after write race detected", isTma);
+  recordRead(state, cell, AtomicScope::NonAtomic, isTma);
 }
 
 GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
@@ -1132,7 +1180,7 @@ struct ReadShadowCellHandler {
   template <typename Cell>
   GSAN_DEVICE void operator()(ThreadState *state, Cell *cell,
                               Location loc) const {
-    doRead(state, cell, loc);
+    doRead(state, cell, loc, /*isTma=*/true);
   }
 };
 
@@ -1140,7 +1188,7 @@ struct WriteShadowCellHandler {
   template <typename Cell>
   GSAN_DEVICE void operator()(ThreadState *state, Cell *cell,
                               Location loc) const {
-    doWrite(state, cell, loc);
+    doWrite(state, cell, loc, /*isTma=*/true);
   }
 };
 
@@ -1254,12 +1302,11 @@ GSAN_DEVICE void releaseAtomicShadowRange(AtomicEventState *event) {
   initAtomicEventState(event);
 }
 
-GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
-                                   AtomicEventState *event, bool pred,
-                                   uintptr_t address, int nBytes,
-                                   int bytesPerElem, bool doesRead,
-                                   [[maybe_unused]] uint32_t semRaw,
-                                   uint32_t scopeRaw, Location loc) {
+GSAN_DEVICE void
+beginAtomicAccess(GlobalState *globals, AtomicEventState *event, bool pred,
+                  uintptr_t address, int nBytes, int bytesPerElem,
+                  bool doesRead, [[maybe_unused]] uint32_t semRaw,
+                  uint32_t scopeRaw, Location loc, bool isTma = false) {
   initAtomicEventState(event);
   if (!pred)
     return;
@@ -1275,15 +1322,16 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
       auto *cell = event->cells[i];
       auto write = cell->writeClock;
       assertOrderedOrCompatible(state, scope, write, loc,
-                                "Read after write race detected");
-      recordRead(state, cell, scope);
+                                "Read after write race detected", isTma);
+      recordRead(state, cell, scope, isTma);
     }
   }
 }
 
 GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
                                  bool didWrite, bool isRmw, uint32_t semRaw,
-                                 uint32_t scopeRaw, Location loc) {
+                                 uint32_t scopeRaw, Location loc,
+                                 bool isTma = false) {
   if (!pred || event->threadState == nullptr)
     return;
 
@@ -1318,10 +1366,10 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       auto *cell = event->cells[i];
       for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
         assertOrderedOrCompatible(state, scope, cell->readClocks[iRead], loc,
-                                  "Write after read race detected");
+                                  "Write after read race detected", isTma);
       }
       assertOrderedOrCompatible(state, scope, cell->writeClock, loc,
-                                "Write after write race detected");
+                                "Write after write race detected", isTma);
     }
 
     auto previousWrite = event->cells[0]->writeClock;
@@ -1343,7 +1391,8 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       }
       newWriteClock = makePublishedClock(state, scope, token);
     } else {
-      if (isRmw && previousWrite.isRelease) {
+      // Async reductions do not extend a generic-proxy release sequence.
+      if (isRmw && previousWrite.isRelease && !isTma) {
         auto token = propagateClockBufferSnapshot(state, previousWrite, loc);
         newWriteClock = makePublishedClock(state, scope, token);
       } else {
@@ -1351,6 +1400,7 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       }
     }
 
+    newWriteClock.isTma = isTma;
     for (uint8_t i = 0; i < event->numCells; ++i)
       event->cells[i]->writeClock = newWriteClock;
 
@@ -1372,9 +1422,10 @@ struct AtomicElementHandler {
   GSAN_DEVICE void operator()(uintptr_t address) const {
     AtomicEventState event;
     beginAtomicAccess(globals, &event, /*pred=*/true, address, bytesPerElem,
-                      bytesPerElem, /*doesRead=*/true, sem, scope, loc);
+                      bytesPerElem, /*doesRead=*/true, sem, scope, loc,
+                      /*isTma=*/true);
     endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true,
-                    /*isRmw=*/true, sem, scope, loc);
+                    /*isRmw=*/true, sem, scope, loc, /*isTma=*/true);
   }
 };
 
@@ -1436,6 +1487,15 @@ __triton_gsan_init(void *globalState, const gsan::LaunchState *launchTable,
   gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState),
                    launchTable[launchIndex], threadIdx, numThreads, barrierId,
                    loc);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_fence_async_global(void *globalState, unsigned threadIdx,
+                                 unsigned numThreads, unsigned barrierId,
+                                 const char *file, unsigned line) {
+  auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
+  gsan::fenceAsyncGlobal(gsan::getThreadState(globals), threadIdx, numThreads,
+                         barrierId, {file, line});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(

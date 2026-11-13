@@ -72,6 +72,33 @@ We can model this by considering two different vector clock values: the value up
 
 In order to do this, we will need to instrument the async wait/mbarrier wait op that forms the actual completion, and do the shadow memory update then. For this we will need to record, for every asynchronous memory access: the associated `VC_access`, as well as metadata that allows us to map the async wait/mbarrier wait ops back to the operation.
 
+### Generic-to-async proxy visibility
+
+The runtime separately tracks a generic vector clock and an async proxy vector
+clock for each logical CTA. A global async proxy fence copies the generic vector
+clock into the async proxy vector clock, then advances the CTA's generic epoch
+so later accesses need a new fence. Gluon exposes this operation as
+`hopper.fence_async_global()` (also exported by Blackwell and Rubin). A
+shared-memory proxy fence does not update this global-memory clock.
+
+Release/acquire atomics exchange only generic clock snapshots. A consumer that
+acquires a producer's generic stores must execute its own global proxy fence
+before accessing those stores through TMA; a producer-side fence is insufficient
+across CTAs. Completed launch dependencies initialize both clocks.
+
+Shadow scalar clocks carry a TMA bit without increasing the shadow-cell size.
+TMA accesses check generic predecessors against the async proxy vector clock,
+while accesses within the same CTA's async proxy use the generic clock. Generic
+and TMA readers retain separate shadow entries, so a TMA read cannot hide an
+earlier generic read from a later TMA write. Accesses are stamped with the current
+generic epoch, not the older epoch captured in the async proxy vector clock.
+Atomic compatibility also requires a matching proxy, and TMA reductions do not
+extend generic-proxy release sequences.
+
+This checks proxy visibility within GSan's existing synchronous-CTA model. The
+issue/completion tracking described above is still separate work; this clock
+does not make missing async waits detectable.
+
 ## **2.6 Limitations**
 
 False Negatives:

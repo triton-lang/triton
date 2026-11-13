@@ -117,6 +117,20 @@ FromCTALowering getFromCTALowering(Location loc,
   return {pred, peerBarrierPtr, {}};
 }
 
+struct FenceAsyncGlobalOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncGlobalOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::FenceAsyncGlobalOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::FenceAsyncGlobalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<NVVM::FenceProxyOp>(
+        op, NVVM::ProxyKind::async_global, NVVM::SharedSpaceAttr{});
+    return success();
+  }
+};
+
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -645,7 +659,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
-  patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<FenceAsyncGlobalOpConversion, FenceAsyncSharedOpConversion>(
+      typeConverter, benefit);
   patterns.add<
       GridDependencyOpConversion<triton::GridDependencyWaitOp>,
       GridDependencyOpConversion<triton::GridDependencyLaunchDependentsOp>>(

@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, cluster, fence_async_shared, mbarrier
+from ..hopper import async_store, cluster, fence_async_global, fence_async_shared, mbarrier
 from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -27,6 +27,7 @@ __all__ = [
     "async_store",
     "clc",
     "cluster",
+    "fence_async_global",
     "fence_async_shared",
     "fma2",
     "mbarrier",
