@@ -39,7 +39,6 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -96,38 +95,32 @@ void assignStageCluster(Operation *op,
   }
 }
 
-bool isOperandPipelineable(Value v, scf::ForOp forOp) {
-  auto isPipelineable = [](Operation *op) {
-    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
-  };
-
-  Operation *foundDef = nullptr;
-  return triton::nvidia_gpu::isOperandPipelineableBase(v, forOp, foundDef,
-                                                       isPipelineable);
+// An aref releases its buffer after MMA completion. An immutable allocation
+// outside the loop can also be read across iterations without being refilled.
+bool canReadAcrossIterations(Value v, scf::ForOp forOp) {
+  while (Operation *def = v.getDefiningOp()) {
+    if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(def))
+      return true;
+    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+      break;
+    v = def->getOperand(0);
+  }
+  return forOp.isDefinedOutsideOfLoop(v) &&
+         !cast<MemDescType>(v.getType()).getMutableMemory();
 }
 
-void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
-                unsigned defaultNumStages) {
-  bool isAsync = true;
-  auto forOp = mmaOp->getParentOfType<scf::ForOp>();
-  if (!forOp)
+void promoteToAsync(MMAv5OpInterface mma, unsigned defaultNumStages) {
+  auto loop = mma->getParentOfType<scf::ForOp>();
+  if (!loop || getNumStagesOrDefault(loop, defaultNumStages) <= 1)
     return;
-
-  unsigned numStages = getNumStagesOrDefault(forOp, defaultNumStages);
-  if (numStages <= 1)
+  if (!canReadAcrossIterations(mma.getA(), loop) ||
+      !canReadAcrossIterations(mma.getB(), loop))
     return;
-
-  if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-          mmaOp.getOperation())) {
-    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
-      isAsync = false;
-    }
-    if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
-        !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
-      isAsync = false;
-    }
-  }
-  mmaOp.setIsAsync(isAsync);
+  if (auto scaled = dyn_cast<TCGen5MMAScaledOp>(mma.getOperation()))
+    if (!canReadAcrossIterations(scaled.getAScale(), loop) ||
+        !canReadAcrossIterations(scaled.getBScale(), loop))
+      return;
+  mma.setIsAsync(true);
 }
 
 struct ArefValue {
@@ -380,9 +373,7 @@ void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
-                       ArefValue arefVal,
-                       const DenseSet<MMAv5OpInterface> &mmav5Ops,
-                       unsigned defaultNumStages) {
+                       ArefValue arefVal) {
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
@@ -415,9 +406,6 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
          "Expecting matching Aref on the ArefPutExitOp");
 
   auto asyncKinds = castAsyncOpAttrs(exitOp.getAsyncOps());
-  auto hasAsyncLoad = [](AsyncOp kind) {
-    return kind == AsyncOp::TMALoad || kind == AsyncOp::CpAsync;
-  };
   auto hasTMA = [](AsyncOp kind) { return kind == AsyncOp::TMALoad; };
   auto hasCLC = [](AsyncOp kind) { return kind == AsyncOp::CLC; };
 
@@ -433,12 +421,6 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
         getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                        getPartitionWsTagIds(op), getStageCluster(op));
     lowerCLC(op, fullBarrier, rewriter);
-  }
-
-  if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
-    for (auto mmav5 : mmav5Ops) {
-      setIsAsync(mmav5, defaultNumStages);
-    }
   }
 
   for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
@@ -639,8 +621,7 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
-  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages)
-      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -648,16 +629,10 @@ public:
     SetVector<Operation *> opToDelete;
     opToDelete.insert(op.getOperation());
 
-    // setIsAsync(true) will be invoked on these mmav5 ops during
-    // rewritePutEnterOp when the producer is async loads. Since collecting
-    // consumer mmav5 ops requires the corresponding get enter op to be still
-    // used in the IR, collect them here.
-    auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
-
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
       if (auto user = dyn_cast<ArefPutEnterOp>(userOp)) {
-        rewritePutEnterOp(user, rewriter, aref, mmav5Ops, defaultNumStages);
+        rewritePutEnterOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefGetEnterOp>(userOp)) {
         rewriteGetEnterOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefPutExitOp>(userOp)) {
@@ -686,9 +661,6 @@ public:
 
     return success();
   }
-
-private:
-  unsigned defaultNumStages;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -965,6 +937,9 @@ public:
       // does load from global to shared memory.
       if (isProducerLoad(arefOp)) {
         arefOps.push_back(arefOp);
+        // Check the operands while they still refer to their original arefs.
+        for (auto mma : getAsyncMMAv5Consumers(arefOp.getResult()))
+          promoteToAsync(mma, numStages);
       }
     });
     multiBufferAref(arefOps, numStages);
@@ -975,7 +950,7 @@ public:
       return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context, numStages);
+    patterns.add<LowerArefCreate>(context);
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
     config.enableFolding(false);
