@@ -122,6 +122,39 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
     assert compiled.packed_metadata[2] == 0
 
 
+# A 128x128 fp32 transpose uses 64 KiB of static LDS. With 8 waves per
+# workgroup, gfx942 (64 KiB LDS per CU) fits one workgroup per CU, i.e. 2 waves
+# per EU, and gfx950 (160 KiB) fits two, i.e. 4 waves per EU. Either way one
+# workgroup needs at least ceil(8 waves / 4 SIMDs) = 2 waves per EU.
+@pytest.mark.parametrize("arch, waves_per_eu, achievable", [
+    ("gfx942", 1, False),
+    ("gfx942", 2, True),
+    ("gfx942", 3, False),
+    ("gfx950", 1, False),
+    ("gfx950", 2, True),
+    ("gfx950", 4, True),
+    ("gfx950", 5, False),
+])
+def test_compile_only_amd_waves_per_eu_static_lds(arch, waves_per_eu, achievable):
+
+    @triton.jit
+    def kernel(src, dst):
+        rows = tl.arange(0, 128)[:, None]
+        cols = tl.arange(0, 128)[None, :]
+        tl.store(dst + cols * 128 + rows, tl.load(src + rows * 128 + cols))
+
+    source = ASTSource(fn=kernel, signature={"src": "*fp32", "dst": "*fp32"})
+    target = GPUTarget("hip", arch, 64)
+    options = {"num_warps": 8, "waves_per_eu": waves_per_eu}
+    if achievable:
+        compiled = triton.compile(source, target=target, options=options)
+        assert compiled.metadata.shared == 64 * 1024
+        assert re.search(rf"; Occupancy: {waves_per_eu}\b", compiled.asm["amdgcn"])
+    else:
+        with pytest.raises(triton.OutOfResources, match="waves_per_eu"):
+            triton.compile(source, target=target, options=options)
+
+
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
 def test_umulhi_truncated_input(seed_type, dtype):
     from triton._C.libtriton import ir

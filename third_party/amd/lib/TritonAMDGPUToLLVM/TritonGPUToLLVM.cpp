@@ -25,6 +25,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
@@ -34,6 +36,99 @@ namespace mlir::triton {
 using namespace mlir;
 
 namespace {
+
+// Returns the [min, max] range of waves per EU that the LLVM AMDGPU backend
+// accepts for an "amdgpu-waves-per-eu" request, given the kernel's static LDS
+// usage and its flat workgroup size range. LLVM drops requests outside this
+// range with only a warning, so Triton reports them as out of resources.
+//
+// This mirrors AMDGPUSubtarget::getEffectiveWavesPerEU and
+// AMDGPUSubtarget::getOccupancyWithWorkGroupSizes in
+// llvm/lib/Target/AMDGPU/AMDGPUSubtarget.cpp, together with the IsaInfo
+// helpers they rely on. Keep them in sync.
+std::pair<unsigned, unsigned>
+computeAchievableWavesPerEU(const AMD::TargetInfo &targetInfo,
+                            unsigned waveSize, unsigned maxFlatWorkGroupSize,
+                            unsigned ldsBytes) {
+  using triton::amdgpu::ISAFamily;
+  namespace AMDGPU = llvm::AMDGPU;
+
+  AMDGPU::GPUKind kind = AMDGPU::parseArchAMDGCN(targetInfo.getBaseArch());
+  ISAFamily family = targetInfo.getISAFamily();
+  bool cuMode = targetInfo.isCuMode();
+  bool isGFX10Plus = family == ISAFamily::RDNA3 ||
+                     family == ISAFamily::RDNA4m ||
+                     family == ISAFamily::RDNA4 || family == ISAFamily::CDNA5;
+  // gfx1250 always runs a workgroup on all four SIMDs.
+  bool fullSIMDMode = family == ISAFamily::CDNA5 || !cuMode;
+
+  const unsigned numSIMDs = AMDGPU::getNumWorkGroupSIMDs(fullSIMDMode);
+  const unsigned maxWavesPerEU = AMDGPU::getMaxWavesPerEU(kind);
+  const unsigned localMemorySize =
+      AMDGPU::getLocalMemorySize(kind, fullSIMDMode);
+  const unsigned ldsGranule = std::max(AMDGPU::getLDSAllocGranule(kind), 1u);
+
+  // Triton requests "amdgpu-flat-work-group-size"="1,<maxFlatWorkGroupSize>".
+  // Out-of-range requests fall back to the default range, whose minimum is
+  // also the minimum flat workgroup size.
+  const unsigned minWGSize = AMDGPU::getMinFlatWorkGroupSize();
+  const unsigned maxWGSize =
+      std::min(maxFlatWorkGroupSize, AMDGPU::getMaxFlatWorkGroupSize());
+
+  auto getWavesPerWorkGroup = [&](unsigned wgSize) {
+    return static_cast<unsigned>(llvm::divideCeil(wgSize, waveSize));
+  };
+  auto getMaxWorkGroupsPerCU = [&](unsigned wgSize) {
+    unsigned maxWaves = maxWavesPerEU * numSIMDs;
+    unsigned wavesPerWG = getWavesPerWorkGroup(wgSize);
+    // Single-wave workgroups don't consume barrier resources.
+    if (wavesPerWG == 1)
+      return maxWaves;
+    unsigned maxBarriers = isGFX10Plus && !cuMode ? 32 : 16;
+    return std::min(maxWaves / wavesPerWG, maxBarriers);
+  };
+
+  // getOccupancyWithWorkGroupSizes(ldsBytes, {minWGSize, maxWGSize}).second.
+  // The adjustment LLVM applies to the minimum waves per CU is omitted because
+  // getEffectiveWavesPerEU only uses the maximum.
+  unsigned maxOccupancy = 1;
+  ldsBytes = llvm::alignTo(ldsBytes, ldsGranule);
+  if (unsigned maxWGsLDS = localMemorySize / std::max(ldsBytes, 1u)) {
+    auto propsFromWGSize = [&](unsigned wgSize) {
+      unsigned wavesPerWG = getWavesPerWorkGroup(wgSize);
+      unsigned wgsPerCU = std::min(getMaxWorkGroupsPerCU(wgSize), maxWGsLDS);
+      return std::make_tuple(wavesPerWG, wgsPerCU, wavesPerWG * wgsPerCU);
+    };
+    auto [minWavesPerWG, maxWGsPerCU, maxWavesPerCU] =
+        propsFromWGSize(minWGSize);
+    auto [maxWavesPerWG, minWGsPerCU, minWavesPerCU] =
+        propsFromWGSize(maxWGSize);
+    if (minWavesPerCU >= maxWavesPerCU) {
+      maxWavesPerCU = minWavesPerCU;
+    } else {
+      // Look for a potential larger group size than the minimum which
+      // increases the concurrent number of waves on the CU for the same number
+      // of concurrent workgroups on the CU.
+      const unsigned waveSlotsPerCU = maxWavesPerEU * numSIMDs;
+      unsigned leftoverSlots = waveSlotsPerCU - maxWGsPerCU * minWavesPerWG;
+      if (unsigned leftoverSlotsPerWG = leftoverSlots / maxWGsPerCU) {
+        maxWavesPerCU += maxWGsPerCU * std::min(leftoverSlotsPerWG,
+                                                ((maxWGSize - 1) / waveSize) +
+                                                    1 - minWavesPerWG);
+      }
+    }
+    maxOccupancy = std::clamp(
+        static_cast<unsigned>(llvm::divideCeil(maxWavesPerCU, numSIMDs)), 1u,
+        maxWavesPerEU);
+  }
+
+  // getEffectiveWavesPerEU: the default range LLVM accepts requests within.
+  unsigned minOccupancy =
+      std::min(static_cast<unsigned>(
+                   llvm::divideCeil(getWavesPerWorkGroup(maxWGSize), numSIMDs)),
+               maxOccupancy);
+  return {minOccupancy, maxOccupancy};
+}
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
@@ -117,6 +212,7 @@ struct ConvertTritonAMDGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
+    recordAchievableWavesPerEU(targetInfo);
 
     // Convert call and ret ops
     {
@@ -258,6 +354,25 @@ private:
     b.setInsertionPointToStart(initBlock);
     Value undef = LLVM::UndefOp::create(b, loc, arrayTy);
     LLVM::ReturnOp::create(b, loc, undef);
+  }
+
+  // The static LDS allocation is final once global_smem is sized, so record
+  // the waves-per-EU range LLVM will honor. The backend checks the requested
+  // waves_per_eu against it.
+  void recordAchievableWavesPerEU(const AMD::TargetInfo &targetInfo) {
+    ModuleOp mod = getOperation();
+    auto sharedSize = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    unsigned ldsBytes = sharedSize ? sharedSize.getInt() : 0;
+    int numWarps = triton::gpu::lookupNumWarps(mod);
+    if (auto totalNumWarps =
+            mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps"))
+      numWarps = totalNumWarps.getInt();
+    unsigned waveSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    auto [minWavesPerEU, maxWavesPerEU] = computeAchievableWavesPerEU(
+        targetInfo, waveSize, numWarps * waveSize, ldsBytes);
+    Builder b(mod.getContext());
+    mod->setAttr("ttg.min_waves_per_eu", b.getI32IntegerAttr(minWavesPerEU));
+    mod->setAttr("ttg.max_waves_per_eu", b.getI32IntegerAttr(maxWavesPerEU));
   }
 };
 
