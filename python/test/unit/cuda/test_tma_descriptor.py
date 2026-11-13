@@ -329,20 +329,35 @@ def _load_ragged_boundary(X, Y, slice_off, slice_size, RANK: tl.constexpr):
     tl.store(Y + offsets, value.reshape(128, 128))
 
 
-@pytest.mark.parametrize("rank, slice_off, slice_size", [(2, 0, 1), (3, 24, 8), (2, 32, 0)])
-def test_ragged_tma_small_allocation_boundary(rank, slice_off, slice_size):
+@pytest.mark.parametrize("rows, rank, slice_off, slice_size", [(32, 2, 0, 1), (32, 3, 24, 8), (32, 2, 32, 0),
+                                                               (64, 2, 48, 16)])
+def test_ragged_tma_small_allocation_boundary(rows, rank, slice_off, slice_size):
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Test requires Hopper or Blackwell target.")
     # Match packed activation storage, independently of matmul or FP4 arithmetic.
-    source = (torch.arange(32 * 2048, device="cuda") % 251 + 1).to(torch.uint8).reshape(32, 2048)
+    source = (torch.arange(rows * 2048, device="cuda") % 251 + 1).to(torch.uint8).reshape(rows, 2048)
     output = torch.empty((128, 128), device="cuda", dtype=torch.uint8)
     expected = torch.zeros_like(output)
     expected[:slice_size] = source[slice_off:slice_off + slice_size, :128]
     if rank == 3:
-        source = source.as_strided((1, 32, 2048), (0, 2048, 1))
+        source = source.as_strided((1, rows, 2048), (0, 2048, 1))
     with _tensor_before_unmapped_guard(source) as guarded:
         block_shape = [128, 128] if rank == 2 else [1, 128, 128]
         descriptor = create_ragged_descriptor(guarded, block_shape, ragged_dim=rank - 2)
         _load_ragged_boundary[(1, )](descriptor, output, slice_off, slice_size, rank)
         torch.cuda.synchronize()
         assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("rows, row_stride, contiguous_bytes", [
+    (32, 2048, 65536),
+    (64, 2048, 131072),
+    (64, 4096, 2048),
+])
+def test_ragged_tma_contiguous_bytes(rows, row_stride, contiguous_bytes):
+    # A virtual rank dimension and gaps between real rows cannot establish
+    # that the corresponding bytes are accessible to the descriptor.
+    storage = torch.empty((rows, row_stride), dtype=torch.uint8)
+    tensor = storage[:, :2048].unsqueeze(0)
+    desc = create_ragged_descriptor(tensor, [1, 128, 128], ragged_dim=1)
+    assert desc.contiguous_bytes == contiguous_bytes

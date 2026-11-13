@@ -29,6 +29,17 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
 
     assert len(block_shape) == rank, "block shape must have same length as tensor shape"
 
+    # Count only consecutive bytes occupied by real elements at the base.
+    # Padding or gaps between rows may be unmapped, even in a single storage.
+    contiguous_elements = 0 if 0 in tensor_shape else 1
+    for dim in reversed(range(rank)):
+        if tensor_shape[dim] == 1:
+            continue
+        if T.stride(dim) != contiguous_elements:
+            break
+        contiguous_elements *= tensor_shape[dim]
+    contiguous_bytes = contiguous_elements * T.dtype.itemsize
+
     max_int = 0x7fff0000
     billion = 0x40000000  # == 2**30
 
@@ -45,7 +56,7 @@ def create_ragged_descriptor(T, block_shape, ragged_dim=0):
     # The virtual dimensions above do not imply a large backing allocation.
     # Blackwell's large-allocation OOB mode requires 128 KiB of accessible
     # memory even for rows that the descriptor zero-fills.
-    return TensorDescriptor(T, tma_shape, tma_stride, box_shape, use_small_tma_allocation_class=True)
+    return TensorDescriptor(T, tma_shape, tma_stride, box_shape, contiguous_bytes=contiguous_bytes)
 
 
 @triton.jit
