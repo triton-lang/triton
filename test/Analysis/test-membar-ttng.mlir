@@ -712,6 +712,26 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: @wait_before_guarded_notification
+  tt.func private @wait_before_guarded_notification(%ready: !barrier, %phase: i32, %flag: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.thread_predicate
+    // CHECK-NEXT: cf.cond_br
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.atomic_rmw exch, relaxed
+    ttng.wait_barrier %ready, %phase : !barrier
+    %owner = ttg.thread_predicate <31, 3>
+    scf.if %owner {
+      ttg.thread_scope {
+        %old = tt.atomic_rmw exch, relaxed, cta, %flag, %one : (!tt.ptr<i32>, i32) -> i32
+        ttg.thread_yield
+      }
+    }
+    tt.return
+  }
+
   // Ordinary payload accesses leave the wait pending until the atomic notification.
   // CHECK-LABEL: @mbarrier_wait_before_global_notification
   tt.func private @mbarrier_wait_before_global_notification(%ready: !barrier, %phase: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %flag: !tt.ptr<i32>) {
