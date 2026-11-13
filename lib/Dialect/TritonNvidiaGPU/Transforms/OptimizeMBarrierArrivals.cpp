@@ -222,7 +222,7 @@ private:
         firstWarpBarrier = nullptr;
       }
     } else if (op->getNumRegions() || op->hasTrait<OpTrait::IsTerminator>() ||
-               hasThreadEffects(op) ||
+               membar::SMemModel::hasThreadEffects(op) ||
                allocation.getBufferId(op) != Allocation::InvalidBufferId) {
       firstWarpBarrier = nullptr;
     }
