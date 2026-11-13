@@ -78,6 +78,16 @@ def TTNG_PackedArithOp : TTNG_Op<"packed_arith", [Pure]> {
   let hasVerifier = 1;
 }
 
+def TTNG_FenceAsyncGlobalOp : TTNG_Op<"fence_async_global"> {
+  let summary = "Order generic and async proxy accesses to global memory";
+  let assemblyFormat = "attr-dict";
+  let extraClassDeclaration = [{
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
 def TTNG_FenceAsyncSharedOp : TTNG_Op<"fence_async_shared"> {
   let arguments = (ins BoolAttr:$bCluster);
 
