@@ -204,6 +204,12 @@ void TMemModel::describe(Operation *op, OpModel &model,
   // A verified scalar callback cannot access or publish TMEM.
   if (isa<MapElementwiseOp>(op))
     return;
+  if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
+    Need kind =
+        wait.getKind() == TMEMWaitKind::LOAD ? Need::WaitLoad : Need::WaitStore;
+    model.fixedAfter |= bit(kind) | bit(Need::WarpConvergence);
+    return;
+  }
   for (const MemoryAccess &access : accesses) {
     if (!isTensorMemory(access.value))
       continue;

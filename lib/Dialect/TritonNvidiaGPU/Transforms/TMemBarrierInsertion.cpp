@@ -67,6 +67,10 @@ private:
         accesses(afterBarrier, kind).empty())
       return;
     waitsBefore[op].push_back(kind);
+    completeWait(kind, pending);
+  }
+
+  void completeWait(TMEMWaitKind kind, BlockInfo &pending) {
     // A wait after lastBarrier restores its preceding accesses for publication.
     // Later accesses are already in pending.
     auto &before = accesses(beforeBarrier, kind);
@@ -131,6 +135,10 @@ private:
 
     OpModel model;
     tmem.describe(op, model, getMemoryAccesses(op));
+    if (model.fixedAfter & bit(Need::WaitLoad))
+      completeWait(TMEMWaitKind::LOAD, pending);
+    if (model.fixedAfter & bit(Need::WaitStore))
+      completeWait(TMEMWaitKind::STORE, pending);
     BlockInfo effects;
     for (const TMemAccess &access : model.tmemAccesses) {
       // Footprints preserve TMEM rows and columns; a full interval makes

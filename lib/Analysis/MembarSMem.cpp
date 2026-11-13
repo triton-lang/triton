@@ -409,13 +409,23 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
 void SMemModel::describe(Operation *op, OpModel &model,
                          ArrayRef<MemoryAccess> accesses,
                          std::optional<BarrierStages> clusterStages) {
-  // A verified callback has no scratch or payload accesses to publish.
-  if (!clusterStages && isa<triton::MapElementwiseOp>(op))
-    return;
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
-      !clusterStages && barrier && barrier.isWarp()) {
-    model.fixedAfter = warpBarrier;
-    return;
+  if (!clusterStages) {
+    // A verified callback has no scratch or payload accesses to publish.
+    if (isa<triton::MapElementwiseOp>(op))
+      return;
+    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
+      model.fixedAfter = barrier.hasLocal()
+                             ? (barrier.isWarp() ? warpBarrier : fullBarrier)
+                             : bit(Need::WarpConvergence);
+      return;
+    }
+    if (isa<ttng::TMEMWaitOp>(op)) {
+      // A scalar notification must observe completion in every issuing warp.
+      // The wait itself converges each warp and adds no memory-order demand.
+      model.sharedOut.threadSync.effectIssuers = IssuerSummary{ThreadIssuer{}};
+      model.fixedAfter = bit(Need::WarpConvergence);
+      return;
+    }
   }
 
   auto scratchId = allocation.getBufferId(op);
