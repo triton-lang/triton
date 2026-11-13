@@ -244,6 +244,7 @@ def make_tensordesc_arg(arg, metadata, _):
         )
     else:
         # Tiled mode - use existing tiled descriptor fill function
+        contiguous_bytes = getattr(arg, "contiguous_bytes", None)
         cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
             arg.base.data_ptr(),
             swizzle,
@@ -253,6 +254,8 @@ def make_tensordesc_arg(arg, metadata, _):
             expanded_shape,
             strides,
             padding,
+            contiguous_bytes is not None,
+            contiguous_bytes or 0,
         )
 
     return [cu_tensor_map, *shape, *strides]

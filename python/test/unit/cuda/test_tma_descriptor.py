@@ -1,4 +1,6 @@
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
+import ctypes
+from types import SimpleNamespace
 from math import prod
 import pytest
 import torch
@@ -212,3 +214,150 @@ def test_fp6_tma_store_padded_bytes(block_m, fmt, dtype, host, with_allocator):
     assert "cp.async.bulk.tensor.2d.global.shared" in kernel.asm["ptx"]
     if host:
         assert kernel.metadata.global_scratch_size == 0
+
+
+class _VmmLocation(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("id", ctypes.c_int)]
+
+
+class _VmmAllocationProp(ctypes.Structure):
+    # CUmemAllocationProp_v1 from cuda.h. All allocation flags stay zero.
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("requestedHandleTypes", ctypes.c_int),
+        ("location", _VmmLocation),
+        ("win32HandleMetaData", ctypes.c_void_p),
+        ("allocFlags", ctypes.c_ubyte * 8),
+    ]
+
+
+class _VmmAccessDesc(ctypes.Structure):
+    _fields_ = [("location", _VmmLocation), ("flags", ctypes.c_int)]
+
+
+@contextmanager
+def _tensor_before_unmapped_guard(source):
+    """Copy a packed activation immediately before an unmapped CUDA VMM page.
+
+    Unlike a slice of a Torch allocation, this cannot borrow accessible padding
+    from the caching allocator. No CUDA extension or cuda-python is required.
+    The yielded tensor interface is borrowed and must not outlive this context.
+    """
+    assert source.is_cuda and source.dtype == torch.uint8 and source.is_contiguous()
+    assert source.numel() > 0 and source.numel() % 16 == 0
+    try:
+        driver = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        pytest.skip("CUDA VMM guard test requires the Linux CUDA driver")
+
+    ptr = ctypes.c_uint64
+    size = ctypes.c_size_t
+    pointer = ctypes.POINTER
+    signatures = {
+        "cuCtxGetDevice": [pointer(ctypes.c_int)],
+        "cuDeviceGetAttribute": [pointer(ctypes.c_int), ctypes.c_int, ctypes.c_int],
+        "cuMemGetAllocationGranularity": [pointer(size), pointer(_VmmAllocationProp), ctypes.c_int],
+        "cuMemAddressReserve": [pointer(ptr), size, size, ptr, ctypes.c_uint64],
+        "cuMemCreate": [pointer(ptr), size, pointer(_VmmAllocationProp), ctypes.c_uint64],
+        "cuMemMap": [ptr, size, size, ptr, ctypes.c_uint64],
+        "cuMemSetAccess": [ptr, size, pointer(_VmmAccessDesc), size],
+        "cuMemcpyDtoDAsync_v2": [ptr, ptr, size, ctypes.c_void_p],
+        "cuMemUnmap": [ptr, size],
+        "cuMemRelease": [ptr],
+        "cuMemAddressFree": [ptr, size],
+    }
+    for name, arguments in signatures.items():
+        getattr(driver, name).argtypes = arguments
+        getattr(driver, name).restype = ctypes.c_int
+
+    def check(name, *args):
+        result = getattr(driver, name)(*args)
+        if result:
+            raise RuntimeError(f"{name} failed with CUDA driver error {result}")
+
+    with torch.cuda.device(source.device), ExitStack() as resources:
+
+        def release_on_exit(function, *args):
+
+            def release(exc_type, exc, traceback):
+                try:
+                    function(*args)
+                except RuntimeError:
+                    # Still release every resource without hiding the first CUDA error.
+                    if exc_type is None:
+                        raise
+
+            resources.push(release)
+
+        device_id, supported = ctypes.c_int(), ctypes.c_int()
+        check("cuCtxGetDevice", ctypes.byref(device_id))
+        # CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED = 102.
+        check("cuDeviceGetAttribute", ctypes.byref(supported), 102, device_id)
+        if not supported.value:
+            pytest.skip("device does not support CUDA virtual memory management")
+        # PINNED allocation, DEVICE location, no shareable handle requested.
+        location = _VmmLocation(1, device_id.value)
+        prop = _VmmAllocationProp(type=1, location=location)
+        granularity = size()
+        check("cuMemGetAllocationGranularity", ctypes.byref(granularity), ctypes.byref(prop), 0)
+        mapped_bytes = triton.cdiv(source.numel(), granularity.value) * granularity.value
+        reserved_bytes = mapped_bytes + granularity.value
+        address, handle = ptr(), ptr()
+        check("cuMemAddressReserve", ctypes.byref(address), reserved_bytes, 0, 0, 0)
+        release_on_exit(check, "cuMemAddressFree", address, reserved_bytes)
+        check("cuMemCreate", ctypes.byref(handle), mapped_bytes, ctypes.byref(prop), 0)
+        release_on_exit(check, "cuMemRelease", handle)
+        check("cuMemMap", address, mapped_bytes, 0, handle, 0)
+        release_on_exit(check, "cuMemUnmap", address, mapped_bytes)
+        access = _VmmAccessDesc(location, 3)  # CU_MEM_ACCESS_FLAGS_PROT_READWRITE.
+        check("cuMemSetAccess", address, mapped_bytes, ctypes.byref(access), 1)
+        tensor_address = address.value + mapped_bytes - source.numel()
+        release_on_exit(torch.cuda.synchronize, source.device)
+        check("cuMemcpyDtoDAsync_v2", tensor_address, source.data_ptr(), source.numel(),
+              torch.cuda.current_stream(source.device).cuda_stream)
+        yield SimpleNamespace(shape=source.shape, dtype=source.dtype, stride=source.stride,
+                              data_ptr=lambda: tensor_address)
+
+
+@triton.jit
+def _load_ragged_boundary(X, Y, slice_off, slice_size, RANK: tl.constexpr):
+    if RANK == 2:
+        value = load_ragged(X, slice_off, slice_size, [0, 0])
+    else:
+        value = load_ragged(X, slice_off, slice_size, [0, 0, 0], ragged_dim=1)
+    offsets = tl.arange(0, 128)[:, None] * 128 + tl.arange(0, 128)[None, :]
+    tl.store(Y + offsets, value.reshape(128, 128))
+
+
+@pytest.mark.parametrize("rows, rank, slice_off, slice_size", [(32, 2, 0, 1), (32, 3, 24, 8), (32, 2, 32, 0),
+                                                               (64, 2, 48, 16)])
+def test_ragged_tma_small_allocation_boundary(rows, rank, slice_off, slice_size):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Test requires Hopper or Blackwell target.")
+    # Match packed activation storage, independently of matmul or FP4 arithmetic.
+    source = (torch.arange(rows * 2048, device="cuda") % 251 + 1).to(torch.uint8).reshape(rows, 2048)
+    output = torch.empty((128, 128), device="cuda", dtype=torch.uint8)
+    expected = torch.zeros_like(output)
+    expected[:slice_size] = source[slice_off:slice_off + slice_size, :128]
+    if rank == 3:
+        source = source.as_strided((1, rows, 2048), (0, 2048, 1))
+    with _tensor_before_unmapped_guard(source) as guarded:
+        block_shape = [128, 128] if rank == 2 else [1, 128, 128]
+        descriptor = create_ragged_descriptor(guarded, block_shape, ragged_dim=rank - 2)
+        _load_ragged_boundary[(1, )](descriptor, output, slice_off, slice_size, rank)
+        torch.cuda.synchronize()
+        assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("rows, row_stride, contiguous_bytes", [
+    (32, 2048, 65536),
+    (64, 2048, 131072),
+    (64, 4096, 2048),
+])
+def test_ragged_tma_contiguous_bytes(rows, row_stride, contiguous_bytes):
+    # A virtual rank dimension and gaps between real rows cannot establish
+    # that the corresponding bytes are accessible to the descriptor.
+    storage = torch.empty((rows, row_stride), dtype=torch.uint8)
+    tensor = storage[:, :2048].unsqueeze(0)
+    desc = create_ragged_descriptor(tensor, [1, 128, 128], ragged_dim=1)
+    assert desc.contiguous_bytes == contiguous_bytes
