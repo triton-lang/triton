@@ -234,7 +234,7 @@ public:
       info->barriers.push_back(
           {copyOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
-           /*txCount=*/-static_cast<int>(copyOp.getNumBytes())});
+           /*txCount=*/-static_cast<int>(copyOp.getNumBytesPerCTA())});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(

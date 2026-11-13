@@ -1144,7 +1144,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %dst = ttg.local_alloc : () -> !dst
     %bar = ttg.local_alloc : () -> !bar
     ttng.init_barrier %bar, 1 : !bar
-    // CHECK: ttng.barrier_expect
+    // CHECK: ttng.init_barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.barrier_expect
     // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
     // CHECK-NEXT: ttng.wait_barrier
     ttng.barrier_expect %bar, 10240, %true : !bar

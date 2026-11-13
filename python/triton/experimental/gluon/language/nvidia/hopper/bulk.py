@@ -8,31 +8,37 @@ __all__ = ["async_load"]
 
 
 @builtin
-def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _semantic=None):
+def async_load(smem, pointer, num_elements, barrier, pred=True, multicast=False, _semantic=None):
     """Copy contiguous global-memory ranges to shared memory asynchronously.
 
     Requires compute capability 9.0+ and PTX 8.6+. ``pointer`` and ``pred``
     are scalars; both copy addresses must be 16-byte aligned. Each CTA copies
-    a contiguous physical range, preserving byte order without swizzling or
-    gathering. Layouts use their canonical linear mapping; views with holes
-    or intervening padding are unsupported.
+    a contiguous physical range. Swizzled destination layouts are supported,
+    but the source must already have the desired physical ordering: the copy
+    itself does not swizzle or gather. Padded and partitioned layouts, and
+    views with holes, are unsupported.
 
-    ``num_bytes`` is a positive compile-time multiple of 16, at most
-    ``smem.nbytes_per_cta``. Source tile ``i`` starts at byte offset
-    ``i * smem.nbytes_per_cta`` from ``pointer``, even for partial copies.
+    ``num_elements`` counts destination elements across all distinct CTA tiles,
+    excluding replicas, and must be a positive compile-time integer at most
+    ``smem.numel``. The total is split equally between those tiles, and each
+    per-CTA byte count must be a multiple of 16. If there are ``T`` distinct
+    tiles, source tile ``i`` starts at element ``i * num_elements // T``,
+    including for partial copies. Thus the source is one contiguous range.
     Tiles follow increasing CTA-id order with replicated bits omitted:
     replicas read the same range, or one representative multicasts to them
     and their barriers when ``multicast=True``.
 
-    Only the ``num_bytes`` prefix is copied, but compiler dependencies and
+    Only the per-CTA prefix is copied, but compiler dependencies and
     ConSan cover the entire destination view. Use sliced views to reuse
     other parts of the allocation independently.
 
     Use separate completion barriers in each CTA, as returned by
     ``mbarrier.allocate_mbarrier()``; shared logical barriers are unsupported.
-    Initialize the barrier, then call ``mbarrier.expect(barrier, num_bytes)``
-    with the same predicate as the copy. Wait on its current phase before
-    reading or reusing the destination, modifying the source, or invalidating
+    Initialize the barrier, then call ``mbarrier.expect(barrier, bytes_per_cta)``
+    with the same predicate as the copy, where
+    ``bytes_per_cta = num_elements * smem.nbytes_per_cta // smem.numel``.
+    Wait on its current phase before reading or reusing the destination,
+    modifying the source, or invalidating
     the barrier. This wait makes the copy visible to ordinary shared accesses.
     Before a multicast write, join the cluster after prior destination
     accesses, including other CTAs' reads from a previous iteration;
@@ -45,13 +51,16 @@ def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _s
     Args:
         smem: Destination shared-memory descriptor.
         pointer: Scalar global-memory pointer.
-        num_bytes: Compile-time integer byte count.
+        num_elements: Compile-time total number of destination elements.
         barrier: Completion mbarrier.
         pred: Scalar predicate. Defaults to True.
         multicast: Multicast to replicated CTAs. Defaults to False.
     """
-    num_bytes = _unwrap_if_constexpr(num_bytes)
-    _check(isinstance(num_bytes, int), lambda: "num_bytes must be a compile-time integer")
+    num_elements = _unwrap_if_constexpr(num_elements)
+    _check(isinstance(num_elements, int), lambda: "num_elements must be a compile-time integer")
+    num_bytes = num_elements * smem.dtype.primitive_bitwidth // 8
+    _check(0 < num_elements <= smem.numel, lambda: "num_elements must be positive and fit in the destination view")
+    _check(num_bytes <= 0x7fffffff, lambda: "total byte count must fit in a signed 32-bit integer")
     pointer = _semantic.to_tensor(pointer)
     pred = _semantic.to_tensor(pred)
     _check(pointer.type.is_ptr(), lambda: "pointer must be a scalar global-memory pointer")

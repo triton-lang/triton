@@ -2152,8 +2152,8 @@ def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.con
     smem = gl.allocate_shared_memory(gl.int32, [BLOCK], shared, gl.full((BLOCK, ), -1, gl.int32, layout))
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
-    hopper.mbarrier.expect(bar, WORDS * 4, pred=take_copy)
-    hopper.bulk.async_load(smem, src + OFFSET, WORDS * 4, bar, pred=take_copy, multicast=MULTICAST)
+    hopper.mbarrier.expect(bar, WORDS * smem.nbytes_per_cta // smem.numel, pred=take_copy)
+    hopper.bulk.async_load(smem, src + OFFSET, WORDS, bar, pred=take_copy, multicast=MULTICAST)
     hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
     gl.store(out + gl.arange(0, BLOCK, layout), smem.load(layout))
     hopper.mbarrier.invalidate(bar)
@@ -2171,16 +2171,15 @@ def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy, cga, 
     src = torch.arange(block + 8, device="cuda", dtype=torch.int32)
     out = torch.empty(block, device="cuda", dtype=torch.int32)
     before = _shadow_cells_for_tensor(src)
-    _bulk_shadow_kernel[(1, )](src, out, take_copy, words, offset, cga, block, multicast, num_ctas=2**len(cga))
+    _bulk_shadow_kernel[(1, )](src, out, take_copy, words * tiles, offset, cga, block, multicast, num_ctas=2**len(cga))
     torch.cuda.synchronize()
     after = _shadow_cells_for_tensor(src)
     changed = torch.zeros(block + 8, dtype=torch.bool)
     if take_copy:
-        for tile in range(tiles):
-            changed[offset + tile * 32:offset + tile * 32 + words] = True
+        changed[offset:offset + tiles * words] = True
     _assert_shadow_mask([before], [after], changed[None, :], access_kind="read")
     expected = torch.full_like(out, -1)
     if take_copy:
         for tile in range(tiles):
-            expected[tile * 32:tile * 32 + words] = src[offset + tile * 32:offset + tile * 32 + words]
+            expected[tile * 32:tile * 32 + words] = src[offset + tile * words:offset + tile * words + words]
     torch.testing.assert_close(out, expected)

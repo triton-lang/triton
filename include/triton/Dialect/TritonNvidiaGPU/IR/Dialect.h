@@ -66,7 +66,7 @@ struct BulkCopyLayout {
   unsigned splitMask;
   unsigned broadcastMask;
 };
-FailureOr<BulkCopyLayout> getBulkCopyLayout(gpu::MemDescType type);
+BulkCopyLayout getBulkCopyLayout(gpu::MemDescType type);
 
 struct PackedArithTypeInfo {
   llvm::StringLiteral suffix;
