@@ -271,7 +271,7 @@ public:
 private:
   llvm::SmallPtrSet<Operation *, 4> returnsWithExitBarrier;
 
-  BarrierStages getBarrierStages(Operation *op) override {
+  static BarrierStages getClusterBarrierStages(Operation *op) {
     BarrierStages stages;
     if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op))
       stages.beforeMemoryEffects = !barrier.getRelaxed();
@@ -297,7 +297,8 @@ private:
       }
       return;
     }
-    updateMemoryEffects(op, membarInfo, funcMap, builder, /*cluster=*/true);
+    updateMemoryEffects(op, membarInfo, funcMap, builder,
+                        getClusterBarrierStages(op));
   }
 };
 

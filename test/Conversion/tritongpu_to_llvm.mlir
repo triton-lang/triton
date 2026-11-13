@@ -2233,6 +2233,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
     // CHECK: llvm.return
     %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
     tt.return %old : f32
@@ -2244,6 +2246,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     // CHECK: atom.global.relaxed.gpu.cas.b64
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
     // CHECK-COUNT-2: nvvm.shfl.sync idx
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.barrier
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
     // CHECK: llvm.return
     %old = tt.atomic_cas relaxed, gpu, %ptr, %cmp, %val : (!tt.ptr<i64>, i64, i64) -> i64
@@ -2271,6 +2275,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
     // CHECK: llvm.return
     %old = tt.atomic_rmw fadd, relaxed, cta, %ptr, %val, %mask : (!tt.ptr<bf16>, bf16, i1) -> bf16
     tt.return %old : bf16
@@ -2292,6 +2298,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
     // CHECK: llvm.return
     %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<8x!tt.ptr<i32>, #warpScalar>, tensor<8xi32, #warpScalar>) -> tensor<8xi32, #warpScalar>
     tt.return %old : tensor<8xi32, #warpScalar>
@@ -2306,6 +2314,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
     // CHECK: [[SOURCE_LANE:%.*]] = llvm.and {{.*}}, [[KEEP_BITS]]
     // CHECK: nvvm.shfl.sync idx {{.*}}, [[SOURCE_LANE]],
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: nvvm.barrier
     // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
     // CHECK: llvm.return
     %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<i32>, #partialLanes>, tensor<32xi32, #partialLanes>) -> tensor<32xi32, #partialLanes>

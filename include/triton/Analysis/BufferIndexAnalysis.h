@@ -6,13 +6,14 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include <memory>
 #include <vector>
 
 namespace mlir {
 
 class Block;
+class CFGLoopInfo;
 class Operation;
 struct AllocationSlice;
 struct BufferIndexExpr;
@@ -75,12 +76,16 @@ public:
   /// dominance region. Restricted to the analyzed function-level CFG.
   bool entersLoop(Operation *terminator) const;
 
+  /// Natural loops in a multi-block region. Single-block regions have no
+  /// dominance tree.
+  const CFGLoopInfo *getLoopInfo(Region *region) const;
+
 private:
   void attachBufferIndex(AllocationSlice &slice, Value value);
   const BufferIndexExpr *intern(BufferIndexExpr expr);
 
   DominanceInfo dominanceInfo;
-  llvm::SmallPtrSet<Block *, 4> loopHeaders;
+  mutable DenseMap<Region *, std::unique_ptr<CFGLoopInfo>> loops;
   bool hasReducibleCFG;
   std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
 };

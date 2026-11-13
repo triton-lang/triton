@@ -5,7 +5,7 @@
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/MembarPlacement.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -54,9 +54,10 @@ struct TestMembarPass
     if (failed(triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
             allocation, computeCapability)))
       return signalPassFailure();
-    ModuleMembarAnalysis membarPass(allocation,
-                                    mlir::triton::NVIDIA::canSkipBarSync);
-    membarPass.runAnalysis<MembarAnalysis>(*regions);
+    if (failed(triton::membar::placeBarriers(
+            allocation, *regions, triton::NVIDIA::canSkipBarSync,
+            triton::membar::PlacementMode::Shared)))
+      signalPassFailure();
   }
 };
 
