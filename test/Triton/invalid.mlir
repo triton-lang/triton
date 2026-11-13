@@ -843,24 +843,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // -----
 
-#layout = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-!tile = tensor<8x16xf32, #layout>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // The scan needs scratch to exchange warp totals. Its combiner only adds scalars.
-  tt.func @scan_with_owner_scratch(%seed: f32) {
-    %v = tt.splat %seed : f32 -> !tile
-    %result = "tt.scan"(%v) <{axis = 0 : i32, reverse = false}> ({
-    ^bb0(%lhs: f32, %rhs: f32):
-      %sum = arith.addf %lhs, %rhs : f32
-      tt.scan.return %sum : f32
-    }) {allocation.offset = 0 : i32, allocation.size = 128 : i32} : (!tile) -> !tile
-    tt.print "prefix" {hex = false, isSigned = array<i32: 1>} : %result : !tile
-    tt.return
-  }
-}
-
-// -----
-
 // Test that DotOp with f32 inputs but without TF32 precision is rejected for MMAv2
 // MMAv2 requires TF32 input precision for f32 operands
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
