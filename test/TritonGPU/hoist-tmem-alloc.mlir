@@ -531,6 +531,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A load without a dependency token has no token to forward to the alloc.
+  // CHECK-LABEL: @no_forward_tmem_load_without_token
+  // CHECK: %[[VAL:.+]], %{{.*}} = ttng.tmem_load %{{.*}}[]
+  // CHECK: ttng.tmem_store %[[VAL]]
+  // POST-PIPELINE-LABEL: @no_forward_tmem_load_without_token
+  // POST-PIPELINE: %[[POST_VAL:.+]], %{{.*}} = ttng.tmem_load %{{.*}}[]
+  // POST-PIPELINE: ttng.tmem_store %[[POST_VAL]]
+  tt.func public @no_forward_tmem_load_without_token(
+      %m: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token) {
+    %result, %load_token = ttng.tmem_load %m[] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    %next, %next_token = ttng.tmem_alloc %result : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    tt.return %next, %next_token : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @sink_multiple_tmem_load
   tt.func public @sink_multiple_tmem_load(%m: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %t: !ttg.async.token) -> (tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
