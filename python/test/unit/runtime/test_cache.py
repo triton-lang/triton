@@ -1451,3 +1451,70 @@ def test_module_load_unload(device, fresh_knobs):
     assert pre_compile.module is None
     # turn on garbage collector
     gc.enable()
+
+
+class _ConstexprKeyOptions:
+    def __str__(self):
+        return "opts"
+
+
+def test_compute_cache_key_distinguishes_constexpr_scalar_types():
+    # 1 == 1.0 == True under tuple equality, so the in-memory launch-key
+    # shortcut conflated those constexprs and reused whichever binary the
+    # first launch compiled (the on-disk string key keeps them apart).
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    int_key = compute_cache_key(cache, [("constexpr", 1)], _ConstexprKeyOptions())
+    float_key = compute_cache_key(cache, [("constexpr", 1.0)], _ConstexprKeyOptions())
+    bool_key = compute_cache_key(cache, [("constexpr", True)], _ConstexprKeyOptions())
+    assert len(cache) == 3
+    assert int_key == "[('constexpr', 1)]opts"
+    assert float_key == "[('constexpr', 1.0)]opts"
+    assert bool_key == "[('constexpr', True)]opts"
+    # Identical relaunches still hit the same entry.
+    assert compute_cache_key(cache, [("constexpr", 1)], _ConstexprKeyOptions()) == int_key
+    assert compute_cache_key(cache, [("constexpr", 1.0)], _ConstexprKeyOptions()) == float_key
+    assert len(cache) == 3
+
+
+def test_compute_cache_key_distinguishes_signed_zero_floats():
+    # 0.0 == -0.0 but the two launch different kernels; key floats on their
+    # repr instead of the value.
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    pos_key = compute_cache_key(cache, [("constexpr", 0.0)], _ConstexprKeyOptions())
+    neg_key = compute_cache_key(cache, [("constexpr", -0.0)], _ConstexprKeyOptions())
+    assert len(cache) == 2
+    assert pos_key == "[('constexpr', 0.0)]opts"
+    assert neg_key == "[('constexpr', -0.0)]opts"
+    assert compute_cache_key(cache, [("constexpr", -0.0)], _ConstexprKeyOptions()) == neg_key
+
+
+def test_compute_cache_key_does_not_grow_for_nan_constexprs():
+    # NaN never compares equal, so keying floats on their value would miss on
+    # every launch and grow the cache without bound. The repr key is what
+    # collapses repeated NaN constexprs onto one entry.
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    first = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
+    second = compute_cache_key(cache, [("constexpr", float("nan"))], _ConstexprKeyOptions())
+    assert first == second
+    assert len(cache) == 1
+
+
+def test_compute_cache_key_skips_constexpr_folding_without_constexprs(monkeypatch):
+    from triton.runtime import jit
+
+    def unexpected_fold(_):
+        raise AssertionError("no-constexpr launches must not scan and fold the specialization")
+
+    monkeypatch.setattr(jit, "_constexpr_specialization_key", unexpected_fold)
+    cache = {}
+    specialization = [("f32", 1), ("i32", 2)]
+    assert jit.compute_cache_key(cache, specialization, _ConstexprKeyOptions(), has_constexpr=False) == (
+        "[('f32', 1), ('i32', 2)]opts"
+    )
+    assert len(cache) == 1
