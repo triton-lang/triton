@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -289,13 +290,15 @@ triton::BarrierStages getLocalBarrierStages(Operation *op, bool hasScratch) {
 
 bool SMemModel::hasThreadEffects(Operation *op) {
   // A handoff only accesses its private scratch, modeled separately below.
-  if (isa<triton::gpu::ThreadHandoffOp>(op))
+  // Assumptions issue no memory access.
+  if (isa<triton::gpu::ThreadHandoffOp, LLVM::AssumeOp>(op))
     return false;
   // ThreadPredicateOp retains unknown effects so pending waits finish before
   // entering its restricted region, while every enclosing thread participates.
   auto effects = getEffectsRecursively(op);
   return !effects || llvm::any_of(*effects, [](const auto &effect) {
-    return !isa<triton::gpu::SharedMemory>(effect.getResource()) ||
+    return !isa<triton::gpu::SharedMemory, ttng::TensorMemory>(
+               effect.getResource()) ||
            !isa<MemoryEffects::Allocate, MemoryEffects::Free>(
                effect.getEffect());
   });
@@ -326,9 +329,10 @@ BlockInfo SMemModel::getThreadEffects(Operation *op) {
 
 void SMemModel::addThreadDemand(BlockInfo &effects, Operation *op,
                                 ArrayRef<MemoryAccess> accesses) {
-  effects.threadDemands.hasDemand = true;
   effects.threadDemands.mayNotifyPeer = mayNotifyPeer(op, accesses);
-  effects.threadDemands.hasDemandBeyondGlobalReads = !hasOnlyGlobalReads(op);
+  effects.threadDemands.kind = hasOnlyGlobalReads(op)
+                                   ? ThreadDemandKind::GlobalReadsOnly
+                                   : ThreadDemandKind::General;
   if (getThreadSyncInfo(op).requiresBefore())
     effects.threadDemands.publicationIssuers =
         IssuerSummary{getThreadIssuer(op)};
@@ -405,6 +409,9 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
 void SMemModel::describe(Operation *op, OpModel &model,
                          ArrayRef<MemoryAccess> accesses,
                          std::optional<BarrierStages> clusterStages) {
+  // A verified callback has no scratch or payload accesses to publish.
+  if (!clusterStages && isa<triton::MapElementwiseOp>(op))
+    return;
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
       !clusterStages && barrier && barrier.isWarp()) {
     model.fixedAfter = warpBarrier;
@@ -480,6 +487,9 @@ void SMemModel::describe(Operation *op, OpModel &model,
     // Final scratch reads still need to finish before a later publication.
     model.sharedOut.syncReadSlices[scratch].insert(op);
   }
+  // A diagnostic can consume a pending completion without publishing payload.
+  if (isa<triton::PrintOp, triton::AssertOp>(op))
+    model.sharedOut.threadSync.effectIssuers = {};
 }
 
 } // namespace mlir

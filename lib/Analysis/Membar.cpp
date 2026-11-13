@@ -139,9 +139,7 @@ void BlockInfo::joinThreadState(const BlockInfo &other) {
   threadSync.completion = std::max(threadSync.completion, sync.completion);
   threadSync.peerWaitNeedsSync |= sync.peerWaitNeedsSync;
   const auto &demands = other.threadDemands;
-  threadDemands.hasDemand |= demands.hasDemand;
-  threadDemands.hasDemandBeyondGlobalReads |=
-      demands.hasDemandBeyondGlobalReads;
+  threadDemands.kind = std::max(threadDemands.kind, demands.kind);
   threadDemands.publicationIssuers.join(demands.publicationIssuers);
   threadDemands.mayNotifyPeer |= demands.mayNotifyPeer;
 }
@@ -150,14 +148,14 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
                                         const BlockInfo &effects) {
   const auto &sync = pending.threadSync;
   const auto &demands = effects.threadDemands;
-  if (sync.effectIssuers.empty() || !demands.hasDemand)
+  if (sync.effectIssuers.empty() || demands.kind == ThreadDemandKind::None)
     return false;
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
       !effects.syncReadSlices.empty() || !effects.syncWriteSlices.empty();
   return sync.completion == CompletionSync::All ||
          (sync.completion == CompletionSync::Shared &&
-          (hasSharedAccesses || demands.hasDemandBeyondGlobalReads)) ||
+          (hasSharedAccesses || demands.kind == ThreadDemandKind::General)) ||
          (!demands.publicationIssuers.empty() &&
           !sync.effectIssuers.hasSameKnownIssuer(demands.publicationIssuers)) ||
          // A notification can let a peer advance a pending wait's phase.

@@ -1729,6 +1729,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %sum1 = arith.addf %sum0, %second : tensor<128x32xf16, #blockedCallDst>
     tt.return %sum1 : tensor<128x32xf16, #blockedCallDst>
   }
+
+  // A map invokes these helpers per element, including their diagnostics.
+  // CHECK-LABEL: @assert_element
+  // CHECK: tt.assert
+  // CHECK-NEXT: tt.return
+  tt.func private @assert_element(%ok: i1) -> i1 attributes {noinline = true} {
+    tt.assert %ok, "invalid element" : i1
+    tt.return %ok : i1
+  }
+
+  // CHECK-LABEL: @check_element
+  // CHECK: tt.print
+  // CHECK-NEXT: {{.*}} = tt.call @assert_element
+  // CHECK-NEXT: tt.return
+  tt.func private @check_element(%ok: i1) -> i1 attributes {noinline = true} {
+    tt.print "element" {hex = false, isSigned = array<i32: 0>} : %ok : i1
+    %checked = tt.call @assert_element(%ok) : (i1) -> i1
+    tt.return %checked : i1
+  }
+
+  // CHECK-LABEL: @map_checked_elements
+  // CHECK: tt.map_elementwise.return
+  // CHECK-NOT: ttg.barrier
+  // Order the pending copy before the print. The call needs no second barrier.
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.print
+  // CHECK-NEXT: tt.assert
+  // CHECK-NEXT: {{.*}} = tt.call @assert_element
+  tt.func @map_checked_elements(%ok: i1) {
+    %values = tt.splat %ok : i1 -> tensor<128xi1, #blockedLarge>
+    %result = "tt.map_elementwise"(%values) <{pack = 1 : i32}> ({
+    ^bb0(%element: i1):
+      %checked_element = tt.call @check_element(%element) : (i1) -> i1
+      tt.map_elementwise.return %checked_element : i1
+    }) : (tensor<128xi1, #blockedLarge>) -> tensor<128xi1, #blockedLarge>
+    ttg.async_wait {num = 0 : i32}
+    tt.print "kernel" {hex = false, isSigned = array<i32: 0>} : %ok : i1
+    tt.assert %ok, "invalid kernel input" : i1
+    %checked = tt.call @assert_element(%ok) : (i1) -> i1
+    tt.return
+  }
 }
 
 // -----

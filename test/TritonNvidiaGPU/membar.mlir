@@ -242,6 +242,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #load = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // PREP-LABEL: @map_diagnostics_before_arrival
+  // PREP: tt.map_elementwise.return
+  // PREP-NOT: ttg.barrier
+  // PREP: ttng.arrive_barrier {{.*}}, 1 {per_warp}
+  // FOLD-LABEL: @map_diagnostics_before_arrival
+  // FOLD: tt.map_elementwise.return
+  // FOLD-NOT: ttg.barrier
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @map_diagnostics_before_arrival(%values: tensor<128xi1, #store>) {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    %result = "tt.map_elementwise"(%values) <{pack = 1 : i32}> ({
+    ^bb0(%ok: i1):
+      tt.print "element" {hex = false, isSigned = array<i32: 0>} : %ok : i1
+      tt.assert %ok, "invalid element" : i1
+      tt.map_elementwise.return %ok : i1
+    }) : (tensor<128xi1, #store>) -> tensor<128xi1, #store>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
   // Distributed publication leaves the cross-warp payload dependency pending.
   // PREP-LABEL: @distributed_arrival_keeps_payload_hazard
   // PREP: ttng.init_barrier %[[BAR:.*]], 1 :

@@ -171,6 +171,13 @@ enum class CompletionSync : uint8_t {
 /// Completion scope, refined by a backend before joining pending state.
 using CompletionScopeFn = CompletionSync (*)(Operation *, CompletionSync);
 
+enum class ThreadDemandKind : uint8_t {
+  None,
+  GlobalReadsOnly,
+  // Base membar demands not proven to have only global-read effects.
+  General
+};
+
 struct BlockInfo {
   using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
 
@@ -186,9 +193,7 @@ struct BlockInfo {
     bool operator==(const ThreadSyncState &) const = default;
   } threadSync;
   struct ThreadDemandState {
-    bool hasDemand = false;
-    // Base membar demands not proven to have only global-read effects.
-    bool hasDemandBeyondGlobalReads = false;
+    ThreadDemandKind kind = ThreadDemandKind::None;
     // Only publication demands contribute to this issuer summary.
     IssuerSummary publicationIssuers;
     bool mayNotifyPeer = false;
