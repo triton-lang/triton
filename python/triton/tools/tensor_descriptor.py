@@ -13,10 +13,13 @@ class TensorDescriptor:
     round_f32_to_tf32: bool = False
     fp6_format: str | None = None
     # Virtual shapes need not describe the size of the underlying allocation.
-    # Request the safe TMA out-of-bounds address-generation mode in that case.
-    use_small_tma_allocation_class: bool = False
+    # For virtual shapes, give the contiguous byte count proven by the real
+    # tensor at its base. The backend may also verify the owning allocation.
+    contiguous_bytes: int | None = None
 
     def __post_init__(self):
+        if self.contiguous_bytes is not None:
+            assert self.contiguous_bytes >= 0, "contiguous byte count must be nonnegative"
         rank = len(self.shape)
         assert len(self.strides) == rank, f"rank mismatch: {self}"
         assert len(self.block_shape) == rank, f"rank mismatch: {self}"
