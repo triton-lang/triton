@@ -246,17 +246,23 @@ def _create_row_idxs(Mask, stride_mr, stride_m0,  #
     tl.static_assert(BLOCK_M % BLOCK_S0 == 0)
     S0_BLK_CNT: tl.constexpr = BLOCK_M // BLOCK_S0
 
+    grid_batch = tl.cdiv(S0, BLOCK_M)
+    batch = tl.program_id(0) // grid_batch
+    pid = tl.program_id(0) % grid_batch
+    row_offset = batch.to(tl.int64) * S0
+
     if UnpaddedBatchSize is not None:
         unpadded = tl.load(UnpaddedBatchSize).to(tl.int32)
-        S0 = unpadded
+        S0 = tl.minimum(S0, unpadded - row_offset)
 
     # E.g., if we have 5 CTA's, then CTA #0 reads S0 blocks (0, 5, 10, ...),
     # #1 reads S0 blocks (1, 6, 11, ...), and so on, so that heaviest rows from
     # each CTA ends up at the top of RowIdxs.
-    S0_blk_idxs = tl.arange(0, S0_BLK_CNT) * tl.num_programs(0) + tl.program_id(0)
+    S0_blk_idxs = tl.arange(0, S0_BLK_CNT) * grid_batch + pid
     idxs = S0_blk_idxs[:, None] * BLOCK_S0 + tl.arange(0, BLOCK_S0)[None, :]
     idxs = idxs.ravel()
     valid = idxs < S0
+    idxs += row_offset
 
     k_idxs = tl.arange(0, BLOCK_K)
     mask = tl.load(
@@ -347,7 +353,7 @@ class ReduceForwardCommonArgs:
 
 
 @triton.jit(noinline=True)
-def _reduce_forward_inner(pid_s0, pid_s1,
+def _reduce_forward_inner(row_start, pid_s1,
                           args,
                           BLOCK_S0: tl.constexpr,
                           USE_STATIC_LOOP: tl.constexpr,
@@ -409,13 +415,13 @@ def _reduce_forward_inner(pid_s0, pid_s1,
     tl.static_assert(XMx is None or BLOCK_X_S1 % 32 == 0)
     BLOCK_X_SMX1: tl.constexpr = tl.cdiv(BLOCK_X_S1, 32)
     BLOCK_Y_SMX1: tl.constexpr = tl.cdiv(BLOCK_Y_S1, 1 if Y_MX_BLOCK_SIZE is None else Y_MX_BLOCK_SIZE)
-    offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
+    offs_s0 = row_start + tl.arange(0, BLOCK_S0)
     valid_s0 = offs_s0 < S0
     x_flex_scale = load_scale(XFlex)
 
     USE_BITMAP: tl.constexpr = ActiveInputCounts is not None
     if USE_BITMAP:
-        offs_s0 = tl.load(RowIdxs + offs_s0, mask=valid_s0, other=0)
+        offs_s0 = tl.load(RowIdxs + offs_s0, mask=valid_s0, other=0).to(tl.int64)
 
         # Construct mask bitmap: we know each output row has at most LIMIT
         # active input rows, but they may be distributed over K (> LIMIT) rows.
@@ -496,7 +502,8 @@ def _reduce_forward_inner(pid_s0, pid_s1,
             y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
             tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
         else:
-            y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
+            flex_mask = valid_s0[:, None] & valid_y_s1[None, :]
+            y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, flex_mask, Y, Y_FLEX_SATURATE_INF)
             # TODO (phil): keeping for backward compatibility, but will remove !
             if POSTPROCESS_FN2 is not None:
                 y = POSTPROCESS_FN2(y, *postprocess_fn2_args, target_dtype=Y.dtype.element_ty)
@@ -525,6 +532,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
                     XGlobalScale,  # x global scale
                     YFlexExpected, YFlexActual, YFlexChecksum,
                     Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
+                    Y_FLEX_BATCH_STRIDES: tl.constexpr,
                     ActiveInputCounts, RowIdxs,  #
                     BROADCAST_R: tl.constexpr,  #
                     BROADCAST_S0: tl.constexpr,  #
@@ -548,6 +556,16 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     grid_subtile: tl.constexpr = 2 if SUBTILE_HEAVY_BLOCKS else 1
 
     pid = tl.program_id(0)
+    row_offset = 0
+    if Y_FLEX_BATCH_STRIDES is not None:
+        grid_batch = grid_m * grid_n * grid_subtile
+        batch = pid // grid_batch
+        pid %= grid_batch
+        row_offset = batch.to(tl.int64) * S0
+        YFlexExpected += batch * Y_FLEX_BATCH_STRIDES[0]
+        if YFlexActual is not None:
+            YFlexActual += batch * Y_FLEX_BATCH_STRIDES[1]
+
     if (RowIdxs is not None) and (CHAIN_FACTOR > 1):
         # Run heavy blocks first: seems like it's better only with chaining.
         pid_s0 = pid // (grid_n * grid_subtile)
@@ -559,12 +577,14 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         pid_s0 = pid // grid_subtile
     subtile_id = pid % grid_subtile
 
-    offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
+    # Use absolute row indices so every tensor keeps its original base pointer.
+    row_start = row_offset + pid_s0 * BLOCK_S0
+    S0 += row_offset
     if UnpaddedBatchSize is not None:
-        unpadded = tl.load(UnpaddedBatchSize).to(tl.int32)
-        if pid_s0 * BLOCK_S0 >= unpadded:
+        S0 = tl.minimum(S0, tl.load(UnpaddedBatchSize).to(tl.int32))
+        if row_start >= S0:
             return
-        S0 = unpadded
+    offs_s0 = row_start + tl.arange(0, BLOCK_S0)
     valid_s0 = offs_s0 < S0
 
     common_args = ReduceForwardCommonArgs(
@@ -605,7 +625,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         if max_actives <= 1:
             if subtile_id == 0:
                 _reduce_forward_inner(
-                    pid_s0, pid_s1,
+                    row_start, pid_s1,
                     common_args,  #
                     BLOCK_S0,
                     USE_STATIC_LOOP=True,
@@ -615,7 +635,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         elif max_actives == 2:
             if subtile_id == 0:
                 _reduce_forward_inner(
-                    pid_s0, pid_s1,
+                    row_start, pid_s1,
                     common_args,  #
                     BLOCK_S0,
                     USE_STATIC_LOOP=True,
@@ -625,7 +645,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         elif max_actives == 3:
             if subtile_id == 0:
                 _reduce_forward_inner(
-                    pid_s0, pid_s1,
+                    row_start, pid_s1,
                     common_args,  #
                     BLOCK_S0,
                     USE_STATIC_LOOP=True,
@@ -638,7 +658,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
         # this because otherwise the last _reduce_forward_inner may require a
         # lot more registers than others, reducing occupancy for everyone.
         _reduce_forward_inner(
-            pid_s0 * 2 + subtile_id, pid_s1,
+            row_start + subtile_id * (BLOCK_S0 // 2), pid_s1,
             common_args,  #
             BLOCK_S0 // 2,
             USE_STATIC_LOOP=USE_STATIC_LOOP,
@@ -647,7 +667,7 @@ def _reduce_forward(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x
     else:
         if subtile_id == 0:
             _reduce_forward_inner(
-                pid_s0, pid_s1,
+                row_start, pid_s1,
                 common_args,  #
                 BLOCK_S0,
                 USE_STATIC_LOOP=USE_STATIC_LOOP,
@@ -706,6 +726,10 @@ def reduce_forward(
           a value of 1 is used everywhere.
         - unpadded_batch_size: Optional[torch.Tensor]
           Optional single-element tensor specifying the number of entries to reduce along the first dimension.
+        - y_flex: Optional[OutFlexData]
+          Output flexpoint scales. Multiple expected scales divide the output's
+          first dimension into equally sized, consecutive batches. Actual scales,
+          when provided, have one entry per batch; the checksum remains global.
 
     Returns:
         - output: torch.Tensor
@@ -724,7 +748,6 @@ def reduce_forward(
             raise ValueError("reduction over the micro-scaled dimension not supported")
         assert x.shape[:-1] == x_mxscale.shape[:-1]
         assert triton.cdiv(x.shape[-1], 32) * 32 == x_mxscale.shape[-1] * 32
-    # assert not y_flex.is_per_batch
     if postprocess_fn1 is None:
         postprocess_fn1 = PostprocessFn()
     if postprocess_fn2 is None:
@@ -744,6 +767,13 @@ def reduce_forward(
     nonred = tuple(d for d in dims if d != dim)
     S0, X_S1 = x.shape[nonred[0]], x.shape[nonred[1]]
     Y_S1 = X_S1 // postprocess_fn1.specs.reduction_n
+    scales = (y_flex.expected_scale, y_flex.actual_scale)
+    batches = 1 if scales[0] is None else scales[0].numel()
+    if not batches or S0 % batches:
+        raise ValueError("output rows must be divisible by a nonzero number of flexpoint batches")
+    if batches > 1 and any(scale is not None and scale.shape != (batches,) for scale in scales):
+        raise ValueError("expected and actual flexpoint scales must have one entry per batch")
+    rows_per_batch = S0 // batches
     if y is None:
         y = torch.empty((S0, Y_S1 // y_value_pack_factor), device=x.device, dtype=y_dtype)
     assert y.shape == (S0, Y_S1 // y_value_pack_factor), f"y.shape: {y.shape} != {(S0, Y_S1 // y_value_pack_factor)}"
@@ -774,13 +804,13 @@ def reduce_forward(
     if opt_flags is None:
         opt_flags = _select_reduce_forward_config(
             x.dtype,
-            S0, Y_S1, postprocess_fn1.specs.reduction_n, K,  #
+            rows_per_batch, Y_S1, postprocess_fn1.specs.reduction_n, K,  #
             x_mxscale is not None or y_has_mx,
             mask_chainable,
         )
         _check_all_constraints_satisfied(opt_flags)
     block_y_s1_chain = opt_flags.block_y_s1 * opt_flags.chain_factor
-    grid = triton.cdiv(S0, opt_flags.block_s0) * triton.cdiv(Y_S1, block_y_s1_chain)
+    grid = triton.cdiv(rows_per_batch, opt_flags.block_s0) * triton.cdiv(Y_S1, block_y_s1_chain)
     if opt_flags.subtile_heavy_blocks:
         grid *= 2
     if y_has_mx:
@@ -802,18 +832,18 @@ def reduce_forward(
         assert S0 < 2**32  # Just in case.
         assert stride_m1 == 0
         active_input_counts = torch.empty((S0,), dtype=torch.int16, device=x.device)
-        row_idxs = torch.empty((S0,), dtype=torch.int32, device=x.device)
+        row_idxs = torch.empty((S0,), dtype=torch.uint32, device=x.device)
         block_m = opt_flags.block_s0
         num_warps = 8
 
         # Choose block_m as large as possible, while being able to load the mask.
         block_k = triton.next_power_of_2(K)
-        while (block_m * 2) * block_k <= 128 * (32 * num_warps) and S0 > block_m * 20:
+        while (block_m * 2) * block_k <= 128 * (32 * num_warps) and rows_per_batch > block_m * 20:
             block_m *= 2
-        _create_row_idxs[(triton.cdiv(S0, block_m),)](
+        _create_row_idxs[(triton.cdiv(rows_per_batch, block_m) * batches,)](
             mask, stride_mr, stride_m0,  #
             active_input_counts, row_idxs,  #
-            S0, unpadded_batch_size,  #
+            rows_per_batch, unpadded_batch_size,  #
             K,
             BLOCK_M=block_m,
             BLOCK_K=block_k,
@@ -823,7 +853,7 @@ def reduce_forward(
     else:
         active_input_counts = row_idxs = None
 
-    reduce_kernel[(grid,)](
+    reduce_kernel[(grid * batches,)](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
         y_flex.reinterpret(y), y.stride(0), y.stride(1),  #
@@ -831,11 +861,12 @@ def reduce_forward(
         mask, stride_mr, stride_m0, stride_m1,  #
         scale, stride_sr, stride_s0, stride_s1,  #
         unpadded_batch_size,  #
-        K, S0, X_S1, Y_S1,  #
+        K, rows_per_batch, X_S1, Y_S1,  #
         triton.next_power_of_2(K),  #
         *postprocess_fn1.fn_args, *postprocess_fn2.fn_args,  #
-        x_flex.scale, x_global_scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,  #
+        x_flex.scale, x_global_scale, *scales, y_flex.checksum_scale,  #
         y_flex_saturate_inf,  #
+        tuple(0 if scale is None else scale.stride(0) for scale in scales) if batches > 1 else None,  #
         active_input_counts, row_idxs,  #
         BROADCAST_R=(stride_mr == 0),  #
         BROADCAST_S0=(stride_m0 == 0),  #
@@ -1116,16 +1147,26 @@ class _ReduceAutograd(torch.autograd.Function):
         ctx.scale_strides = tuple(scale.stride()) if scale is not None else None
         ctx.y_has_mx = bool(y_mx is not None)
         ctx.unpadded_batch_size = unpadded_batch_size
+        ctx.save_for_backward(None if y_flex is None else y_flex.expected_scale)
 
         return y, y_mx
 
     @staticmethod
     def backward(ctx, grad_y: torch.Tensor, grad_y_mxscale: Optional[torch.Tensor] = None):
-        # We do not support grads through MX-quantized outputs (no torch compute in bwd)
+        # We do not support grads through MX-quantized outputs.
         if ctx.y_has_mx:
             raise NotImplementedError("Backward with y_mxscale (MX-quantized outputs) is not supported.")
 
-        # Allocate grad for x; (no torch compute)
+        output_scale, = ctx.saved_tensors
+        if output_scale is not None:
+            output_shape = grad_y.shape
+            if output_scale.numel() > 1:
+                batches = output_scale.numel()
+                grad_y = grad_y.reshape(batches, output_shape[0] // batches, output_shape[1])
+                output_scale = output_scale[:, None, None]
+            grad_y = (grad_y.float() / output_scale).reshape(output_shape)
+
+        # Allocate grad for x.
         dx = torch.empty(ctx.x_shape, dtype=ctx.x_dtype, device=grad_y.device)
 
         reduce_backward(
@@ -1211,8 +1252,15 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
     if postprocess_fn1 is not None:
         ret = postprocess_fn1(ret)
     if y_flex is not None:
-        y_flex.actual_scale.copy_(compute_actual_scale(ret, x_dtype, y_flex.is_per_batch))
-        ret = (ret / y_flex.expected_scale).to(x_dtype)
+        output_shape = ret.shape
+        expected_scale = y_flex.expected_scale
+        per_batch = expected_scale.numel() > 1
+        if per_batch:
+            ret = ret.reshape(expected_scale.numel(), -1, ret.shape[-1])
+            expected_scale = expected_scale[:, None, None]
+        if y_flex.actual_scale is not None:
+            y_flex.actual_scale.copy_(compute_actual_scale(ret, x_dtype, per_batch))
+        ret = (ret / expected_scale).reshape(output_shape).to(x_dtype)
     # downcast output
     ret_mxscale = None
     if x_mxscale is not None:

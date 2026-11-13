@@ -38,6 +38,21 @@ def plus_a_reduce(x, a):
     return tl.sum(y.reshape([x.shape[0], x.shape[1] // 2, 2]), axis=2)
 
 
+@pytest.mark.parametrize("scale_values", [2.0**-17, [1.0, 8.0]])
+def test_reduce_output_scale(scale_values, device):
+    scales = torch.tensor(scale_values, device=device)
+    actual_scale = torch.zeros_like(scales)
+    x = torch.ones((2, 6, 4), device=device, dtype=torch.float16, requires_grad=True)
+    input_scale = torch.full_like(x, 2.0**-17)
+    y, _ = reduce(x, dim=0, scale=input_scale, y_flex=OutFlexData(expected_scale=scales, actual_scale=actual_scale))
+    batches = scales.numel()
+    expected = (2.0**-16 / scales.reshape(batches, 1, 1)).expand(batches, 6 // batches, 4).reshape(6, 4)
+    torch.testing.assert_close(y, expected.half(), rtol=0, atol=0)
+    torch.testing.assert_close(actual_scale, torch.full_like(scales, 2.0**-16 / 65472.0))
+    y.sum().backward()
+    torch.testing.assert_close(x.grad, (expected / 2).half().expand_as(x), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("k", [4, 16])
 @pytest.mark.parametrize("scale", [0, 1, 127, 128, 255])
