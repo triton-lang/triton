@@ -883,15 +883,15 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   //   epilogue(i)
   Logue &epilogue = logues.back();
 
-  // The only external uses of epilogue outputs are in the outer yield.
-  auto epilogueOutputs = epilogue.getOutputs();
+  // Commit every outer loop-carried value only on the last inner iteration of
+  // an outer iteration. A yield operand is not necessarily an epilogue
+  // output; it can also be a prologue result or a forwarded outer block
+  // argument, and those must not advance on every inner iteration.
   auto outerYield = cast<scf::YieldOp>(outer.getBody()->getTerminator());
 
   SmallVector<unsigned> positions;
   SmallVector<Value> thenValues, elseValues;
   for (auto [pos, value] : llvm::enumerate(outerYield.getOperands())) {
-    if (!llvm::is_contained(epilogueOutputs, value))
-      continue;
     positions.push_back(pos);
     thenValues.push_back(value);
     elseValues.push_back(fused.getRegionIterArg(outerArgsStartIdx + pos));

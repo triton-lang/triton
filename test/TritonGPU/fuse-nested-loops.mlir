@@ -701,3 +701,27 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   }
   tt.return
 }
+
+// -----
+
+// An outer yield operand that is not an epilogue output (here a value defined
+// before the inner loop, i.e. a prologue result) must still be committed only
+// on the last inner iteration of an outer iteration. Otherwise it is forwarded
+// on every flattened inner iteration, where it reads the previous outer
+// iteration's value, so a carried chain lags one outer iteration behind.
+// CHECK-LABEL: @yield_prologue_result_only_on_last_inner_iter
+tt.func @yield_prologue_result_only_on_last_inner_iter(%lb: i32, %ub: i32, %step: i32) -> (i32, i32) {
+  %r:2 = scf.for %i = %lb to %ub step %step iter_args(%cur = %lb, %prev = %ub) -> (i32, i32) : i32 {
+    %x = "prologue"(%cur) : (i32) -> i32
+    scf.for %j = %lb to %ub step %step : i32 {
+      "body"(%x) : (i32) -> ()
+    }
+    %next = "epilogue"(%x) : (i32) -> i32
+    // CHECK: [[PROL:%.*]]:2 = scf.if {{.*}} -> (i32, i32) {
+    // CHECK: [[IS_LAST:%.*]] = arith.cmpi eq, {{%.*}}, {{%.*}} : i32
+    // CHECK-NEXT: [[DELAYED:%.*]] = arith.select [[IS_LAST]], [[PROL]]#0, {{%.*}} : i32
+    // CHECK: scf.yield {{%.*}}, {{%.*}}, {{%.*}}, [[DELAYED]], {{%.*}}, {{%.*}}
+    scf.yield %next, %x : i32, i32
+  } {"ttg.always-fuse"}
+  tt.return %r#0, %r#1 : i32, i32
+}
