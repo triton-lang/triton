@@ -2408,9 +2408,9 @@ struct BufferStoreOpConversion
   }
 };
 
-static bool isCooperativeMaskUniform(Value mask, unsigned vec,
-                                     unsigned lanesPerLine,
-                                     ModuleAxisInfoAnalysis &axisAnalysis) {
+static bool isMaskConstantPerLine(Value mask, unsigned vec,
+                                  unsigned lanesPerLine,
+                                  ModuleAxisInfoAnalysis &axisAnalysis) {
   auto *axisInfo = axisAnalysis.getAxisInfo(mask);
   auto type = cast<RankedTensorType>(mask.getType());
   if (!axisInfo || axisInfo->getRank() != type.getRank())
@@ -2459,10 +2459,10 @@ struct CooperativeAtomicOpConversion : public ConvertOpToLLVMPattern<OpTy>,
     unsigned bytesPerLane = op.getBytesPerLane();
     unsigned vec = bytesPerLane * 8 / elementType.getIntOrFloatBitWidth();
     if (Value mask = op.getMask();
-        mask && !isCooperativeMaskUniform(mask, vec, 128 / bytesPerLane,
-                                          axisAnalysisPass))
-      return op.emitOpError("mask must be provably constant across each "
-                            "complete 128-byte line");
+        mask &&
+        !isMaskConstantPerLine(mask, vec, 128 / bytesPerLane, axisAnalysisPass))
+      return op.emitOpError("mask must be provably constant over each 128-byte "
+                            "line");
     Type intrinsicType = rewriter.getI32Type();
     if (bytesPerLane != 4)
       intrinsicType = LLVM::getVectorType(intrinsicType, bytesPerLane / 4);

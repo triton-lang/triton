@@ -330,23 +330,22 @@ def CooperativeAtomicLoadOp : TT_AMDGPU_Op<"cooperative_atomic_load", [
     group of 32, 16, or 8 lanes of a wave32 loads one line atomically, 4, 8, or
     16 bytes per lane. The bytes per lane follow from the offsets layout: the
     register contiguity of each lane, capped at 16 bytes. Consecutive lanes must
-    hold consecutive 4, 8 or 16 bytes in the dense row-major order of the
+    hold consecutive 4, 8, or 16 bytes in the dense row-major order of the
     tensor. Each lane is addressed by its first offset in register order; the
     remaining offsets are assumed to follow contiguously.
 
-    The optional mask must be provably constant over every complete line.
-    Inactive lines perform no access and return `other`, or undefined values
-    if it is absent. Active lines must be backed by storage on a fabric
-    supporting cooperative atomic accesses, and byte offsets must fit in 32
-    bits.
+    The optional mask must be provably constant over each line. Masked-off
+    lines perform no access and return `other`, or undefined values if it is
+    absent. Accessed lines must be backed by storage on a fabric supporting
+    cooperative atomic accesses, and byte offsets must fit in 32 bits.
 
     `sem` is `relaxed` or `acquire` and `scope` is the synchronization scope;
     they order the whole operation as for `tt.atomic_load`. The operation may
-    synchronize only with cooperative atomics of the same total access size.
+    synchronize only with other cooperative atomics.
   }];
   let arguments = (ins
-    // Atomic loads are observable synchronization operations even when the
-    // loaded value is unused; the write effect keeps polling loads in place.
+    // Like tt.atomic_load, model the load as also writing so that
+    // canonicalization and LICM keep polling loads.
     Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
     I32Tensor:$offsets,
     Optional<TT_BoolTensor>:$mask,
