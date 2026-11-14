@@ -58,18 +58,6 @@ def saturatef(arg0):
     ...
 
 
-def fma_rz(arg0, arg1, arg2):
-    ...
-
-
-def fma_rd(arg0, arg1, arg2):
-    ...
-
-
-def fma_ru(arg0, arg1, arg2):
-    ...
-
-
 def fast_dividef(arg0, arg1):
     ...
 

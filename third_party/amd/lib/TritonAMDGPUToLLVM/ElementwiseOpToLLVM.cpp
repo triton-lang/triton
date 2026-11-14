@@ -36,6 +36,48 @@ Value EmitDualBF16ElementwiseOp(Location loc,
   return AMD::convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
 }
 
+// CDNA3 (gfx942), CDNA4 (gfx950) and CDNA5 (gfx1250) select the FMA
+// rounding mode through the wavefront MODE register (FP_ROUND: 0 =
+// nearest-even, 1 = +inf, 2 = -inf, 3 = toward-zero); there is no
+// per-instruction encoding, and packed instructions honor FP_ROUND just
+// like scalar ones. Returns false for round-to-nearest-even (or an
+// absent attribute), which needs no MODE write.
+static bool getDirectedFpRound(math::FmaOp op, int32_t &hwMode,
+                               LLVM::RoundingMode &llvmRounding) {
+  std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+  if (!rounding.has_value() ||
+      rounding.value() == arith::RoundingMode::to_nearest_even)
+    return false;
+  switch (rounding.value()) {
+  case arith::RoundingMode::toward_zero:
+    hwMode = 3;
+    llvmRounding = LLVM::RoundingMode::TowardZero;
+    return true;
+  case arith::RoundingMode::downward:
+    hwMode = 2;
+    llvmRounding = LLVM::RoundingMode::TowardNegative;
+    return true;
+  case arith::RoundingMode::upward:
+    hwMode = 1;
+    llvmRounding = LLVM::RoundingMode::TowardPositive;
+    return true;
+  default:
+    return false;
+  }
+}
+
+// MODE register ID = 1, FP_ROUND offset = 0, width = 4. The value sets
+// both the single-precision field [1:0] and the double/half field [3:2];
+// hwMode = 0 restores round-to-nearest-even.
+static void emitSetFpRound(ConversionPatternRewriter &rewriter, Location loc,
+                           int32_t hwMode) {
+  constexpr int32_t kFpRoundLoc = 1 | (0 << 6) | ((4 - 1) << 11);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  int32_t modeVal = hwMode | (hwMode << 2);
+  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
+                                  {b.i32_val(kFpRoundLoc), b.i32_val(modeVal)});
+}
+
 // Override pattern that packs adjacent elementwise ops into vector LLVM ops.
 // The default elementwise patterns remain target-agnostic.
 template <typename SourceOp, typename LLVMOp>
@@ -60,8 +102,32 @@ struct PackedArithOpConversion
     for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
       packedOperands.push_back(
           packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
-    Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
-                              packedOperands, typename LLVMOp::Properties{});
+    Type packedTy = packedOperands[0].getType();
+    if constexpr (std::is_same_v<SourceOp, math::FmaOp>) {
+      // Packed instructions honor FP_ROUND, so directed rounding keeps
+      // the packed form: select the mode around the constrained FMA
+      // (whose FP-environment side effects keep it between the mode
+      // writes) and restore round-to-nearest-even.
+      int32_t hwMode;
+      LLVM::RoundingMode llvmRounding;
+      if (getDirectedFpRound(op, hwMode, llvmRounding)) {
+        MLIRContext *ctx = rewriter.getContext();
+        emitSetFpRound(rewriter, loc, hwMode);
+        Value vr = LLVM::ConstrainedFMAIntr::create(
+            rewriter, loc, packedTy, packedOperands[0], packedOperands[1],
+            packedOperands[2], LLVM::RoundingModeAttr::get(ctx, llvmRounding),
+            LLVM::FPExceptionBehaviorAttr::get(
+                ctx, LLVM::FPExceptionBehavior::Ignore));
+        emitSetFpRound(rewriter, loc, 0);
+        return unpackLLVector(loc, vr, rewriter);
+      }
+      std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+      if (rounding.has_value() &&
+          rounding.value() != arith::RoundingMode::to_nearest_even)
+        return {};
+    }
+    Value vr = LLVMOp::create(rewriter, loc, packedTy, packedOperands,
+                              typename LLVMOp::Properties{});
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -429,6 +495,39 @@ struct ClampFOpConversion
     return {med};
   }
 };
+struct FmaDirectedOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaDirectedOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<math::FmaOp, FmaDirectedOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    int32_t hwMode;
+    LLVM::RoundingMode llvmRounding;
+    if (!getDirectedFpRound(op, hwMode, llvmRounding))
+      return {};
+    // The AMDGPU backend emits a plain v_fma for the constrained
+    // intrinsic without changing MODE, so set FP_ROUND around it (the
+    // FP-environment side effects keep it between the mode writes) and
+    // restore round-to-nearest. On CDNA5, PackedArithOpConversion keeps
+    // the vector form under the same mode writes; this pattern handles
+    // the remaining scalar cases.
+    emitSetFpRound(rewriter, loc, hwMode);
+    MLIRContext *ctx = rewriter.getContext();
+    Value result = LLVM::ConstrainedFMAIntr::create(
+        rewriter, loc, elemTy, operands[0][0], operands[0][1], operands[0][2],
+        LLVM::RoundingModeAttr::get(ctx, llvmRounding),
+        LLVM::FPExceptionBehaviorAttr::get(ctx,
+                                           LLVM::FPExceptionBehavior::Ignore));
+    emitSetFpRound(rewriter, loc, 0);
+    return {result};
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -490,8 +589,11 @@ void populateElementwiseOpToLLVMPatterns(
         typeConverter, axisInfoAnalysis, cdna5Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
         typeConverter, axisInfoAnalysis, cdna5Benefit);
+    // Above FmaDirectedOpConversion (benefit + 1) so directed FMA keeps
+    // the packed form on CDNA5; FmaDirectedOpConversion handles the
+    // cases packing cannot (single element, fp64).
     patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
-        typeConverter, axisInfoAnalysis, cdna5Benefit);
+        typeConverter, axisInfoAnalysis, benefit.getBenefit() + 2);
   }
 
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
@@ -525,6 +627,8 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
+  patterns.add<FmaDirectedOpConversion>(typeConverter, axisInfoAnalysis,
+                                        benefit.getBenefit() + 1);
   triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                               axisInfoAnalysis, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,

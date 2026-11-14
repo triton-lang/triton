@@ -208,6 +208,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<64xf32, #blocked>
   }
 
+  // COMMON-LABEL: @f32_fma_rz
+  tt.func @f32_fma_rz(%arg0: tensor<64xf32, #blocked>, %arg1: tensor<64xf32, #blocked>, %arg2: tensor<64xf32, #blocked>) -> tensor<64xf32, #blocked> {
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.s.setreg"
+    // COMMON: llvm.intr.experimental.constrained.fma {{.*}} towardzero ignore : vector<2xf32>
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.s.setreg"
+    %0 = math.fma %arg0, %arg1, %arg2 toward_zero : tensor<64xf32, #blocked>
+    tt.return %0 : tensor<64xf32, #blocked>
+  }
+
   // COMMON-LABEL: @bf16_fma
   tt.func @bf16_fma(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>, %arg2: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
     // COMMON-NOT: llvm.intr.fma({{.*}}) : (bf16, bf16, bf16) -> bf16
