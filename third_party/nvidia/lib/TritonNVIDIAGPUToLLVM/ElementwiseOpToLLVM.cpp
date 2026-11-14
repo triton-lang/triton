@@ -367,8 +367,14 @@ struct FpToFpOpConversion
       // NVPTX can select a direct f16 <-> bf16 conversion when supported.
       if (srcWidth == dstWidth)
         value = LLVM::FPExtOp::create(rewriter, loc, f32_ty, value);
-      return {convertFpTrunc(loc, rewriter, elemTy, value,
-                             roundingMode.value_or(RoundingMode::RTNE))};
+      RoundingMode rounding = roundingMode.value_or(RoundingMode::RTNE);
+      // PTX has no f64 -> bf16 conversion before SM90. Truncating toward zero
+      // through f32 gives the same result because every bf16 value is exact
+      // in f32.
+      if (computeCapability < 90 && srcElementType.isF64() &&
+          dstElementType.isBF16() && rounding == RoundingMode::RTZ)
+        value = convertFpTrunc(loc, rewriter, f32_ty, value, rounding);
+      return {convertFpTrunc(loc, rewriter, elemTy, value, rounding)};
     }
 
     bool useSoftwareFp8 = computeCapability < 89 &&
