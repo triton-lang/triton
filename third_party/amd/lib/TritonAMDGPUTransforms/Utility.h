@@ -7,6 +7,7 @@
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 
@@ -47,6 +48,13 @@ triton::gpu::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     triton::gpu::DotOperandEncodingAttr dotOpEnc,
     triton::gpu::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
     bool useAsyncCopy, unsigned warpSize);
+
+// Returns the bank conflicts of a load or store between the register layout
+// `reg` and the padded shared layout `padded`.
+int bankConflictsMemDescPadded(const triton::LinearLayout &reg,
+                               triton::gpu::PaddedSharedEncodingAttr padded,
+                               int32_t bitwidth, int32_t numBanks = 32,
+                               triton::gpu::LocalMemOpTile laneTile = {});
 
 triton::gpu::SharedEncodingTrait
 getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,

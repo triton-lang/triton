@@ -3,19 +3,34 @@ from __future__ import annotations
 from typing import Any
 
 from triton._C.libtriton import gsan_testing as _gsan_testing
+from ._allocator import get_reserve_pointer
 
 from triton._C.libtriton.gsan_testing import (
     ShadowCell,
     ScalarClock,
     GlobalState,
     ThreadState,
-    shadow_cell_address,
-    shadow_cell_size,
     thread_state_stride_bytes,
     decode_shadow_cell,
     SHADOW_CELL_SIZE_BYTES,
     GLOBAL_STATE_SIZE_BYTES,
 )
+
+
+def shadow_cell_address(real_address: int) -> int:
+    return _gsan_testing.shadow_cell_address(real_address, get_reserve_pointer())
+
+
+def shadow_cell_size(real_address: int) -> int:
+    return _gsan_testing.shadow_cell_size(real_address, get_reserve_pointer())
+
+
+def shadow_granularity(real_address: int) -> int:
+    return _gsan_testing.shadow_granularity(real_address, get_reserve_pointer())
+
+
+def is_write_once_address(real_address: int) -> bool:
+    return _gsan_testing.is_write_once_address(real_address, get_reserve_pointer())
 
 
 def shadow_cell(real_address: int) -> tuple[int, int]:

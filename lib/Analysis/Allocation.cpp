@@ -155,14 +155,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
     return ws.getCaptureSize();
   }
-  if (auto func = dyn_cast<FunctionOpInterface>(op)) {
-    // The default dispatcher stores one command byte per worker warp.
-    unsigned numWorkers = 0;
-    func.walk([&](gpu::WarpSpecializeOp ws) {
-      numWorkers = std::max(numWorkers, ws.getTotalPartitionWarps());
-    });
-    return numWorkers;
-  }
   return 0;
 }
 
@@ -170,7 +162,7 @@ std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
   if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
     return handoff.getSource().getBlock() &
            ~handoff.getDestination().getBlock();
-  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+  if (!isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
   if (op->getNumResults() == 0)
     return std::nullopt;
@@ -326,11 +318,17 @@ private:
                                                           captureAlign);
       return;
     }
-    unsigned bytes = scratchSizeGetter(op);
-    if (isa<FunctionOpInterface>(op)) {
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes);
+    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+      unsigned numWarpIndices = 0;
+      // Warp specialization communicates states over shared memory to each
+      // warp. Add space for an i8 for each warpgroup warp.
+      func.walk([&](gpu::WarpSpecializeOp op) {
+        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
+      });
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
       return;
     }
+    unsigned bytes = scratchSizeGetter(op);
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
   }

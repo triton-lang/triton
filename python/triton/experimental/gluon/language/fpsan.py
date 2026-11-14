@@ -1,4 +1,9 @@
+from triton.language import fpsan as tl_fpsan
+
 from ._core import _unwrap_if_constexpr, builtin, dtype, tensor
+
+barrier = builtin(tl_fpsan.barrier)
+homomorphic_cast = builtin(tl_fpsan.homomorphic_cast)
 
 
 @builtin

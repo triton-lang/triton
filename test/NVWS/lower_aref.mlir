@@ -710,6 +710,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
@@ -735,6 +736,15 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       %b = ttg.memdesc_trans %gbuf {order = array<i32: 1, 0>, ttg.partition = array<i32: 1>} : !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64> -> !ttg.memdesc<64x64xf16, #shared_t, #smem, 1x64x64>
       scf.if %cnd {
         ttng.tc_gen5_mma %a, %b, %acc[], %true, %true {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_t, #smem, 1x64x64>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+        // The other MMA reuses one unprotected A tile each iteration.
+        // CHECK: [[A:%.*]] = ttg.local_alloc
+        // CHECK-NEXT: ttng.tc_gen5_mma [[A]],
+        // CHECK-NOT: is_async
+        // CHECK: ttng.tc_gen5_commit
+        %scalar = arith.sitofp %i : i32 to f16
+        %tile = tt.splat %scalar : f16 -> tensor<128x64xf16, #blocked>
+        %loop_a = ttg.local_alloc %tile {ttg.partition = array<i32: 1>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+        ttng.tc_gen5_mma %loop_a, %b, %acc[], %true, %true {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_t, #smem, 1x64x64>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
       } {ttg.partition = array<i32: 1>}
       nvws.aref.get.exit %aref, %gtok [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!buf]>, !ttg.async.token
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2>}

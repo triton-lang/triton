@@ -27,6 +27,12 @@
 #linear_ds_tr_tile_out = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #linear_ds_tr_tile_invalid = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 4]], lane = [[1, 0], [4, 0], [2, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 
+#inner_part_linear = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#partitioned_part_cols = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 1, partitionLayout = #inner_part_linear}>
+#partitioned_part_rows = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 4, partitionDim = 0, partitionLayout = #inner_part_linear}>
+#linear_part_reg0 = #ttg.linear<{register = [[0, 8], [0, 1], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#generic_part_lane0 = #ttg.generic_linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [32, 0]], lane = [[9, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   //  CHECK-LABEL: b16_tests
   tt.func @b16_tests(%arg0: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, %arg1: !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
@@ -228,6 +234,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     %ptr1 = tt.splat %arg2 : !tt.ptr<i8> -> tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 8}>>
     tt.store %ptr1, %1 : tensor<64x64x!tt.ptr<i8>, #ttg.dot_op<{opIdx = 1, parent = #mma_b8, kWidth = 8}>>
+    tt.return
+  }
+
+  // CDNA5 ds_load_tr16_b128 routes destination register bit 0 to source lane
+  // bit 0. The partition can vary across the destination registers
+  // of one instruction while each source lane reads from a single partition.
+  // CHECK-LABEL: llvm.func @ds_transpose_partitioned_register_varying(
+  tt.func @ds_transpose_partitioned_register_varying(%arg0: !ttg.memdesc<64x16xf16, #partitioned_part_cols, #smem, mutable>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: %[[C1:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: %[[C0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[PART_BIT:.*]] = llvm.and %{{.*}}, %[[C1]] : i32
+    // CHECK: %[[PART_OR:.*]] = llvm.or disjoint %[[PART_BIT]], %[[C0]] : i32
+    // CHECK: %[[PART:.*]] = llvm.xor %[[C0]], %[[PART_OR]] : i32
+    // CHECK: %[[BASE:.*]] = llvm.extractelement %{{.*}}[%[[PART]] : i32] : vector<2x!llvm.ptr<3>>
+    // CHECK: %[[ADDR:.*]] = llvm.getelementptr inbounds %[[BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr16.b128"(%[[ADDR]]) : (!llvm.ptr<3>) -> vector<8xf16>
+    // CHECK-COUNT-3: llvm.call_intrinsic "llvm.amdgcn.ds.load.tr16.b128"
+    // CHECK-NOT: llvm.amdgcn.ds.load.tr
+    // CHECK: llvm.return
+    %value = ttg.local_load %arg0 : !ttg.memdesc<64x16xf16, #partitioned_part_cols, #smem, mutable> -> tensor<64x16xf16, #linear_part_reg0>
+    %ptr = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x16x!tt.ptr<f16>, #linear_part_reg0>
+    tt.store %ptr, %value : tensor<64x16x!tt.ptr<f16>, #linear_part_reg0>
+    tt.return
+  }
+
+  // Each source lane's eight-element read would span both LDS partitions.
+  // A transpose load uses one base address per source lane, so the lowering
+  // must fall back to ordinary LDS loads.
+  // CHECK-LABEL: llvm.func @ds_transpose_partitioned_read_crosses_partitions(
+  tt.func @ds_transpose_partitioned_read_crosses_partitions(%arg0: !ttg.memdesc<64x16xf16, #partitioned_part_rows, #smem, mutable>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-NOT: llvm.amdgcn.ds.load.tr
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3>
+    // CHECK-NOT: llvm.amdgcn.ds.load.tr
+    // CHECK: llvm.return
+    %value = ttg.local_load %arg0 : !ttg.memdesc<64x16xf16, #partitioned_part_rows, #smem, mutable> -> tensor<64x16xf16, #generic_part_lane0>
+    %ptr = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x16x!tt.ptr<f16>, #generic_part_lane0>
+    tt.store %ptr, %value : tensor<64x16x!tt.ptr<f16>, #generic_part_lane0>
     tt.return
   }
 }

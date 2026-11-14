@@ -363,6 +363,7 @@ OP_TO_ID_U64 = {
     "floor": np.uint64(9),
     "ceil": np.uint64(10),
     "sqrt_rn": np.uint64(11),
+    "barrier": np.uint64(12),
 }
 
 OP_TO_TAG_U32 = {name: np.uint32(murmur64Mixer(op_id) & np.uint64(0xFFFFFFFF)) for name, op_id in OP_TO_ID_U64.items()}
@@ -374,6 +375,17 @@ def _expected_unary_tag_payload_u32(x_u32: np.ndarray, op: str) -> np.ndarray:
     x = x_u32.astype(np.uint64)
     out_u64 = (((x * UNARY_TAG_MULTIPLIER_U64) & np.uint64(0xFFFFFFFF)) ^ tag) * UNARY_TAG_MULTIPLIER_U64
     return (out_u64 & np.uint64(0xFFFFFFFF)).astype(np.uint32)
+
+
+def _expected_barrier_payload_u64(payload: np.ndarray, bitwidth: int) -> np.ndarray:
+    mask = _low_mask_u64(bitwidth)
+    x = payload.astype(np.uint64) ^ (murmur64Mixer(OP_TO_ID_U64["barrier"]) & mask)
+    shift = np.uint64(bitwidth // 2)
+    with np.errstate(over="ignore"):
+        for multiplier in (0xff51afd7ed558ccd, 0xc4ceb9fe1a85ec53):
+            x ^= x >> shift
+            x = (x * np.uint64(multiplier)) & mask
+    return x ^ (x >> shift)
 
 
 def _expected_u32_inv(x_u32: np.ndarray) -> np.ndarray:
@@ -1026,6 +1038,126 @@ def test_unary_math_identity(device, op, fresh_knobs):
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("expression", ["multiply", "fma"])
+def test_fpsan_barrier_expression_structure(device, fresh_knobs, frontend, expression):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(A, B, C, Out, ANNOTATE: tl.constexpr, RHS: tl.constexpr, EXPR: tl.constexpr, GLUON: tl.constexpr,
+               WARP_SIZE: tl.constexpr):
+        if GLUON:
+            offsets = gl.arange(0, 256, layout=gl.BlockedLayout([1], [WARP_SIZE], [4], [0]))
+        else:
+            offsets = tl.arange(0, 256)
+        a = lang.load(A + offsets)
+        b = lang.load(B + offsets)
+        c = lang.load(C + offsets)
+        if RHS:
+            if EXPR == "multiply":
+                bc = b * c
+                if ANNOTATE:
+                    bc = lang.fpsan.barrier(bc)
+                out = a * bc
+            else:
+                out = lang.fma(a, b, c)
+        else:
+            ab = a * b
+            if ANNOTATE:
+                ab = lang.fpsan.barrier(ab)
+            if EXPR == "multiply":
+                out = ab * c
+            else:
+                out = ab + c
+        lang.store(Out + offsets, out)
+
+    rng = np.random.RandomState(17)
+    bits = [rng.randn(256).astype(np.float32).view(np.int32) for _ in range(3)]
+    inputs = [triton.TensorWrapper(torch.tensor(x, device=device), dtype=torch.float32) for x in bits]
+    outputs = {}
+    for annotate, rhs in itertools.product([False, True], repeat=2):
+        output = torch.empty(256, dtype=torch.int32, device=device)
+        kernel[(1, )](*inputs, triton.TensorWrapper(output, dtype=torch.float32), annotate, rhs, expression,
+                      frontend == "gluon", THREADS_PER_WARP, enable_fp_fusion=False)
+        outputs[annotate, rhs] = output.cpu().numpy()
+
+    np.testing.assert_array_equal(outputs[False, False], outputs[False, True])
+    assert np.any(outputs[True, False] != outputs[True, True])
+
+    a, b, c = [_mix_f32_bits_to_payload_u32(x) for x in bits]
+    product = _expected_barrier_payload_u64(a * b, 32).astype(np.uint32)
+    expected = product * c if expression == "multiply" else product + c
+    np.testing.assert_array_equal(outputs[True, False], _unmix_payload_u32_to_f32_bits_i32(expected))
+    if expression == "multiply":
+        expected = a * _expected_barrier_payload_u64(b * c, 32).astype(np.uint32)
+        np.testing.assert_array_equal(outputs[True, True], _unmix_payload_u32_to_f32_bits_i32(expected))
+    else:
+        np.testing.assert_array_equal(outputs[True, True], outputs[False, True])
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("src, dst", [("f64", "f32"), ("f32", "f16"), ("f16", "e5m2"), ("f64", "e5m2"),
+                                      ("f16", "bf16")])
+@pytest.mark.parametrize("op", ["add", "mul"])
+def test_fpsan_homomorphic_cast_barrier_placement(device, fresh_knobs, frontend, src, dst, op):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.fpsan_homomorphic_casts = False
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(A, B, Cast, After, Before, BarrierAfter, BarrierBefore, BarrierRoundtrip, SRC: tl.constexpr,
+               DST: tl.constexpr, OP: tl.constexpr, GLUON: tl.constexpr, WARP_SIZE: tl.constexpr):
+        if GLUON:
+            offsets = gl.arange(0, 256, layout=gl.BlockedLayout([1], [WARP_SIZE], [4], [0]))
+        else:
+            offsets = tl.arange(0, 256)
+        a = lang.load(A + offsets)
+        b = lang.load(B + offsets)
+        narrow_a = lang.fpsan.homomorphic_cast(a, DST)
+        narrow_b = lang.fpsan.homomorphic_cast(b, DST)
+        if OP == "add":
+            wide = a + b
+            early = narrow_a.to(SRC) + narrow_b.to(SRC)
+        else:
+            wide = a * b
+            early = narrow_a.to(SRC) * narrow_b.to(SRC)
+        lang.store(Cast + offsets, narrow_a)
+        lang.store(After + offsets, lang.fpsan.homomorphic_cast(wide, DST))
+        lang.store(Before + offsets, lang.fpsan.homomorphic_cast(early, DST))
+        lang.store(BarrierAfter + offsets, lang.fpsan.homomorphic_cast(lang.fpsan.barrier(a), DST))
+        lang.store(BarrierBefore + offsets, lang.fpsan.barrier(narrow_a))
+        lang.store(BarrierRoundtrip + offsets, lang.fpsan.homomorphic_cast(lang.fpsan.barrier(narrow_a.to(SRC)), DST))
+
+    rng = np.random.RandomState(19)
+    a_bits, b_bits = [_random_float_bits(rng, (256, ), src) for _ in range(2)]
+    src_width, _, _, _, _, src_dtype = _float_dtype_info(src)
+    dst_width, _, _, storage_dtype, torch_dtype, dst_dtype = _float_dtype_info(dst)
+    _, a = _as_float_bits_tensor(a_bits, src)
+    _, b = _as_float_bits_tensor(b_bits, src)
+    outputs = [torch.empty(256, dtype=storage_dtype, device=device) for _ in range(6)]
+    kernel[(1, )](a, b, *[triton.TensorWrapper(out, dtype=torch_dtype) for out in outputs], src_dtype, dst_dtype, op,
+                  frontend == "gluon", THREADS_PER_WARP)
+
+    a_payload, b_payload = _mix_float_bits(a_bits, src), _mix_float_bits(b_bits, src)
+    mask = _low_mask_u64(dst_width)
+    narrow = a_payload & mask
+    with np.errstate(over="ignore"):
+        arithmetic = (a_payload + b_payload if op == "add" else a_payload * b_payload) & mask
+    after_barrier = _expected_barrier_payload_u64(a_payload, src_width) & mask
+    before_barrier = _expected_barrier_payload_u64(narrow, dst_width)
+    widened = _cast_float_payload_u64(narrow, dst_width, src_width)
+    roundtrip_barrier = _expected_barrier_payload_u64(widened, src_width) & mask
+    expected = [narrow, arithmetic, arithmetic, after_barrier, before_barrier, roundtrip_barrier]
+    for output, payload in zip(outputs, expected):
+        np.testing.assert_array_equal(output.cpu().numpy(), _unmix_payload_to_float_bits(payload, dst))
+    if src_width > dst_width:
+        assert np.any(after_barrier != before_barrier)
+        assert np.any(after_barrier != roundtrip_barrier)
 
 
 def test_absf_payload_semantics(device, fresh_knobs):

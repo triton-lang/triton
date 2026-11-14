@@ -39,6 +39,8 @@ constexpr unsigned kWarpSpecializeCTABarrierId = 1;
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
                                   Value val, int delta);
+std::pair<Value, Value> shuffleDown(Location loc, RewriterBase &rewriter,
+                                    Value val, int delta);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,

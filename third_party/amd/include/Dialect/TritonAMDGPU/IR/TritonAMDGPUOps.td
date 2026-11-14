@@ -425,6 +425,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 //===----------------------------------------------------------------------===//
 
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
+  AtomicOpInterface,
   FoldTruePredicate,
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
@@ -477,6 +478,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 // BufferAtomicCASOp
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
+  AtomicOpInterface,
   SameLoadStoreOperandsAndResultEncoding,
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,

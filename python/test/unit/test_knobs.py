@@ -459,6 +459,27 @@ def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
     assert "s_endpgm" in assembly
 
 
+def test_mir_swap_knobs_invalidate_cache_key(monkeypatch):
+    from triton._C.libtriton import get_cache_invalidating_env_vars
+
+    for var in ("TRITON_SWAP_MIR", "TRITON_SWAP_MIR_ENABLE_MISCHED"):
+        monkeypatch.delenv(var, raising=False)
+    unswapped = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR", "/mir/a")
+    swapped_a = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR", "/mir/b")
+    swapped_b = get_cache_invalidating_env_vars()
+
+    monkeypatch.setenv("TRITON_SWAP_MIR_ENABLE_MISCHED", "1")
+    misched = get_cache_invalidating_env_vars()
+
+    # Compared the way get_cache_key() consumes them.
+    keys = {str(sorted(env.items())) for env in (unswapped, swapped_a, swapped_b, misched)}
+    assert len(keys) == 4
+
+
 def _loop_strength_reduction_kernel():
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler

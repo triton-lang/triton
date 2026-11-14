@@ -144,7 +144,13 @@ def _scan_layouts():
         for name, layout in layouts.items()
         if _is_layout_applicable(layout)
     ]
+    cases += [
+        pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 4, n, 1, torch.int32,
+                     id=f"shuffle_bounds_{n}") for n in (4, THREADS_PER_WARP // 2, THREADS_PER_WARP)
+    ]
     return cases + [
+        pytest.param(ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 4, THREADS_PER_WARP // 4,
+                     1, torch.int32, id="shuffle_bounds_independent_scans"),
         pytest.param(ordinary, 32, 32, 1, torch.int32, id="permuted_owners_axis1"),
         pytest.param(transpose, 32, 32, 0, torch.int8, id="mixed_width"),
         pytest.param(scattered_registers, 64, 32, 0, torch.bool, id="boolean_interwarp_carries"),
