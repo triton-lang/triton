@@ -50,11 +50,25 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// cp.async combines a global load and a shared-memory store. When the
-// shared layout limits the copy width below the source layout's per-thread
-// contiguity, splitting the copy can break coalescing across lanes.
-// Clip the source layout's contiguous dimension to the copy width computed
-// from the source and destination LinearLayouts.
+// One example where this clipping is needed is when all of the following hold:
+//   1) Operand A for WGMMA is to be loaded in registers
+//   2) We upcast operand A in registers before the WGMMA
+//      (downcasting is not yet supported)
+//   3) Pipelining is enabled for loading A
+//
+// ...then for the AsyncCopyGlobalToLocal op, the SharedEncoding
+// vec will be less than BlockedEncoding's sizePerThread for k-dim. E.g. if
+// we're upcasting from int8 to bf16, then shared vec is 8 and sizePerThread
+// for k is 16. In this case, AsyncCopyGlobalToLocal will generate two
+// 8-byte-cp.async's for each contiguous 16B global data owned by each
+// thread. This breaks coalescing (i.e. results 2x the minimum required
+// transactions).
+//
+// This issue occurs for cp.async because it combines load and store into one
+// instruction. The fix is to clip each dim of sizePerThread by shared vec, so
+// that the vectorization of load and store are equal along the contiguous
+// dimension. In the above example, each thread will then only own 8B contiguous
+// global data.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
   ModuleAxisInfoAnalysis &axisInfoAnalysis;
