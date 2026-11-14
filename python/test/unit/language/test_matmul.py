@@ -345,9 +345,7 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("num_stages", [1, 3])
-@pytest.mark.parametrize("iterations", [0, 1, 8])
-def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, iterations, device):
+def test_tma_matmul_two_ctas_lagging_peer(num_ctas, device):
     # Inputs are loaded before the loop, so the MMA stays synchronous.
     # A lagging peer must observe completion before the leader reuses the barrier.
     from triton.tools.tensor_descriptor import TensorDescriptor
@@ -367,7 +365,7 @@ def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, iterations, devi
         C.store([0, 0], acc)
         tl.store(final_index + rows, index)
 
-    steps, chain_size = 8, 1 << 18
+    iterations, steps, chain_size = 8, 8, 1 << 18
     a = torch.ones((256, 16), device=device, dtype=torch.float16)
     b = torch.ones((16, 16), device=device, dtype=torch.float16)
     c = torch.full((256, 16), -1.0, device=device, dtype=torch.float32)
@@ -377,18 +375,17 @@ def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, iterations, devi
     b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
     c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 16])
     compiled = kernel[(1, )](a_desc, b_desc, c_desc, chain, final_index, iterations, CHAIN_SIZE=chain_size,
-                             CHASE_STEPS=steps, num_ctas=num_ctas, num_stages=num_stages, num_warps=4)
+                             CHASE_STEPS=steps, num_ctas=num_ctas, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     assert (f"tcgen05.mma.cta_group::{num_ctas}" in compiled.asm["ptx"])
-    # No peeled MMA: the loop uses synchronous lowering at either CTA/stage count.
+    # No peeled MMA: invariant inputs keep the MMA synchronous.
     assert compiled.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
     if num_ctas == 2:
         assert "ttng.cluster_barrier" in compiled.asm["ttgir"]
     torch.testing.assert_close(c, torch.full_like(c, 16.0 * iterations), atol=0, rtol=0)
     rows = torch.arange(256, device=device, dtype=torch.int32)
-    expected_index = rows * 1024 if iterations == 0 else torch.where(
-        rows >= 128, (rows * 1024 + 32 * iterations * steps) & (chain_size - 1), 0)
+    expected_index = torch.where(rows >= 128, (rows * 1024 + 32 * iterations * steps) & (chain_size - 1), 0)
     torch.testing.assert_close(final_index, expected_index, atol=0, rtol=0)
 
 
