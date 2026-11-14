@@ -6,6 +6,8 @@
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=VEC90 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' -cse | FileCheck --check-prefix=VEC100 --dump-input-context=20 %s
 // RUN: triton-opt %t/fp4.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100a -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
+// RUN: triton-opt %t/fp4_fp16.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' -cse | FileCheck %s --check-prefix=FP16-BITS
+// RUN: triton-opt %t/fp4_fp16.mlir --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=83' -cse | FileCheck %s --check-prefix=FP16-E4M3
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 
@@ -844,5 +846,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %packed = tt.extern_elementwise %hi, %lo, %false {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.ff.to.e2m1x2.rn.satfinite"} : (f32, f32, i1) -> i16
     tt.store %out, %packed : !tt.ptr<i16>
     tt.return
+  }
+}
+
+//--- fp4_fp16.mlir
+#packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#unpacked_fp4 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // cvt.rn.f16x2.e4m3x2 needs sm_89, so older targets build fp16 from bits.
+  // FP16-BITS-LABEL: @fp4_to_fp16
+  // FP16-BITS-NOT: e4m3x2
+  // FP16-BITS: prmt.b32 a5, 0x3E3C3800, 0x46444240, a0;
+  // FP16-BITS-SAME: prmt.b32 $0, a9, 0, 0x1404;
+  // FP16-BITS-NOT: e4m3x2
+  // FP16-E4M3-LABEL: @fp4_to_fp16
+  // FP16-E4M3: cvt.rn.f16x2.e4m3x2
+  tt.func private @fp4_to_fp16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>
+    tt.return %out : tensor<256xf16, #unpacked_fp4>
   }
 }
