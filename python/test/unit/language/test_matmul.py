@@ -252,8 +252,9 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
-def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period, num_ctas):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
@@ -276,10 +277,10 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
     a_desc = TensorDescriptor.from_tensor(a, [256, 16])
     b_desc = TensorDescriptor.from_tensor(b, [16, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, num_stages=3, num_warps=4)
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, num_ctas=num_ctas, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
-    assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
+    assert f"tcgen05.mma.cta_group::{num_ctas}" in compiled.asm["ptx"]
 
     values = {0: [16, 48, 80, 112], 2: [16, 32, 32, 32], 4: [16, 32, 64, 32]}[reset_period]
     expected = torch.tensor(values, device=device, dtype=torch.float32)
@@ -341,6 +342,114 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "multicast" not in ttgir
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
     assert "scf.for" in ttgir
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tma_matmul_conditional_accumulator_read_before_wait(num_ctas, device):
+    # A conditional accumulator read in the MMA completion wait's stage but an earlier scheduling cluster also
+    # needs that wait before it.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C):
+        acc = tl.zeros((256, 16), tl.float32)
+        for k in range(4):
+            acc = tl.dot(A.load([0, k * 128]), B.load([k * 128, 0]), acc)
+            if k % 2 == 0:
+                C.store([(k // 2) * 256, 0], acc)
+            if k % 4 == 3:
+                acc = tl.full((256, 16), 1.0, tl.float32)
+        C.store([512, 0], acc)
+
+    a = torch.ones((256, 512), device=device, dtype=torch.float16)
+    b = torch.ones((512, 16), device=device, dtype=torch.float16)
+    c = torch.empty((768, 16), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 128])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [128, 16])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, num_ctas=num_ctas, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert ("tcgen05.mma.cta_group::2" in compiled.asm["ptx"]) == (num_ctas == 2)
+    expected = torch.tensor([128, 384, 1], device=device, dtype=torch.float32)
+    expected = expected[:, None, None].expand(3, 256, 16).reshape_as(c)
+    torch.testing.assert_close(c, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tma_matmul_pipelined_if_else_side_effects(num_ctas, device):
+    # Predicating a pipelined scf.if by masking its condition runs its else branch in inactive stages, which must
+    # not happen when that branch has side effects: with zero iterations nothing may be written.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit(do_not_specialize=["N"])
+    def kernel(A, B, C, marker, N):
+        rows = tl.arange(0, 256)
+        cols = tl.arange(0, 16)
+        for k in range(N):
+            acc = tl.dot(A.load([0, k * 16]), B.load([k * 16, 0]))
+            if k % 2 == 0:
+                tl.store(marker, 7)
+            else:
+                tl.store(C + (k * 256 + rows)[:, None] * 16 + cols[None, :], acc)
+                tl.store(marker + 1, 9)
+
+    a = torch.ones((256, 32), device=device, dtype=torch.float16)
+    b = torch.ones((32, 16), device=device, dtype=torch.float16)
+    c = torch.full((512, 16), -1.0, device=device)
+    marker = torch.full((2, ), -1, device=device, dtype=torch.int32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 16])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
+    kernel[(1, )](a_desc, b_desc, c, marker, 0, num_ctas=num_ctas, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert marker.tolist() == [-1, -1]
+    assert torch.all(c == -1)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("num_stages", [1, 3])
+def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, device):
+    # The peer CTA chases pointers between MMAs, so it lags the leader. The leader must not reuse an MMA
+    # completion barrier before the peer observed its previous phase, or the peer waits on it forever.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit(do_not_specialize=["iterations"])
+    def kernel(A, B, C, chain, final_index, iterations, CHAIN_SIZE: tl.constexpr, CHASE_STEPS: tl.constexpr):
+        a = A.load([0, 0])
+        b = B.load([0, 0])
+        acc = tl.zeros((256, 16), tl.float32)
+        rows = tl.arange(0, 256)
+        peer_rows = rows >= 128
+        index = rows * 1024
+        for _ in range(iterations):
+            acc = tl.dot(a, b, acc)
+            for _ in tl.static_range(CHASE_STEPS):
+                index = tl.load(chain + (index & (CHAIN_SIZE - 1)), peer_rows, other=0, cache_modifier=".cg")
+        C.store([0, 0], acc)
+        tl.store(final_index + rows, index)
+
+    iterations, steps, chain_size = 8, 8, 1 << 18
+    a = torch.ones((256, 16), device=device, dtype=torch.float16)
+    b = torch.ones((16, 16), device=device, dtype=torch.float16)
+    c = torch.full((256, 16), -1.0, device=device, dtype=torch.float32)
+    final_index = torch.full((256, ), -1, device=device, dtype=torch.int32)
+    chain = (torch.arange(chain_size, device=device, dtype=torch.int32) + 32) & (chain_size - 1)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 16])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 16])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, chain, final_index, iterations, CHAIN_SIZE=chain_size,
+                             CHASE_STEPS=steps, num_ctas=num_ctas, num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert (f"tcgen05.mma.cta_group::{num_ctas}" in compiled.asm["ptx"])
+    torch.testing.assert_close(c, torch.full_like(c, 16.0 * iterations), atol=0, rtol=0)
+    rows = torch.arange(256, device=device, dtype=torch.int32)
+    expected_index = torch.where(rows >= 128, (rows * 1024 + 32 * iterations * steps) & (chain_size - 1), 0)
+    torch.testing.assert_close(final_index, expected_index, atol=0, rtol=0)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):

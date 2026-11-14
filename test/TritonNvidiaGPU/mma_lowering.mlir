@@ -180,3 +180,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A synchronous two-CTA MMA holds the pair together after its completion
+  // wait: each CTA's wait only proves its own barrier copy completed, and the
+  // leader must not reuse the barrier before the peer observed it.
+  // CHECK-LABEL: @two_cta_sync_mma
+  // CHECK: ttng.init_barrier
+  // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, two_ctas}
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.inval_barrier
+  tt.func @two_cta_sync_mma(%a: !ttg.memdesc<256x64xf16, #sharedA, #smem>, %b: !ttg.memdesc<64x128xf16, #sharedB, #smem>,
+                            %acc: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %true = arith.constant true
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true {two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem>, !ttg.memdesc<64x128xf16, #sharedB, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
