@@ -820,6 +820,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
   // F64BF16-LABEL: fp_trunc_f64_to_bf16_rtne(
   // F64BF16: cvt.rn.bf16.f64
+  // F64BF16-SM80-LABEL: fp_trunc_f64_to_bf16_rtne(
+  // F64BF16-SM80: cvt.rn.f32.f64
+  // F64BF16-SM80: cvt.f64.f32
+  // F64BF16-SM80: cvt.rn.bf16.f32
   tt.func public @fp_trunc_f64_to_bf16_rtne(%out: !tt.ptr<bf16>, %arg: f64) {
     %result = tt.fp_to_fp %arg, rounding = rtne : f64 -> bf16
     tt.store %out, %result : !tt.ptr<bf16>

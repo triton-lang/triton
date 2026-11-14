@@ -370,7 +370,8 @@ struct FpToFpOpConversion
       RoundingMode rounding = roundingMode.value_or(RoundingMode::RTNE);
       // PTX has no f64 -> bf16 conversion before SM90. Truncating toward zero
       // through f32 gives the same result because every bf16 value is exact
-      // in f32.
+      // in f32. Rounding to nearest through f32 would round twice; NVPTX
+      // already expands that mode without double rounding.
       if (computeCapability < 90 && srcElementType.isF64() &&
           dstElementType.isBF16() && rounding == RoundingMode::RTZ)
         value = convertFpTrunc(loc, rewriter, f32_ty, value, rounding);
