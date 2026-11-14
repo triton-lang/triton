@@ -212,3 +212,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A loop tagged tt.warp_specialize that partition scheduling declined (no
+// ttg.partition attributes anywhere) must be left alone: the hoist relies on
+// the partition bookkeeping and used to assert in getPartitionOutputs.
+#blocked_unpartitioned = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared_unpartitioned = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared_unpartitioned_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#smem_unpartitioned = #ttg.shared_memory
+#tmem_unpartitioned = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @warp_specialize_without_partitions_not_hoisted
+  // CHECK-NOT: ttg.partition
+  tt.func @warp_specialize_without_partitions_not_hoisted(%a: !ttg.memdesc<128x64xf16, #shared_unpartitioned, #smem_unpartitioned>, %b: !ttg.memdesc<64x128xf16, #shared_unpartitioned_t, #smem_unpartitioned>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c8 = arith.constant 8 : i32
+    %c148 = arith.constant 148 : i32
+    %false = arith.constant false
+    %true = arith.constant true
+    %zero = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked_unpartitioned>
+    // The store still folds into the alloc, but the alloc stays inside the
+    // tagged loop and no partition attributes are invented.
+    // CHECK: scf.for
+    // CHECK: ttng.tmem_alloc %
+    // CHECK-NOT: ttg.partition
+    scf.for %tile = %c0 to %c148 step %c1  : i32 {
+      %acc, %token = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem_unpartitioned, #ttng.tensor_memory, mutable>, !ttg.async.token)
+      %stored = ttng.tmem_store %zero, %acc[%token], %true : tensor<128x128xf32, #blocked_unpartitioned> -> !ttg.memdesc<128x128xf32, #tmem_unpartitioned, #ttng.tensor_memory, mutable>
+      %inner:2 = scf.for %k = %c0 to %c8 step %c1 iter_args(%use_acc = %false, %acc_token = %stored) -> (i1, !ttg.async.token) : i32 {
+        %next_token = ttng.tc_gen5_mma %a, %b, %acc[%acc_token], %use_acc, %true : !ttg.memdesc<128x64xf16, #shared_unpartitioned, #smem_unpartitioned>, !ttg.memdesc<64x128xf16, #shared_unpartitioned_t, #smem_unpartitioned>, !ttg.memdesc<128x128xf32, #tmem_unpartitioned, #ttng.tensor_memory, mutable>
+        scf.yield %true, %next_token : i1, !ttg.async.token
+      }
+    } {tt.warp_specialize}
+    tt.return
+  }
+}
