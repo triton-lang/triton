@@ -377,7 +377,6 @@ def test_tma_matmul_pipelined_if_else_side_effects(num_ctas, iterations, device)
     assert torch.all(c[256:] == (16 if iterations == 2 else -1))
 
 
-
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")

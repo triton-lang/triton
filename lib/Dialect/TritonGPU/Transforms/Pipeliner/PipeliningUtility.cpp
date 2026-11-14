@@ -190,14 +190,20 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    // Masking only the condition executes the else branch in inactive stages.
-    // Gate the entire conditional when that branch has side effects.
-    if (ifOp.getElseRegion().empty() ||
-        llvm::all_of(ifOp.elseBlock()->without_terminator(),
-                     [](Operation &elseOp) { return isPure(&elseOp); })) {
+    auto isPureRegion = [](Region &region) {
+      return region.empty() ||
+             llvm::all_of(region.front().without_terminator(),
+                          [](Operation &op) { return isPure(&op); });
+    };
+    // Inactive stages can execute either pure branch. Otherwise gate the
+    // entire conditional so neither branch's side effects execute.
+    bool elseIsPure = isPureRegion(ifOp.getElseRegion());
+    if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
       rewriter.setInsertionPoint(op);
-      Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
-                              ifOp.getCondition(), pred);
+      Value inactiveCondition =
+          arith::ConstantIntOp::create(rewriter, op->getLoc(), !elseIsPure, 1);
+      Value cnd = arith::SelectOp::create(
+          rewriter, op->getLoc(), pred, ifOp.getCondition(), inactiveCondition);
       ifOp.getConditionMutable().assign(cnd);
       return op;
     }

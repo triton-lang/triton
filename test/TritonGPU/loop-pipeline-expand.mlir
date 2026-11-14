@@ -96,3 +96,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Inactive stages take the pure then branch, avoiding the effectful else.
+  // CHECK-LABEL: @predicate_pure_then(
+  // CHECK-SAME: %[[PRED:.*]]: i1, %[[COND:.*]]: i1,
+  // CHECK: %[[TRUE:.*]] = arith.constant true
+  // CHECK: %[[MASK:.*]] = arith.select %[[PRED]], %[[COND]], %[[TRUE]] : i1
+  // CHECK-NEXT: %[[RESULT:.*]] = scf.if %[[MASK]]
+  // CHECK: arith.addi
+  // CHECK: } else {
+  // CHECK: tt.store
+  // CHECK: tt.return %[[RESULT]]
+  tt.func @predicate_pure_then(%pred: i1, %cond: i1, %ptr: !tt.ptr<i32>, %x: i32) -> i32 {
+    %one = arith.constant 1 : i32
+    %masked = "ttg.mask"(%pred) ({
+      %result = scf.if %cond -> i32 {
+        %next = arith.addi %x, %one : i32
+        scf.yield %next : i32
+      } else {
+        tt.store %ptr, %x : !tt.ptr<i32>
+        scf.yield %x : i32
+      }
+      ttg.mask.return %result : i32
+    }) : (i1) -> i32
+    tt.return %masked : i32
+  }
+}
