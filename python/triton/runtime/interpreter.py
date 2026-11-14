@@ -2,6 +2,8 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
+from collections import ChainMap
+from types import CellType, CodeType, FunctionType
 from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 
 import math
@@ -1371,7 +1373,8 @@ def _patch_lang_core(lang, scope: _LangPatchScope):
 def _patch_lang(fn):
     scope = _LangPatchScope()
     langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
-    assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
+    if not langs or "tl" not in fn.__globals__:
+        langs.append(tl)
     for lang in langs:
         _patch_builtin(lang, interpreter_builder, scope)
         _patch_builtin(lang.tensor, interpreter_builder, scope)
@@ -1585,6 +1588,13 @@ class _InterpreterComparison:
 
 
 class ASTTransformer(ast.NodeTransformer):
+    helper_scope = "<interpreter helpers>"
+
+    @staticmethod
+    def _helper(name):
+        # Keep generated references separate from captured names.
+        return ast.Subscript(value=ast.Name(id=ASTTransformer.helper_scope, ctx=ast.Load()), slice=ast.Constant(name),
+                             ctx=ast.Load())
 
     def visit_Compare(self, node):
         node = self.generic_visit(node)
@@ -1600,7 +1610,7 @@ class ASTTransformer(ast.NodeTransformer):
                 comparison = ast.Compare(left=ast.Name(id="lhs", ctx=ast.Load()), ops=[op],
                                          comparators=[ast.Name(id="rhs", ctx=ast.Load())])
                 args.append(ast.Lambda(args=parameters, body=comparison))
-            return ast.Call(func=ast.Name(id="_InterpreterComparison", ctx=ast.Load()), args=args, keywords=[])
+            return ast.Call(func=self._helper("_InterpreterComparison"), args=args, keywords=[])
 
         # Keep operand expressions in their original scope so assignment
         # expressions still bind there. Python's native chain evaluates each
@@ -1619,9 +1629,8 @@ class ASTTransformer(ast.NodeTransformer):
         # Modify the assignment x = value to
         # interpreter_semantic.to_tensor(value, False)
         node.value = ast.Call(
-            func=ast.Attribute(value=ast.Name(id="interpreter_semantic", ctx=ast.Load()), attr="to_tensor",
-                               ctx=ast.Load()), args=[self.visit(node.value),
-                                                      ast.Constant(value=False)], keywords=[])
+            func=ast.Attribute(value=self._helper("interpreter_semantic"), attr="to_tensor", ctx=ast.Load()),
+            args=[self.visit(node.value), ast.Constant(value=False)], keywords=[])
         return node
 
 
@@ -1685,14 +1694,65 @@ class FunctionRewriter:
         return transformed_ast
 
     def _compile_and_exec(self, transformed_ast):
-        compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
-        local_namespace = {**self.kwargs}
-        fn_globals = self.fn.__globals__
-        for key, value in globals().items():
-            if key not in fn_globals:
-                fn_globals[key] = value
-        exec(compiled_code, fn_globals, local_namespace)
-        return local_namespace[self.fn.__name__]
+        fn = self.fn
+        fn_globals = fn.__globals__
+        # Bind free names as cells so cached rewrites still see changes to both
+        # the original closure and the module globals.
+        names = {node.id for node in ast.walk(transformed_ast) if isinstance(node, ast.Name)}
+        cells = {name: CellType(globals()[name]) for name in names & (globals().keys() - fn_globals.keys())}
+        cells.update(zip(fn.__code__.co_freevars, fn.__closure__ or ()))
+        helpers = ChainMap(fn_globals, globals())
+        if ASTTransformer.helper_scope in names:
+            cells[ASTTransformer.helper_scope] = CellType(helpers)
+        namespace = self.kwargs.copy()
+        if not cells and "__builtins__" in fn_globals:
+            exec(compile(transformed_ast, self.filename, 'exec'), fn_globals, namespace)
+            return namespace[fn.__name__]
+
+        # Evaluate defaults once in the usual definition-time namespace. The
+        # uncalled outer function gives the body its lexical scope at compile time.
+        definition = transformed_ast.body[0]
+        scope = ast.parse("def _scope(): pass")
+        scope.body[0].args.args = [ast.arg(arg=name) for name in cells]
+        scope.body[0].body = [definition]
+        if fn.__name__ not in cells:
+            scope.body[0].body.insert(0, ast.Global(names=[fn.__name__]))
+        factory = {}
+        exec(compile(ast.fix_missing_locations(scope), self.filename, 'exec'), factory)
+        code = next(const for const in factory["_scope"].__code__.co_consts
+                    if isinstance(const, CodeType) and const.co_name == fn.__name__)
+
+        if fn.__closure__:
+            # Defaults may refer to factory locals absent from co_freevars. Keep
+            # their original values unless the rewrite provides an explicit name.
+            def bind_default(expr, value):
+                if expr is None:
+                    return None
+                refs = {node.id for node in ast.walk(expr) if isinstance(node, ast.Name)}
+                if refs & self.kwargs.keys():
+                    for name in refs.intersection(fn.__code__.co_freevars) - self.kwargs.keys():
+                        namespace[name] = cells[name].cell_contents
+                    return expr
+                name = f"<default {len(namespace)}>"
+                namespace[name] = value
+                return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), expr)
+
+            args = definition.args
+            args.defaults = [bind_default(expr, value) for expr, value in zip(args.defaults, fn.__defaults__ or ())]
+            args.kw_defaults = [
+                bind_default(expr, (fn.__kwdefaults__ or {}).get(arg.arg))
+                for arg, expr in zip(args.kwonlyargs, args.kw_defaults)
+            ]
+        definition.body = [ast.copy_location(ast.Pass(), definition)]
+        definition_globals = globals() | fn_globals | {ASTTransformer.helper_scope: helpers}
+        exec(compile(transformed_ast, self.filename, 'exec'), definition_globals, namespace)
+        prototype = namespace[fn.__name__]
+        closure = tuple(cells[name] for name in code.co_freevars) or None
+        rewritten = FunctionType(code, fn_globals, fn.__name__, prototype.__defaults__, closure)
+        rewritten.__qualname__ = prototype.__qualname__
+        rewritten.__kwdefaults__ = prototype.__kwdefaults__
+        rewritten.__annotations__ = prototype.__annotations__
+        return rewritten
 
 
 class InterpretedFunction(KernelInterface[T]):
