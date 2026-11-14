@@ -1785,6 +1785,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def warpgroup_mma_explicit_none_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
+    a = ttgl.allocate_shared_memory(ttgl.float8e4nv, [128, 128], nvmma_layout)
+    b = ttgl.allocate_shared_memory(ttgl.float8e4nv, [128, 128], nvmma_layout)
+    acc = ttgl.full([128, 128], 0, dtype=ttgl.float32, layout=acc_layout)
+    # CHECK: ttng.warp_group_dot {{.*}} {[[ATTRS:.*]]} :
+    hopper.warpgroup_mma(a, b, acc)
+    # CHECK: ttng.warp_group_dot {{.*}} {[[ATTRS]]} :
+    hopper.warpgroup_mma(a, b, acc, precision=None, max_num_imprecise_acc=None)
+
+
+def test_warpgroup_mma_explicit_none():
+    nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2)
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 32])
+    run_filecheck_test(warpgroup_mma_explicit_none_kernel, *make_args(nvmma_layout, mma_layout), target=HOPPER_TARGET)
+
+
+@gluon.jit
 def warpgroup_mma_wait_kernel():
     layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
     acc = hopper.warpgroup_mma_init(ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout))
