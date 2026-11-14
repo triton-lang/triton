@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -79,7 +80,9 @@ struct CGALayouts {
 };
 
 FailureOr<CGALayouts> getCGALayouts(triton::DotOp dot);
+FailureOr<CGALayouts> getCGALayouts(triton::DotScaledOp dot);
 FailureOr<CGALayouts> getCGALayouts(triton::ReduceOp reduce);
+FailureOr<CGALayouts> getCGALayouts(triton::ScanOp scan);
 
 // Rematerialize a dot/reduce operand's producer slice in the requested CGA
 // layout. First, trace the slice back to its load leaves, rejecting block
@@ -131,10 +134,12 @@ private:
       if (roots.contains(&use))
         continue;
       Operation *user = use.getOwner();
-      if (isa<triton::DotOp, triton::ReduceOp>(user)) {
+      if (isa<triton::DotOp, triton::DotScaledOp, triton::ReduceOp,
+              triton::ScanOp>(user)) {
         LogicalResult result =
             llvm::TypeSwitch<Operation *, LogicalResult>(user)
-                .Case<triton::DotOp, triton::ReduceOp>(
+                .Case<triton::DotOp, triton::DotScaledOp, triton::ReduceOp,
+                      triton::ScanOp>(
                     [&](auto op) { return addRoot(op, use); });
         if (failed(result))
           return failure();
@@ -332,7 +337,7 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-bool preferTwoCTALayout(triton::DotOp dot) {
+bool preferTwoCTALayout(Operation *dot) {
   if (ttg::lookupNumCTAs(dot) < 2)
     return false;
   auto module = dot->getParentOfType<ModuleOp>();
@@ -425,20 +430,90 @@ FailureOr<CGALayouts> getCGALayouts(triton::DotOp dot) {
   return CGALayouts{{newALayout, newBLayout, newDLayout}, {newDLayout}};
 }
 
-ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
-                                        RankedTensorType srcTy,
-                                        ttg::CGAEncodingAttr srcCGA) {
+// Project the CGA layout of a dot result [M, N] onto a [rows, K] operand:
+// `rowDim` is the result dimension the operand's rows follow (M for A and its
+// scales, N for B's scales). The K dimension is never split, so each CTA holds
+// the whole reduction for its rows. `transposed` puts K first ([K, N] for B).
+ttg::CGAEncodingAttr getDotOperandCGALayout(ttg::CGAEncodingAttr dCGA,
+                                            unsigned rowDim, bool transposed) {
+  MLIRContext *ctx = dCGA.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto bases = dCGA.getLinearLayout().getBases();
+  for (auto &basis : bases[kBlock]) {
+    int32_t row = basis[rowDim];
+    basis = transposed ? std::vector<int32_t>{0, row}
+                       : std::vector<int32_t>{row, 0};
+  }
+  return ttg::CGAEncodingAttr::get(
+      ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
+}
+
+// Like a dot, a scaled dot reduces along K within each CTA: give the result
+// the dot's CGA split and its operands (and scales) the matching layouts, with
+// K never split across CTAs.
+FailureOr<CGALayouts> getCGALayouts(triton::DotScaledOp dot) {
+  auto dTy = cast<RankedTensorType>(dot.getD().getType());
+  if (dTy.getRank() != 2 || !isa<ttg::BlockedEncodingAttr>(dTy.getEncoding()))
+    return failure();
+  auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
+  MLIRContext *ctx = dot.getContext();
+  bool preferTwoCTA = preferTwoCTALayout(dot);
+  auto ctaSplit =
+      getDotCGASplit(dTy.getShape(), ttg::getNumCTAs(dLayout), preferTwoCTA);
+  SmallVector<unsigned> ctaOrder = {1, 0};
+  if (preferTwoCTA)
+    std::swap(ctaOrder[0], ctaOrder[1]);
+  auto dCGA =
+      ttg::CGAEncodingAttr::fromSplitParams(ctx, ctaSplit, ctaSplit, ctaOrder);
+
+  auto getLayout = [&](Value value,
+                       ttg::CGAEncodingAttr cga) -> FailureOr<Attribute> {
+    return getRematerializationLayout(cast<RankedTensorType>(value.getType()),
+                                      cga, dot);
+  };
+  auto newD = getLayout(dot.getD(), dCGA);
+  auto newA = getLayout(dot.getA(),
+                        getDotOperandCGALayout(dCGA, 0, /*transposed=*/false));
+  auto newB = getLayout(dot.getB(),
+                        getDotOperandCGALayout(dCGA, 1, /*transposed=*/true));
+  if (failed(newD) || failed(newA) || failed(newB))
+    return failure();
+  SmallVector<Attribute> operandLayouts = {*newA, *newB, *newD};
+  if (Value scale = dot.getAScale()) {
+    auto layout =
+        getLayout(scale, getDotOperandCGALayout(dCGA, 0, /*transposed=*/false));
+    if (failed(layout))
+      return failure();
+    operandLayouts.push_back(*layout);
+  }
+  if (Value scale = dot.getBScale()) {
+    auto layout =
+        getLayout(scale, getDotOperandCGALayout(dCGA, 1, /*transposed=*/false));
+    if (failed(layout))
+      return failure();
+    operandLayouts.push_back(*layout);
+  }
+  return CGALayouts{std::move(operandLayouts), {*newD}};
+}
+
+// A CGA layout that keeps `axis` within each CTA, for ops whose lowering
+// combines values along it (reduce, scan). CTAs go to the other dimensions in
+// layout order, bounded by how many elements each CTA covers there.
+// `splitLoneAxis`: when `axis` is the only dimension, split it across the CTAs
+// (a reduction combines the CTAs' partial results); otherwise every CTA holds
+// the whole tensor (a scan has no cross-CTA lowering).
+ttg::CGAEncodingAttr getAxisLocalCGALayout(MLIRContext *ctx, unsigned axis,
+                                           RankedTensorType srcTy,
+                                           ttg::CGAEncodingAttr srcCGA,
+                                           bool splitLoneAxis) {
   unsigned rank = srcTy.getRank();
   auto order = ttg::getOrder(srcTy);
   auto sizePerThread = ttg::getContigPerThread(srcTy);
   SmallVector<unsigned> ctasPerCGA(rank, 0);
   unsigned remainingCTAs = srcCGA.getLinearLayout().getTotalInDimSize();
-  // Keep the reduced dimension within a single CTA so reductions do not cross
-  // CTAs. Assign CTAs to the remaining dimensions in layout order, bounded by
-  // how many elements each CTA can cover in that dimension.
   for (int i = rank - 1; i >= 0; --i) {
     unsigned dim = order[i];
-    if (dim == reduce.getAxis()) {
+    if (dim == axis) {
       ctasPerCGA[dim] = 1;
       continue;
     }
@@ -449,11 +524,11 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
     remainingCTAs /= ctasPerCGA[dim];
   }
 
-  // Put any leftover CTAs on the fastest non-reduced dimension.
+  // Put any leftover CTAs on the fastest other dimension.
   bool assignedRemainingCTAs = false;
   for (int i = rank - 1; i >= 0; --i) {
     unsigned dim = order[i];
-    if (dim == reduce.getAxis())
+    if (dim == axis)
       continue;
     ctasPerCGA[dim] *= remainingCTAs;
     assignedRemainingCTAs = true;
@@ -461,17 +536,17 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
   }
 
   SmallVector<unsigned> ctaSplitNum = ctasPerCGA;
-  // If numCTAs > 1 and the only dimension is the reduced dimension, the loops
-  // above leave all CTAs unassigned. Put the remaining CTAs on that dimension
-  // so that they all collaborate in the reduction.
+  // If numCTAs > 1 and the only dimension is `axis`, the loops above leave all
+  // CTAs unassigned: split it so that they collaborate, or replicate it.
   if (!assignedRemainingCTAs && remainingCTAs > 0) {
     ctasPerCGA[order[rank - 1]] *= remainingCTAs;
-    ctaSplitNum[order[rank - 1]] = ctasPerCGA[order[rank - 1]];
+    if (splitLoneAxis)
+      ctaSplitNum[order[rank - 1]] = ctasPerCGA[order[rank - 1]];
   }
 
   auto ctaOrder = srcCGA.getCTAOrder();
-  return ttg::CGAEncodingAttr::fromSplitParams(reduce.getContext(), ctasPerCGA,
-                                               ctaSplitNum, ctaOrder);
+  return ttg::CGAEncodingAttr::fromSplitParams(ctx, ctasPerCGA, ctaSplitNum,
+                                               ctaOrder);
 }
 
 FailureOr<CGALayouts> getCGALayouts(triton::ReduceOp reduce) {
@@ -482,7 +557,8 @@ FailureOr<CGALayouts> getCGALayouts(triton::ReduceOp reduce) {
   auto srcCGA = maybeGetCGA(srcTy);
   if (failed(srcCGA))
     return failure();
-  auto cgaLayout = getReduceCGALayout(reduce, srcTy, *srcCGA);
+  auto cgaLayout = getAxisLocalCGALayout(ctx, reduce.getAxis(), srcTy, *srcCGA,
+                                         /*splitLoneAxis=*/true);
   auto newSrcLayout = getRematerializationLayout(srcTy, cgaLayout, reduce);
   if (failed(newSrcLayout))
     return failure();
@@ -496,6 +572,21 @@ FailureOr<CGALayouts> getCGALayouts(triton::ReduceOp reduce) {
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
   return CGALayouts{std::move(operandLayouts), std::move(resultLayouts)};
+}
+
+FailureOr<CGALayouts> getCGALayouts(triton::ScanOp scan) {
+  auto srcTy = cast<RankedTensorType>(scan.getOperand(0).getType());
+  auto srcCGA = maybeGetCGA(srcTy);
+  if (failed(srcCGA))
+    return failure();
+  auto cgaLayout =
+      getAxisLocalCGALayout(scan.getContext(), scan.getAxis(), srcTy, *srcCGA,
+                            /*splitLoneAxis=*/false);
+  auto newLayout = getRematerializationLayout(srcTy, cgaLayout, scan);
+  if (failed(newLayout))
+    return failure();
+  SmallVector<Attribute> layouts(scan.getNumOperands(), *newLayout);
+  return CGALayouts{layouts, layouts};
 }
 
 template <typename OpTy> void assignCGALayouts(OpTy op) {
@@ -517,14 +608,19 @@ struct AssignCGALayoutsPass
 
     SmallVector<Operation *> consumers;
     mod.walk([&](Operation *op) {
-      if (isa<triton::DotOp, triton::ReduceOp>(op))
+      if (isa<triton::DotOp, triton::DotScaledOp, triton::ReduceOp,
+              triton::ScanOp>(op))
         consumers.push_back(op);
     });
     for (Operation *op : consumers) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
         assignCGALayouts(dot);
+      if (auto dot = dyn_cast<triton::DotScaledOp>(op))
+        assignCGALayouts(dot);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignCGALayouts(reduce);
+      if (auto scan = dyn_cast<triton::ScanOp>(op))
+        assignCGALayouts(scan);
     }
   }
 };
