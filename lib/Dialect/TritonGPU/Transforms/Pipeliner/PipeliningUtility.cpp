@@ -195,18 +195,15 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
              llvm::all_of(region.front().without_terminator(),
                           [](Operation &op) { return isPure(&op); });
     };
-    // Preserve the original condition in active stages. Inactive stages can
-    // take either pure branch; if both have effects, gate the entire op below.
     bool elseIsPure = isPureRegion(ifOp.getElseRegion());
     if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
       rewriter.setInsertionPoint(op);
       Value cnd = ifOp.getCondition();
       if (elseIsPure) {
-        // cond && pred forces the pure else branch when pred is false.
+        // We can execute the else branch whenever cond && pred is false
         cnd = getPredMask(rewriter, cnd.getType(), cnd, pred);
       } else {
-        // cond || !pred forces the pure then branch when pred is false,
-        // so the effectful else branch only executes for pred && !cond.
+        // We can execute the then branch whenever cond || !pred is true
         Value vTrue =
             arith::ConstantIntOp::create(rewriter, op->getLoc(), 1, 1);
         Value inactivePred =
