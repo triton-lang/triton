@@ -2293,11 +2293,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
 
   // CHECK-LABEL: @atomic_rmw_bf16_unaligned
   tt.func private @atomic_rmw_bf16_unaligned(%ptr: !tt.ptr<bf16>, %val: tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked> {
-    // CHECK: llvm.atomicrmw fadd
+    // CHECK: llvm.atomicrmw fadd {{.*}} <alignment = 2>
     // CHECK-NOT: alignment = 4
     // CHECK: llvm.return
     %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #blocked>
     %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %val : (tensor<128x!tt.ptr<bf16>, #blocked>, tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked>
+    tt.return %old : tensor<128xbf16, #blocked>
+  }
+
+  // The masked form takes the predicated bf16 branch.
+  // CHECK-LABEL: @atomic_rmw_bf16_masked_aligned
+  tt.func private @atomic_rmw_bf16_masked_aligned(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %val: tensor<128xbf16, #blocked>, %mask: i1) -> tensor<128xbf16, #blocked> {
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.atomicrmw fadd {{.*}} <alignment = 4>
+    %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #blocked>
+    %masks = tt.splat %mask : i1 -> tensor<128xi1, #blocked>
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %val, %masks : (tensor<128x!tt.ptr<bf16>, #blocked>, tensor<128xbf16, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xbf16, #blocked>
     tt.return %old : tensor<128xbf16, #blocked>
   }
 }

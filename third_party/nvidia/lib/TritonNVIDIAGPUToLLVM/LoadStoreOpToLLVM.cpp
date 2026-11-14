@@ -994,7 +994,9 @@ public:
       auto old = NVIDIA::emitAtomicRMW(
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
           op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed,
-          valueElemTy.isBF16() ? alignBytes : 0);
+          valueElemTy.isBF16() && !targetInfo.supportNativeBF16AtomicAdd()
+              ? alignBytes
+              : 0);
       if (failed(old))
         return failure();
       if (useRed)
