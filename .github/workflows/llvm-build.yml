@@ -8,6 +8,7 @@ on:
       - cmake/llvm-build-info.json
       - cmake/amd-llvm-build-info.json
       - third_party/amd/backend/codegen/**
+      - include/triton/Tools/LLVMDiagnosticCapture.h
       - include/triton/Tools/LLVMOptions.h
       - lib/Tools/LLVMOptions.cpp
   workflow_dispatch:
@@ -52,8 +53,8 @@ jobs:
             if "cmake/llvm-build-info.json" in changed:
                 packages.append("llvm")
             if any(
-                path in {"cmake/amd-llvm-build-info.json", "include/triton/Tools/LLVMOptions.h",
-                         "lib/Tools/LLVMOptions.cpp"}
+                path in {"cmake/amd-llvm-build-info.json", "include/triton/Tools/LLVMDiagnosticCapture.h",
+                         "include/triton/Tools/LLVMOptions.h", "lib/Tools/LLVMOptions.cpp"}
                 or path.startswith("third_party/amd/backend/codegen/") for path in changed
             ):
                 packages.append("amd-codegen")
