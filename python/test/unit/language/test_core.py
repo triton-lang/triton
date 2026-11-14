@@ -2138,6 +2138,51 @@ def test_atomic_rmw_predicate(num_ctas, device):
     assert x.item() == 63
 
 
+@pytest.mark.parametrize("num_warps", [1, 4])
+@pytest.mark.parametrize("case", ["sum128", "sum256", "masked", "offset", "distinct", "scalar"])
+def test_atomic_bf16_contended(case, num_warps, device):
+    # bf16 atomics lower to a 32-bit cas loop before sm_90; lanes that hit the
+    # same word must not lose updates.
+    check_type_supported("bfloat16", device)
+    # The bug and its fix are in the NVIDIA lowering before sm_90.
+    if not is_cuda():
+        pytest.skip("CUDA only")
+
+    @triton.jit
+    def add_kernel(X, OUT, N, STRIDE: tl.constexpr, BLOCK: tl.constexpr, MASKED: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        mask = offs < N if MASKED else None
+        tl.atomic_add(OUT + offs * STRIDE, tl.load(X + offs), mask=mask)
+
+    @triton.jit
+    def scalar_kernel(OUT):
+        tl.atomic_add(OUT, 1.0)
+
+    ones = torch.ones(256, device=device, dtype=torch.bfloat16)
+    out = torch.zeros(128 if case == "distinct" else 2, device=device, dtype=torch.bfloat16)
+    if case in ("sum128", "sum256"):
+        n = int(case[3:])
+        add_kernel[(1, )](ones, out, n, STRIDE=0, BLOCK=n, MASKED=False, num_warps=num_warps)
+        assert out[0].item() == n
+    elif case == "masked":
+        add_kernel[(1, )](ones, out, 100, STRIDE=0, BLOCK=128, MASKED=True, num_warps=num_warps)
+        assert out[0].item() == 100
+    elif case == "offset":
+        # base pointer is 2 bytes past a 4-byte boundary
+        view = out[1:]
+        add_kernel[(1, )](ones, view, 128, STRIDE=0, BLOCK=128, MASKED=False, num_warps=num_warps)
+        assert view[0].item() == 128
+        assert out[0].item() == 0
+    elif case == "distinct":
+        add_kernel[(1, )](ones, out, 128, STRIDE=1, BLOCK=128, MASKED=False, num_warps=num_warps)
+        assert torch.all(out == 1)
+    elif case == "scalar":
+        scalar_kernel[(64, )](out, num_warps=num_warps)
+        assert out[0].item() == 64
+    else:
+        raise AssertionError(f"unknown case {case}")
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str, check_return_val",
                          [(shape, axis, num_ctas, dtype_x_str, check_return_val)

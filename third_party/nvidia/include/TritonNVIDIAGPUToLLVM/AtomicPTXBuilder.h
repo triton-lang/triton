@@ -174,7 +174,8 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
               Type valueElemTy, Value ptr, ArrayRef<Value> vals,
               RMWOp rmwOpAttr, MemSemantic sem, MemSyncScope scope, Value pred,
               const TargetInfoBase &targetInfo, unsigned vec = 1,
-              unsigned packed = 1, bool returnOld = true) {
+              unsigned packed = 1, bool returnOld = true,
+              unsigned alignment = 0) {
   if (pred || vec != 1 || packed != 1 ||
       usePtxForHalfAdd(rmwOpAttr, valueElemTy, targetInfo))
     return emitPtxAtomicRMWImpl(
@@ -186,9 +187,9 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
-                                   *ordering,
-                                   targetInfo.getAtomicSyncScope(scope))
+  return LLVM::AtomicRMWOp::create(
+             rewriter, loc, *binOp, ptr, vals.front(), *ordering,
+             targetInfo.getAtomicSyncScope(scope), alignment)
       .getResult();
 }
 

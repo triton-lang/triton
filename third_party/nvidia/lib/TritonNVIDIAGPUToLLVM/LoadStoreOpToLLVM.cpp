@@ -25,6 +25,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 
+#include <algorithm>
 #include <cassert>
 
 using namespace mlir;
@@ -900,6 +901,17 @@ public:
                        << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
+    // Workaround for an LLVM AtomicExpand bug: with `align 2` on an address
+    // LLVM can prove is 4-aligned, the partword CAS loop reuses the pre-loop
+    // value (#12740). Passing the alignment we know avoids that path.
+    // TODO: remove once LLVM's AtomicExpand partword loop is fixed.
+    const bool useBF16Cas =
+        valueElemTy.isBF16() && !targetInfo.supportNativeBF16AtomicAdd();
+    unsigned bf16CasAlignBytes = 2;
+    if (AxisInfo *ptrInfo = axisAnalysisPass.getAxisInfo(op.getPtr()))
+      bf16CasAlignBytes =
+          std::clamp<int64_t>(ptrInfo->getGlobalDivisibility(), 2, 4);
+
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     Value threadPred =
         ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
@@ -942,8 +954,7 @@ public:
 
       // LLVM's atomicrmw is unconditional. Branch so only active lanes enter
       // the CAS loop for BF16 add.
-      if (pred && valueElemTy.isBF16() &&
-          !targetInfo.supportNativeBF16AtomicAdd()) {
+      if (pred && useBF16Cas) {
         assert(vec == 1 && packed == 1);
         // Lower atomic bin-op and sem to LLVM
         auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
@@ -968,11 +979,12 @@ public:
 
         // Codegen the atomic-rmw instruction(s)
         rewriter.setInsertionPointToEnd(atomicBlock);
-        Value atom = LLVM::AtomicRMWOp::create(
-                         rewriter, loc, *llvmAtomicBinOp, rmwPtr,
-                         valElements[i], *llvmAtomicMemOrdering,
-                         targetInfo.getAtomicSyncScope(op.getScope()))
-                         .getResult();
+        Value atom =
+            LLVM::AtomicRMWOp::create(
+                rewriter, loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
+                *llvmAtomicMemOrdering,
+                targetInfo.getAtomicSyncScope(op.getScope()), bf16CasAlignBytes)
+                .getResult();
         LLVM::BrOp::create(rewriter, loc, atom, endBlock);
         rewriter.setInsertionPointToStart(endBlock);
         resultVals[i] = endBlock->getArgument(0);
@@ -985,7 +997,8 @@ public:
         rmwVals.push_back(valElements[i + ii]);
       auto old = NVIDIA::emitAtomicRMW(
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
-          op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed);
+          op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed,
+          useBF16Cas ? bf16CasAlignBytes : 0);
       if (failed(old))
         return failure();
       if (useRed)

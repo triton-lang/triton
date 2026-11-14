@@ -2279,6 +2279,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
 
 // -----
 
+// bf16 atomic add on sm_80 is a sub-word CAS loop; the atomicrmw must carry the
+// alignment known from the pointer so the loop is built correctly.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_rmw_bf16_aligned
+  tt.func private @atomic_rmw_bf16_aligned(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %val: tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked> {
+    // CHECK: llvm.atomicrmw fadd {{.*}} <alignment = 4>
+    %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #blocked>
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %val : (tensor<128x!tt.ptr<bf16>, #blocked>, tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked>
+    tt.return %old : tensor<128xbf16, #blocked>
+  }
+
+  // CHECK-LABEL: @atomic_rmw_bf16_unaligned
+  tt.func private @atomic_rmw_bf16_unaligned(%ptr: !tt.ptr<bf16>, %val: tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked> {
+    // CHECK: llvm.atomicrmw fadd {{.*}} <alignment = 2>
+    // CHECK-NOT: alignment = 4
+    // CHECK: llvm.return
+    %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #blocked>
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %val : (tensor<128x!tt.ptr<bf16>, #blocked>, tensor<128xbf16, #blocked>) -> tensor<128xbf16, #blocked>
+    tt.return %old : tensor<128xbf16, #blocked>
+  }
+
+  // The masked form takes the predicated bf16 branch.
+  // CHECK-LABEL: @atomic_rmw_bf16_masked_aligned
+  tt.func private @atomic_rmw_bf16_masked_aligned(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %val: tensor<128xbf16, #blocked>, %mask: i1) -> tensor<128xbf16, #blocked> {
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.atomicrmw fadd {{.*}} <alignment = 4>
+    %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #blocked>
+    %masks = tt.splat %mask : i1 -> tensor<128xi1, #blocked>
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %val, %masks : (tensor<128x!tt.ptr<bf16>, #blocked>, tensor<128xbf16, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xbf16, #blocked>
+    tt.return %old : tensor<128xbf16, #blocked>
+  }
+}
+
+// -----
+
 #warpScalar = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [[1], [2]], block = [[4]]}>
 #partialLanes = #ttg.linear<{register = [], lane = [[0], [1], [0], [2], [0]], warp = [[4], [8]], block = [[16]]}>
 // CHECK-LABEL: module
