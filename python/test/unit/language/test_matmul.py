@@ -344,34 +344,38 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
-def test_tma_matmul_pipelined_if_else_side_effects(device):
-    # Keep the accumulator read outside the loop so the MMA wait is delayed.
-    # With zero iterations, predicated stages must not execute either store.
+@pytest.mark.parametrize("then_pure, else_pure", [(True, False), (False, True), (False, False)])
+def test_tma_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit(do_not_specialize=["N"])
-    def kernel(A, B, C, marker, N):
+    def kernel(A, B, C, marker, N, THEN_PURE: tl.constexpr, ELSE_PURE: tl.constexpr):
         rows = tl.arange(0, 64)
         cols = tl.arange(0, 32)
         acc = tl.zeros((64, 32), tl.float32)
         for k in tl.range(N, num_stages=3):
             acc = tl.dot(A.load([0, k * 32]), B.load([k * 32, 0]), acc)
             if k % 2 == 0:
-                tl.store(marker, 7)
+                if not THEN_PURE:
+                    tl.store(marker, 7)
+                value = k + 1
             else:
-                tl.store(marker + 1, 9)
+                if not ELSE_PURE:
+                    tl.store(marker + 1, 9)
+                value = k + 2
+            tl.store(marker + 2, value)
         tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
 
     a = torch.ones((64, 64), device=device, dtype=torch.float16)
     b = torch.ones((64, 32), device=device, dtype=torch.float16)
     c = torch.full((64, 32), -1.0, device=device)
-    marker = torch.full((2, ), -1, device=device, dtype=torch.int32)
+    marker = torch.full((3, ), -1, device=device, dtype=torch.int32)
     a_desc = TensorDescriptor(a, a.shape, a.stride(), [64, 32])
     b_desc = TensorDescriptor(b, b.shape, b.stride(), [32, 32])
-    kernel[(1, )](a_desc, b_desc, c, marker, 0, num_stages=3, num_warps=4)
+    kernel[(1, )](a_desc, b_desc, c, marker, 0, then_pure, else_pure, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
-    assert marker.tolist() == [-1, -1]
+    assert marker.tolist() == [-1, -1, -1]
     assert torch.all(c == 0)
 
 
