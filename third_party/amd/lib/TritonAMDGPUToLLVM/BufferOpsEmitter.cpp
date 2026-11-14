@@ -67,9 +67,16 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords) {
   // The RDNA-style flags below have bits [3:0]=0, so they are effectively
   // ignored on GFX12+ but we include CDNA5 in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m, ISAFamily::RDNA4,
-                          ISAFamily::CDNA5},
+  if (llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2},
                          targetInfo.getISAFamily())) {
+    // GFX10 dword3: FORMAT=32_FLOAT (20) in bits 18:12, RESOURCE_LEVEL=1
+    // (bit 24) and OOB_SELECT=3 (bits 29:28): the 0x31014000 constant that
+    // composable_kernel uses for gfx10. The gfx9 default leaves the bounds
+    // check wrong, so masked loads/stores misbehave.
+    flags = (20 << 12) | (1 << 24) | (3 << 28);
+  } else if (llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m,
+                                 ISAFamily::RDNA4, ISAFamily::CDNA5},
+                                targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
     flags |= (oob << 28);
