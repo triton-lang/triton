@@ -31,8 +31,8 @@ _ACCESS_DOC = """The offsets layout decides the access: each lane accesses its r
 
     ``mask`` must be provably constant over each line; a masked-off line is not accessed.
 
-    Lines synchronize only with other cooperative atomics, and must be in global memory reached over a fabric
-    that supports 128-byte requests (not host memory over PCIe)."""
+    Lines synchronize only with other cooperative atomics, and must be in global memory reachable through a bus
+    that supports 128-byte requests, which excludes host memory over PCIe."""
 
 
 def _format_doc(fn):

@@ -336,8 +336,8 @@ def CooperativeAtomicLoadOp : TT_AMDGPU_Op<"cooperative_atomic_load", [
 
     The optional mask must be provably constant over each line. Masked-off
     lines perform no access and return `other`, or undefined values if it is
-    absent. Accessed lines must be backed by storage on a fabric supporting
-    cooperative atomic accesses, and byte offsets must fit in 32 bits.
+    absent. Accessed lines must be backed by global memory reachable through a
+    bus supporting 128-byte requests, and byte offsets must fit in 32 bits.
 
     `sem` is `relaxed` or `acquire` and `scope` is the synchronization scope;
     they order the whole operation as for `tt.atomic_load`. The operation may
