@@ -282,33 +282,47 @@ static unsigned getIntTypeWidth(Type type) {
   return cast<IntegerType>(type).getWidth();
 }
 
-// Generate IR to compute the number of iterations of a loop.
+// Cast an integer or index value to an integer or index `type`, if necessary.
+static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value, Type type,
+                                bool isUnsigned = false) {
+  if (value.getType() == type)
+    return value;
+  if (isa<IndexType>(value.getType()) || isa<IndexType>(type)) {
+    if (isUnsigned)
+      return arith::IndexCastUIOp::create(b, type, value);
+    return arith::IndexCastOp::create(b, type, value);
+  }
+  if (cast<IntegerType>(value.getType()).getWidth() >
+      cast<IntegerType>(type).getWidth())
+    return arith::TruncIOp::create(b, type, value);
+  if (isUnsigned)
+    return arith::ExtUIOp::create(b, type, value);
+  return arith::ExtSIOp::create(b, type, value);
+}
+
+// Convert the bounds and step before computing the length so subtraction
+// can use the full width of the counter type.
 static Value computeNumIters(ImplicitLocOpBuilder &b, Value lowerBound,
-                             Value upperBound, Value step) {
-  // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
-  // This works even if step is negative.
+                             Value upperBound, Value step, Type intTy,
+                             bool isUnsigned) {
+  lowerBound = castIntIfNecessary(b, lowerBound, intTy, isUnsigned);
+  upperBound = castIntIfNecessary(b, upperBound, intTy, isUnsigned);
+  step = castIntIfNecessary(b, step, intTy, isUnsigned);
+  if (isUnsigned) {
+    // Clamp the empty range before the subtraction so its distance cannot wrap.
+    Value lb = arith::MinUIOp::create(b, lowerBound, upperBound);
+    Value diff = arith::SubIOp::create(b, upperBound, lb);
+    return arith::CeilDivUIOp::create(b, diff, step);
+  }
   Value diff = arith::SubIOp::create(b, upperBound, lowerBound);
-  // Let someone else prove it can be unsigned.
   return arith::CeilDivSIOp::create(b, diff, step);
 }
 
 // Generate IR to compute the number of iterations of a loop.
-static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
+static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop,
+                             Type intTy) {
   return computeNumIters(b, loop.getLowerBound(), loop.getUpperBound(),
-                         loop.getStep());
-}
-
-// Cast an integer or index value to an integer or index `type`, if necessary.
-static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
-                                Type type) {
-  if (value.getType() == type)
-    return value;
-  if (isa<IndexType>(value.getType()) || isa<IndexType>(type))
-    return arith::IndexCastOp::create(b, type, value);
-  if (cast<IntegerType>(value.getType()).getWidth() >
-      cast<IntegerType>(type).getWidth())
-    return arith::TruncIOp::create(b, type, value);
-  return arith::ExtSIOp::create(b, type, value);
+                         loop.getStep(), intTy, loop.getUnsignedCmp());
 }
 
 // To model an "undef" value, i.e. a value that is known to never be read on
@@ -555,37 +569,40 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // be fusible.
   hoistOpsBefore(outer, toHoist);
 
-  // Determine the integer type to use for the length computations. Use an
-  // integer bitwidth twice the size of the largest integer, up to 64 bits, to
-  // avoid overflow.
-  unsigned intTyWidth = getIntTypeWidth(outer.getInductionVar().getType());
+  // Double the largest IV width up to 64 bits. Keep the original width of
+  // wider IVs so the bounds and step are never truncated.
+  unsigned ivWidth = getIntTypeWidth(outer.getInductionVar().getType());
 
   // Generate the computations of the fused loop bounds.
   Location loc = outer.getLoc();
   ImplicitLocOpBuilder b(loc, outer);
   for (InnerLoop &loop : innerLoops) {
-    intTyWidth = std::max(intTyWidth,
-                          getIntTypeWidth(loop.op.getInductionVar().getType()));
+    ivWidth =
+        std::max(ivWidth, getIntTypeWidth(loop.op.getInductionVar().getType()));
   }
-  auto intTy = b.getIntegerType(intTyWidth);
+  auto intTy = b.getIntegerType(std::max(ivWidth, std::min(64u, 2 * ivWidth)));
   bool allInvariant = llvm::all_of(
       innerLoops, [](InnerLoop &loop) { return loop.isOuterLoopInvariant(); });
 
-  Value lenOuter = computeNumIters(b, outer);
+  auto intTyCst = [&](int64_t v) {
+    return arith::ConstantOp::create(b, IntegerAttr::get(intTy, v));
+  };
+
+  // Clamp negative signed lengths before multiplying so they cannot wrap to
+  // a positive count. Unsigned lengths already clamp the bounds.
+  Value lenOuter = computeNumIters(b, outer, intTy);
+  if (!outer.getUnsignedCmp())
+    lenOuter = arith::MaxSIOp::create(b, lenOuter, intTyCst(0));
   SmallVector<Value> lenInners;
   for (InnerLoop &loop : innerLoops) {
     // len_jk = len(range(lbjk, ubjk, stepjk))
     Value lenInner;
     if (loop.isOuterLoopInvariant())
-      lenInner = castIntIfNecessary(b, computeNumIters(b, loop.op), intTy);
+      lenInner = computeNumIters(b, loop.op, intTy);
     else
       lenInner = createPoisonOrZero(b, intTy);
     lenInners.push_back(lenInner);
   }
-
-  auto intTyCst = [&](int64_t v) {
-    return arith::ConstantOp::create(b, IntegerAttr::get(intTy, v));
-  };
 
   // inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
   unsigned N = innerLoops.size() - 1;
@@ -599,8 +616,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   innerLen = arith::SubIOp::create(b, innerLen, intTyCst(N));
 
   // total_iters = len_i * inner_len
-  Value totalIters = arith::MulIOp::create(
-      b, castIntIfNecessary(b, lenOuter, intTy), innerLen);
+  Value totalIters = arith::MulIOp::create(b, lenOuter, innerLen);
 
   // Generate a loop to compute the total number of iterations for inner loops
   // whose bounds are not outer loop invariant.
@@ -608,6 +624,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   auto peeledLen =
       scf::ForOp::create(b, outer.getLowerBound(), outer.getUpperBound(),
                          outer.getStep(), {totalIters});
+  peeledLen.setUnsignedCmp(outer.getUnsignedCmp());
   totalIters = peeledLen.getRegionIterArg(0);
   mapping.map(outer.getInductionVar(), peeledLen.getInductionVar());
   b.setInsertionPointToStart(peeledLen.getBody());
@@ -622,8 +639,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     Value numIters =
         computeNumIters(b, mapping.lookupOrDefault(loop.op.getLowerBound()),
                         mapping.lookupOrDefault(loop.op.getUpperBound()),
-                        mapping.lookupOrDefault(loop.op.getStep()));
-    numIters = castIntIfNecessary(b, numIters, intTy);
+                        mapping.lookupOrDefault(loop.op.getStep()), intTy,
+                        loop.op.getUnsignedCmp());
     // Accumulate into the total number of iterations.
     numIters = arith::MaxSIOp::create(b, intTyCst(1), numIters);
     totalIters = arith::AddIOp::create(b, totalIters, numIters);
@@ -768,8 +785,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
         lenInner =
             computeNumIters(b, mapping.lookupOrDefault(loop.op.getLowerBound()),
                             mapping.lookupOrDefault(loop.op.getUpperBound()),
-                            mapping.lookupOrDefault(loop.op.getStep()));
-        lenInner = castIntIfNecessary(b, lenInner, intTy);
+                            mapping.lookupOrDefault(loop.op.getStep()), intTy,
+                            loop.op.getUnsignedCmp());
         innerLen = arith::AddIOp::create(
             b, innerLen, arith::MaxSIOp::create(b, intTyCst(1), lenInner));
       }

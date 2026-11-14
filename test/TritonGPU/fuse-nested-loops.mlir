@@ -49,6 +49,7 @@ tt.func @fuse_one_level_simple(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
   //
   // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]]
   // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]]
+  // CHECK-NEXT: [[LEN_I_POS:%.*]] = arith.maxsi [[LEN_I]], %c0_i64
 
   // len_j = len(range(lbj0, ubj0, stepj0))
   //
@@ -61,7 +62,7 @@ tt.func @fuse_one_level_simple(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
 
   // total_iters = len_i * max(1, inner_len)
   //
-  // CHECK: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I]], [[INNER_LEN]]
+  // CHECK: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I_POS]], [[INNER_LEN]]
 
   // T = -1
   // i = lbi - stepi
@@ -210,6 +211,7 @@ tt.func @multiple_loops(
     %m0: f32) -> f32 {
   // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]]
   // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]]
+  // CHECK-NEXT: [[LEN_I_POS:%.*]] = arith.maxsi [[LEN_I]], %c0_i64
   // CHECK-NEXT: [[DIFF_J0:%.*]] = arith.subi [[UBJ0]], [[LBJ0]]
   // CHECK-NEXT: [[LEN_J0:%.*]] = arith.ceildivsi [[DIFF_J0]], [[STEPJ0]]
   // CHECK-NEXT: [[DIFF_J1:%.*]] = arith.subi [[UBJ1]], [[LBJ1]]
@@ -223,7 +225,7 @@ tt.func @multiple_loops(
   // CHECK-NEXT: [[LEN_J2_CLAMP:%.*]] = arith.maxsi [[LEN_J2]], %c1_i64
   // CHECK-NEXT: [[PLEN3:%.*]] = arith.addi [[PLEN2]], [[LEN_J2_CLAMP]]
   // CHECK:      [[INNER_LEN:%.*]] = arith.subi [[PLEN3]], %c2_i64
-  // CHECK-NEXT: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I]], [[INNER_LEN]]
+  // CHECK-NEXT: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I_POS]], [[INNER_LEN]]
 
   // CHECK:      [[I_INIT:%.*]] = arith.subi [[LBI]], [[STEPI]]
   // CHECK:      [[OUTS:%.*]]:12 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS]] step %c1_i64 iter_args(
@@ -363,6 +365,7 @@ tt.func @hoist_loop_bound_computations(%lbi: i64, %ubi: i64, %stepi: i64) {
 
   // CHECK-NEXT: [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]]
   // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]]
+  // CHECK-NEXT: [[LEN_I_POS:%.*]] = arith.maxsi [[LEN_I]], %c0_i64
   // CHECK-NEXT: [[DIFF_J:%.*]] = arith.subi [[UBJ]], [[LBJ]]
   // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ]]
 
@@ -416,15 +419,22 @@ tt.func @dependent_inner_loop(%lbi: i64, %ubi: i64, %stepi: i64) {
   tt.return
 }
 
-// CHECK-LABEL: @upcast_i16_to_i32
+// CHECK-LABEL: @widen_i16_and_i32_to_i64
 // CHECK-SAME: [[LBI:%.*]]: i32, [[UBI:%.*]]: i32, [[STEPI:%.*]]: i32, [[LBJ:%.*]]: i16, [[UBJ:%.*]]: i16, [[STEPJ:%.*]]: i16
-tt.func @upcast_i16_to_i32(%lbi: i32, %ubi: i32, %stepi: i32, %lbj: i16, %ubj: i16, %stepj: i16) {
-  // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]] : i32
-  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]] : i32
-  // CHECK-NEXT: [[DIFF_J:%.*]] = arith.subi [[UBJ]], [[LBJ]] : i16
-  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ]] : i16
+tt.func @widen_i16_and_i32_to_i64(%lbi: i32, %ubi: i32, %stepi: i32, %lbj: i16, %ubj: i16, %stepj: i16) {
+  // Lengths are computed in a type twice the largest IV width (i32 -> i64) so
+  // that `ub - lb` cannot overflow for a loop that is itself valid.
+  // CHECK:      [[LBI64:%.*]] = arith.extsi [[LBI]] : i32 to i64
+  // CHECK:      [[UBI64:%.*]] = arith.extsi [[UBI]] : i32 to i64
+  // CHECK:      [[STEPI64:%.*]] = arith.extsi [[STEPI]] : i32 to i64
+  // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI64]], [[LBI64]] : i64
+  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI64]] : i64
+  // CHECK:      [[LBJ64:%.*]] = arith.extsi [[LBJ]] : i16 to i64
+  // CHECK:      [[UBJ64:%.*]] = arith.extsi [[UBJ]] : i16 to i64
+  // CHECK:      [[STEPJ64:%.*]] = arith.extsi [[STEPJ]] : i16 to i64
+  // CHECK:      [[DIFF_J:%.*]] = arith.subi [[UBJ64]], [[LBJ64]] : i64
+  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ64]] : i64
 
-  // CHECK: arith.extsi [[LEN_J]] : i16 to i32
   scf.for %i = %lbi to %ubi step %stepi : i32 {
     scf.for %j = %lbj to %ubj step %stepj : i16 {
       "body"(%i, %j) : (i32, i16) -> ()
@@ -436,18 +446,212 @@ tt.func @upcast_i16_to_i32(%lbi: i32, %ubi: i32, %stepi: i32, %lbj: i16, %ubj: i
 // CHECK-LABEL: @upcast_index_to_i64
 // CHECK-SAME: [[LBI:%.*]]: index, [[UBI:%.*]]: index, [[STEPI:%.*]]: index, [[LBJ:%.*]]: index, [[UBJ:%.*]]: index, [[STEPJ:%.*]]: index
 tt.func @upcast_index_to_i64(%lbi: index, %ubi: index, %stepi: index, %lbj: index, %ubj: index, %stepj: index) {
-  // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI]], [[LBI]] : index
-  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI]] : index
-  // CHECK-NEXT: [[DIFF_J:%.*]] = arith.subi [[UBJ]], [[LBJ]] : index
-  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ]] : index
+  // Index has a 64-bit internal width, so the length type is capped at i64.
+  // CHECK:      [[LBI64:%.*]] = arith.index_cast [[LBI]] : index to i64
+  // CHECK:      [[UBI64:%.*]] = arith.index_cast [[UBI]] : index to i64
+  // CHECK:      [[STEPI64:%.*]] = arith.index_cast [[STEPI]] : index to i64
+  // CHECK:      [[DIFF_I:%.*]] = arith.subi [[UBI64]], [[LBI64]] : i64
+  // CHECK-NEXT: [[LEN_I:%.*]] = arith.ceildivsi [[DIFF_I]], [[STEPI64]] : i64
+  // CHECK:      [[LBJ64:%.*]] = arith.index_cast [[LBJ]] : index to i64
+  // CHECK:      [[UBJ64:%.*]] = arith.index_cast [[UBJ]] : index to i64
+  // CHECK:      [[STEPJ64:%.*]] = arith.index_cast [[STEPJ]] : index to i64
+  // CHECK:      [[DIFF_J:%.*]] = arith.subi [[UBJ64]], [[LBJ64]] : i64
+  // CHECK-NEXT: [[LEN_J:%.*]] = arith.ceildivsi [[DIFF_J]], [[STEPJ64]] : i64
 
-  // CHECK: arith.index_cast [[LEN_J]] : index to i64
-  // CHECK: arith.index_cast [[LEN_I]] : index to i64
   scf.for %i = %lbi to %ubi step %stepi {
     scf.for %j = %lbj to %ubj step %stepj {
       "body"(%i, %j) : (index, index) -> ()
     }
   } {"ttg.always-fuse"}
+  tt.return
+}
+
+// Regression for #12385: six valid outer iterations with an i32 bounds
+// difference of 3221225467, which exceeds INT32_MAX.
+// CHECK-LABEL: @i32_trip_count_overflow
+tt.func @i32_trip_count_overflow() {
+  %lb = arith.constant -2147483643 : i32
+  %ub = arith.constant 1073741824 : i32
+  %step = arith.constant 536870912 : i32
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  // CHECK: scf.for {{.*}} = %c0_i64 to %c18_i64 step %c1_i64
+  scf.for %i = %lb to %ub step %step : i32 {
+    scf.for %j = %c0_i32 to %c3_i32 step %c1_i32 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  tt.return
+}
+
+// The frontend lowers descending ranges to a positive step and reflects the
+// induction variable in the loop body.
+// CHECK-LABEL: @i32_trip_count_overflow_reversed_iv
+tt.func @i32_trip_count_overflow_reversed_iv() {
+  %lb = arith.constant -2147483643 : i32
+  %ub = arith.constant 1073741824 : i32
+  %step = arith.constant 536870912 : i32
+  %c1073741824 = arith.constant 1073741824 : i32
+  %cneg2147483643 = arith.constant -2147483643 : i32
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  // CHECK: scf.for {{.*}} = %c0_i64 to %c18_i64 step %c1_i64
+  scf.for %i = %lb to %ub step %step : i32 {
+    %rev = arith.subi %c1073741824, %i : i32
+    %real = arith.addi %rev, %cneg2147483643 : i32
+    scf.for %j = %c0_i32 to %c3_i32 step %c1_i32 : i32 {
+      "body"(%real, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  tt.return
+}
+
+// An all-i16 nest exercises the width rule below the 64-bit cap.
+// CHECK-LABEL: @i16_trip_count_i32
+tt.func @i16_trip_count_i32() {
+  %lb = arith.constant 0 : i16
+  %ub = arith.constant 6 : i16
+  %step = arith.constant 1 : i16
+  %c0_i16 = arith.constant 0 : i16
+  %c3_i16 = arith.constant 3 : i16
+  %c1_i16 = arith.constant 1 : i16
+  // CHECK: scf.for {{.*}} = %c0_i32 to %c18_i32 step %c1_i32
+  scf.for %i = %lb to %ub step %step : i16 {
+    scf.for %j = %c0_i16 to %c3_i16 step %c1_i16 : i16 {
+      "body"(%i, %j) : (i16, i16) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  tt.return
+}
+
+// An empty outer loop must not be multiplied into a positive fused trip count:
+// len_i = -4294967297 and len_j = 4294967295, whose product would wrap to 1 in
+// i64. The outer length is clamped to zero before the multiplication.
+// CHECK-LABEL: @empty_outer_trip_count
+tt.func @empty_outer_trip_count() {
+  %olb = arith.constant 4294967297 : i64
+  %oub = arith.constant 0 : i64
+  %ostep = arith.constant 1 : i64
+  %ilb = arith.constant -2147483648 : i32
+  %iub = arith.constant 2147483647 : i32
+  %istep = arith.constant 1 : i32
+  // CHECK-NOT: scf.for
+  // CHECK-NOT: "body"
+  scf.for %i = %olb to %oub step %ostep : i64 {
+    scf.for %j = %ilb to %iub step %istep : i32 {
+      "body"(%i, %j) : (i64, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  // CHECK: tt.return
+  tt.return
+}
+
+// A runtime lower bound prevents the clamp from folding away.
+// CHECK-LABEL: @empty_outer_runtime_lb
+// CHECK-SAME: [[LB:%.*]]: i64
+tt.func @empty_outer_runtime_lb(%lb: i64) {
+  %oub = arith.constant 0 : i64
+  %ostep = arith.constant 1 : i64
+  %ilb = arith.constant -2147483648 : i32
+  %iub = arith.constant 2147483647 : i32
+  %istep = arith.constant 1 : i32
+  // CHECK: [[DIFF:%.*]] = arith.subi %c0_i64, [[LB]] : i64
+  // CHECK-NEXT: [[LEN:%.*]] = arith.maxsi [[DIFF]], %c0_i64 : i64
+  // CHECK-NEXT: arith.muli [[LEN]], %c4294967295_i64 : i64
+  scf.for %i = %lb to %oub step %ostep : i64 {
+    scf.for %j = %ilb to %iub step %istep : i32 {
+      "body"(%i, %j) : (i64, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  tt.return
+}
+
+// This unsigned inner range crosses the sign bit and spans four iterations.
+// CHECK-LABEL: @unsigned_inner_wide_trip_count
+tt.func @unsigned_inner_wide_trip_count() {
+  %olb = arith.constant 0 : i32
+  %oub = arith.constant 2 : i32
+  %ostep = arith.constant 1 : i32
+  %ilb = arith.constant 2147483646 : i32
+  %iub = arith.constant -2147483646 : i32
+  %istep = arith.constant 1 : i32
+  // CHECK: scf.for {{.*}} = %c0_i64 to %c8_i64 step %c1_i64
+  scf.for %i = %olb to %oub step %ostep : i32 {
+    scf.for unsigned %j = %ilb to %iub step %istep : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
+  tt.return
+}
+
+// An unsigned outer loop with a dependent inner loop must create the peeled
+// length loop with the unsigned comparison. Signed iteration would treat this
+// empty unsigned range as 4294967295 iterations.
+// CHECK-LABEL: @unsigned_outer_empty_dependent_inner
+tt.func @unsigned_outer_empty_dependent_inner() {
+  %olb = arith.constant -2147483648 : i32
+  %oub = arith.constant 2147483647 : i32
+  %ostep = arith.constant 1 : i32
+  %ilb = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK-NOT: scf.for
+  // CHECK-NOT: "body"
+  scf.for unsigned %i = %olb to %oub step %ostep : i32 {
+    %iub = arith.addi %i, %c1 : i32
+    scf.for %j = %ilb to %iub step %c1 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {"ttg.always-fuse"}
+  // CHECK: tt.return
+  tt.return
+}
+
+// A nonempty unsigned range supplies the fused bound through the peeled loop.
+// CHECK-LABEL: @unsigned_outer_dependent_inner
+tt.func @unsigned_outer_dependent_inner() {
+  %olb = arith.constant 2147483646 : i32
+  %oub = arith.constant -2147483646 : i32
+  %ostep = arith.constant 1 : i32
+  %ilb = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: [[PEELED:%.*]] = scf.for unsigned {{.*}} = %c2147483646_i32 to %c-2147483646_i32 step %c1_i32
+  // CHECK: scf.for {{.*}} = %c0_i64 to [[PEELED]]
+  // CHECK: "body"
+  scf.for unsigned %i = %olb to %oub step %ostep : i32 {
+    %iub = arith.addi %i, %c1 : i32
+    scf.for %j = %ilb to %iub step %c1 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
+// Truncating this step to 64 bits would turn it into zero.
+// CHECK-LABEL: @i128_step_not_truncated
+tt.func @i128_step_not_truncated() {
+  %olb = arith.constant 0 : i128
+  %oub = arith.constant 18446744073709551616 : i128
+  %ostep = arith.constant 18446744073709551616 : i128
+  %ilb = arith.constant 0 : i32
+  %iub = arith.constant 3 : i32
+  %istep = arith.constant 1 : i32
+  // CHECK: scf.for {{.*}} = %c0_i128 to %c3_i128 step %c1_i128
+  scf.for %i = %olb to %oub step %ostep : i128 {
+    scf.for %j = %ilb to %iub step %istep : i32 {
+      "body"(%i, %j) : (i128, i32) -> ()
+      scf.yield
+    }
+  } {"tt.flatten"}
   tt.return
 }
 
