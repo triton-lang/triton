@@ -1795,5 +1795,9 @@ def test_async_copy_nvmma_input_layout(dtype, precision, col_b, num_warps, num_s
         a, b, output, M, N, K, *a.stride(), *b.stride(), *output.stride(),
         BLOCK_M=M, BLOCK_N=N, BLOCK_K=32, NUM_STAGES=num_stages,
         PRECISION=precision, num_warps=num_warps)
-    torch.testing.assert_close(output, a.float() @ b.float(), atol=0, rtol=0)
     assert "wgmma.mma_async" in kernel.asm["ptx"]
+    assert "cp.async." in kernel.asm["ptx"]
+    assert "cp.async.bulk.tensor" not in kernel.asm["ptx"]
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(output, a.float() @ b.float(), atol=0, rtol=0)

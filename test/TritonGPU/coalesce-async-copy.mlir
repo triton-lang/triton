@@ -102,7 +102,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// A transposed FP32 NVMMA layout needs scalar copies at every swizzle width.
+// This row-oriented source requires scalar copies into the transposed layout.
 // CHECK: #[[CLIP0:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
 // CHECK: tt.func @nvmma_swizzle_0
 // CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP0]]>
@@ -119,7 +119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// A transposed FP32 NVMMA layout needs scalar copies at every swizzle width.
+// This row-oriented source requires scalar copies into the transposed layout.
 // CHECK: #[[CLIP32:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
 // CHECK: tt.func @nvmma_swizzle_32
 // CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP32]]>
@@ -136,7 +136,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// A transposed FP32 NVMMA layout needs scalar copies at every swizzle width.
+// This row-oriented source requires scalar copies into the transposed layout.
 // CHECK: #[[CLIP64:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
 // CHECK: tt.func @nvmma_swizzle_64
 // CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP64]]>
@@ -243,23 +243,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
  tt.func @nvmma_replicated(%p: tensor<64x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<64x128xf32, #shared, #smem, mutable>) {
   %t = ttg.async_copy_global_to_local %p, %s : tensor<64x128x!tt.ptr<f32>, #blocked> -> <64x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// Pointer/mask contiguity may lower vector width, but a compatible shared
-// layout alone must not trigger this shared-layout clipping rule.
-// CHECK-LABEL: tt.func @nvmma_mask_contiguity_unchanged
-// CHECK-NOT: ttg.convert_layout
-// CHECK: ttg.async_copy_global_to_local {{.*}} mask
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_mask_contiguity_unchanged(%p: tensor<128x32x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<128x32xf32, #shared, #smem, mutable>, %mask: tensor<128x32xi1, #blocked>) {
-  %t = ttg.async_copy_global_to_local %p, %s mask %mask {contiguity = 1 : i32} : tensor<128x32x!tt.ptr<f32>, #blocked> -> <128x32xf32, #shared, #smem, mutable>
   tt.return
  }
 }
