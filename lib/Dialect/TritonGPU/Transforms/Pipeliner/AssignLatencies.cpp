@@ -229,19 +229,17 @@ public:
           // full iteration of masked operations only to execute single wait.
           continue;
         }
-        // Inputs already available before the loop need no operand pipeline.
-        // Keep the two-CTA MMA synchronous so both CTAs advance together.
-        if (mma.getTwoCtas()) {
-          SmallVector<Value> inputs = {mma.getA(), mma.getB()};
-          if (auto scaled = dyn_cast<ttng::TCGen5MMAScaledOp>(mma.getOperation())) {
-            inputs.push_back(scaled.getAScale());
-            inputs.push_back(scaled.getBScale());
-          }
-          if (llvm::all_of(inputs, [&](Value input) {
-                return forOp.isDefinedOutsideOfLoop(input);
-              }))
-            continue;
+        // Keep tcgen05 synchronous when its inputs are already available.
+        // Loads elsewhere in the loop can still be pipelined independently.
+        SmallVector<Value> inputs = {mma.getA(), mma.getB()};
+        if (auto scaled = dyn_cast<ttng::TCGen5MMAScaledOp>(mma.getOperation())) {
+          inputs.push_back(scaled.getAScale());
+          inputs.push_back(scaled.getBScale());
         }
+        if (llvm::all_of(inputs, [&](Value input) {
+              return forOp.isDefinedOutsideOfLoop(input);
+            }))
+          continue;
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
             mma, forOp, isLoadToBePipelined);
         if (pipeHelper.isPipelineable ||

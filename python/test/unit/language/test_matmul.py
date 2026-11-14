@@ -348,7 +348,7 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 @pytest.mark.parametrize("num_stages", [1, 3])
 @pytest.mark.parametrize("iterations", [0, 1, 8])
 def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, iterations, device):
-    # Inputs are loaded before the loop, so the two-CTA MMA stays synchronous.
+    # Inputs are loaded before the loop, so the MMA stays synchronous.
     # A lagging peer must observe completion before the leader reuses the barrier.
     from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -381,9 +381,9 @@ def test_tma_matmul_two_ctas_lagging_peer(num_ctas, num_stages, iterations, devi
     if is_compile_warmup():
         return
     assert (f"tcgen05.mma.cta_group::{num_ctas}" in compiled.asm["ptx"])
+    # No peeled MMA: the loop uses synchronous lowering at either CTA/stage count.
+    assert compiled.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
     if num_ctas == 2:
-        # No peeled MMA: the loop uses synchronous lowering at either stage count.
-        assert compiled.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
         assert "ttng.cluster_barrier" in compiled.asm["ttgir"]
     torch.testing.assert_close(c, torch.full_like(c, 16.0 * iterations), atol=0, rtol=0)
     rows = torch.arange(256, device=device, dtype=torch.int32)
