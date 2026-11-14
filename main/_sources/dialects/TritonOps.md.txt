@@ -244,7 +244,7 @@ and each element is loaded at least once, even with a zero timeout.
 
 Traits: `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`
+Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -601,7 +601,7 @@ The shape and types of `src` must match the descriptor otherwise the result is u
 
 Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
+Interfaces: `AtomicOpInterface`, `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 
 #### Attributes:
 

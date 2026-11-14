@@ -719,7 +719,7 @@ poll. The block waits for all elements to finish. The result has the
 same shape and encoding as $ptr. All elements share one timeout budget,
 and each element is loaded at least once, even with a zero timeout.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id12">
 <h3>Attributes:<a class="headerlink" href="#id12" title="Link to this heading"></a></h3>
 <table>
@@ -1182,7 +1182,7 @@ The destination tensor type and shape must match the descriptor otherwise the re
 <code class="docutils literal notranslate"><span class="pre">desc</span></code> is a tensor descriptor object.
 The shape and types of <code class="docutils literal notranslate"><span class="pre">src</span></code> must match the descriptor otherwise the result is undefined.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorStoreLikeOpInterface</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">AtomicOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_DescriptorStoreLikeOpInterface</span></code></p>
 <section id="id35">
 <h3>Attributes:<a class="headerlink" href="#id35" title="Link to this heading"></a></h3>
 <table>

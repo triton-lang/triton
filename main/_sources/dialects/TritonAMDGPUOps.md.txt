@@ -632,7 +632,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 
 Traits: `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `BufferOpInterface`
+Interfaces: `AtomicOpInterface`, `BufferOpInterface`
 
 #### Attributes:
 
@@ -731,7 +731,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 
 Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `SameLoadStoreOperandsAndResultEncoding`
 
-Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
+Interfaces: `AtomicOpInterface`, `BufferOpInterface`, `PredicatedOpInterface`
 
 #### Attributes:
 

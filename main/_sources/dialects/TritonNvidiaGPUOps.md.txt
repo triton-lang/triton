@@ -294,7 +294,7 @@ semantics are implied.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
+Interfaces: `AtomicOpInterface`, `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 #### Attributes:
 
