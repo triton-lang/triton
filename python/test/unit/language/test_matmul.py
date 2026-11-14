@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
-from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_cdna5, is_rubin, is_blackwell, is_hopper_or_newer
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_cdna5, is_rubin, is_blackwell
 
 pytestmark = pytest.mark.enable_warmup
 
@@ -343,18 +343,19 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "scf.for" in ttgir
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
 @pytest.mark.parametrize("then_pure, else_pure", [(True, False), (False, True), (False, False)])
-def test_tma_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
-    from triton.tools.tensor_descriptor import TensorDescriptor
+def test_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
 
     @triton.jit(do_not_specialize=["N"])
     def kernel(A, B, C, marker, N, THEN_PURE: tl.constexpr, ELSE_PURE: tl.constexpr):
         rows = tl.arange(0, 64)
         cols = tl.arange(0, 32)
+        ks = tl.arange(0, 32)
         acc = tl.zeros((64, 32), tl.float32)
         for k in tl.range(N, num_stages=3):
-            acc = tl.dot(A.load([0, k * 32]), B.load([k * 32, 0]), acc)
+            a = tl.load(A + rows[:, None] * 64 + k * 32 + ks[None, :])
+            b = tl.load(B + (k * 32 + ks[:, None]) * 32 + cols[None, :])
+            acc = tl.dot(a, b, acc)
             if k % 2 == 0:
                 if not THEN_PURE:
                     tl.store(marker, 7)
@@ -370,9 +371,7 @@ def test_tma_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device)
     b = torch.ones((64, 32), device=device, dtype=torch.float16)
     c = torch.full((64, 32), -1.0, device=device)
     marker = torch.full((3, ), -1, device=device, dtype=torch.int32)
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), [64, 32])
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), [32, 32])
-    kernel[(1, )](a_desc, b_desc, c, marker, 0, then_pure, else_pure, num_stages=3, num_warps=4)
+    kernel[(1, )](a, b, c, marker, 0, then_pure, else_pure, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     assert marker.tolist() == [-1, -1, -1]
