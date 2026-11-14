@@ -8,6 +8,7 @@
 // RUN: triton-opt %t/fp4.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100a -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
+// RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16-SM80 --dump-input-context=20 %s
 
 //--- common.mlir
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
@@ -827,6 +828,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 
   // F64BF16-LABEL: fp_trunc_f64_to_bf16_rtz(
   // F64BF16: cvt.rz.bf16.f64
+  // F64BF16-SM80-LABEL: fp_trunc_f64_to_bf16_rtz(
+  // F64BF16-SM80: cvt.rz.f32.f64
+  // F64BF16-SM80: cvt.rz.bf16.f32
   tt.func public @fp_trunc_f64_to_bf16_rtz(%out: !tt.ptr<bf16>, %arg: f64) {
     %result = tt.fp_to_fp %arg, rounding = rtz : f64 -> bf16
     tt.store %out, %result : !tt.ptr<bf16>
