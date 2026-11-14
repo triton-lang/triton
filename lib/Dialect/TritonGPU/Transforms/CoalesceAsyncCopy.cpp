@@ -50,7 +50,7 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// This pass currently only applies if the following are all true...
+// One example where this clipping is needed is when all of the following hold:
 //   1) Operand A for WGMMA is to be loaded in registers
 //   2) We upcast operand A in registers before the WGMMA
 //      (downcasting is not yet supported)
@@ -86,9 +86,16 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    if (!sharedEnc)
+    if (!isa<SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr>(
+            dstTy.getEncoding()))
       return failure();
+    // Padded/packed NVMMA encodings are outside this per-element clipping
+    // rule. In particular, packed FP6 has no per-element LinearLayout.
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(dstTy.getEncoding())) {
+      if (nvmma.getPadding() != NVMmaPadding::None)
+        return rewriter.notifyMatchFailure(copyOp,
+                                           "padded NVMMA copies are not handled");
+    }
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even
