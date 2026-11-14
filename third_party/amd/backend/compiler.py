@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
+from triton.runtime.errors import OutOfResources
 from dataclasses import dataclass
 import ctypes
 from typing import Any, Dict, Tuple
@@ -511,7 +512,7 @@ class HIPBackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            metadata.shared,
+            0,
         )
 
     def get_codegen_implementation(self, options):
@@ -856,6 +857,9 @@ class HIPBackend(BaseBackend):
         # Get some metadata
         metadata["num_warps"] = total_warps_num
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        max_shared = amd.get_shared_memory_size(options.arch)
+        if metadata["shared"] > max_shared:
+            raise OutOfResources(metadata["shared"], max_shared, "shared memory")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0

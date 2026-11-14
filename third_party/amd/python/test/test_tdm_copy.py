@@ -637,7 +637,7 @@ def test_compile_heterogeneous_tdm_hints_stay_separate():
     """Compile-only: heterogeneous hinted loads stay separate."""
     amdgcn = _compile_amdgcn(
         heterogeneous_tdm_kernel, ["a_ptr", "b_ptr", "as_ptr", "bs_ptr"], {
-            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 2048, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A":
+            "BLOCK_M": 256, "BLOCK_N": 128, "BLOCK_N_B": 1024, "BLOCK_SCALE_M": 64, "BLOCK_SCALE_N": 32, "HINT_A":
             0b00010001, "HINT_B": 0b00100010, "HINT_AS": 0b01000100, "HINT_BS": 0b10001000
         }, ptr_ty="*i8")
     _assert_tensor_load_count(amdgcn, 4, "heterogeneous hinted A/B/AS/BS loads")
