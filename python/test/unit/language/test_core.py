@@ -2157,7 +2157,7 @@ def test_atomic_bf16_contended(case, num_warps, device):
         tl.atomic_add(OUT, 1.0)
 
     ones = torch.ones(256, device=device, dtype=torch.bfloat16)
-    out = torch.zeros(2, device=device, dtype=torch.bfloat16)
+    out = torch.zeros(128 if case == "distinct" else 2, device=device, dtype=torch.bfloat16)
     if case in ("sum128", "sum256"):
         n = int(case[3:])
         add_kernel[(1, )](ones, out, n, STRIDE=0, BLOCK=n, MASKED=False, num_warps=num_warps)
@@ -2172,12 +2172,13 @@ def test_atomic_bf16_contended(case, num_warps, device):
         assert view[0].item() == 128
         assert out[0].item() == 0
     elif case == "distinct":
-        out = torch.zeros(128, device=device, dtype=torch.bfloat16)
         add_kernel[(1, )](ones, out, 128, STRIDE=1, BLOCK=128, MASKED=False, num_warps=num_warps)
         assert torch.all(out == 1)
-    else:
+    elif case == "scalar":
         scalar_kernel[(64, )](out, num_warps=num_warps)
         assert out[0].item() == 64
+    else:
+        raise AssertionError(f"unknown case {case}")
 
 
 @pytest.mark.interpreter
