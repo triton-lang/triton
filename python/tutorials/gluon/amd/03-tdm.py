@@ -41,7 +41,7 @@ if __name__ == "__main__" and not is_cdna5():
     raise RuntimeError("This tutorial requires an AMD CDNA5 GPU")
 
 # A warp on CDNA5 GPUs has 32 lanes.
-warp_size = 32
+warp_size = gl.constexpr(32)
 
 # %%
 # A kernel creates a tensor descriptor with `tdm.make_tensor_descriptor`. Like a
@@ -52,15 +52,15 @@ warp_size = 32
 # `tdm.async_load` copies the current block of a descriptor from global memory
 # to shared memory, and `tdm.async_store` copies a tile back. Like buffer loads
 # and stores, TDM checks the bounds in hardware. Out-of-bounds elements read
-# zeros and are not written. TDM copies have their own wait counter,
-# `tensorcnt`. `tdm.async_wait(n)` waits until at most `n` TDM copies of the
-# warp are still in flight.
+# zeros and are not written.
 #
-# A TDM copy takes no block coordinates. The descriptor holds the position of
-# the current block, and the kernel moves it with
-# `tdm.update_tensor_descriptor`. This function can also set a predicate on the
-# descriptor with `pred`. If the predicate is false, a copy with this descriptor
-# is still issued, but it copies nothing.
+# TDM copies have their own wait counter, `tensorcnt`. `tdm.async_wait(n)` is
+# used to wait until at most `n` TDM copies of the warp are still in flight.
+#
+# When we need to copy a tile of the tensor at an offset, we need to update the
+# TDM descriptor with `tdm.update_tensor_descriptor`. This function can also set
+# a predicate on the descriptor with `pred`. If the predicate is false, a copy
+# with this descriptor is still issued, but it copies nothing.
 
 
 @gluon.jit

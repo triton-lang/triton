@@ -49,7 +49,7 @@ if __name__ == "__main__" and not (is_cdna4() or is_cdna5()):
     raise RuntimeError("This tutorial requires an AMD CDNA4 or CDNA5 GPU")
 
 # A warp has 64 lanes on CDNA4 GPUs and 32 lanes on CDNA5 GPUs.
-warp_size = 64 if is_cdna4() else 32
+warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
 # %%
 # CDNA4 async copy

@@ -49,7 +49,7 @@ if __name__ == "__main__" and not (is_cdna4() or is_cdna5()):
     raise RuntimeError("This tutorial requires an AMD CDNA4 or CDNA5 GPU")
 
 # A warp has 64 lanes on CDNA4 GPUs and 32 lanes on CDNA5 GPUs.
-warp_size = 64 if is_cdna4() else 32
+warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
 
 @gluon.jit
@@ -348,13 +348,10 @@ if __name__ == "__main__" and is_cdna4():
 # first elements of `op_sel` and `op_sel_hi` form the index of the byte.
 
 # %%
-# Now we can build the matmul. It follows the MFMA kernel of `04-mfma-wmma.py`,
-# with async copies into padded shared memory, and uses `tiles_per_warp=[2, 2]`
-# for the scales. The scales go through shared memory in the same copy group as
-# the tiles. On CDNA4, async copies and global loads share one wait counter, so
-# loading the scales with `gl.load` would make the MFMAs also wait for the
-# copies of the next K block. `PRESHUFFLE` lets us compare plain and
-# preshuffled scales.
+# Now let's build a matmul using MX data types. This example mimics an MLP-style
+# matmul, where we multiply activations A by weights W. We use fp8 for the
+# activations and mxfp4 for the weights. In practice, the weights are quantized
+# beforehand, and also preshuffled before we serve the model.
 
 
 @gluon.aggregate
@@ -363,10 +360,10 @@ class MXMfmaLayouts:
     a_gmem_layout: gl.constexpr
     a_smem_layout: gl.constexpr
     a_reg_layout: gl.constexpr
-    # Operand B's global memory, shared memory, and register layouts
-    b_gmem_layout: gl.constexpr
-    b_smem_layout: gl.constexpr
-    b_reg_layout: gl.constexpr
+    # Operand W's global memory, shared memory, and register layouts
+    w_gmem_layout: gl.constexpr
+    w_smem_layout: gl.constexpr
+    w_reg_layout: gl.constexpr
     # The scales' global memory, shared memory, and register layouts
     s_gmem_layout: gl.constexpr
     s_smem_layout: gl.constexpr
@@ -379,18 +376,18 @@ class MXMfmaLayouts:
 def get_mx_mfma_layouts(preshuffle):
     # Assume the 128x256x256 block size and 4 warps per CTA
     # Operand A has shape [128, 256] in fp8
-    # Operand B has shape [256, 128] in packed fp4, so transposed
+    # Operand W has shape [256, 128] in packed fp4, so transposed
     acc_layout = gl.amd.AMDMFMALayout(  #
         version=4, instr_shape=[16, 16, 128], transposed=True, warps_per_cta=[2, 2], tiles_per_warp=[2, 2])
     a_reg_layout = gl.DotOperandLayout(0, acc_layout, 16)
-    b_reg_layout = gl.DotOperandLayout(1, acc_layout, 16)
+    w_reg_layout = gl.DotOperandLayout(1, acc_layout, 16)
 
     # Both operands use the padded layout and the copy layout of
     # `04-mfma-wmma.py`.
     a_gmem_layout = t4.get_gmem_layout_for_async_copies([128, 256], gl.float8e4nv)
     a_smem_layout = t4.get_smem_layout_for_async_copies([128, 256], gl.float8e4nv)
-    b_gmem_layout = t4.get_gmem_layout_for_async_copies([256, 128], gl.uint8)
-    b_smem_layout = t4.get_smem_layout_for_async_copies([256, 128], gl.uint8)
+    w_gmem_layout = t4.get_gmem_layout_for_async_copies([256, 128], gl.uint8)
+    w_smem_layout = t4.get_smem_layout_for_async_copies([256, 128], gl.uint8)
 
     # The scales are [256, 8] per K block, or [8, 256] if preshuffled. Each lane
     # copies 4 bytes.
@@ -399,36 +396,36 @@ def get_mx_mfma_layouts(preshuffle):
     else:
         s_gmem_layout = gl.BlockedLayout([1, 4], [warp_size // 2, 2], [4, 1], [1, 0])
     s_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    s_reg_layout = cdna4.get_mfma_scale_layout(b_reg_layout, [256, 8])
+    s_reg_layout = cdna4.get_mfma_scale_layout(w_reg_layout, [256, 8])
     return MXMfmaLayouts(a_gmem_layout, a_smem_layout, a_reg_layout,  #
-                         b_gmem_layout, b_smem_layout, b_reg_layout,  #
+                         w_gmem_layout, w_smem_layout, w_reg_layout,  #
                          s_gmem_layout, s_smem_layout, s_reg_layout,  #
                          acc_layout)
 
 
 @gluon.jit
-def issue_mx_copy(k, a_desc, b_desc, s_desc, a_offs, b_offs, s_offs, a_smem, b_smem, s_smem, BLOCK_K: gl.constexpr,
+def issue_mx_copy(k, a_desc, w_desc, s_desc, a_offs, w_offs, s_offs, a_smem, w_smem, s_smem, BLOCK_K: gl.constexpr,
                   NUM_BUFFERS: gl.constexpr):
     buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K)
-    buffer.load_to_shared(b_smem.index(k % NUM_BUFFERS), b_desc, b_offs, soffset=k * BLOCK_K // 2)
+    buffer.load_to_shared(w_smem.index(k % NUM_BUFFERS), w_desc, w_offs, soffset=k * BLOCK_K // 2)
     buffer.load_to_shared(s_smem.index(k % NUM_BUFFERS), s_desc, s_offs, soffset=k * s_smem.shape[2])
     async_copy.commit_group()
 
 
 @gluon.jit
-def load_mx_operands(k, a_smem, b_smem, s_smem, layouts, NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
+def load_mx_operands(k, a_smem, w_smem, s_smem, layouts, NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
     a = a_smem.index(k % NUM_BUFFERS).load(layouts.a_reg_layout)
-    b = b_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.b_reg_layout)
+    w = w_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
     s_buf = s_smem.index(k % NUM_BUFFERS)
     if PRESHUFFLE:
         s_buf = unshuffle_scales_cdna4(s_buf)
-    b_scale = s_buf.load(layouts.s_reg_layout)
-    return a, b, b_scale
+    w_scale = s_buf.load(layouts.s_reg_layout)
+    return a, w, w_scale
 
 
 @gluon.jit
-def mx_mfma_matmul_kernel(a_ptr, b_ptr, b_scale_ptr, c_ptr, M, N, K,  #
-                          stride_am, stride_bn, stride_scale, stride_cm,  #
+def mx_mfma_matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
+                          stride_am, stride_wn, stride_scale, stride_ym,  #
                           PRESHUFFLE: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 128
     BLOCK_N: gl.constexpr = 256
@@ -443,48 +440,50 @@ def mx_mfma_matmul_kernel(a_ptr, b_ptr, b_scale_ptr, c_ptr, M, N, K,  #
     off_n = pid % num_pid_n * BLOCK_N
 
     a_desc = t1.make_buffer_descriptor(a_ptr, off_m, M, stride_am, BLOCK_M)
-    b_desc = t1.make_buffer_descriptor(b_ptr, off_n, N, stride_bn, BLOCK_N)
-    s_desc = t1.make_buffer_descriptor(b_scale_ptr, off_n // GROUP, gl.cdiv(N, GROUP), stride_scale, BLOCK_N // GROUP)
+    w_desc = t1.make_buffer_descriptor(w_ptr, off_n, N, stride_wn, BLOCK_N)
+    s_desc = t1.make_buffer_descriptor(w_scale_ptr, off_n // GROUP, gl.cdiv(N, GROUP), stride_scale, BLOCK_N // GROUP)
     a_offs = offs_2d(BLOCK_M, BLOCK_K, stride_am, layouts.a_gmem_layout)
-    b_offs = offs_2d(BLOCK_N, BLOCK_K // 2, stride_bn, layouts.b_gmem_layout)
+    w_offs = offs_2d(BLOCK_N, BLOCK_K // 2, stride_wn, layouts.w_gmem_layout)
     s_offs = offs_2d(BLOCK_N // GROUP, BLOCK_K // 32 * GROUP, stride_scale, layouts.s_gmem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
-                                       layouts.b_smem_layout)
-    s_smem = gl.allocate_shared_memory(b_scale_ptr.dtype.element_ty,
+    w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
+                                       layouts.w_smem_layout)
+    s_smem = gl.allocate_shared_memory(w_scale_ptr.dtype.element_ty,
                                        [NUM_BUFFERS, BLOCK_N // GROUP, BLOCK_K // 32 * GROUP], layouts.s_smem_layout)
 
     num_k = gl.cdiv(K, BLOCK_K)
     for i in gl.static_range(NUM_BUFFERS - 1):
-        issue_mx_copy(i, a_desc, b_desc, s_desc, a_offs, b_offs, s_offs, a_smem, b_smem, s_smem, BLOCK_K, NUM_BUFFERS)
+        issue_mx_copy(i, a_desc, w_desc, s_desc, a_offs, w_offs, s_offs, a_smem, w_smem, s_smem, BLOCK_K, NUM_BUFFERS)
 
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k - (NUM_BUFFERS - 1)):
-        issue_mx_copy(k + NUM_BUFFERS - 1, a_desc, b_desc, s_desc, a_offs, b_offs, s_offs, a_smem, b_smem, s_smem,
+        issue_mx_copy(k + NUM_BUFFERS - 1, a_desc, w_desc, s_desc, a_offs, w_offs, s_offs, a_smem, w_smem, s_smem,
                       BLOCK_K, NUM_BUFFERS)
         async_copy.wait_group(NUM_BUFFERS - 1)
-        a, b, b_scale = load_mx_operands(k, a_smem, b_smem, s_smem, layouts, NUM_BUFFERS, PRESHUFFLE)
-        acc = cdna4.mfma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        a, w, w_scale = load_mx_operands(k, a_smem, w_smem, s_smem, layouts, NUM_BUFFERS, PRESHUFFLE)
+        acc = cdna4.mfma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     for i in gl.static_range(NUM_BUFFERS - 1):
         async_copy.wait_group(NUM_BUFFERS - 2 - i)
-        a, b, b_scale = load_mx_operands(num_k - (NUM_BUFFERS - 1) + i, a_smem, b_smem, s_smem, layouts, NUM_BUFFERS,
+        a, w, w_scale = load_mx_operands(num_k - (NUM_BUFFERS - 1) + i, a_smem, w_smem, s_smem, layouts, NUM_BUFFERS,
                                          PRESHUFFLE)
-        acc = cdna4.mfma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        acc = cdna4.mfma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
-    t4.buffer_store_output(acc, c_ptr, M, N, stride_cm, off_m, off_n, BLOCK_M, BLOCK_N)
+    y_desc = t1.make_buffer_descriptor(y_ptr + off_n, off_m, M, stride_ym, BLOCK_M)
+    rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
+    cols = gl.arange(0, BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
+    mask = (off_n + cols < N)[None, :]
+    buffer.store(acc.to(y_ptr.dtype.element_ty), y_desc, rows[:, None] * stride_ym + cols[None, :], mask)
 
 
-def mx_mfma_matmul(A, B, B_scale, preshuffle=True):
+def mx_mfma_matmul(A, W, W_scale, preshuffle=True):
     M, K = A.shape
-    N = B.shape[0]
-    # The async copy of plain scales needs rows aligned to 16 bytes.
-    assert preshuffle or B_scale.stride(0) % 16 == 0
-    C = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
+    N = W.shape[0]
+    Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
-    mx_mfma_matmul_kernel[grid](A, B, B_scale, C, M, N, K, A.stride(0), B.stride(0), B_scale.stride(0), C.stride(0),
+    mx_mfma_matmul_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),
                                 preshuffle)
-    return C
+    return Y
 
 
 @pytest.mark.parametrize("M, N, K", [(256, 256, 512), (500, 300, 512), (1024, 512, 1024)])
@@ -492,11 +491,11 @@ def mx_mfma_matmul(A, B, B_scale, preshuffle=True):
 @pytest.mark.skipif(not is_cdna4(), reason="Requires CDNA4")
 def test_mx_mfma_matmul(M, N, K, preshuffle):
     A = random_fp8(M, K)
-    B, B_scale, B_ref = random_mxfp4(N, K)
+    W, W_scale, W_ref = random_mxfp4(N, K)
     if preshuffle:
-        B_scale = preshuffle_scales_cdna4(B_scale)
-    C = mx_mfma_matmul(A, B, B_scale, preshuffle)
-    torch.testing.assert_close(A.float() @ B_ref.T, C.float(), atol=1e-1, rtol=1e-2)
+        W_scale = preshuffle_scales_cdna4(W_scale)
+    Y = mx_mfma_matmul(A, W, W_scale, preshuffle)
+    torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
 
 # %%
@@ -508,18 +507,18 @@ if __name__ == "__main__" and is_cdna4():
     print("===================")
     M, N, K = 8192, 8192, 8192
     A = random_fp8(M, K)
-    B, B_scale, _ = random_mxfp4(N, K)
+    W, W_scale, _ = random_mxfp4(N, K)
     A_bf16 = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
-    B_bf16 = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
+    W_bf16 = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
 
     def bench(label, fn):
         ms = triton.testing.do_bench(fn, warmup=200, rep=1000)
         print(f"{label}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
-    bench("bf16", lambda: t4.mfma_matmul(A_bf16, B_bf16, t4.mfma_matmul_subtiled_kernel))
-    bench("fp8 x mxfp4", lambda: mx_mfma_matmul(A, B, B_scale, preshuffle=False))
-    B_scale = preshuffle_scales_cdna4(B_scale)
-    bench("fp8 x mxfp4, preshuffled scales", lambda: mx_mfma_matmul(A, B, B_scale))
+    bench("bf16", lambda: t4.mfma_matmul(A_bf16, W_bf16, t4.mfma_matmul_subtiled_kernel))
+    bench("fp8 x mxfp4", lambda: mx_mfma_matmul(A, W, W_scale, preshuffle=False))
+    W_scale = preshuffle_scales_cdna4(W_scale)
+    bench("fp8 x mxfp4, preshuffled scales", lambda: mx_mfma_matmul(A, W, W_scale))
 
 # %%
 # ```
@@ -527,9 +526,6 @@ if __name__ == "__main__" and is_cdna4():
 # fp8 x mxfp4: 1992 TFLOPS
 # fp8 x mxfp4, preshuffled scales: 2132 TFLOPS
 # ```
-#
-# The preshuffled scales make the fp8 x mxfp4 kernel 7% faster. It is then 1.8x
-# faster than the bf16 kernel.
 
 # %%
 # CDNA5 WMMA
@@ -703,11 +699,9 @@ def test_scaled_wmma_smem(M, N, K, a_kind, b_kind, preshuffle):
 
 
 # %%
-# The matmul starts from the best WMMA kernel of `04-mfma-wmma.py`. TDM copies
-# the tiles of A and B into the padded and partitioned layouts, and the scales
-# of B along with them, in a ring of shared memory buffers. As on CDNA4, the
-# scales are preshuffled, so TDM copies them as a few long rows instead of many
-# short ones.
+# Similarly, here is an end-to-end matmul example. It follows the best WMMA
+# kernel of `04-mfma-wmma.py`, and TDM also copies the preshuffled scales along
+# with the tiles.
 
 
 @gluon.aggregate
@@ -715,9 +709,9 @@ class MXWmmaLayouts:
     # Operand A's shared memory and register layouts
     a_smem_layout: gl.constexpr
     a_reg_layout: gl.constexpr
-    # Operand B's shared memory and register layouts
-    b_smem_layout: gl.constexpr
-    b_reg_layout: gl.constexpr
+    # Operand W's shared memory and register layouts
+    w_smem_layout: gl.constexpr
+    w_reg_layout: gl.constexpr
     # The scales' shared memory and register layouts
     s_smem_layout: gl.constexpr
     s_reg_layout: gl.constexpr
@@ -728,42 +722,42 @@ class MXWmmaLayouts:
 @gluon.constexpr_function
 def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     # Operand A has shape [BLOCK_M, BLOCK_K] in fp8
-    # Operand B has shape [BLOCK_N, BLOCK_K // 2] in packed fp4, so transposed
+    # Operand W has shape [BLOCK_N, BLOCK_K // 2] in packed fp4, so transposed
     a_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_M, BLOCK_K], [1, 0])
-    b_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_N, BLOCK_K // 2], [1, 0])
-    a_smem_layout, b_smem_layout, acc_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
-        BLOCK_M, BLOCK_N, a_smem_layout, b_smem_layout, num_warps, [16, 16, 128], b_transposed=True)
-    # The packed fp4 operand B needs its own parent layout.
+    w_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_N, BLOCK_K // 2], [1, 0])
+    a_smem_layout, w_smem_layout, acc_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
+        BLOCK_M, BLOCK_N, a_smem_layout, w_smem_layout, num_warps, [16, 16, 128], b_transposed=True)
+    # The packed fp4 operand W needs its own parent layout.
     b_parent_layout = gl.amd.AMDWMMALayout(  #
         version=3, transposed=True, warp_bases=acc_layout.warp_bases, reg_bases=acc_layout.reg_bases,
         instr_shape=[16, 16, 64])
     a_reg_layout = gl.DotOperandLayout(0, acc_layout, 16)
-    b_reg_layout = gl.DotOperandLayout(1, b_parent_layout, 16)
+    w_reg_layout = gl.DotOperandLayout(1, b_parent_layout, 16)
 
     s_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    s_reg_layout = gl.amd.cdna5.get_wmma_scale_layout(b_reg_layout, [BLOCK_N, BLOCK_K // 32])
+    s_reg_layout = gl.amd.cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
     return MXWmmaLayouts(a_smem_layout, a_reg_layout,  #
-                         b_smem_layout, b_reg_layout,  #
+                         w_smem_layout, w_reg_layout,  #
                          s_smem_layout, s_reg_layout,  #
                          acc_layout)
 
 
 @gluon.jit
-def issue_loads(k, pred, off_m, off_n, a_desc, b_desc, s_desc, a_smem, b_smem, s_smem, BLOCK_K: gl.constexpr,
+def issue_loads(k, pred, off_m, off_n, a_desc, w_desc, s_desc, a_smem, w_smem, s_smem, BLOCK_K: gl.constexpr,
                 NUM_BUFFERS: gl.constexpr, GROUP: gl.constexpr):
     i = k % NUM_BUFFERS
     a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
+    w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
     s_desc = tdm.update_tensor_descriptor(s_desc, add_offsets=[off_n // GROUP, k * BLOCK_K // 32 * GROUP], pred=pred,
                                           clamp_bounds=True)
     tdm.async_load(a_desc, dest=a_smem.index(i))
-    tdm.async_load(b_desc, dest=b_smem.index(i))
+    tdm.async_load(w_desc, dest=w_smem.index(i))
     tdm.async_load(s_desc, dest=s_smem.index(i))
 
 
 @gluon.jit
-def mx_matmul_kernel(a_ptr, b_ptr, b_scale_ptr, c_ptr, M, N, K,  #
-                     stride_am, stride_bn, stride_scale, stride_cm,  #
+def mx_matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
+                     stride_am, stride_wn, stride_scale, stride_ym,  #
                      BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr,
                      PRESHUFFLE: gl.constexpr):
     # A row of the preshuffled scales holds a group of 128 rows.
@@ -776,48 +770,53 @@ def mx_matmul_kernel(a_ptr, b_ptr, b_scale_ptr, c_ptr, M, N, K,  #
     off_n = pid % num_pid_n * BLOCK_N
 
     a_desc = tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_desc = tdm.make_tensor_descriptor(b_ptr, [N, K // 2], [stride_bn, 1], [BLOCK_N, BLOCK_K // 2],
-                                        layouts.b_smem_layout)
-    s_desc = tdm.make_tensor_descriptor(b_scale_ptr, [gl.cdiv(N, GROUP), K // 32 * GROUP], [stride_scale, 1],
+    w_desc = tdm.make_tensor_descriptor(w_ptr, [N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
+                                        layouts.w_smem_layout)
+    s_desc = tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(N, GROUP), K // 32 * GROUP], [stride_scale, 1],
                                         [BLOCK_N // GROUP, BLOCK_K // 32 * GROUP], layouts.s_smem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
-                                       layouts.b_smem_layout)
+    w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
+                                       layouts.w_smem_layout)
     s_smem = gl.allocate_shared_memory(gl.uint8, [NUM_BUFFERS, BLOCK_N // GROUP, BLOCK_K // 32 * GROUP],
                                        layouts.s_smem_layout)
 
     num_k = gl.cdiv(K, BLOCK_K)
     for k in gl.static_range(NUM_BUFFERS - 1):
-        issue_loads(k, True, off_m, off_n, a_desc, b_desc, s_desc, a_smem, b_smem, s_smem, BLOCK_K, NUM_BUFFERS, GROUP)
+        issue_loads(k, True, off_m, off_n, a_desc, w_desc, s_desc, a_smem, w_smem, s_smem, BLOCK_K, NUM_BUFFERS, GROUP)
 
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
         # Load the tiles of iteration k + NUM_BUFFERS - 1. The last iterations
         # disable the loads with a predicate.
         next_k = k + NUM_BUFFERS - 1
-        issue_loads(next_k, next_k < num_k, off_m, off_n, a_desc, b_desc, s_desc, a_smem, b_smem, s_smem, BLOCK_K,
+        issue_loads(next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, s_desc, a_smem, w_smem, s_smem, BLOCK_K,
                     NUM_BUFFERS, GROUP)
         tdm.async_wait((NUM_BUFFERS - 1) * 3)
         a = a_smem.index(k % NUM_BUFFERS).load(layouts.a_reg_layout)
-        b = b_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.b_reg_layout)
+        w = w_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
         s_buf = s_smem.index(k % NUM_BUFFERS)
         if PRESHUFFLE:
             s_buf = unshuffle_scales_cdna5(s_buf)
-        b_scale = s_buf.load(layouts.s_reg_layout)
-        acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        w_scale = s_buf.load(layouts.s_reg_layout)
+        acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
-    c_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
-    t4.store_output(acc, c_ptr, M, N, stride_cm, off_m, off_n, c_smem_layout)
+    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
+    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_smem.store(acc.to(y_ptr.dtype.element_ty))
+    y_desc = tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_desc = tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
+    tdm.async_store(y_desc, src=y_smem)
+    tdm.async_wait(0)
 
 
-def mx_matmul(A, B, B_scale, preshuffle=True, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3):
+def mx_matmul(A, W, W_scale, preshuffle=True, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3):
     M, K = A.shape
-    N = B.shape[0]
-    C = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
+    N = W.shape[0]
+    Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
-    mx_matmul_kernel[grid](A, B, B_scale, C, M, N, K, A.stride(0), B.stride(0), B_scale.stride(0), C.stride(0), BLOCK_M,
+    mx_matmul_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0), BLOCK_M,
                            BLOCK_N, BLOCK_K, NUM_BUFFERS, preshuffle)
-    return C
+    return Y
 
 
 @pytest.mark.parametrize("M, N, K", [(256, 256, 512), (512, 768, 1024), (300, 500, 768)])
@@ -825,11 +824,11 @@ def mx_matmul(A, B, B_scale, preshuffle=True, BLOCK_M=256, BLOCK_N=256, BLOCK_K=
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
 def test_mx_matmul(M, N, K, preshuffle):
     A = random_fp8(M, K)
-    B, B_scale, B_ref = random_mxfp4(N, K)
+    W, W_scale, W_ref = random_mxfp4(N, K)
     if preshuffle:
-        B_scale = preshuffle_scales_cdna5(B_scale)
-    C = mx_matmul(A, B, B_scale, preshuffle)
-    torch.testing.assert_close(A.float() @ B_ref.T, C.float(), atol=1e-1, rtol=1e-2)
+        W_scale = preshuffle_scales_cdna5(W_scale)
+    Y = mx_matmul(A, W, W_scale, preshuffle)
+    torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
 
 # %%
@@ -841,18 +840,18 @@ if __name__ == "__main__" and is_cdna5():
     print("===================")
     M, N, K = 8192, 8192, 8192
     A = random_fp8(M, K)
-    B, B_scale, _ = random_mxfp4(N, K)
+    W, W_scale, _ = random_mxfp4(N, K)
     A_bf16 = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
-    B_bf16 = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
+    W_bf16 = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
 
     def bench(label, fn):
         ms = triton.testing.do_bench(fn, warmup=200, rep=1000)
         print(f"{label}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
-    bench("bf16", lambda: t4.wmma_matmul(A_bf16, B_bf16, partitioned=True))
-    bench("fp8 x mxfp4", lambda: mx_matmul(A, B, B_scale, preshuffle=False))
-    B_scale = preshuffle_scales_cdna5(B_scale)
-    bench("fp8 x mxfp4, preshuffled scales", lambda: mx_matmul(A, B, B_scale))
+    bench("bf16", lambda: t4.wmma_matmul(A_bf16, W_bf16, partitioned=True))
+    bench("fp8 x mxfp4", lambda: mx_matmul(A, W, W_scale, preshuffle=False))
+    W_scale = preshuffle_scales_cdna5(W_scale)
+    bench("fp8 x mxfp4, preshuffled scales", lambda: mx_matmul(A, W, W_scale))
 
 # %%
 # ```
@@ -860,6 +859,3 @@ if __name__ == "__main__" and is_cdna5():
 # fp8 x mxfp4: 7750 TFLOPS
 # fp8 x mxfp4, preshuffled scales: 7866 TFLOPS
 # ```
-#
-# On CDNA5, preshuffling gains 2%. The fp8 x mxfp4 kernel reaches 3.4x the
-# throughput of the bf16 kernel.

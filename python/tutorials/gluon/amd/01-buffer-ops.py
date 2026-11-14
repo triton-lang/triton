@@ -38,7 +38,7 @@ if __name__ == "__main__" and not is_cdna4():
     raise RuntimeError("This tutorial requires an AMD CDNA4 GPU")
 
 # A warp on CDNA4 GPUs has 64 lanes.
-warp_size = 64
+warp_size = gl.constexpr(64)
 
 # %%
 # Buffer operations build the address from three parts:
