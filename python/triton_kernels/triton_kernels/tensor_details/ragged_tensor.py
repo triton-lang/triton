@@ -61,7 +61,7 @@ class RaggedTensorMetadata:
             assert self.slice_offs.dtype == torch.int32
 
     @property
-    def n_slices(self):
+    def n_slices(self):s
         return self.slice_sizes.shape[0]
 
     def block_offs(self, block_size):
@@ -91,7 +91,7 @@ class RaggedTensorMetadata:
 
 def ragged_metadata_fields(metadata, block_size):
     return (metadata.slice_sizes, metadata.slice_offs, metadata.block_offs(block_size),
-            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility or 1)
+            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility)
 
 
 # utilities
