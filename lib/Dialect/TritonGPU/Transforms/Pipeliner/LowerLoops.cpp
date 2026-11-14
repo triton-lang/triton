@@ -736,8 +736,12 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
                              Value alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
+  bool hasSharedOperandPipeline = false;
   auto isLoadToBePipelined = [&](Operation *op) {
-    return schedule[mma].first > schedule[op].first;
+    bool pipelined = schedule[mma].first > schedule[op].first;
+    if (pipelined && canBeAsyncLoad(op) && !mustLoadToRegisters(op))
+      hasSharedOperandPipeline = true;
+    return pipelined;
   };
 
   llvm::SmallDenseSet<Operation *> syncCandidates;
@@ -839,6 +843,10 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  // Without a shared operand pipeline, the peer has no load-side back-pressure
+  // to prevent the leader from reusing a completion slot before its wait.
+  if (mma.getTwoCtas() && !hasSharedOperandPipeline)
+    ttng::ClusterBarrierOp::create(builder);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
