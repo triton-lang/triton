@@ -286,11 +286,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 13.9 TB/s
-# tdm gather: 19.3 TB/s
+# global load: 12.6 TB/s
+# tdm gather: 19.0 TB/s
 # ```
 #
-# The TDM gather is 39% faster than the global load kernel.
+# The TDM gather is 51% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -424,14 +424,14 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
 
 
 def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, index_dtype=gl.int16, BLOCK_M=256,
-           BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3, num_warps=4):
+           BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3):
     E, N, K = W.shape[0], W.shape[1], A.shape[1]
     M = E * rows_per_expert
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (M // BLOCK_M * triton.cdiv(N, BLOCK_N), )
     matmul_kernel[grid](A, W, W_scale, Y, gather_idx, scatter_idx, M, E, N, K, A.stride(0), W.stride(1),
                         W_scale.stride(0), Y.stride(0), rows_per_expert, BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS,
-                        gather_idx is not None, scatter_idx is not None, index_dtype, num_warps=num_warps)
+                        gather_idx is not None, scatter_idx is not None, index_dtype)
     return Y
 
 
@@ -491,6 +491,6 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# mlp1: 5688 TFLOPS
-# mlp2: 6205 TFLOPS
+# mlp1: 5605 TFLOPS
+# mlp2: 6065 TFLOPS
 # ```
