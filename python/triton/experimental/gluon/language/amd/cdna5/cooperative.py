@@ -1,0 +1,125 @@
+"""
+Cooperative 128-byte atomic memory ops for CDNA5.
+
+A line is a naturally aligned, contiguous 128-byte block of global memory. A group of 32, 16, or 8 consecutive
+lanes of a wave32 loads or stores one line as a single atomic access, so a line is never torn: a cooperative load
+never returns part of one cooperative store and part of another. The ops address global memory through a scalar
+base pointer and a tensor of element offsets.
+
+Protocols that keep a flag in every line, such as LL128, need no ordering for the line itself and should use
+``sem="relaxed"`` for both loads and stores, including when polling: ``"acquire"`` and ``"release"`` add a fence
+and CTA barriers on every call. Use them only when a consumer also reads other memory written before the store:
+the producer stores the flag's line with ``"release"``, and the consumer reloads that line once with
+``"acquire"`` after polling.
+"""
+
+from __future__ import annotations
+
+from triton._C.libtriton import ir
+from ..._core import builtin, tensor, _unwrap_if_constexpr
+from ..._semantic import _check
+from .._buffer import _atomic_scope, _atomic_semantic, _broadcast_mask_other, _verify_offsets
+
+__all__ = ["load", "store"]
+
+_ACCESS_DOC = """The offsets layout decides the access: each lane accesses its register-contiguous elements, up
+    to 16 bytes, and 128 / (bytes per lane) consecutive lanes form each line, in the dense row-major order of
+    ``offsets``. The layout must not replicate elements. Each lane is addressed by its first offset in register
+    order; the remaining offsets are assumed to follow contiguously and are not read. The offsets of each line
+    must be contiguous and 128-byte aligned, each line must be backed by storage, and byte offsets must be below
+    2**32; these address requirements are not checked.
+
+    ``mask`` must be provably constant over each line; a masked-off line is not accessed.
+
+    Lines synchronize only with other cooperative atomics, and must be in global memory reached over a fabric
+    that supports 128-byte requests (not host memory over PCIe)."""
+
+
+def _format_doc(fn):
+    """Fill the shared access description into `fn`'s docstring."""
+    fn.__doc__ = fn.__doc__.format(access=_ACCESS_DOC)
+    return fn
+
+
+def _verify(ptr, offsets):
+    _check(ptr.type.is_ptr() and not ptr.type.is_block(), lambda: f"ptr must be a scalar pointer, got {ptr.type}")
+    _verify_offsets(offsets)
+
+
+@builtin
+@_format_doc
+def load(ptr, offsets, mask=None, other=None, *, sem=None, scope=None, _semantic=None):
+    """
+    Atomically load 128-byte lines from global memory into registers.
+
+    Each 128-byte line is one atomic snapshot, consistent with every cooperative store to it; different lines
+    are independent snapshots. Masked-off elements read ``other``, or zero without it.
+
+    {access}
+
+    Args:
+        ptr (pointer to scalar): Global memory base pointer.
+        offsets (tensor): Offsets of the elements to load, in elements.
+        mask (tensor, optional): Mask, constant over each line. Defaults to None.
+        other (tensor or scalar, optional): Values for masked-off elements. Defaults to None.
+        sem (str, optional): ``"acquire"`` or ``"relaxed"``; ``"acquire"`` orders the whole operation as for
+            :func:`~triton.language.atomic_load`. Defaults to None (``"acquire"``).
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to None (``"gpu"``).
+
+    Returns:
+        tensor: The loaded values, with the shape and layout of ``offsets``.
+    """
+    _verify(ptr, offsets)
+    sem = _atomic_semantic(sem, ir.MEM_SEMANTIC.ACQUIRE, ("acquire", "relaxed"), "cooperative.load", _semantic)
+    scope = _atomic_scope(scope, _semantic)
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+        if other is None:
+            other = 0
+    offsets, mask, other = _broadcast_mask_other(offsets, mask, other, ptr.dtype.element_ty, _semantic)
+    ret_ty = offsets.type.with_element_ty(ptr.dtype.element_ty)
+    builder = _semantic.builder
+    handle = builder.create_cooperative_atomic_load(ret_ty.to_ir(builder), ptr.handle, offsets.handle,
+                                                    mask.handle if mask is not None else ir.value(),
+                                                    other.handle if other is not None else ir.value(), sem, scope)
+    return tensor(handle, ret_ty)
+
+
+@builtin
+@_format_doc
+def store(value, ptr, offsets, mask=None, *, sem=None, scope=None, _semantic=None):
+    """
+    Atomically store 128-byte lines from registers to global memory.
+
+    Each 128-byte line becomes visible as a whole to cooperative loads; different lines may become visible in
+    any order. Masked-off lines are not written.
+
+    {access}
+
+    Args:
+        value (tensor or scalar): The values to store, converted to the pointee type.
+        ptr (pointer to scalar): Global memory base pointer.
+        offsets (tensor): Offsets of the elements to store, in elements.
+        mask (tensor, optional): Mask, constant over each line. Defaults to None.
+        sem (str, optional): ``"release"`` or ``"relaxed"``; ``"release"`` orders the whole operation as for
+            :func:`~triton.language.atomic_store`. Defaults to None (``"release"``).
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to None (``"gpu"``).
+    """
+    mask = _unwrap_if_constexpr(mask)
+    _verify(ptr, offsets)
+    _check(not ptr.dtype.is_const(), lambda: "cannot store through a constant pointer")
+    sem = _atomic_semantic(sem, ir.MEM_SEMANTIC.RELEASE, ("release", "relaxed"), "cooperative.store", _semantic)
+    scope = _atomic_scope(scope, _semantic)
+    offsets_shape = offsets.shape
+    value = _semantic.to_tensor(value)
+    if mask is None:
+        offsets, value = _semantic.broadcast_tensors(offsets, value)
+    else:
+        offsets, value, mask = _semantic.broadcast_tensors(offsets, value, _semantic.to_tensor(mask))
+    _check(offsets_shape == offsets.shape,
+           lambda: f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
+    value = _semantic.cast(value, ptr.dtype.element_ty)
+    _semantic.builder.create_cooperative_atomic_store(value.handle, ptr.handle, offsets.handle,
+                                                      mask.handle if mask is not None else ir.value(), sem, scope)

@@ -6123,3 +6123,35 @@ def test_async_copy_tdm_scope_cache_policy_cdna5(scope, scope_bits, temporal):
     assert bits("global_store_async_from_lds_b32") == {frozenset(set(scope_bits.split()) | store_bits)}
     assert bits("tensor_load_to_lds") == {frozenset(set(scope_bits.split()) | load_bits)}
     assert bits("tensor_store_from_lds") == {frozenset(set(scope_bits.split()) | store_bits)}
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("bytes_per_lane", [4, 8, 16])
+def test_runtime_cooperative_atomic_line_mask(bytes_per_lane):
+
+    @gluon.jit
+    def kernel(src, dst, observed, flags, BYTES: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, BYTES // 4], [BYTES // 4, 128 // BYTES], [1, 1], [1, 0])
+        line = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        word = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        offsets = line[:, None] * 32 + word[None, :]
+        active = ttgl.load(flags + line) != 0
+        value = ttgl.amd.cdna5.cooperative.load(src, offsets, active[:, None], other=-offsets - 1)
+        ttgl.amd.cdna5.cooperative.store(value, dst, offsets, active[:, None])
+        ttgl.store(observed + offsets, value)
+
+    # The fourth line has no storage; the second exists and must keep its
+    # contents when disabled.
+    src = torch.arange(96, dtype=torch.int32, device="cuda")
+    dst = torch.full_like(src, -7)
+    observed = torch.empty((4, 32), dtype=torch.int32, device="cuda")
+    flags = torch.tensor([1, 0, 1, 0], dtype=torch.int32, device="cuda")
+    k = kernel[(1, )](src, dst, observed, flags, bytes_per_lane, num_warps=1)
+    assert f"llvm.amdgcn.cooperative.atomic.load.{128 // bytes_per_lane}x{bytes_per_lane}B" in k.asm["llir"]
+    bits = bytes_per_lane * 8
+    assert re.search(rf"global_load_b{bits} v\S+, v\d+, s\[\d+:\d+\]", k.asm["amdgcn"])
+    assert re.search(rf"global_store_b{bits} v\d+, v\S+, s\[\d+:\d+\]", k.asm["amdgcn"])
+    offsets = torch.arange(128, dtype=torch.int32, device="cuda").reshape(4, 32)
+    torch.testing.assert_close(observed, torch.where(flags[:, None].bool(), offsets, -offsets - 1), atol=0, rtol=0)
+    expected_dst = torch.where(flags[:3, None].bool(), src.reshape(3, 32), -7)
+    torch.testing.assert_close(dst.reshape(3, 32), expected_dst, atol=0, rtol=0)

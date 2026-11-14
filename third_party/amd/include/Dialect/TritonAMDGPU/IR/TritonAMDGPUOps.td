@@ -308,6 +308,98 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
 }
 
 //===----------------------------------------------------------------------===//
+// Cooperative atomic memory operations
+//===----------------------------------------------------------------------===//
+
+def CooperativeAtomicLoadOp : TT_AMDGPU_Op<"cooperative_atomic_load", [
+  AtomicOpInterface,
+  AttrSizedOperandSegments,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
+                 "(cast<CooperativeAtomicLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
+  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
+                 "(cast<CooperativeAtomicLoadOp>($_op).getOther() == nullptr) || std::equal_to<>()">
+]> {
+  let summary = "Cooperatively load naturally aligned 128-byte lines from a scalar base pointer and a tensor offset";
+  let description = [{
+    Like `amdg.buffer_load`, the operation addresses global memory through a
+    scalar base pointer and a tensor of element offsets. A line is a naturally
+    aligned, contiguous 128-byte block of global memory. Each naturally aligned
+    group of 32, 16, or 8 lanes of a wave32 loads one line atomically, 4, 8, or
+    16 bytes per lane. The bytes per lane follow from the offsets layout: the
+    register contiguity of each lane, capped at 16 bytes. Consecutive lanes must
+    hold consecutive 4, 8, or 16 bytes in the dense row-major order of the
+    tensor. Each lane is addressed by its first offset in register order; the
+    remaining offsets are assumed to follow contiguously.
+
+    The optional mask must be provably constant over each line. Masked-off
+    lines perform no access and return `other`, or undefined values if it is
+    absent. Accessed lines must be backed by storage on a fabric supporting
+    cooperative atomic accesses, and byte offsets must fit in 32 bits.
+
+    `sem` is `relaxed` or `acquire` and `scope` is the synchronization scope;
+    they order the whole operation as for `tt.atomic_load`. The operation may
+    synchronize only with other cooperative atomics.
+  }];
+  let arguments = (ins
+    // Like tt.atomic_load, model the load as also writing so that
+    // canonicalization and LICM keep polling loads.
+    Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    I32Tensor:$offsets,
+    Optional<TT_BoolTensor>:$mask,
+    Optional<TT_FpIntTensor>:$other,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_FpIntTensor:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+    attr-dict `:` qualified(type($ptr)) `->` type($result)
+  }];
+  let extraClassDeclaration = [{
+    /// Bytes each lane accesses per instruction: 4, 8, or 16.
+    unsigned getBytesPerLane();
+  }];
+  let hasVerifier = 1;
+}
+
+def CooperativeAtomicStoreOp : TT_AMDGPU_Op<"cooperative_atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
+                 "(cast<CooperativeAtomicStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">
+]> {
+  let summary = "Cooperatively store naturally aligned 128-byte lines to a scalar base pointer and a tensor offset";
+  let description = [{
+    The addressing, participation and layout requirements match
+    `amdg.cooperative_atomic_load`. `sem` is `relaxed` or `release` and
+    `scope` is the synchronization scope; they order the whole operation as
+    for `tt.atomic_store`.
+  }];
+  let arguments = (ins
+    TT_FpIntTensor:$value,
+    Arg<TT_Ptr, "Global memory scalar base pointer to store to", [MemWrite<GlobalMemory>]>:$ptr,
+    I32Tensor:$offsets,
+    Optional<TT_BoolTensor>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+    attr-dict `:` qualified(type($ptr)) `->` type($value)
+  }];
+  let extraClassDeclaration = [{
+    /// Bytes each lane accesses per instruction: 4, 8, or 16.
+    unsigned getBytesPerLane();
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // BufferLoadOp
 //===----------------------------------------------------------------------===//
 

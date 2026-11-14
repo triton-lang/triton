@@ -2408,6 +2408,179 @@ struct BufferStoreOpConversion
   }
 };
 
+static bool isMaskConstantPerLine(Value mask, unsigned vec,
+                                  unsigned lanesPerLine,
+                                  ModuleAxisInfoAnalysis &axisAnalysis) {
+  auto *axisInfo = axisAnalysis.getAxisInfo(mask);
+  auto type = cast<RankedTensorType>(mask.getType());
+  if (!axisInfo || axisInfo->getRank() != type.getRank())
+    return false;
+  ArrayRef<int64_t> constancy = axisInfo->getConstancy();
+  if (llvm::any_of(constancy, [](int64_t size) {
+        return size <= 0 || !llvm::isPowerOf2_64(size);
+      }))
+    return false;
+
+  LinearLayout layout = toLinearLayout(type);
+  auto kRegister = StringAttr::get(mask.getContext(), "register");
+  auto kLane = StringAttr::get(mask.getContext(), "lane");
+  // Each register and lane basis within a line must be smaller than the mask's
+  // constancy along every dim, so the whole line sits in one constant block. A
+  // line may span several logical dims.
+  for (auto [dim, size] :
+       {std::pair{kRegister, vec}, std::pair{kLane, lanesPerLine}}) {
+    for (unsigned bit = 0; bit < llvm::Log2_32(size); ++bit) {
+      for (auto [basis, constant] :
+           llvm::zip(layout.getBasis(dim, bit), constancy))
+        if (basis >= constant)
+          return false;
+    }
+  }
+  return true;
+}
+
+template <typename OpTy>
+struct CooperativeAtomicOpConversion : public ConvertOpToLLVMPattern<OpTy>,
+                                       public LoadStoreConversionBase {
+  CooperativeAtomicOpConversion(LLVMTypeConverter &converter,
+                                const AMD::TargetInfo &targetInfo,
+                                ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<OpTy>(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    constexpr bool isLoad =
+        std::is_same_v<OpTy, triton::amdgpu::CooperativeAtomicLoadOp>;
+    Type elementType = this->getTypeConverter()->convertType(
+        triton::getPointeeType(op.getPtr().getType()));
+    unsigned bytesPerLane = op.getBytesPerLane();
+    unsigned vec = bytesPerLane * 8 / elementType.getIntOrFloatBitWidth();
+    if (Value mask = op.getMask();
+        mask &&
+        !isMaskConstantPerLine(mask, vec, 128 / bytesPerLane, axisAnalysisPass))
+      return op.emitOpError("mask must be provably constant over each 128-byte "
+                            "line");
+    Type intrinsicType = rewriter.getI32Type();
+    if (bytesPerLane != 4)
+      intrinsicType = LLVM::getVectorType(intrinsicType, bytesPerLane / 4);
+    Type packedType =
+        vec == 1 ? elementType : LLVM::getVectorType(elementType, vec);
+    std::string intrinsic = std::string("llvm.amdgcn.cooperative.atomic.") +
+                            (isLoad ? "load." : "store.") +
+                            std::to_string(128 / bytesPerLane) + "x" +
+                            std::to_string(bytesPerLane) + "B";
+
+    // As for tt.atomic_load/store, every intrinsic call is relaxed and the
+    // operation is ordered by barriers and fences executed by all participating
+    // lanes.
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // A uniform base plus a zero-extended i32 byte offset selects the SADDR
+    // form.
+    Value base = adaptor.getPtr();
+    unsigned elementBytes = elementType.getIntOrFloatBitWidth() / 8;
+    auto offsets = unpackTensorElements(loc, adaptor.getOffsets(), rewriter,
+                                        op.getOffsets().getType());
+    auto address = [&](unsigned index) {
+      Value bytes = b.mul(offsets[index], b.i32_val(elementBytes),
+                          LLVM::IntegerOverflowFlags::nuw);
+      return b.gep(base.getType(), rewriter.getI8Type(), base,
+                   Value(b.zext(i64_ty, bytes)),
+                   LLVM::GEPNoWrapFlags::inbounds);
+    };
+    SmallVector<Value> masks, values, others;
+    if (op.getMask())
+      masks = unpackTensorElements(loc, adaptor.getMask(), rewriter,
+                                   op.getMask().getType());
+    if constexpr (isLoad) {
+      if (op.getOther())
+        others = unpackTensorElements(loc, adaptor.getOther(), rewriter,
+                                      op.getOther().getType());
+    } else {
+      values = unpackTensorElements(loc, adaptor.getValue(), rewriter,
+                                    op.getValue().getType());
+    }
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+    auto scopeNode = LLVM::MDNodeAttr::get(
+        rewriter.getContext(),
+        {LLVM::MDStringAttr::get(rewriter.getContext(),
+                                 rewriter.getStringAttr(syncScope))});
+    Value scope = LLVM::MetadataAsValueOp::create(rewriter, loc, scopeNode);
+    // The intrinsic takes the C ABI memory order.
+    Value ordering = b.i32_val(/*relaxed=*/0);
+    if (!isLoad && op.getSem() == triton::MemSemantic::RELEASE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                            syncScope);
+    // One intrinsic call per vector. The verifier fixed which lanes form each
+    // line, so skip the generic vectorization and redundant-lane elimination.
+    // The intrinsic has no mask operand, so a mask becomes a branch around each
+    // call, or one branch for all calls when it is uniform over the tensor.
+    unsigned numVecs = offsets.size() / vec;
+    unsigned vecsPerBranch = 1;
+    if (Value mask = op.getMask()) {
+      auto *axisInfo = axisAnalysisPass.getAxisInfo(mask);
+      auto shape = cast<RankedTensorType>(mask.getType()).getShape();
+      if (axisInfo && llvm::equal(axisInfo->getConstancy(), shape))
+        vecsPerBranch = numVecs;
+    } else {
+      vecsPerBranch = numVecs;
+    }
+    auto pack = [&](ArrayRef<Value> elements, unsigned i) {
+      Value packed =
+          vec == 1 ? elements[i * vec]
+                   : packLLVector(loc, elements.slice(i * vec, vec), rewriter);
+      return Value(b.bitcast(packed, intrinsicType));
+    };
+    SmallVector<Value> results;
+    for (unsigned first = 0; first < numVecs; first += vecsPerBranch) {
+      auto vecs = llvm::seq(first, first + vecsPerBranch);
+      Value pred = masks.empty() ? Value() : masks[first * vec];
+      if constexpr (isLoad) {
+        SmallVector<Value> fallback;
+        for (unsigned i : vecs)
+          fallback.push_back(others.empty() ? Value(b.undef(intrinsicType))
+                                            : pack(others, i));
+        auto loaded = emitPredicated(rewriter, loc, pred, fallback, [&] {
+          SmallVector<Value> values;
+          for (unsigned i : vecs)
+            values.push_back(LLVM::createLLVMIntrinsicCallOp(
+                                 rewriter, loc, intrinsic, intrinsicType,
+                                 {address(i * vec), ordering, scope})
+                                 .getResult(0));
+          return values;
+        });
+        for (Value value : loaded)
+          llvm::append_range(
+              results,
+              unpackLLVector(loc, b.bitcast(value, packedType), rewriter));
+      } else {
+        emitPredicated(rewriter, loc, pred, {}, [&] {
+          for (unsigned i : vecs)
+            LLVM::createLLVMIntrinsicCallOp(
+                rewriter, loc, intrinsic, {},
+                {address(i * vec), pack(values, i), ordering, scope});
+          return SmallVector<Value>{};
+        });
+      }
+    }
+    if constexpr (isLoad) {
+      if (op.getSem() == triton::MemSemantic::ACQUIRE)
+        LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                              syncScope);
+      rewriter.replaceOp(op,
+                         packTensorElements(loc, this->getTypeConverter(),
+                                            results, rewriter, op.getType()));
+    } else {
+      rewriter.eraseOp(op);
+    }
+    return success();
+  }
+};
+
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -2908,6 +3081,10 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                AsyncTDMFusedCopyGlobalToLocalOpConversion,
                AsyncTDMCopyLocalToGlobalOpConversion,
                AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<
+      CooperativeAtomicOpConversion<triton::amdgpu::CooperativeAtomicLoadOp>,
+      CooperativeAtomicOpConversion<triton::amdgpu::CooperativeAtomicStoreOp>>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<MakeBufferDescOpConversion>(typeConverter, targetInfo, benefit);
