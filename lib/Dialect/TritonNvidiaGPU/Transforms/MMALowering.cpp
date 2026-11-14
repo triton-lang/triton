@@ -48,7 +48,7 @@ public:
     Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
                           op.getPredicate());
-    // Both CTAs must observe completion before a hoisted barrier is reused.
+    // Both CTAs must observe completion
     if (op.getTwoCtas())
       ClusterBarrierOp::create(rewriter, loc);
     InvalBarrierOp::create(rewriter, loc, barrierAlloc);

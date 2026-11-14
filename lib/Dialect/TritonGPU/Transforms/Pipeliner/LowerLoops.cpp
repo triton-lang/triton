@@ -845,8 +845,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   auto mainWait =
       ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
-  // Without a TMA operand pipeline, the peer has no load-side back-pressure
+  // Without a TMA operand pipeline, the peer has no paired cta mbarrier
   // to prevent the leader from reusing a completion slot before its wait.
+  // So we conservatively insert a cluster barrier here
   if (mma.getTwoCtas() && !hasTMAOperandPipeline)
     ttng::ClusterBarrierOp::create(builder);
 
