@@ -51,6 +51,11 @@ def load(ptr, offsets, mask=None, other=None, *, sem=None, scope=None, _semantic
     Each 128-byte line is one atomic snapshot, consistent with every cooperative store to it; different lines
     are independent snapshots. Masked-off elements read ``other``, or zero without it.
 
+    To poll a flag, use ``sem="relaxed"``: the flag and the data in its line arrive in one snapshot, while
+    ``"acquire"`` adds a fence and CTA barriers on every call. If later reads of other memory depend on the
+    flag, the producer must store the flag's line with :func:`store` and ``sem="release"``, and the consumer
+    reloads it once with ``"acquire"`` after the loop.
+
     {access}
 
     Args:
