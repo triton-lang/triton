@@ -480,13 +480,13 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 13.54 TB/s
-# tdm: 17.90 TB/s
-# tdm pipelined (double buffer): 18.38 TB/s
+# global load: 13.20 TB/s
+# tdm: 17.48 TB/s
+# tdm pipelined (double buffer): 18.07 TB/s
 # ```
 #
 # TDM is 32% faster than global loads, and double buffering adds another 3%.
-# The best kernel reaches 18.38 TB/s, 94% of the 19.6 TB/s peak HBM bandwidth
+# The best kernel reaches 18.07 TB/s, 92% of the 19.6 TB/s peak HBM bandwidth
 # of MI455X.
 
 # %%

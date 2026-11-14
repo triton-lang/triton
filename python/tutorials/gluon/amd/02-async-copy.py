@@ -574,8 +574,8 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# global load: 13.37 TB/s
-# async copy: 17.21 TB/s
+# global load: 13.13 TB/s
+# async copy: 17.69 TB/s
 # ```
 #
-# Async copies are 29% faster than global loads.
+# Async copies are 35% faster than global loads.

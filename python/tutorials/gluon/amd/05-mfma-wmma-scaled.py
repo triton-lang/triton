@@ -853,7 +853,7 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# bf16: 2299 TFLOPS
-# fp8 x mxfp4: 7750 TFLOPS
-# fp8 x mxfp4, preshuffled scales: 7866 TFLOPS
+# bf16: 2209 TFLOPS
+# fp8 x mxfp4: 7498 TFLOPS
+# fp8 x mxfp4, preshuffled scales: 7619 TFLOPS
 # ```
