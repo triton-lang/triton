@@ -289,11 +289,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // COMMON-LABEL: llvm.func @cooperative_atomic_i64
   tt.func @cooperative_atomic_i64(%src: !tt.ptr<i64>, %dst: !tt.ptr<i64>, %offsets: tensor<32xi32, #blocked>) {
-    // One 8-byte element per lane is a 16x8B line.
+    // One 8-byte element per lane is a 16x8B line. Relaxed accesses add no
+    // fence or barrier.
+    // COMMON-NOT: {{llvm.fence|rocdl.s.barrier}}
     // COMMON: %[[VALUE:.*]] = llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.16x8B"({{.*}}) : (!llvm.ptr<1>, i32, !llvm.metadata) -> vector<2xi32>
     // COMMON: llvm.bitcast %[[VALUE]] : vector<2xi32> to i64
+    // COMMON-NOT: {{llvm.fence|rocdl.s.barrier}}
     %value = amdg.cooperative_atomic_load relaxed, cta, %src[%offsets] : !tt.ptr<i64> -> tensor<32xi64, #blocked>
     // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.store.16x8B"({{.*}}) : (!llvm.ptr<1>, vector<2xi32>, i32, !llvm.metadata) -> ()
+    // COMMON-NOT: {{llvm.fence|rocdl.s.barrier}}
+    // COMMON: llvm.return
     amdg.cooperative_atomic_store relaxed, cta, %value, %dst[%offsets] : !tt.ptr<i64> -> tensor<32xi64, #blocked>
     tt.return
   }
