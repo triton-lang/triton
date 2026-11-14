@@ -200,10 +200,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     bool elseIsPure = isPureRegion(ifOp.getElseRegion());
     if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
       rewriter.setInsertionPoint(op);
-      Value inactiveCondition =
-          arith::ConstantIntOp::create(rewriter, op->getLoc(), !elseIsPure, 1);
-      Value cnd = arith::SelectOp::create(
-          rewriter, op->getLoc(), pred, ifOp.getCondition(), inactiveCondition);
+      Value cnd = ifOp.getCondition();
+      if (elseIsPure) {
+        cnd = getPredMask(rewriter, cnd.getType(), cnd, pred);
+      } else {
+        Value vTrue =
+            arith::ConstantIntOp::create(rewriter, op->getLoc(), 1, 1);
+        Value inactivePred =
+            arith::XOrIOp::create(rewriter, op->getLoc(), pred, vTrue);
+        cnd = arith::OrIOp::create(rewriter, op->getLoc(), cnd, inactivePred);
+      }
       ifOp.getConditionMutable().assign(cnd);
       return op;
     }

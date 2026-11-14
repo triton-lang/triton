@@ -104,7 +104,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @predicate_pure_then(
   // CHECK-SAME: %[[PRED:.*]]: i1, %[[COND:.*]]: i1,
   // CHECK: %[[TRUE:.*]] = arith.constant true
-  // CHECK: %[[MASK:.*]] = arith.select %[[PRED]], %[[COND]], %[[TRUE]] : i1
+  // CHECK: %[[INACTIVE:.*]] = arith.xori %[[PRED]], %[[TRUE]] : i1
+  // CHECK: %[[MASK:.*]] = arith.ori %[[COND]], %[[INACTIVE]] : i1
   // CHECK-NEXT: %[[RESULT:.*]] = scf.if %[[MASK]]
   // CHECK: arith.addi
   // CHECK: } else {
