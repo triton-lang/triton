@@ -595,7 +595,7 @@ struct AtomicLoadOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, op.getScope(), rewriter, targetInfo);
 
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
@@ -653,7 +653,8 @@ struct AtomicStoreOpConversion
   matchAndRewrite(triton::AtomicStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
         unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
