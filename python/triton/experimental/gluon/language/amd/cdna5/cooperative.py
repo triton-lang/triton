@@ -2,9 +2,14 @@
 Cooperative 128-byte atomic memory ops for CDNA5.
 
 A line is a naturally aligned, contiguous 128-byte block of global memory. A group of 32, 16, or 8 consecutive
-lanes of a wave32 loads or stores one line as a single atomic access, so a line is never observed torn. Like
+lanes of a wave32 loads or stores one line as a single atomic access, so a line is never torn: a cooperative load
+returns the line as one cooperative store wrote it, never part of one store and part of another. Like
 :func:`~triton.experimental.gluon.language.amd.cdna5.buffer_load`, the ops address global memory through a scalar
 base pointer and a tensor of element offsets.
+
+Protocols that keep a flag in every line, such as LL128, need no ordering for the line itself and should use
+``sem="relaxed"`` for both loads and stores. ``"acquire"`` and ``"release"`` add a fence and CTA barriers on every
+call; use them only to order other memory around a line.
 """
 
 from __future__ import annotations
@@ -51,10 +56,9 @@ def load(ptr, offsets, mask=None, other=None, *, sem=None, scope=None, _semantic
     Each 128-byte line is one atomic snapshot, consistent with every cooperative store to it; different lines
     are independent snapshots. Masked-off elements read ``other``, or zero without it.
 
-    To poll a flag, use ``sem="relaxed"``: the flag and the data in its line arrive in one snapshot, while
-    ``"acquire"`` adds a fence and CTA barriers on every call. If later reads of other memory depend on the
-    flag, the producer must store the flag's line with :func:`store` and ``sem="release"``, and the consumer
-    reloads it once with ``"acquire"`` after the loop.
+    To poll a flag, use ``sem="relaxed"``: the flag and the data in its line arrive in one snapshot. If later
+    reads of other memory depend on the flag, the producer must store the flag's line with :func:`store` and
+    ``sem="release"``, and the consumer reloads it once with ``"acquire"`` after the loop.
 
     {access}
 
@@ -96,6 +100,10 @@ def store(value, ptr, offsets, mask=None, *, sem=None, scope=None, _semantic=Non
 
     Each 128-byte line becomes visible as a whole to cooperative loads; different lines may become visible in
     any order. Masked-off lines are not written.
+
+    To publish a line that carries its own flag, use ``sem="relaxed"``. Use ``"release"`` only when consumers
+    also read other memory written before the store; they must then reload the line with an ``"acquire"``
+    :func:`load`.
 
     {access}
 
