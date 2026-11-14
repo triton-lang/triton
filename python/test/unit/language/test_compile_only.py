@@ -560,6 +560,49 @@ def test_fp8_compiles_for_multiple_architectures_hip():
     triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
 
 
+@pytest.mark.parametrize("arch, warp_size", [
+    ("gfx90a", 64),
+    ("gfx942", 64),
+    ("gfx950", 64),
+    ("gfx1100", 32),
+    ("gfx1151", 32),
+    ("gfx1170", 32),
+    ("gfx1200", 32),
+    ("gfx1250", 32),
+    ("gfx1250-strict", 32),
+])
+def test_amd_target_supported(arch, warp_size):
+
+    @triton.jit
+    def kernel():
+        return
+
+    compiled = triton.compile(ASTSource(kernel, {}), target=GPUTarget("hip", arch, warp_size))
+    assert compiled.asm["hsaco"]
+
+
+@pytest.mark.parametrize("arch", [
+    "gfx90c",
+    "gfx1030",
+    "gfx1250-strictjunk",
+    "gfx1250-strict-anything",
+    "gfx1100-strict",
+    "gfx119f",
+    "invalid",
+    "",
+    90,
+    None,
+])
+def test_amd_target_unsupported(arch):
+
+    @triton.jit
+    def kernel():
+        return
+
+    with pytest.raises(ValueError, match=f"Unsupported AMD GPU architecture '{arch}'"):
+        triton.compile(ASTSource(kernel, {}), target=GPUTarget("hip", arch, 64))
+
+
 def test_fp8_compiles_for_multiple_architectures_cuda():
     """
     Validate FP8 compilation succeeds for architectures with different

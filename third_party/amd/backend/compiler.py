@@ -469,6 +469,9 @@ class HIPBackend(BaseBackend):
                 raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'")
             target = GPUTarget(target.backend, target.arch, warp_size)
 
+        if not isinstance(target.arch, str) or not amd.is_arch_supported(target.arch):
+            raise ValueError(f"Unsupported AMD GPU architecture '{target.arch}'")
+
         super().__init__(target)
         assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
