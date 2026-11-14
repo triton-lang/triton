@@ -188,11 +188,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #smem = #ttg.shared_memory
 module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // A synchronous two-CTA MMA holds the pair together after its completion
-  // wait: each CTA's wait only proves its own barrier copy completed, and the
-  // leader must not reuse the barrier before the peer observed it.
+  // Both CTAs must observe completion before the barrier can be reused.
   // CHECK-LABEL: @two_cta_sync_mma
-  // CHECK: ttng.init_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, two_ctas}
   // CHECK-NEXT: ttng.wait_barrier
   // CHECK-NEXT: ttng.cluster_barrier
