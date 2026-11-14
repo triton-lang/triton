@@ -8419,3 +8419,81 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     if not atomic:
         assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
+
+
+@gluon.jit
+def async_copy_nvmma_audit_kernel(inp, out, SWIZZLE: ttgl.constexpr, TRANSPOSED: ttgl.constexpr,
+                                  CGA: ttgl.constexpr, MASK_KIND: ttgl.constexpr,
+                                  CONTIGUOUS: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], cga_layout=CGA)
+    shared: ttgl.constexpr = ttgl.NVMMASharedLayout(SWIZZLE, 32, transposed=TRANSPOSED, cga_layout=CGA)
+    rows = ttgl.arange(0, 64, ttgl.SliceLayout(1, layout))[:, None]
+    cols = ttgl.arange(0, 128, ttgl.SliceLayout(0, layout))[None, :]
+    if CONTIGUOUS:
+        offsets = rows * 128 + cols
+    else:
+        offsets = rows * 256 + cols * 2
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [64, 128], shared)
+    if MASK_KIND == 0:
+        async_copy.async_load(smem, inp + offsets)
+    elif MASK_KIND == 1:
+        async_copy.async_load(smem, inp + offsets, (rows < 61) & (cols < 125))
+    else:
+        async_copy.async_load(smem, inp + offsets, (cols % 2) == 0)
+    async_copy.commit_group()
+    async_copy.wait_group(0)
+    values = smem.load(layout)
+    ttgl.store(out + rows * 128 + cols, values)
+
+
+@pytest.mark.parametrize("swizzle", [0, 32, 64, 128])
+@pytest.mark.parametrize("transposed", [False, True])
+@pytest.mark.parametrize("cga", [(), ((1, 0),), ((0, 1),), ((0, 0),), ((1, 0), (0, 1))])
+@pytest.mark.parametrize("mask_kind", [0, 1, 2])
+@pytest.mark.parametrize("contiguous", [False, True])
+def test_async_copy_nvmma_clipping_audit(swizzle, transposed, cga, mask_kind, contiguous, monkeypatch):
+    if not is_hopper_or_newer():
+        pytest.skip("NVMMA shared layouts require Hopper or newer")
+    # Gluon deliberately preserves explicit layouts. Invoke the production pass
+    # through a test-only stage hook to exercise reachable copies without adding
+    # automatic layout rewriting to Gluon's normal compiler pipeline.
+    from triton._C.libtriton import ir, passes
+    snapshots = []
+
+    def hook(self=None, stages=None, options=None, language=None, capability=None):
+        if stages is None:
+            return "nvmma-clipping-audit-v1", "nvmma-clipping-audit-v1"
+        original = stages["ttgir"]
+
+        def run_pass(src, metadata):
+            mod = original(src, metadata)
+            before = str(mod)
+            pm = ir.pass_manager(mod.context)
+            passes.ttgpuir.add_coalesce_async_copy(pm)
+            pm.run(mod, "nvmma-clipping-audit")
+            snapshots.append((before, str(mod)))
+            return mod
+
+        stages["ttgir"] = run_pass
+
+    monkeypatch.setattr(triton.knobs.runtime, "add_stages_inspection_hook", hook)
+    inp = torch.arange(64 * 128 * (1 if contiguous else 2), device="cuda", dtype=torch.float32)
+    out = torch.empty((64, 128), device="cuda", dtype=torch.float32)
+    compiled = async_copy_nvmma_audit_kernel[(1,)](
+        inp, out, swizzle, transposed, cga, mask_kind, contiguous, num_warps=4, num_ctas=1 << len(cga))
+    expected = inp.reshape(64, -1)[:, ::1 if contiguous else 2].clone()
+    if mask_kind == 1:
+        expected[61:, :] = 0
+        expected[:, 125:] = 0
+    elif mask_kind == 2:
+        expected[:, 1::2] = 0
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    assert "cp.async." in compiled.asm["ptx"]
+    assert "cp.async.bulk.tensor" not in compiled.asm["ptx"]
+    if snapshots:
+        before, after = snapshots[-1]
+        # The shared-layout rule changes only transposed destinations, even
+        # when pointer/mask contiguity independently limits lowering to 4B.
+        assert (before != after) == transposed
+        assert set(re.findall(r"CGALayout = \[[^\n]*?\]", before)) == set(re.findall(
+            r"CGALayout = \[[^\n]*?\]", after))

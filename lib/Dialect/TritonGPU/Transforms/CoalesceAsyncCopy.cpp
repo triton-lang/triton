@@ -50,14 +50,10 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// This pass currently only applies if the following are all true...
-//   1) Operand A for WGMMA is to be loaded in registers
-//   2) We upcast operand A in registers before the WGMMA
-//      (downcasting is not yet supported)
-//   3) Pipelining is enabled for loading A
-//
-// ...then for the AsyncCopyGlobalToLocal op, the SharedEncoding
-// vec will be less than BlockedEncoding's sizePerThread for k-dim. E.g. if
+// A shared layout can restrict the copy width below the contiguous elements
+// owned by each thread in the source layout. One example is a pipelined WGMMA
+// operand A that is upcast in registers: the shared encoding's vec can be less
+// than the blocked encoding's sizePerThread for the K dimension. E.g. if
 // we're upcasting from int8 to bf16, then shared vec is 8 and sizePerThread
 // for k is 16. In this case, AsyncCopyGlobalToLocal will generate two
 // 8-byte-cp.async's for each contiguous 16B global data owned by each
@@ -69,6 +65,8 @@ static void retargetCopyOperandsToEncoding(
 // that the vectorization of load and store are equal along the contiguous
 // dimension. In the above example, each thread will then only own 8B contiguous
 // global data.
+// The same mismatch occurs for FP32 copies into a transposed NVMMA shared
+// layout, where four contiguous source elements require scalar copies.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
   ModuleAxisInfoAnalysis &axisInfoAnalysis;
@@ -86,9 +84,19 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    if (!sharedEnc)
+    // NVMMA shared layouts can also limit the copy width below the source
+    // layout's contiguous elements per thread. Use the same LinearLayout-based
+    // clipping to keep those scalar copies coalesced across lanes.
+    if (!isa<SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr>(
+            dstTy.getEncoding()))
       return failure();
+    // Padded/packed NVMMA encodings are outside this per-element clipping
+    // rule. In particular, packed FP6 has no per-element LinearLayout.
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(dstTy.getEncoding())) {
+      if (nvmma.getPadding() != NVMmaPadding::None)
+        return rewriter.notifyMatchFailure(copyOp,
+                                           "padded NVMMA copies are not handled");
+    }
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even

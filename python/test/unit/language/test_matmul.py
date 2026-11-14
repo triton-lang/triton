@@ -1773,3 +1773,27 @@ def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knob
     assert "ttg.warp_specialize" in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
     torch.testing.assert_close(y, x.float().reshape(128, 16, 64).sum(1), atol=0.001, rtol=0.001)
+
+
+@pytest.mark.parametrize("dtype,precision", [(torch.float32, "tf32"), (torch.float32, "tf32x3"),
+                                          (torch.float16, "ieee"), (torch.bfloat16, "ieee")])
+@pytest.mark.parametrize("col_b", [False, True])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_stages", [2, 3])
+def test_async_copy_nvmma_input_layout(dtype, precision, col_b, num_warps, num_stages, device):
+    if not is_cuda() or torch.cuda.get_device_capability(device)[0] != 9:
+        pytest.skip("requires Hopper WGMMA")
+    # Small integer inputs make the FP32 reference exact for every input precision.
+    M, N, K = 128, 128, 256
+    a = torch.randint(-4, 5, (M, K), device=device).to(dtype)
+    if col_b:
+        b = torch.randint(-4, 5, (N, K), device=device).to(dtype).T
+    else:
+        b = torch.randint(-4, 5, (K, N), device=device).to(dtype)
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    kernel = matmul_kernel[(1,)](
+        a, b, output, M, N, K, *a.stride(), *b.stride(), *output.stride(),
+        BLOCK_M=M, BLOCK_N=N, BLOCK_K=32, NUM_STAGES=num_stages,
+        PRECISION=precision, num_warps=num_warps)
+    torch.testing.assert_close(output, a.float() @ b.float(), atol=0, rtol=0)
+    assert "wgmma.mma_async" in kernel.asm["ptx"]
