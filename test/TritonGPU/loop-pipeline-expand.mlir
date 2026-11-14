@@ -100,19 +100,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // A pure then branch does not change how an effectful else is predicated.
+  // Inactive stages force the pure then branch, skipping the effectful else.
   // CHECK-LABEL: @predicate_pure_then(
   // CHECK-SAME: %[[PRED:.*]]: i1, %[[COND:.*]]: i1,
-  // CHECK: %[[POISON:.*]] = ub.poison : i32
-  // CHECK: %[[OUTER:.*]] = scf.if %[[PRED]]
-  // CHECK-NEXT: %[[INNER:.*]] = scf.if %[[COND]]
+  // CHECK: %[[TRUE:.*]] = arith.constant true
+  // CHECK: %[[INACTIVE:.*]] = arith.xori %[[PRED]], %[[TRUE]] : i1
+  // CHECK: %[[MASK:.*]] = arith.ori %[[COND]], %[[INACTIVE]] : i1
+  // CHECK-NEXT: %[[RESULT:.*]] = scf.if %[[MASK]]
   // CHECK: arith.addi
   // CHECK: } else {
   // CHECK: tt.store
-  // CHECK: scf.yield %[[INNER]]
-  // CHECK: } else {
-  // CHECK-NEXT: scf.yield %[[POISON]]
-  // CHECK: tt.return %[[OUTER]]
+  // CHECK: tt.return %[[RESULT]]
   tt.func @predicate_pure_then(%pred: i1, %cond: i1, %ptr: !tt.ptr<i32>, %x: i32) -> i32 {
     %one = arith.constant 1 : i32
     %masked = "ttg.mask"(%pred) ({

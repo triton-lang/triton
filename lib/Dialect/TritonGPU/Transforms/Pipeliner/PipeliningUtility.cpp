@@ -190,14 +190,29 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    // Masking only the condition executes the else branch in inactive stages.
-    // Gate the entire conditional when that branch has side effects.
-    if (ifOp.getElseRegion().empty() ||
-        llvm::all_of(ifOp.elseBlock()->without_terminator(),
-                     [](Operation &elseOp) { return isPure(&elseOp); })) {
+    auto isPureRegion = [](Region &region) {
+      return region.empty() ||
+             llvm::all_of(region.front().without_terminator(),
+                          [](Operation &op) { return isPure(&op); });
+    };
+    // Preserve the original condition in active stages. Inactive stages can
+    // take either pure branch; if both have effects, gate the entire op below.
+    bool elseIsPure = isPureRegion(ifOp.getElseRegion());
+    if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
       rewriter.setInsertionPoint(op);
-      Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
-                              ifOp.getCondition(), pred);
+      Value cnd = ifOp.getCondition();
+      if (elseIsPure) {
+        // cond && pred forces the pure else branch when pred is false.
+        cnd = getPredMask(rewriter, cnd.getType(), cnd, pred);
+      } else {
+        // cond || !pred forces the pure then branch when pred is false,
+        // so the effectful else branch only executes for pred && !cond.
+        Value vTrue =
+            arith::ConstantIntOp::create(rewriter, op->getLoc(), 1, 1);
+        Value inactivePred =
+            arith::XOrIOp::create(rewriter, op->getLoc(), pred, vTrue);
+        cnd = arith::OrIOp::create(rewriter, op->getLoc(), cnd, inactivePred);
+      }
       ifOp.getConditionMutable().assign(cnd);
       return op;
     }
