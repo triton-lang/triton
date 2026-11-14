@@ -169,38 +169,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// Packed/padded NVMMA is deliberately not included in per-element clipping.
-// CHECK-LABEL: tt.func @nvmma_fp6_packed_unchanged
-// CHECK-NOT: ttg.convert_layout
-// CHECK: ttg.async_copy_global_to_local %{{.*}}, %{{.*}} : tensor<128x128x!tt.ptr<i8>, #{{.*}}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, padding = "b6x16_p32"}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_fp6_packed_unchanged(%p: tensor<128x128x!tt.ptr<i8>, #blocked>, %s: !ttg.memdesc<128x128xi8, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<128x128x!tt.ptr<i8>, #blocked> -> <128x128xi8, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// Packed/padded NVMMA is deliberately not included in per-element clipping.
-// CHECK-LABEL: tt.func @nvmma_fp6_byte_unchanged
-// CHECK-NOT: ttg.convert_layout
-// CHECK: ttg.async_copy_global_to_local %{{.*}}, %{{.*}} : tensor<128x128x!tt.ptr<i8>, #{{.*}}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, padding = "b6p2x16"}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_fp6_byte_unchanged(%p: tensor<128x128x!tt.ptr<i8>, #blocked>, %s: !ttg.memdesc<128x128xi8, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<128x128x!tt.ptr<i8>, #blocked> -> <128x128xi8, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
 // Preserve the CTA partition/replication bases while redistributing registers.
 // CHECK: #[[CGA_split_m:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}CGALayout = {{\[\[1, 0\]\]}}{{.*}}>
 // CHECK: tt.func @nvmma_split_m

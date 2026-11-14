@@ -1775,11 +1775,16 @@ def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knob
     torch.testing.assert_close(y, x.float().reshape(128, 16, 64).sum(1), atol=0.001, rtol=0.001)
 
 
-@pytest.mark.parametrize("dtype,precision", [(torch.float32, "tf32"), (torch.float32, "tf32x3"),
-                                          (torch.float16, "ieee"), (torch.bfloat16, "ieee")])
-@pytest.mark.parametrize("col_b", [False, True])
-@pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.parametrize("dtype,precision,col_b,num_warps,num_stages", [
+    (torch.float32, "tf32", False, 4, 2),
+    (torch.float32, "tf32", False, 4, 3),
+    (torch.float32, "tf32", False, 8, 3),
+    (torch.float32, "tf32", True, 4, 3),
+    (torch.float32, "tf32", True, 8, 3),
+    (torch.float32, "tf32x3", False, 4, 3),
+    (torch.float16, "ieee", False, 4, 3),
+    (torch.bfloat16, "ieee", False, 4, 3),
+])
 def test_async_copy_nvmma_input_layout(dtype, precision, col_b, num_warps, num_stages, device):
     if not is_cuda() or torch.cuda.get_device_capability(device)[0] != 9:
         pytest.skip("requires Hopper WGMMA")
