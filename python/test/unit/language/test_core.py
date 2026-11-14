@@ -153,6 +153,27 @@ def get_src_element_ty_size(dtype_str):
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
+@pytest.mark.skipif(not is_hip(), reason="Requires HIP runtime")
+def test_static_lds_launch(device):
+
+    @triton.jit
+    def transpose(src, dst):
+        rows = tl.arange(0, 128)[:, None]
+        cols = tl.arange(0, 128)[None, :]
+        values = tl.load(src + rows * 128 + cols)
+        tl.store(dst + cols * 128 + rows, values)
+
+    src = torch.arange(128 * 128, device=device, dtype=torch.float32).reshape(128, 128)
+    dst = torch.empty_like(src)
+    source = triton.compiler.ASTSource(fn=transpose, signature={"src": "*fp32", "dst": "*fp32"})
+    compiled = triton.compile(source, target=triton.runtime.driver.active.get_current_target(),
+                              options={"num_warps": 8})
+    compiled[(1, 1, 1)](src, dst)
+    assert compiled.metadata.shared > 0
+    assert compiled.packed_metadata[2] == 0
+    torch.testing.assert_close(dst, src.T, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 def test_scalar_overflow(device):
 

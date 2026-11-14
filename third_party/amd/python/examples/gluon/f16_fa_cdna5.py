@@ -963,6 +963,10 @@ def run_prefill_attention(config, q, k, v, o, sm_scale):
     attn_fn = _ATTN_TYPE_TO_KERNEL_FN[config["ATTN_FN"]]
 
     num_warps = _KERNEL_NUM_WARPS[attn_fn]
+    # A workgroup's waves are spread across the CU's 4 SIMDs, so with 8 warps each
+    # SIMD holds at least 2 waves and 1 wave per EU is unachievable (Triton rejects
+    # it with OutOfResources). Leave waves_per_eu unset there instead.
+    waves_per_eu = 1 if num_warps <= 4 else 0
 
     grid = (
         BATCH,
@@ -977,7 +981,7 @@ def run_prefill_attention(config, q, k, v, o, sm_scale):
         o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
         sm_scale, SEQLEN_Q, SEQLEN_K,  #
         BLOCK_M, BLOCK_N,  #
-        HEAD_SZ, num_warps=num_warps, waves_per_eu=1)
+        HEAD_SZ, num_warps=num_warps, waves_per_eu=waves_per_eu)
     return (attn_kernel, )
 
 

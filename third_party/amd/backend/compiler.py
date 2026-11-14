@@ -511,7 +511,7 @@ class HIPBackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            metadata.shared,
+            0,
         )
 
     def get_codegen_implementation(self, options):
@@ -728,6 +728,22 @@ class HIPBackend(BaseBackend):
         passes.convert.add_reconcile_unrealized_casts(pm)
         pm.run(mod, 'make_llir')
 
+        # LLVM drops an amdgpu-waves-per-eu request that the static LDS usage and
+        # workgroup size make unachievable (emitting only a warning), so reject it
+        # here instead.
+        if options.waves_per_eu != 0:
+            min_waves_per_eu = src.get_int_attr("ttg.min_waves_per_eu")
+            max_waves_per_eu = src.get_int_attr("ttg.max_waves_per_eu")
+            if not min_waves_per_eu <= options.waves_per_eu <= max_waves_per_eu:
+                from triton.runtime.errors import OutOfResources
+                shared = src.get_int_attr("ttg.shared") or 0
+                num_warps = src.get_int_attr("ttg.total-num-warps") or options.num_warps
+                limit = max_waves_per_eu if options.waves_per_eu > max_waves_per_eu else min_waves_per_eu
+                raise OutOfResources(
+                    options.waves_per_eu, limit,
+                    f"waves_per_eu (achievable range is [{min_waves_per_eu}, {max_waves_per_eu}] "
+                    f"with {shared} bytes of LDS and {num_warps} warps)")
+
         if knobs.compilation.dump_ir_extract_di_local_variables:
             # comments below on why separate it
             if not knobs.compilation.disable_line_info:
@@ -919,6 +935,10 @@ class HIPBackend(BaseBackend):
                 dump_ir=dump_llvm_ir,
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
+        shared_static = re.search(r"^\s*\.amdhsa_group_segment_fixed_size\s+(\d+)\s*$", amdgcn, re.MULTILINE)
+        assert shared_static is not None
+        metadata["shared_static"] = int(shared_static.group(1))
+        metadata["shared"] = metadata["shared_static"]
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

@@ -2960,7 +2960,11 @@ def attn_fwd(  #
 
     sm_scale = head_sz**(-0.5) * 1.4426950408889634  # 1 / ln(2)
     args = [q, k, v, q_scale, k_scale, v_scale, o, l, m, sm_scale, cfg]
-    kwargs = {"num_warps": num_warps, "num_ctas": num_ctas, "waves_per_eu": 1}
+    # A workgroup's waves are spread across the CU's 4 SIMDs, so with 8 warps each
+    # SIMD holds at least 2 waves and 1 wave per EU is unachievable (Triton rejects
+    # it with OutOfResources). Leave waves_per_eu unset there instead.
+    waves_per_eu = 1 if num_warps <= 4 else 0
+    kwargs = {"num_warps": num_warps, "num_ctas": num_ctas, "waves_per_eu": waves_per_eu}
 
     def kernel_fn():
         return mxfp_attn_fwd_kernel[grid](*args, **kwargs)
