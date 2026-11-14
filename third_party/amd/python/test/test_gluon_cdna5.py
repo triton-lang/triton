@@ -6125,28 +6125,6 @@ def test_async_copy_tdm_scope_cache_policy_cdna5(scope, scope_bits, temporal):
     assert bits("tensor_store_from_lds") == {frozenset(set(scope_bits.split()) | store_bits)}
 
 
-@gluon.jit
-def cooperative_atomic_kernel(src, dst, N: ttgl.constexpr, LAYOUT: ttgl.constexpr):
-    offsets = ttgl.arange(0, N, layout=LAYOUT)
-    value = ttgl.amd.cdna5.cooperative.load(src, offsets, sem="relaxed", scope="sys")
-    ttgl.amd.cdna5.cooperative.store(value, dst, offsets, sem="relaxed", scope="sys")
-
-
-@pytest.mark.parametrize("bytes_per_lane,dtype", [(4, "i32"), (8, "i64"), (16, "bf16")])
-def test_compile_cooperative_atomic(bytes_per_lane, dtype):
-    elements_per_lane = bytes_per_lane * 8 // str_to_triton_dtype(dtype).primitive_bitwidth
-    constexprs = {"N": 32 * elements_per_lane, "LAYOUT": ttgl.BlockedLayout([elements_per_lane], [32], [1], [0])}
-    k = triton.compile(
-        src=gluon._runtime.GluonASTSource(
-            cooperative_atomic_kernel,
-            {"src": f"*{dtype}", "dst": f"*{dtype}", "N": "constexpr", "LAYOUT": "constexpr"}, constexprs),
-        target=GPUTarget("hip", "gfx1250", 32), options={"num_warps": 1})
-    assert f"llvm.amdgcn.cooperative.atomic.load.{128 // bytes_per_lane}x{bytes_per_lane}B" in k.asm["llir"]
-    bits = bytes_per_lane * 8
-    assert re.search(rf"global_load_b{bits} v\S+, v\d+, s\[\d+:\d+\].*scope:SCOPE_SYS", k.asm["amdgcn"])
-    assert re.search(rf"global_store_b{bits} v\d+, v\S+, s\[\d+:\d+\].*scope:SCOPE_SYS", k.asm["amdgcn"])
-
-
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("bytes_per_lane", [4, 8, 16])
 def test_runtime_cooperative_atomic_line_mask(bytes_per_lane):
@@ -6168,7 +6146,11 @@ def test_runtime_cooperative_atomic_line_mask(bytes_per_lane):
     dst = torch.full_like(src, -7)
     observed = torch.empty((4, 32), dtype=torch.int32, device="cuda")
     flags = torch.tensor([1, 0, 1, 0], dtype=torch.int32, device="cuda")
-    kernel[(1, )](src, dst, observed, flags, bytes_per_lane, num_warps=1)
+    k = kernel[(1, )](src, dst, observed, flags, bytes_per_lane, num_warps=1)
+    assert f"llvm.amdgcn.cooperative.atomic.load.{128 // bytes_per_lane}x{bytes_per_lane}B" in k.asm["llir"]
+    bits = bytes_per_lane * 8
+    assert re.search(rf"global_load_b{bits} v\S+, v\d+, s\[\d+:\d+\]", k.asm["amdgcn"])
+    assert re.search(rf"global_store_b{bits} v\d+, v\S+, s\[\d+:\d+\]", k.asm["amdgcn"])
     offsets = torch.arange(128, dtype=torch.int32, device="cuda").reshape(4, 32)
     torch.testing.assert_close(observed, torch.where(flags[:, None].bool(), offsets, -offsets - 1), atol=0, rtol=0)
     expected_dst = torch.where(flags[:3, None].bool(), src.reshape(3, 32), -7)

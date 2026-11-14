@@ -1659,8 +1659,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @cooperative_atomic_interleaved_chunks(%ptr: !tt.ptr<i32>, %offsets: tensor<256xi32, #blocked>) {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @cooperative_atomic_32_bytes_per_lane(%ptr: !tt.ptr<i32>, %offsets: tensor<256xi32, #blocked>) {
     // Each lane owns 32 contiguous bytes, so its neighbor does not continue
     // its 16-byte access.
     // expected-error @below {{layout must map consecutive lanes of 4, 8 or 16 contiguous bytes to each 128-byte line}}
