@@ -25,6 +25,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 
+#include <algorithm>
 #include <cassert>
 
 using namespace mlir;
@@ -900,6 +901,12 @@ public:
                        << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
+    // LLVM's sub-word atomic expansion needs the real alignment to build a
+    // correct CAS loop (#12740).
+    unsigned alignBytes = 2;
+    if (AxisInfo *ptrInfo = axisAnalysisPass.getAxisInfo(op.getPtr()))
+      alignBytes = std::clamp<int64_t>(ptrInfo->getGlobalDivisibility(), 2, 4);
+
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     Value threadPred =
         ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
@@ -968,11 +975,12 @@ public:
 
         // Codegen the atomic-rmw instruction(s)
         rewriter.setInsertionPointToEnd(atomicBlock);
-        Value atom = LLVM::AtomicRMWOp::create(
-                         rewriter, loc, *llvmAtomicBinOp, rmwPtr,
-                         valElements[i], *llvmAtomicMemOrdering,
-                         targetInfo.getAtomicSyncScope(op.getScope()))
-                         .getResult();
+        Value atom =
+            LLVM::AtomicRMWOp::create(
+                rewriter, loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
+                *llvmAtomicMemOrdering,
+                targetInfo.getAtomicSyncScope(op.getScope()), alignBytes)
+                .getResult();
         LLVM::BrOp::create(rewriter, loc, atom, endBlock);
         rewriter.setInsertionPointToStart(endBlock);
         resultVals[i] = endBlock->getArgument(0);
@@ -985,7 +993,8 @@ public:
         rmwVals.push_back(valElements[i + ii]);
       auto old = NVIDIA::emitAtomicRMW(
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
-          op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed);
+          op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed,
+          valueElemTy.isBF16() ? alignBytes : 0);
       if (failed(old))
         return failure();
       if (useRed)
