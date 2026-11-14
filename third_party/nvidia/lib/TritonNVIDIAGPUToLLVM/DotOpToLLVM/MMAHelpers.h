@@ -147,11 +147,13 @@ public:
     return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
-  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc, int kSize = 0) const {
-    auto *ctx = loc.getContext();
-    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value getBase() const { return baseb128; }
+
+  // Keep the static descriptor fields separate from the dynamic base so
+  // WGMMA can construct the full descriptor inside its consuming inline asm.
+  uint64_t getDescriptorBits(int a, int b, bool useAbsolute = false) const {
     auto dims = to_vector(ll.getInDimNames());
+    auto *ctx = dims.front().getContext();
     assert(to_vector(ll.getOutDimNames()) ==
            llvm::to_vector(
                ArrayRef<StringAttr>{str_attr("offset"), str_attr("block")}));
@@ -168,14 +170,21 @@ public:
     // address the second chunk through an absolute leading dimension.
     // The caller selects this only for K-major, 128-byte-swizzled operands
     // whose MN tile origins preserve a zero matrix base offset.
-    int k = desc.transposed ? a : b;
-    bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
     if (useAbsolute) {
       currDesc.leadDimensionAbsoluteMode = 1;
       currDesc.leadDimensionBaseOffset = 0;
     }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    uint64_t descBits = std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
+    return std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
+  }
+
+  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                 Location loc, int kSize = 0) const {
+    auto *ctx = loc.getContext();
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    int k = desc.transposed ? a : b;
+    bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
+    uint64_t descBits = getDescriptorBits(a, b, useAbsolute);
     // Add the base address to the descriptor
     Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
     Value high = tb.i32_val(descBits >> 32);

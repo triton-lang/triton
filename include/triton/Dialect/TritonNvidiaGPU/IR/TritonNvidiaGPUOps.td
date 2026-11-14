@@ -235,6 +235,11 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let description = [{
     $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
+
+    `descriptorMode = Inline` constructs shared-memory operand descriptors,
+    including static instruction offsets, within each consuming WGMMA inline
+    assembly block. It does not change memory effects or synchronization and
+    does not constrain subsequent PTXAS register allocation or scheduling.
   }];
 
   let arguments = (ins
@@ -244,7 +249,9 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     Optional<I1>:$useC,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
     DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
-    DefaultValuedAttr<BoolAttr, "false">:$isAsync
+    DefaultValuedAttr<BoolAttr, "false">:$isAsync,
+    DefaultValuedAttr<TTNG_WGMMADescriptorModeAttr,
+        "::mlir::triton::nvidia_gpu::WGMMADescriptorMode::Default">:$descriptorMode
   );
 
   let results = (outs TT_FpIntTensor:$d);

@@ -106,7 +106,7 @@ def warpgroup_mma_init(value, _semantic=None):
 
 @_core.builtin
 def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_acc=None, is_async=False,
-                  _semantic=None):
+                  descriptor_mode=None, _semantic=None):
     """
     Perform warpgroup MMA (Tensor Core) operations.
     acc = a * b + (acc if use_acc else 0)
@@ -119,6 +119,10 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         precision (str, optional): Dot input precision. Defaults to builder default.
         max_num_imprecise_acc (int): Max imprecise accumulations. Used for fp8 -> fp32 dot. Determines how many accumulation are done in limited precision. Defaults to None, which means no upcasting is done.
         is_async (bool): Whether operation is asynchronous. Defaults to False.
+        descriptor_mode (str, optional): Compile-time shared-memory operand descriptor construction mode.
+            ``None`` uses the compiler default. ``"inline"`` constructs descriptors and their static
+            instruction offsets inside each consuming WGMMA inline assembly block. This does not
+            change synchronization or guarantee physical register lifetimes after PTXAS scheduling.
 
     Returns:
         tensor or warpgroup_mma_accumulator: Returns the result if synchronous, or a token to load the value once computed if asynchronous.
@@ -143,9 +147,12 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     max_num_imprecise_acc = _core._unwrap_if_constexpr(max_num_imprecise_acc)
     is_async = _core._unwrap_if_constexpr(is_async)
+    descriptor_mode = _core._unwrap_if_constexpr(descriptor_mode)
+    _check(descriptor_mode is None or (isinstance(descriptor_mode, str) and descriptor_mode == "inline"),
+           lambda: f"descriptor_mode must be None or 'inline', got {descriptor_mode!r}")
 
     handle = _semantic.builder.create_warpgroup_mma(a.handle, b.handle, acc.handle, use_acc.handle, precision,
-                                                    max_num_imprecise_acc, is_async)
+                                                    max_num_imprecise_acc, is_async, descriptor_mode)
     tensor_ty = acc.type.tensor_type if isinstance(acc, warpgroup_mma_accumulator) else acc.type
     if is_async:
         return warpgroup_mma_accumulator(handle, tensor_ty)

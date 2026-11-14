@@ -95,15 +95,25 @@ def WGMMA_EltTypeAttr : I32EnumAttr<"WGMMAEltType",
   let cppNamespace = "::mlir::triton::nvgpu";
 }
 
-def WGMMA_OperandType : AnyTypeOf<[LLVM_AnyStruct, I64], "wgmma operand A/B type">;
+def WGMMA_OperandType : AnyTypeOf<[LLVM_AnyStruct, I64, I32], "wgmma operand A/B type">;
 
 def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let arguments = (ins WGMMA_OperandType:$opA, WGMMA_OperandType:$opB, I1:$useC, Optional<LLVM_AnyStruct>:$opC,
                    I32Attr:$m, I32Attr:$n, I32Attr:$k,
                    WGMMA_EltTypeAttr:$eltTypeC, WGMMA_EltTypeAttr:$eltTypeA, WGMMA_EltTypeAttr:$eltTypeB,
-                   WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB);
+                   WGMMA_LayoutAttr:$layoutA, WGMMA_LayoutAttr:$layoutB,
+                   OptionalAttr<I64Attr>:$descriptorBitsA,
+                   OptionalAttr<I64Attr>:$descriptorBitsB);
+  let description = [{
+    Shared operands are either complete i64 descriptors or i32 base addresses
+    in 16-byte units with a corresponding `descriptorBitsA/B` attribute. The
+    latter form constructs the descriptor inside the consuming inline asm:
+    low = base + low32(bits), high = high32(bits), with no carry into high.
+    A register operand A has no descriptor bits. Operand B is always shared.
+  }];
   let results = (outs LLVM_AnyStruct:$res);
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
+  let hasVerifier = 1;
 }
 
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
