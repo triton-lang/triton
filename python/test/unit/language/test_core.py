@@ -2143,6 +2143,8 @@ def test_atomic_rmw_predicate(num_ctas, device):
 def test_atomic_bf16_contended(case, num_warps, device):
     # bf16 atomics lower to a 32-bit cas loop before sm_90; lanes that hit the
     # same word must not lose updates.
+    check_type_supported("bfloat16", device)
+    # The bug and its fix are in the NVIDIA lowering before sm_90.
     if not is_cuda():
         pytest.skip("CUDA only")
 

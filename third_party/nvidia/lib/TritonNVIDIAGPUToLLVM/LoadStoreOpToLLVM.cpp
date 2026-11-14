@@ -901,11 +901,16 @@ public:
                        << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
-    // LLVM's sub-word atomic expansion needs the real alignment to build a
-    // correct CAS loop (#12740).
-    unsigned alignBytes = 2;
+    // Workaround for an LLVM AtomicExpand bug: with `align 2` on an address
+    // LLVM can prove is 4-aligned, the partword CAS loop reuses the pre-loop
+    // value (#12740). Passing the alignment we know avoids that path.
+    // TODO: remove once LLVM's AtomicExpand partword loop is fixed.
+    const bool useBF16Cas =
+        valueElemTy.isBF16() && !targetInfo.supportNativeBF16AtomicAdd();
+    unsigned bf16CasAlignBytes = 2;
     if (AxisInfo *ptrInfo = axisAnalysisPass.getAxisInfo(op.getPtr()))
-      alignBytes = std::clamp<int64_t>(ptrInfo->getGlobalDivisibility(), 2, 4);
+      bf16CasAlignBytes =
+          std::clamp<int64_t>(ptrInfo->getGlobalDivisibility(), 2, 4);
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     Value threadPred =
@@ -949,8 +954,7 @@ public:
 
       // LLVM's atomicrmw is unconditional. Branch so only active lanes enter
       // the CAS loop for BF16 add.
-      if (pred && valueElemTy.isBF16() &&
-          !targetInfo.supportNativeBF16AtomicAdd()) {
+      if (pred && useBF16Cas) {
         assert(vec == 1 && packed == 1);
         // Lower atomic bin-op and sem to LLVM
         auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
@@ -979,7 +983,7 @@ public:
             LLVM::AtomicRMWOp::create(
                 rewriter, loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
                 *llvmAtomicMemOrdering,
-                targetInfo.getAtomicSyncScope(op.getScope()), alignBytes)
+                targetInfo.getAtomicSyncScope(op.getScope()), bf16CasAlignBytes)
                 .getResult();
         LLVM::BrOp::create(rewriter, loc, atom, endBlock);
         rewriter.setInsertionPointToStart(endBlock);
@@ -994,9 +998,7 @@ public:
       auto old = NVIDIA::emitAtomicRMW(
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
           op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed,
-          valueElemTy.isBF16() && !targetInfo.supportNativeBF16AtomicAdd()
-              ? alignBytes
-              : 0);
+          useBF16Cas ? bf16CasAlignBytes : 0);
       if (failed(old))
         return failure();
       if (useRed)
