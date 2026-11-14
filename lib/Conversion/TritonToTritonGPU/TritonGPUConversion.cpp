@@ -142,6 +142,16 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
   return type.cloneWithEncoding(newEncoding);
 }
 
+bool impl::hasGatherScatterIndicesLayout(Operation *op, Value xOffsets) {
+  auto type = cast<RankedTensorType>(xOffsets.getType());
+  if (!type.getEncoding())
+    return false;
+  auto mod = op->getParentOfType<ModuleOp>();
+  // `getNewIndicesType` returns null if the indices already have the layout.
+  return !getNewIndicesType(type, TritonGPUDialect::getThreadsPerWarp(mod),
+                            lookupNumWarps(op), lookupNumCTAs(op));
+}
+
 // Function for converting any gather or scatter op that requires a specific
 // index layout. This also handles converting result types if there are any.
 static LogicalResult convertGatherScatterIndices(Operation *op,
