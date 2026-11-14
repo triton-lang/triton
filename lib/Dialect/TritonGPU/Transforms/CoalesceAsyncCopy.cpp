@@ -50,23 +50,11 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// A shared layout can restrict the copy width below the contiguous elements
-// owned by each thread in the source layout. One example is a pipelined WGMMA
-// operand A that is upcast in registers: the shared encoding's vec can be less
-// than the blocked encoding's sizePerThread for the K dimension. E.g. if
-// we're upcasting from int8 to bf16, then shared vec is 8 and sizePerThread
-// for k is 16. In this case, AsyncCopyGlobalToLocal will generate two
-// 8-byte-cp.async's for each contiguous 16B global data owned by each
-// thread. This breaks coalescing (i.e. results 2x the minimum required
-// transactions).
-//
-// This issue occurs for cp.async because it combines load and store into one
-// instruction. The fix is to clip each dim of sizePerThread by shared vec, so
-// that the vectorization of load and store are equal along the contiguous
-// dimension. In the above example, each thread will then only own 8B contiguous
-// global data.
-// The same mismatch occurs for FP32 copies into a transposed NVMMA shared
-// layout, where four contiguous source elements require scalar copies.
+// cp.async combines a global load and a shared-memory store. When the
+// shared layout limits the copy width below the source layout's per-thread
+// contiguity, splitting the copy can break coalescing across lanes.
+// Clip the source layout's contiguous dimension to the copy width computed
+// from the source and destination LinearLayouts.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
   ModuleAxisInfoAnalysis &axisInfoAnalysis;
@@ -84,9 +72,6 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    // NVMMA shared layouts can also limit the copy width below the source
-    // layout's contiguous elements per thread. Use the same LinearLayout-based
-    // clipping to keep those scalar copies coalesced across lanes.
     if (!isa<SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr>(
             dstTy.getEncoding()))
       return failure();
