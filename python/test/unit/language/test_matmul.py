@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
-from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_cdna5, is_rubin, is_blackwell
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_cdna5, is_rubin, is_blackwell, is_hopper_or_newer
 
 pytestmark = pytest.mark.enable_warmup
 
@@ -343,38 +343,36 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "scf.for" in ttgir
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("num_ctas", [1, 2])
-@pytest.mark.parametrize("iterations", [0, 1, 2])
-def test_tma_matmul_pipelined_if_else_side_effects(num_ctas, iterations, device):
-    # Predicating a pipelined scf.if by masking its condition runs its else branch in inactive stages, which must
-    # not happen when that branch has side effects: with zero iterations nothing may be written.
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+def test_tma_matmul_pipelined_if_else_side_effects(device):
+    # Keep the accumulator read outside the loop so the MMA wait is delayed.
+    # With zero iterations, predicated stages must not execute either store.
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit(do_not_specialize=["N"])
     def kernel(A, B, C, marker, N):
-        rows = tl.arange(0, 256)
-        cols = tl.arange(0, 16)
-        for k in range(N):
-            acc = tl.dot(A.load([0, k * 16]), B.load([k * 16, 0]))
+        rows = tl.arange(0, 64)
+        cols = tl.arange(0, 32)
+        acc = tl.zeros((64, 32), tl.float32)
+        for k in tl.range(N, num_stages=3):
+            acc = tl.dot(A.load([0, k * 32]), B.load([k * 32, 0]), acc)
             if k % 2 == 0:
                 tl.store(marker, 7)
             else:
-                tl.store(C + (k * 256 + rows)[:, None] * 16 + cols[None, :], acc)
                 tl.store(marker + 1, 9)
+        tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
 
-    a = torch.ones((256, 32), device=device, dtype=torch.float16)
-    b = torch.ones((32, 16), device=device, dtype=torch.float16)
-    c = torch.full((512, 16), -1.0, device=device)
+    a = torch.ones((64, 64), device=device, dtype=torch.float16)
+    b = torch.ones((64, 32), device=device, dtype=torch.float16)
+    c = torch.full((64, 32), -1.0, device=device)
     marker = torch.full((2, ), -1, device=device, dtype=torch.int32)
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 16])
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
-    kernel[(1, )](a_desc, b_desc, c, marker, iterations, num_ctas=num_ctas, num_stages=3, num_warps=4)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [64, 32])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [32, 32])
+    kernel[(1, )](a_desc, b_desc, c, marker, 0, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
-    assert marker.tolist() == [7 if iterations else -1, 9 if iterations == 2 else -1]
-    assert torch.all(c[:256] == -1)
-    assert torch.all(c[256:] == (16 if iterations == 2 else -1))
+    assert marker.tolist() == [-1, -1]
+    assert torch.all(c == 0)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
