@@ -265,9 +265,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // COMMON-LABEL: llvm.func @cooperative_atomic_i32
   tt.func @cooperative_atomic_i32(%src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %offsets: tensor<32xi32, #blocked>) {
-    // One element per lane is a 32x4B line. Accesses are relaxed;
-    // acquire/release order the operation as for tt.atomic_load/store. The
-    // address is the scalar base plus a zero-extended 32-bit byte offset.
+    // One element per lane is a 32x4B line.
     // COMMON: %[[SCOPE:.*]] = llvm.mlir.metadata_as_value #llvm.md_node<#llvm.md_string<"agent">>
     // COMMON: %[[ORDER:.*]] = llvm.mlir.constant(0 : i32)
     // COMMON: %[[BYTES:.*]] = llvm.mul {{.*}} overflow<nuw> : i32

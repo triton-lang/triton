@@ -1,8 +1,8 @@
 """
 Cooperative 128-byte atomic memory ops for CDNA5.
 
-A group of 32, 16, or 8 consecutive lanes of a wave32 loads or stores one naturally aligned 128-byte line as a
-single atomic access, so the line is never observed torn. Like
+A line is a naturally aligned, contiguous 128-byte block of global memory. A group of 32, 16, or 8 consecutive
+lanes of a wave32 loads or stores one line as a single atomic access, so a line is never observed torn. Like
 :func:`~triton.experimental.gluon.language.amd.cdna5.buffer_load`, the ops address global memory through a scalar
 base pointer and a tensor of element offsets.
 """
@@ -18,8 +18,8 @@ __all__ = ["load", "store"]
 
 _ACCESS_DOC = """The offsets layout decides the access: each lane accesses its register-contiguous elements, up
     to 16 bytes, and 128 / that many consecutive lanes form each 128-byte line, in the dense row-major order of
-    ``offsets``. Each lane's access is addressed by its first offset in register order; the remaining offsets of
-    the access are assumed to follow contiguously and are not read. Each line must be contiguous, 128-byte
+    ``offsets``. Each lane is addressed by its first offset in register order; the remaining offsets are assumed
+    to follow contiguously and are not read. Each line must be contiguous, 128-byte
     aligned and backed by storage, and byte offsets must be below 2**32; these address requirements are not
     checked.
 

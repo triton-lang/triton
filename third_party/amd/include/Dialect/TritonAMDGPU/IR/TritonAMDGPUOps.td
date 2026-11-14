@@ -325,20 +325,20 @@ def CooperativeAtomicLoadOp : TT_AMDGPU_Op<"cooperative_atomic_load", [
   let summary = "Cooperatively load naturally aligned 128-byte lines from a scalar base pointer and a tensor offset";
   let description = [{
     Like `amdg.buffer_load`, the operation addresses global memory through a
-    scalar base pointer and a tensor of element offsets. Each naturally
-    aligned group of 32, 16, or 8 lanes of a wave32 loads one 128-byte line
-    atomically, 4, 8, or 16 bytes per lane. The access size per lane follows
-    from the offsets layout: the register contiguity of each lane, capped at
-    16 bytes. Consecutive lanes must hold consecutive accesses in the dense
-    row-major order of the tensor. Each lane's access is addressed by its first
-    offset in register order; the remaining offsets of the access are assumed
-    to follow contiguously.
+    scalar base pointer and a tensor of element offsets. A line is a naturally
+    aligned, contiguous 128-byte block of global memory. Each naturally aligned
+    group of 32, 16, or 8 lanes of a wave32 loads one line atomically, 4, 8, or
+    16 bytes per lane. The bytes per lane follow from the offsets layout: the
+    register contiguity of each lane, capped at 16 bytes. Consecutive lanes must
+    hold consecutive 4, 8 or 16 bytes in the dense row-major order of the
+    tensor. Each lane is addressed by its first offset in register order; the
+    remaining offsets are assumed to follow contiguously.
 
     The optional mask must be provably constant over every complete line.
     Inactive lines perform no access and return `other`, or undefined values
-    if it is absent. Active lines must be naturally aligned global storage on
-    a fabric supporting cooperative atomic accesses, and byte offsets must fit
-    in 32 bits.
+    if it is absent. Active lines must be backed by storage on a fabric
+    supporting cooperative atomic accesses, and byte offsets must fit in 32
+    bits.
 
     `sem` is `relaxed` or `acquire` and `scope` is the synchronization scope;
     they order the whole operation as for `tt.atomic_load`. The operation may

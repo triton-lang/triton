@@ -2408,7 +2408,7 @@ struct BufferStoreOpConversion
   }
 };
 
-static bool isCooperativeMaskUniform(Value mask, unsigned elementsPerLane,
+static bool isCooperativeMaskUniform(Value mask, unsigned vec,
                                      unsigned lanesPerLine,
                                      ModuleAxisInfoAnalysis &axisAnalysis) {
   auto *axisInfo = axisAnalysis.getAxisInfo(mask);
@@ -2424,10 +2424,11 @@ static bool isCooperativeMaskUniform(Value mask, unsigned elementsPerLane,
   LinearLayout layout = toLinearLayout(type);
   auto kRegister = StringAttr::get(mask.getContext(), "register");
   auto kLane = StringAttr::get(mask.getContext(), "lane");
-  // Every line basis must stay inside one aligned constant rectangle. This
-  // covers lines that span multiple logical axes, not just the minor axis.
-  for (auto [dim, size] : {std::pair{kRegister, elementsPerLane},
-                           std::pair{kLane, lanesPerLine}}) {
+  // Each register and lane basis within a line must be smaller than the mask's
+  // constancy along every dim, so the whole line sits in one constant block. A
+  // line may span several logical dims.
+  for (auto [dim, size] :
+       {std::pair{kRegister, vec}, std::pair{kLane, lanesPerLine}}) {
     for (unsigned bit = 0; bit < llvm::Log2_32(size); ++bit) {
       for (auto [basis, constant] :
            llvm::zip(layout.getBasis(dim, bit), constancy))
@@ -2456,26 +2457,25 @@ struct CooperativeAtomicOpConversion : public ConvertOpToLLVMPattern<OpTy>,
     Type elementType = this->getTypeConverter()->convertType(
         triton::getPointeeType(op.getPtr().getType()));
     unsigned bytesPerLane = op.getBytesPerLane();
-    unsigned elementsPerLane =
-        bytesPerLane * 8 / elementType.getIntOrFloatBitWidth();
+    unsigned vec = bytesPerLane * 8 / elementType.getIntOrFloatBitWidth();
     if (Value mask = op.getMask();
-        mask && !isCooperativeMaskUniform(mask, elementsPerLane,
-                                          128 / bytesPerLane, axisAnalysisPass))
+        mask && !isCooperativeMaskUniform(mask, vec, 128 / bytesPerLane,
+                                          axisAnalysisPass))
       return op.emitOpError("mask must be provably constant across each "
                             "complete 128-byte line");
     Type intrinsicType = rewriter.getI32Type();
     if (bytesPerLane != 4)
       intrinsicType = LLVM::getVectorType(intrinsicType, bytesPerLane / 4);
-    Type packedType = elementsPerLane == 1
-                          ? elementType
-                          : LLVM::getVectorType(elementType, elementsPerLane);
+    Type packedType =
+        vec == 1 ? elementType : LLVM::getVectorType(elementType, vec);
     std::string intrinsic = std::string("llvm.amdgcn.cooperative.atomic.") +
                             (isLoad ? "load." : "store.") +
                             std::to_string(128 / bytesPerLane) + "x" +
                             std::to_string(bytesPerLane) + "B";
 
-    // As for tt.atomic_load/store, every access is relaxed and the operation
-    // is ordered by barriers and fences executed by all participating lanes.
+    // As for tt.atomic_load/store, every intrinsic call is relaxed and the
+    // operation is ordered by barriers and fences executed by all participating
+    // lanes.
     insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2515,47 +2515,42 @@ struct CooperativeAtomicOpConversion : public ConvertOpToLLVMPattern<OpTy>,
     if (!isLoad && op.getSem() == triton::MemSemantic::RELEASE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
                             syncScope);
-    // One instruction per chunk of elementsPerLane elements. The verifier fixes
-    // the physical grouping, so do not use ordinary load/store vectorization or
-    // redundant-lane elimination for cooperative accesses. A line cannot be
-    // predicated inside an instruction, so a mask becomes a branch; a mask
-    // that is uniform over the whole tensor guards all chunks with one branch.
-    unsigned numChunks = offsets.size() / elementsPerLane;
-    unsigned chunksPerBranch = 1;
+    // One intrinsic call per vector. The verifier fixed which lanes form each
+    // line, so skip the generic vectorization and redundant-lane elimination.
+    // The intrinsic has no mask operand, so a mask becomes a branch around each
+    // call, or one branch for all calls when it is uniform over the tensor.
+    unsigned numVecs = offsets.size() / vec;
+    unsigned vecsPerBranch = 1;
     if (Value mask = op.getMask()) {
       auto *axisInfo = axisAnalysisPass.getAxisInfo(mask);
       auto shape = cast<RankedTensorType>(mask.getType()).getShape();
       if (axisInfo && llvm::equal(axisInfo->getConstancy(), shape))
-        chunksPerBranch = numChunks;
+        vecsPerBranch = numVecs;
     } else {
-      chunksPerBranch = numChunks;
+      vecsPerBranch = numVecs;
     }
-    auto pack = [&](ArrayRef<Value> elements, unsigned chunk) {
-      Value packed = elementsPerLane == 1
-                         ? elements[chunk * elementsPerLane]
-                         : packLLVector(loc,
-                                        elements.slice(chunk * elementsPerLane,
-                                                       elementsPerLane),
-                                        rewriter);
+    auto pack = [&](ArrayRef<Value> elements, unsigned i) {
+      Value packed =
+          vec == 1 ? elements[i * vec]
+                   : packLLVector(loc, elements.slice(i * vec, vec), rewriter);
       return Value(b.bitcast(packed, intrinsicType));
     };
     SmallVector<Value> results;
-    for (unsigned first = 0; first < numChunks; first += chunksPerBranch) {
-      auto chunks = llvm::seq(first, first + chunksPerBranch);
-      Value pred = masks.empty() ? Value() : masks[first * elementsPerLane];
+    for (unsigned first = 0; first < numVecs; first += vecsPerBranch) {
+      auto vecs = llvm::seq(first, first + vecsPerBranch);
+      Value pred = masks.empty() ? Value() : masks[first * vec];
       if constexpr (isLoad) {
         SmallVector<Value> fallback;
-        for (unsigned chunk : chunks)
+        for (unsigned i : vecs)
           fallback.push_back(others.empty() ? Value(b.undef(intrinsicType))
-                                            : pack(others, chunk));
+                                            : pack(others, i));
         auto loaded = emitPredicated(rewriter, loc, pred, fallback, [&] {
           SmallVector<Value> values;
-          for (unsigned chunk : chunks)
-            values.push_back(
-                LLVM::createLLVMIntrinsicCallOp(
-                    rewriter, loc, intrinsic, intrinsicType,
-                    {address(chunk * elementsPerLane), ordering, scope})
-                    .getResult(0));
+          for (unsigned i : vecs)
+            values.push_back(LLVM::createLLVMIntrinsicCallOp(
+                                 rewriter, loc, intrinsic, intrinsicType,
+                                 {address(i * vec), ordering, scope})
+                                 .getResult(0));
           return values;
         });
         for (Value value : loaded)
@@ -2564,11 +2559,10 @@ struct CooperativeAtomicOpConversion : public ConvertOpToLLVMPattern<OpTy>,
               unpackLLVector(loc, b.bitcast(value, packedType), rewriter));
       } else {
         emitPredicated(rewriter, loc, pred, {}, [&] {
-          for (unsigned chunk : chunks)
-            LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                            {address(chunk * elementsPerLane),
-                                             pack(values, chunk), ordering,
-                                             scope});
+          for (unsigned i : vecs)
+            LLVM::createLLVMIntrinsicCallOp(
+                rewriter, loc, intrinsic, {},
+                {address(i * vec), pack(values, i), ordering, scope});
           return SmallVector<Value>{};
         });
       }
