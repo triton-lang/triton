@@ -736,11 +736,12 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
                              Value alloc, int phaseArgIdx,
                              int barrierIdxArgIdx) {
-  bool hasSharedOperandPipeline = false;
+  bool hasTMAOperandPipeline = false;
   auto isLoadToBePipelined = [&](Operation *op) {
     bool pipelined = schedule[mma].first > schedule[op].first;
-    if (pipelined && canBeAsyncLoad(op) && !mustLoadToRegisters(op))
-      hasSharedOperandPipeline = true;
+    if (pipelined && isTMALoad(op) && canPipelineTMALoad(op) &&
+        !mustLoadToRegisters(op))
+      hasTMAOperandPipeline = true;
     return pipelined;
   };
 
@@ -843,9 +844,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
-  // Without a shared operand pipeline, the peer has no load-side back-pressure
+  // Without a TMA operand pipeline, the peer has no load-side back-pressure
   // to prevent the leader from reusing a completion slot before its wait.
-  if (mma.getTwoCtas() && !hasSharedOperandPipeline)
+  if (mma.getTwoCtas() && !hasTMAOperandPipeline)
     ttng::ClusterBarrierOp::create(builder);
 
   // Add waits before loads in conditional blocks
