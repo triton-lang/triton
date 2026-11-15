@@ -86,7 +86,7 @@ class Prefetcher {
   DenseMap<Value, Value> initMaterializations;
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
-                         Attribute dotEncoding, OpBuilder &builder,
+                         triton::DotOp dot, OpBuilder &builder,
                          Value token = Value(),
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt);
@@ -146,14 +146,21 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
   mapping.map(vals[1], ret);
   for (int i = 2; i < vals.size(); i++) {
     Value v = vals[i];
-    Value curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
-    if (isa<RankedTensorType>(curr.getType())) {
-      auto retType = RankedTensorType::get(
-          cast<RankedTensorType>(ret.getType()).getShape(),
-          cast<RankedTensorType>(curr.getType()).getElementType(),
-          cast<RankedTensorType>(curr.getDefiningOp()->getOperand(0).getType())
-              .getEncoding());
-      curr.setType(retType);
+    Value curr;
+    if (auto fp4 = v.getDefiningOp<Fp4ToFpOp>()) {
+      auto src =
+          cast<TypedValue<RankedTensorType>>(mapping.lookup(fp4.getSrc()));
+      curr = Fp4ToFpOp::create(builder, fp4.getLoc(), src,
+                               fp4.getType().getElementType(), fp4.getAxis());
+    } else {
+      curr = builder.clone(*v.getDefiningOp(), mapping)->getResult(0);
+      if (auto resultType = dyn_cast<RankedTensorType>(curr.getType())) {
+        auto srcType = cast<RankedTensorType>(
+            curr.getDefiningOp()->getOperand(0).getType());
+        curr.setType(RankedTensorType::get(srcType.getShape(),
+                                           resultType.getElementType(),
+                                           srcType.getEncoding()));
+      }
     }
     mapping.map(v, curr);
   }
@@ -162,7 +169,7 @@ void Prefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
 }
 
 Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
-                                   Attribute dotEncoding, OpBuilder &builder,
+                                   triton::DotOp dot, OpBuilder &builder,
                                    Value token, std::optional<int64_t> offsetK,
                                    std::optional<int64_t> shapeK) {
   // opIdx: 0 => a, 1 => b
@@ -174,14 +181,18 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
 
   // k => (prefetchWidth, k - prefetchWidth)
   int64_t kIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  auto operandType = opIdx == 0 ? dot.getA().getType() : dot.getB().getType();
+  // FP4 packs two logical K elements into each shared-memory element.
+  int64_t kPack = operandType.getShape()[kIdx] / shape[kIdx];
+  int64_t packedWidth = prefetchWidth / kPack;
 
-  offset[kIdx] = isPrologue ? 0 : prefetchWidth;
-  shape[kIdx] = isPrologue ? prefetchWidth : (shape[kIdx] - prefetchWidth);
+  offset[kIdx] = isPrologue ? 0 : packedWidth;
+  shape[kIdx] = isPrologue ? packedWidth : (shape[kIdx] - packedWidth);
 
   if (shapeK)
-    shape[kIdx] = *shapeK;
+    shape[kIdx] = *shapeK / kPack;
   if (offsetK)
-    offset[kIdx] = *offsetK;
+    offset[kIdx] = *offsetK / kPack;
 
   Value newSmem = triton::gpu::MemDescSubsliceOp::create(
       builder, v.getLoc(),
@@ -191,7 +202,8 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
       v, offset);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
+      builder.getContext(), opIdx, dot.getType().getEncoding(),
+      prefetchWidth / (8 * kPack));
   Value prefetchSlice = triton::gpu::LocalLoadOp::create(
       builder, v.getLoc(),
       RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem, token);
@@ -440,8 +452,8 @@ LogicalResult Prefetcher::initialize() {
           foundConvertFromShared = true;
         break;
       }
-      // Shape-changing operations need different slice sizes, e.g. fp4_to_fp.
-      if (op->getNumOperands() != 1 || !op->hasTrait<OpTrait::Elementwise>())
+      if (op->getNumOperands() != 1 ||
+          (!op->hasTrait<OpTrait::Elementwise>() && !isa<Fp4ToFpOp>(op)))
         break;
       rets.push_back(op->getOperand(0));
       op = op->getOperand(0).getDefiningOp();
@@ -524,16 +536,15 @@ void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
   for (triton::DotOp dot : dots) {
-    Attribute dotEncoding = dot.getType().getEncoding();
     Value aPrefetched = generatePrefetch(
         materializeInitValue(dot2aSource[dot], builder, initMaterializations),
-        0, true, dotEncoding, builder,
+        0, true, dot, builder,
         materializeInitValue(dot2aToken.lookup(dot), builder,
                              initMaterializations));
     cloneElementwiseOps(aPrefetched, dot2aVals[dot], builder);
     Value bPrefetched = generatePrefetch(
         materializeInitValue(dot2bSource[dot], builder, initMaterializations),
-        1, true, dotEncoding, builder,
+        1, true, dot, builder,
         materializeInitValue(dot2bToken.lookup(dot), builder,
                              initMaterializations));
     cloneElementwiseOps(bPrefetched, dot2bVals[dot], builder);
@@ -594,7 +605,6 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<triton::DotOp>(&op);
     if (dot && dots.contains(dot)) {
-      Attribute dotEncoding = dot.getType().getEncoding();
       // First dot uses the values prefetched before entering the loop.
       Operation *firstDot = builder.clone(*dot, mapping);
       if (Value a = operand2headPrefetch.lookup(dot.getA()))
@@ -624,7 +634,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         Value aRem = generatePrefetch(
             getCurrentTrackedValue(dot, /*isA=*/true, /*isToken=*/false,
                                    newForOp, mapping, carriedArgs),
-            0, false, dotEncoding, builder,
+            0, false, dot, builder,
             getCurrentTrackedValue(dot, /*isA=*/true, /*isToken=*/true,
                                    newForOp, mapping, carriedArgs),
             kOff, kShape);
@@ -632,7 +642,7 @@ void Prefetcher::cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
         Value bRem = generatePrefetch(
             getCurrentTrackedValue(dot, /*isA=*/false, /*isToken=*/false,
                                    newForOp, mapping, carriedArgs),
-            1, false, dotEncoding, builder,
+            1, false, dot, builder,
             getCurrentTrackedValue(dot, /*isA=*/false, /*isToken=*/true,
                                    newForOp, mapping, carriedArgs),
             kOff, kShape);
@@ -684,13 +694,12 @@ Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
       yieldValues.push_back(nextAToken);
     if (carriedArgs.b.contains(dot))
       yieldValues.push_back(nextBToken);
-    Attribute dotEncoding = dot.getType().getEncoding();
-    Value aToYield = generatePrefetch(nextASource, 0, true, dotEncoding,
-                                      builder, nextAToken);
+    Value aToYield =
+        generatePrefetch(nextASource, 0, true, dot, builder, nextAToken);
     cloneElementwiseOps(aToYield, dot2aVals[dot], builder);
     yieldValues.push_back(aToYield);
-    Value bToYield = generatePrefetch(nextBSource, 1, true, dotEncoding,
-                                      builder, nextBToken);
+    Value bToYield =
+        generatePrefetch(nextBSource, 1, true, dot, builder, nextBToken);
     cloneElementwiseOps(bToYield, dot2bVals[dot], builder);
     yieldValues.push_back(bToYield);
   }
