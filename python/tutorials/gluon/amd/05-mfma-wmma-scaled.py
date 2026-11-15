@@ -8,16 +8,7 @@ CDNA5 GPUs support MX formats in hardware, with scaled MFMA and scaled WMMA
 instructions.
 
 In this tutorial, we will demonstrate scaled matrix multiplications using an
-MLP-style kernel, where we multiply fp8 (e4m3) activations by mxfp4 weights.
-The weights use fp4 (e2m1) values with one e8m0 scale per 32 values along K.
-
-```
-C = A @ (B * B_scale).T
-
-A.shape = (M, K)            # fp8
-B.shape = (N, K // 2)       # fp4, 2 values packed per byte
-B_scale.shape = (N, K // 32)
-```
+MLP-style kernel, where we multiply fp8 activations by mxfp4 weights.
 """
 
 import importlib

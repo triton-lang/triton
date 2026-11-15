@@ -21,7 +21,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 
 t1 = importlib.import_module("01-buffer-ops")
-t7 = importlib.import_module("07-mfma-wmma-scaled")
+t5 = importlib.import_module("05-mfma-wmma-scaled")
 
 
 def is_cdna5():
@@ -286,11 +286,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 12.7 TB/s
-# tdm gather: 18.9 TB/s
+# global load: 12.4 TB/s
+# tdm gather: 19.1 TB/s
 # ```
 #
-# The TDM gather is 49% faster than the global load kernel.
+# The TDM gather is 54% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -306,7 +306,7 @@ if __name__ == "__main__":
 # `Y[scatter_idx] = A @ W[e].T`, where `scatter_idx` is a permutation of the
 # rows.
 #
-# Each output tile runs the K loop of the matmul in `07-mfma-wmma-scaled.py`.
+# Each output tile runs the K loop of the matmul in `05-mfma-wmma-scaled.py`.
 # The expert of the tile decides the offset of the `W` descriptors in the
 # stacked weights. With `GATHER`, the row indices of a tile are loaded once, and
 # gather the `A` tile of every K block. With `SCATTER`, the output tile is
@@ -316,19 +316,12 @@ if __name__ == "__main__":
 # padded layout without partitions, while `W` keeps its partitioned layout. The
 # scales of all experts are preshuffled as one tensor. `N` is a multiple of the
 # preshuffle group, so a group never crosses two experts.
-#
-# The row indices use int16, so each TDM instruction gathers 16 rows, and a
-# warp issues 4 TDM instructions for its part of a 256-row tile. A warp can have
-# at most 11 TDM copies in flight, and the compiler adds a wait before the next
-# copy when there might be more. So with `GATHER`, one fused instruction copies
-# the tile of `W` with warps 0 and 1, and its scales with warps 2 and 3. This
-# keeps the copies of two K blocks within the limit.
 
 
 def random_experts(E, N, K):
-    weights = [t7.random_mxfp4(N, K) for _ in range(E)]
+    weights = [t5.random_mxfp4(N, K) for _ in range(E)]
     W = torch.stack([w[0] for w in weights])
-    W_scale = t7.preshuffle_scales_cdna5(torch.cat([w[1] for w in weights]))
+    W_scale = t5.preshuffle_scales_cdna5(torch.cat([w[1] for w in weights]))
     return W, W_scale, [w[2] for w in weights]
 
 
@@ -345,18 +338,15 @@ def matmul_ld_gmem(k, pred, off_m, off_n, gather_idx, a_desc, w_desc, ws_desc, a
     w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
     ws_desc = tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128], pred=pred,
                                            clamp_bounds=True)
-    if GATHER:
-        tdm.async_load_fused([(w_desc, w_smem.index(i), 0b0011), (ws_desc, ws_smem.index(i), 0b1100)])
-    else:
-        tdm.async_load(w_desc, dest=w_smem.index(i))
-        tdm.async_load(ws_desc, dest=ws_smem.index(i))
+    tdm.async_load(w_desc, dest=w_smem.index(i))
+    tdm.async_load(ws_desc, dest=ws_smem.index(i))
 
 
 @gluon.jit
 def matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFERS: gl.constexpr):
     a = a_smem.index(k % NUM_BUFFERS).load(layouts.a_reg_layout)
     w = w_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
-    w_scale = t7.unshuffle_scales_cdna5(ws_smem.index(k % NUM_BUFFERS)).load(layouts.ws_reg_layout)
+    w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(k % NUM_BUFFERS)).load(layouts.ws_reg_layout)
     return a, w, w_scale
 
 
@@ -379,13 +369,15 @@ def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N: gl.constexpr, stride
 
 
 @gluon.jit
-def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr, M, NUM_EXPERTS, N: gl.constexpr,
-                  K: gl.constexpr, stride_am: gl.constexpr, stride_wn: gl.constexpr, stride_scale: gl.constexpr,
-                  stride_ym: gl.constexpr, ROWS_PER_EXPERT: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
-                  BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr, SCATTER: gl.constexpr):
+def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr,  #
+                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
+                  stride_am: gl.constexpr, stride_wn: gl.constexpr, stride_scale: gl.constexpr,
+                  stride_ym: gl.constexpr,  #
+                  BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr,  #
+                  GATHER: gl.constexpr, SCATTER: gl.constexpr):
     gl.static_assert(ROWS_PER_EXPERT % BLOCK_M == 0)
     num_warps: gl.constexpr = gl.num_warps()
-    layouts: gl.constexpr = t7.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
+    layouts: gl.constexpr = t5.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
     if GATHER:
         a_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_M, BLOCK_K], [1, 0])
     else:
@@ -423,7 +415,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
         next_k = k + NUM_BUFFERS - 1
         matmul_ld_gmem(next_k, next_k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem,
                        ws_smem, BLOCK_K, NUM_BUFFERS, GATHER)
-        tdm.async_wait((NUM_BUFFERS - 1) * (2 if GATHER else 3))
+        tdm.async_wait((NUM_BUFFERS - 1) * 3)
         a, w, w_scale = matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
         acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
@@ -432,14 +424,17 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
 
 
 def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256,
-           NUM_BUFFERS=3):
+           NUM_BUFFERS=2):
     E, N, K = W.shape[0], W.shape[1], A.shape[1]
     M = E * rows_per_expert
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (M // BLOCK_M * triton.cdiv(N, BLOCK_N), )
-    matmul_kernel[grid](A, W, W_scale, Y, gather_idx, scatter_idx, M, E, N, K, A.stride(0), W.stride(1),
-                        W_scale.stride(0), Y.stride(0), rows_per_expert, BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS,
-                        gather_idx is not None, scatter_idx is not None)
+    matmul_kernel[grid](
+        A, W, W_scale, Y, gather_idx, scatter_idx,  #
+        M, E, rows_per_expert, N, K,  #
+        A.stride(0), W.stride(1), W_scale.stride(0), Y.stride(0),  #
+        BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS,  #
+        gather_idx is not None, scatter_idx is not None)
     return Y
 
 
@@ -447,7 +442,7 @@ def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, BL
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
 def test_matmul_gather(E, R, N, K):
     T = 300
-    A = t7.random_fp8(T, K)
+    A = t5.random_fp8(T, K)
     W, W_scale, W_ref = random_experts(E, N, K)
     gather_idx = torch.randint(0, T, (E, R), device="cuda", dtype=torch.int32).sort(dim=1).values.flatten()
     Y = matmul(A, W, W_scale, R, gather_idx=gather_idx)
@@ -458,7 +453,7 @@ def test_matmul_gather(E, R, N, K):
 @pytest.mark.parametrize("E, R, N, K", [(4, 256, 512, 1024), (8, 512, 768, 512)])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
 def test_matmul_scatter(E, R, N, K):
-    A = t7.random_fp8(E * R, K)
+    A = t5.random_fp8(E * R, K)
     W, W_scale, W_ref = random_experts(E, N, K)
     scatter_idx = torch.randperm(E * R, device="cuda", dtype=torch.int32)
     Y = matmul(A, W, W_scale, R, scatter_idx=scatter_idx)
@@ -482,22 +477,22 @@ if __name__ == "__main__":
     M = E * R
     for name, (N, K) in [("mlp1", (2 * H, H)), ("mlp2", (H, H))]:
         W = torch.randint(0, 256, (E, N, K // 2), device="cuda", dtype=torch.uint8)
-        W_scale = t7.preshuffle_scales_cdna5(torch.randint(120, 128, (E * N, K // 32), device="cuda",
+        W_scale = t5.preshuffle_scales_cdna5(torch.randint(120, 128, (E * N, K // 32), device="cuda",
                                                            dtype=torch.uint8))
 
         if name == "mlp1":
-            A = t7.random_fp8(T, K)
+            A = t5.random_fp8(T, K)
             gather_idx = torch.arange(T, device="cuda", dtype=torch.int32).repeat_interleave(TOPK)
             gather_idx = gather_idx[torch.randperm(M, device="cuda")].view(E, R).sort(dim=1).values.flatten()
             kwargs = dict(gather_idx=gather_idx)
         else:
-            A = t7.random_fp8(M, K)
+            A = t5.random_fp8(M, K)
             kwargs = dict(scatter_idx=torch.randperm(M, device="cuda", dtype=torch.int32))
         ms = triton.testing.do_bench(lambda: matmul(A, W, W_scale, R, **kwargs), warmup=100, rep=500)
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
 # %%
 # ```
-# mlp1: 6506 TFLOPS
-# mlp2: 6060 TFLOPS
+# mlp1: 6547 TFLOPS
+# mlp2: 6016 TFLOPS
 # ```
