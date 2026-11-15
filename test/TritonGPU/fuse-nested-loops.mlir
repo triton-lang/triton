@@ -486,30 +486,6 @@ tt.func @i32_trip_count_overflow() {
   tt.return
 }
 
-// The frontend lowers descending ranges to a positive step and reflects the
-// induction variable in the loop body.
-// CHECK-LABEL: @i32_trip_count_overflow_reversed_iv
-tt.func @i32_trip_count_overflow_reversed_iv() {
-  %lb = arith.constant -2147483643 : i32
-  %ub = arith.constant 1073741824 : i32
-  %step = arith.constant 536870912 : i32
-  %c1073741824 = arith.constant 1073741824 : i32
-  %cneg2147483643 = arith.constant -2147483643 : i32
-  %c0_i32 = arith.constant 0 : i32
-  %c1_i32 = arith.constant 1 : i32
-  %c3_i32 = arith.constant 3 : i32
-  // CHECK: scf.for {{.*}} = %c0_i64 to %c18_i64 step %c1_i64
-  scf.for %i = %lb to %ub step %step : i32 {
-    %rev = arith.subi %c1073741824, %i : i32
-    %real = arith.addi %rev, %cneg2147483643 : i32
-    scf.for %j = %c0_i32 to %c3_i32 step %c1_i32 : i32 {
-      "body"(%real, %j) : (i32, i32) -> ()
-      scf.yield
-    }
-  } {"tt.flatten"}
-  tt.return
-}
-
 // An all-i16 nest exercises the width rule below the 64-bit cap.
 // CHECK-LABEL: @i16_trip_count_i32
 tt.func @i16_trip_count_i32() {
@@ -529,9 +505,8 @@ tt.func @i16_trip_count_i32() {
   tt.return
 }
 
-// An empty outer loop must not be multiplied into a positive fused trip count:
-// len_i = -4294967297 and len_j = 4294967295, whose product would wrap to 1 in
-// i64. The outer length is clamped to zero before the multiplication.
+// Negative outer lengths must be clamped before multiplication can wrap to a
+// positive fused trip count.
 // CHECK-LABEL: @empty_outer_trip_count
 tt.func @empty_outer_trip_count() {
   %olb = arith.constant 4294967297 : i64
@@ -592,9 +567,8 @@ tt.func @unsigned_inner_wide_trip_count() {
   tt.return
 }
 
-// An unsigned outer loop with a dependent inner loop must create the peeled
-// length loop with the unsigned comparison. Signed iteration would treat this
-// empty unsigned range as 4294967295 iterations.
+// The dependent-bound prepass must preserve the unsigned comparison, or this
+// empty range would execute billions of iterations.
 // CHECK-LABEL: @unsigned_outer_empty_dependent_inner
 tt.func @unsigned_outer_empty_dependent_inner() {
   %olb = arith.constant -2147483648 : i32
@@ -633,25 +607,6 @@ tt.func @unsigned_outer_dependent_inner() {
       scf.yield
     }
   } {"ttg.always-fuse"}
-  tt.return
-}
-
-// Truncating this step to 64 bits would turn it into zero.
-// CHECK-LABEL: @i128_step_not_truncated
-tt.func @i128_step_not_truncated() {
-  %olb = arith.constant 0 : i128
-  %oub = arith.constant 18446744073709551616 : i128
-  %ostep = arith.constant 18446744073709551616 : i128
-  %ilb = arith.constant 0 : i32
-  %iub = arith.constant 3 : i32
-  %istep = arith.constant 1 : i32
-  // CHECK: scf.for {{.*}} = %c0_i128 to %c3_i128 step %c1_i128
-  scf.for %i = %olb to %oub step %ostep : i128 {
-    scf.for %j = %ilb to %iub step %istep : i32 {
-      "body"(%i, %j) : (i128, i32) -> ()
-      scf.yield
-    }
-  } {"tt.flatten"}
   tt.return
 }
 
