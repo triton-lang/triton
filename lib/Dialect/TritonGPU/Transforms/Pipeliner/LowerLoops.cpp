@@ -86,8 +86,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
+  DenseSet<Operation *> allocUsers;
   if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
-    DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
         DenseSet<Operation *> users =
@@ -103,9 +103,9 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
       topLevelWaitUsers.insert(topLevelUser);
     }
   }
-  for (Operation *topLevelUser : topLevelUsers) {
-    int _useStage = schedule[topLevelUser].first;
-    CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
+  auto getEffectiveUseStage = [&](Operation *user) {
+    int _useStage = schedule[user].first;
+    CoarseSchedule::Cluster _useCluster = schedule[user].second;
     // This adds an *extra* buffer, so only bump already-pipelined loads:
     // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
     if (*_useCluster > *defCluster && _useStage > defStage) {
@@ -116,7 +116,20 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
       // after the global-to-local copy for the next pipeline stage starts.
       _useStage++;
     }
+    return _useStage;
+  };
+  for (Operation *topLevelUser : topLevelUsers) {
+    int _useStage = getEffectiveUseStage(topLevelUser);
     useStage = std::min(_useStage, useStage.value_or(_useStage));
+  }
+  // When the local_alloc is removed, its users read the pipelined buffer
+  // itself, e.g. two MMAv5 ops in different stages that share an operand. The
+  // buffer must stay live until the last of them, not only the first.
+  if (!allocUsers.empty() && !mustLoadToRegisters(op)) {
+    for (Operation *allocUser : allocUsers) {
+      int _useStage = getEffectiveUseStage(allocUser);
+      useStage = std::max(_useStage, useStage.value_or(_useStage));
+    }
   }
   // Waits tells us the buffer is still in use until the wait completes, we
   // can't simply load from the buffer and replace the uses of the buffer with
