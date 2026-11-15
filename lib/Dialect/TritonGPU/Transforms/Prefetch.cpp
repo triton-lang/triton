@@ -452,8 +452,7 @@ LogicalResult Prefetcher::initialize() {
           foundConvertFromShared = true;
         break;
       }
-      if (op->getNumOperands() != 1 ||
-          (!op->hasTrait<OpTrait::Elementwise>() && !isa<Fp4ToFpOp>(op)))
+      if (op->getNumOperands() != 1)
         break;
       rets.push_back(op->getOperand(0));
       op = op->getOperand(0).getDefiningOp();
