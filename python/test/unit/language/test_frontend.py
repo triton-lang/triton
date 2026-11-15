@@ -309,6 +309,20 @@ def test_scalar_constant_preserves_signed_zero(dtype):
     run_filecheck_test(kernel, args=(dtype, ))
 
 
+def test_16bit_float_constant_rounded_once():
+
+    @triton.jit
+    def kernel():
+        # Just above a tie between two 16-bit values: rounding to fp32 first
+        # drops the 2**-30 that breaks the tie, and the tie rounds down.
+        # CHECK: arith.constant 1.000980e+00 : f16
+        anchor(tl.full((), 1 + 2**-11 + 2**-30, tl.float16))
+        # CHECK: arith.constant 1.007810e+00 : bf16
+        anchor(tl.full((), 1 + 2**-8 + 2**-30, tl.bfloat16))
+
+    run_filecheck_test(kernel)
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.int1, tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64],
                          ids=str)
