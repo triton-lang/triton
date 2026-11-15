@@ -541,3 +541,86 @@ tt.func @matmul_loop_mixed_amd(%lb : index, %ub : index, %step : index, %A : !tt
   tt.return %loop#4 : tensor<128x128xf32, #C>
 }
 }  // end module
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#a_packed = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+#b_packed = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:89"} {
+// CHECK-LABEL: tt.func @prefetch_fp4_lhs(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<16x64xi8
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<128x8xbf16
+// CHECK: scf.for
+// CHECK: ttg.local_load %[[A]]
+// CHECK: ttg.fp4_to_fp
+// CHECK: ttg.local_load %[[B]]
+// CHECK: tt.dot
+// CHECK: tt.return
+tt.func @prefetch_fp4_lhs(%a_smem: !ttg.memdesc<16x64xi8, #shared, #smem>, %b_smem: !ttg.memdesc<128x8xbf16, #shared, #smem>, %n: i32, %tok: !ttg.async.token) -> tensor<16x8xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<16x8xf32, #mma>) : i32 {
+    %a_i8 = ttg.local_load %a_smem token %tok : !ttg.memdesc<16x64xi8, #shared, #smem> -> tensor<16x64xi8, #a_packed>
+    %a_bf16 = ttg.fp4_to_fp %a_i8 {axis = 1 : i32} : tensor<16x64xi8, #a_packed> -> tensor<16x128xbf16, #a>
+    %b_bf16 = ttg.local_load %b_smem token %tok : !ttg.memdesc<128x8xbf16, #shared, #smem> -> tensor<128x8xbf16, #b>
+    %dot = tt.dot %a_bf16, %b_bf16, %acc : tensor<16x128xbf16, #a> * tensor<128x8xbf16, #b> -> tensor<16x8xf32, #mma>
+    scf.yield %dot : tensor<16x8xf32, #mma>
+  }
+  tt.return %result : tensor<16x8xf32, #mma>
+}
+
+// CHECK-LABEL: tt.func @prefetch_fp4_rhs(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<16x128xbf16
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<64x8xi8
+// CHECK: scf.for
+// CHECK: ttg.local_load %[[A]]
+// CHECK: ttg.local_load %[[B]]
+// CHECK: ttg.fp4_to_fp
+// CHECK: tt.dot
+// CHECK: tt.return
+tt.func @prefetch_fp4_rhs(%a_smem: !ttg.memdesc<16x128xbf16, #shared, #smem>, %b_smem: !ttg.memdesc<64x8xi8, #shared, #smem>, %n: i32, %tok: !ttg.async.token) -> tensor<16x8xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<16x8xf32, #mma>) : i32 {
+    %a_bf16 = ttg.local_load %a_smem token %tok : !ttg.memdesc<16x128xbf16, #shared, #smem> -> tensor<16x128xbf16, #a>
+    %b_i8 = ttg.local_load %b_smem token %tok : !ttg.memdesc<64x8xi8, #shared, #smem> -> tensor<64x8xi8, #b_packed>
+    %b_bf16 = ttg.fp4_to_fp %b_i8 {axis = 0 : i32} : tensor<64x8xi8, #b_packed> -> tensor<128x8xbf16, #b>
+    %dot = tt.dot %a_bf16, %b_bf16, %acc : tensor<16x128xbf16, #a> * tensor<128x8xbf16, #b> -> tensor<16x8xf32, #mma>
+    scf.yield %dot : tensor<16x8xf32, #mma>
+  }
+  tt.return %result : tensor<16x8xf32, #mma>
+}
+
+// CHECK-LABEL: tt.func @prefetch_fp4_both(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<16x64xi8
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<64x8xi8
+// CHECK: scf.for
+// CHECK: ttg.local_load %[[A]]
+// CHECK: ttg.fp4_to_fp
+// CHECK: ttg.local_load %[[B]]
+// CHECK: ttg.fp4_to_fp
+// CHECK: tt.dot
+// CHECK: tt.return
+tt.func @prefetch_fp4_both(%a_smem: !ttg.memdesc<16x64xi8, #shared, #smem>, %b_smem: !ttg.memdesc<64x8xi8, #shared, #smem>, %n: i32, %tok: !ttg.async.token) -> tensor<16x8xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<16x8xf32, #mma>) : i32 {
+    %a_i8 = ttg.local_load %a_smem token %tok : !ttg.memdesc<16x64xi8, #shared, #smem> -> tensor<16x64xi8, #a_packed>
+    %a_bf16 = ttg.fp4_to_fp %a_i8 {axis = 1 : i32} : tensor<16x64xi8, #a_packed> -> tensor<16x128xbf16, #a>
+    %b_i8 = ttg.local_load %b_smem token %tok : !ttg.memdesc<64x8xi8, #shared, #smem> -> tensor<64x8xi8, #b_packed>
+    %b_bf16 = ttg.fp4_to_fp %b_i8 {axis = 0 : i32} : tensor<64x8xi8, #b_packed> -> tensor<128x8xbf16, #b>
+    %dot = tt.dot %a_bf16, %b_bf16, %acc : tensor<16x128xbf16, #a> * tensor<128x8xbf16, #b> -> tensor<16x8xf32, #mma>
+    scf.yield %dot : tensor<16x8xf32, #mma>
+  }
+  tt.return %result : tensor<16x8xf32, #mma>
+}
+}

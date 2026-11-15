@@ -440,7 +440,8 @@ LogicalResult Prefetcher::initialize() {
           foundConvertFromShared = true;
         break;
       }
-      if (op->getNumOperands() != 1)
+      // Shape-changing operations need different slice sizes, e.g. fp4_to_fp.
+      if (op->getNumOperands() != 1 || !op->hasTrait<OpTrait::Elementwise>())
         break;
       rets.push_back(op->getOperand(0));
       op = op->getOperand(0).getDefiningOp();
