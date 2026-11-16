@@ -496,9 +496,14 @@ def test_sparse_shadow_coalesces_nearby_ranges(granularity, write_once):
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("granularity", [1, 2, 4, 8])
-def test_sparse_shadow_peer_alias_preserves_history(granularity):
-
+@pytest.mark.parametrize("different_device", [False, True])
+def test_sparse_shadow_peer_alias_preserves_history(granularity, different_device):
     device = torch.cuda.current_device()
+    alias_device = device
+    if different_device:
+        alias_device = 1 if device == 0 else 0
+        if torch.cuda.device_count() < 2 or not torch.cuda.can_device_access_peer(alias_device, device):
+            pytest.skip("requires peer access between two CUDA devices")
     kind = ShareableHandleType.POSIX_FILE_DESCRIPTOR
     size = 32 << 20
     with ExitStack() as stack:
@@ -511,19 +516,20 @@ def test_sparse_shadow_peer_alias_preserves_history(granularity):
         for handle in shadows:
             stack.callback(os.close, handle)
         assert exported_granularity == granularity
-        alias = import_allocation_handles(real, shadows, alloc_size, device, kind, shadow_granularity=granularity,
-                                          shadow_layout=layout)
-        stack.callback(gsan_free, alias, device)
-        with triton.knobs.compilation.scope():
-            triton.knobs.compilation.instrumentation_mode = "gsan"
-            for offset in (0, size - 4):
-                target = uint8_cuda_tensor_from_ptr(alias + offset, 4, device).view(torch.int32)
-                _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
-            torch.cuda.synchronize(device)
+        with torch.cuda.device(alias_device):
+            alias = import_allocation_handles(real, shadows, alloc_size, alias_device, kind,
+                                              shadow_granularity=granularity, shadow_layout=layout)
+            stack.callback(gsan_free, alias, alias_device)
+            with triton.knobs.compilation.scope():
+                triton.knobs.compilation.instrumentation_mode = "gsan"
+                for offset in (0, size - 4):
+                    target = uint8_cuda_tensor_from_ptr(alias + offset, 4, alias_device).view(torch.int32)
+                    _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+                torch.cuda.synchronize(alias_device)
         for offset in (0, size - 4):
             assert uint8_cuda_tensor_from_ptr(pointer + offset, 4, device).view(torch.int32).item() == 1
             original = shadow_cell_from_address(pointer + offset).write_clock
-            imported = shadow_cell_from_address(alias + offset).write_clock
+            imported = shadow_cell_from_address(alias + offset, device_index=alias_device).write_clock
             assert original.epoch == imported.epoch > 0
             assert original.thread_id == imported.thread_id
 
