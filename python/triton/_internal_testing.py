@@ -342,8 +342,10 @@ def create_mxfp_scale(operand: int, m: int, n: int, scale_dtype: str, scale_fact
         scale_factor: Number of operand values that share one scale.
 
     Returns:
-        A tuple of the raw scale bytes and the float32 scales broadcast to the
-        operand shape.
+        A tuple (scale, scale_ref), where scale is the raw E8M0 payload as
+        torch.uint8 for "e8m0", or a torch.float8_e4m3fn tensor for "e4m3"
+        because wmma_scaled infers the scale format from the scale dtype, and
+        scale_ref is the float32 scales broadcast to the operand shape.
     """
     pack_dim = 1 if operand == 0 else 0
     size = (m, n // scale_factor) if pack_dim == 1 else (m // scale_factor, n)

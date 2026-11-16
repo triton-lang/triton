@@ -1301,7 +1301,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #layout = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func @scaled_downcast_fp8_pk2_one_scale_per_value(%input: tensor<1x512xf32, #layout>, %scale: tensor<1x512xi8, #layout>) {
-    // expected-error @+1 {{each scale block along the scaled axis must cover a multiple of 2 elements, but got 1 output elements per scale}}
+    // expected-error @+1 {{each scale block along the scaled axis must cover a multiple of 2 fp8 values, but got 1 fp8 value per scale}}
     %0 = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xf32, #layout>, tensor<1x512xi8, #layout> -> tensor<1x512xf8E4M3FN, #layout>
     tt.return
   }
@@ -1315,8 +1315,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #bcast_scale = #ttg.linear<{register = [[0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 2], [0, 4], [0, 8]], warp = [], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func @scaled_downcast_fp8_pk2_broadcast_register(%input: tensor<1x128xf32, #bcast>, %scale: tensor<1x16xi8, #bcast_scale>) {
-    // expected-error @+1 {{each v_cvt_scalef32 group of 2 elements must share a single scale}}
+    // expected-error @+1 {{each v_cvt_scalef32 group of 2 fp8 values must share a single scale}}
     %0 = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x128xf32, #bcast>, tensor<1x16xi8, #bcast_scale> -> tensor<1x128xf8E4M3FN, #bcast>
+    tt.return
+  }
+}
+
+// -----
+
+// The layout is valid on gfx950; gfx942 has no v_cvt_scalef32 instructions.
+#unpacked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#packed = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_downcast_fp4_unsupported_target(%input: tensor<1x512xbf16, #unpacked>, %scale: tensor<1x64xi8, #scale>) {
+    // expected-error @+1 {{scaled downcast requires a CDNA4 or CDNA5 target, but the module targets gfx942}}
+    %0 = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x512xbf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #packed>
     tt.return
   }
 }

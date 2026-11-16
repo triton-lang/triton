@@ -368,7 +368,7 @@ bool TargetFeatures::supportsHwScaledUpcast() const {
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {
-  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
+  return supportsCvtPkScalePk2() || supportsCvtPkScalePk8();
 }
 
 std::optional<int64_t>

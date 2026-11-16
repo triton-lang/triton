@@ -609,10 +609,14 @@ std::optional<Attribute> inferScaledDowncastScaleEncoding(OpT op,
 // them, because the lowering zero-pads the group.
 //
 // `packFactor` is the number of values per dst element (2 for packed fp4, 1
-// for fp8), and `valueName` names those values in diagnostics.
+// for fp8), and `valueName` is the singular name of those values in
+// diagnostics.
 template <typename OpT>
 LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t packFactor,
                                               StringRef valueName) {
+  auto countOf = [](int64_t count, StringRef noun) {
+    return (Twine(count) + " " + noun + (count == 1 ? "" : "s")).str();
+  };
   auto scaleTy = op.getScale().getType();
   auto outputTy = op.getOutput().getType();
   auto scaleEnc = scaleTy.getEncoding();
@@ -641,11 +645,13 @@ LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t packFactor,
   if (groupSize && *elementsPerBlock % *groupSize != 0) {
     InFlightDiagnostic diag = op.emitError();
     diag << "each scale block along the scaled axis must cover a multiple of "
-         << *groupSize * packFactor << " " << valueName;
+         << countOf(*groupSize * packFactor, valueName);
     if (packFactor > 1)
-      diag << " (" << *groupSize << " packed bytes)";
-    return diag << ", but got " << *elementsPerBlock
-                << " output elements per scale";
+      diag << " (" << countOf(*groupSize, "packed byte") << ")";
+    diag << ", but got " << countOf(*elementsPerBlock * packFactor, valueName);
+    if (packFactor > 1)
+      diag << " (" << countOf(*elementsPerBlock, "packed byte") << ")";
+    return diag << " per scale";
   }
 
   // The lowering converts each thread's unique values, so form groups after
@@ -667,7 +673,7 @@ LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t packFactor,
           *compact, kRegister,
           std::min<int64_t>(*groupSize, compact->getInDimSize(kRegister))))
     return op.emitError() << "each v_cvt_scalef32 group of "
-                          << *groupSize * packFactor << " " << valueName
+                          << countOf(*groupSize * packFactor, valueName)
                           << " must share a single scale, but the layout "
                              "places a thread's group in more than one scale "
                              "block";
@@ -1151,7 +1157,7 @@ LogicalResult ScaledDowncastFp4Op::verify() {
     return failure();
 
   if (failed(verifyScaledDowncastScaleLayout(*this, /*packFactor=*/2,
-                                             /*valueName=*/"fp4 values")))
+                                             /*valueName=*/"fp4 value")))
     return failure();
 
   // Reuse fp4tofp verifier for packed/unpacked relationship
@@ -1260,7 +1266,7 @@ LogicalResult ScaledDowncastFp8Op::verify() {
     return failure();
 
   return verifyScaledDowncastScaleLayout(*this, /*packFactor=*/1,
-                                         /*valueName=*/"elements");
+                                         /*valueName=*/"fp8 value");
 }
 
 Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,
