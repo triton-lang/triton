@@ -94,7 +94,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NOT: nvvm.barrier
-    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
+    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x range <i32, 0, 128> : i32
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
     // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[IS_ZERO]], [[BASE]]
@@ -108,7 +108,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier_pred(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NOT: nvvm.barrier
-    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
+    // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x range <i32, 0, 128> : i32
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
     // CHECK-NEXT: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
@@ -1275,6 +1275,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %combined : f32
     }) {allocation.offset = 0 : i32} : (tensor<64xf32, #blocked>) -> f32
     tt.return %r : f32
+  }
+}
+
+// -----
+
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: thread_id_bound_uses_total_num_warps
+  // CHECK-DAG: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
+  tt.func @thread_id_bound_uses_total_num_warps(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
+    // CHECK: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x range <i32, 0, 256> : i32
+    // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
+    ttng.arrive_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared0, #smem>
+    tt.return
   }
 }
 

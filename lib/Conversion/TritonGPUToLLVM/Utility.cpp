@@ -2404,4 +2404,15 @@ void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp) {
   }
 }
 
+void annotateKnownBlockSize(ModuleOp mod) {
+  std::optional<int> totalNumThreads = triton::gpu::lookupTotalNumThreads(mod);
+  if (!totalNumThreads)
+    return;
+  mod.walk([&](FunctionOpInterface func) {
+    func->setDiscardableAttr(
+        "gpu.known_block_size",
+        DenseI32ArrayAttr::get(mod.getContext(), {*totalNumThreads, 1, 1}));
+  });
+}
+
 } // namespace mlir

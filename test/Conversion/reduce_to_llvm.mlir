@@ -150,7 +150,7 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tens
   // CHECK-NEXT: [[SUM1:%.*]] = add i32 [[SRC1]], [[SRC3]]
 
   // Reduce the even and odd lanes separately with converged full-warp redux.
-  // CHECK-NEXT: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK-NEXT: [[TID:%.*]] = tail call range(i32 0, 128) i32 @llvm.nvvm.read.ptx.sreg.tid.x()
   // CHECK-NEXT: [[GROUP_BIT:%.*]] = and i32 [[TID]], 1
   // CHECK-NEXT: [[GROUP:%.*]] = icmp eq i32 [[GROUP_BIT]], 0
   // CHECK-NEXT: [[V0:%.*]] = select i1 [[GROUP]], i32 [[SUM0]], i32 0

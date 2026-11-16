@@ -4605,6 +4605,15 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }
 
+std::optional<int> triton::gpu::lookupTotalNumThreads(ModuleOp mod) {
+  auto numWarps = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  if (!numWarps)
+    numWarps = mod->getAttrOfType<IntegerAttr>(AttrNumWarpsName);
+  if (!numWarps)
+    return std::nullopt;
+  return numWarps.getInt() * TritonGPUDialect::getThreadsPerWarp(mod);
+}
+
 int triton::gpu::lookupNumCTAs(Operation *op) {
   auto mod = dyn_cast<ModuleOp>(op);
   if (!mod)

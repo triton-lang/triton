@@ -57,6 +57,11 @@ constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
 int lookupNumWarps(Region *region);
+// Find the number of threads the block is launched with, i.e. the number of
+// warps in the module after warp-group allocation times the warp size. This is
+// the upper bound of the raw hardware thread ID. Returns nullopt if the module
+// does not specify the number of warps.
+std::optional<int> lookupTotalNumThreads(ModuleOp mod);
 // Try to find the contextual number of warps on which this operation is
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.

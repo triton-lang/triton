@@ -87,6 +87,8 @@ struct ConvertTritonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
+    mlir::annotateKnownBlockSize(mod);
+
     AMD::TargetInfo targetInfo(this->gfxArch.getValue(),
                                this->cuMode.getValue());
     if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {

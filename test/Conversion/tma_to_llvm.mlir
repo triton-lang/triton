@@ -27,7 +27,7 @@ tt.func @tma_gather_simple(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: !
   // CHECK: [[BAR:%.*]] = extractvalue {{.*}} %1, 0
   // CHECK: [[BASE_PTR:%.*]] = extractvalue {{.*}} %4, 0
 
-  // CHECK: [[TIDX:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK: [[TIDX:%.*]] = tail call range(i32 0, 128) i32 @llvm.nvvm.read.ptx.sreg.tid.x()
   // CHECK: [[WIDX:%.*]] = lshr i32 [[TIDX]], 5
   // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[WIDX]],
 

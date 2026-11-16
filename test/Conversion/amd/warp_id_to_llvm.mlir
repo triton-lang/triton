@@ -11,7 +11,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // GFX9-LABEL: @wave_id_wave64
 tt.func public @wave_id_wave64() {
   //      GFX9: %[[C64:.+]] = llvm.mlir.constant(64 : i32) : i32
-  // GFX9-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
+  // GFX9-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x range <i32, 0, 64> : i32
   // GFX9-NEXT: %[[C63:.+]] = llvm.mlir.constant(63 : i32) : i32
   // GFX9-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C63]] : i32
   // GFX9-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C64]] : i32
@@ -38,7 +38,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 //  GFX12-LABEL: @wave_id_wave32
 tt.func public @wave_id_wave32() {
   //       GFX11: %[[C32:.+]] = llvm.mlir.constant(32 : i32) : i32
-  //  GFX11-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x : i32
+  //  GFX11-NEXT: %[[IDX:.+]] = rocdl.workitem.id.x range <i32, 0, 32> : i32
   //  GFX11-NEXT: %[[C31:.+]] = llvm.mlir.constant(31 : i32) : i32
   //  GFX11-NEXT: %[[AND:.+]] = llvm.and %[[IDX]], %[[C31]] : i32
   //  GFX11-NEXT: %[[DIV:.+]] = llvm.udiv %[[AND]], %[[C32]] : i32

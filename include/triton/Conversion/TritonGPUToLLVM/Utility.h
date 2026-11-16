@@ -883,6 +883,9 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                            ConversionPatternRewriter &rewriter,
                            const TargetInfoBase &targetInfo);
 void handleArgPtrDatatype(triton::FuncOp funcOp, LLVM::LLVMFuncOp &llvmFuncOp);
+/// Annotate every function in the module with the block size it is launched
+/// with, so that GPU index ops can infer their ranges.
+void annotateKnownBlockSize(ModuleOp mod);
 } // namespace mlir
 
 #endif

@@ -22,7 +22,7 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
   // CHECK-NEXT: [[SRC6:%.*]] = extractvalue {{.*}} %0, 6
   // CHECK-NEXT: [[SRC7:%.*]] = extractvalue {{.*}} %0, 7
 
-  // CHECK-NEXT: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK-NEXT: [[TID:%.*]] = tail call range(i32 0, 32) i32 @llvm.nvvm.read.ptx.sreg.tid.x()
 
   // The layout conversion looks like
   //             dst_lane

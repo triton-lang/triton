@@ -164,6 +164,7 @@ private:
 void ConvertTritonGPUToLLVM::runOnOperation() {
   MLIRContext *context = &getContext();
   ModuleOp mod = getOperation();
+  annotateKnownBlockSize(mod);
   TargetInfo targetInfo(computeCapability, ptxVersion);
 
   mlir::LowerToLLVMOptions option(context);

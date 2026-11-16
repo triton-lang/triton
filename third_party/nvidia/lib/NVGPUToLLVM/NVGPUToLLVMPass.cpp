@@ -2,6 +2,7 @@
 #include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -213,7 +214,13 @@ public:
       return success();
     }
 
-    Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
+    auto tidOp = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
+    if (auto bound = ::mlir::gpu::getKnownDimensionSizeAround(
+            tidOp, ::mlir::gpu::DimensionKind::Block,
+            ::mlir::gpu::Dimension::x))
+      tidOp.setRangeAttr(rewriter.getAttr<LLVM::ConstantRangeAttr>(
+          /*bitWidth=*/32, /*lower=*/0, /*upper=*/*bound));
+    Value tid = tidOp.getResult();
     Value warpId = b.udiv(tid, b.i32_val(32));
     auto func = op->getParentOfType<FunctionOpInterface>();
     if (auto offset = func->getAttrOfType<IntegerAttr>(
