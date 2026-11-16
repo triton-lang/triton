@@ -407,6 +407,29 @@ def test_sparse_shadow_rejects_invalid_coverage(ranges):
         gsan_malloc(4096, torch.cuda.current_device(), shadow_granularity=1, accessed_ranges=ranges)
 
 
+def _run_sparse_shadow_hole_access(write_once):
+    device = torch.cuda.current_device()
+    size = 32 << 20
+    ptr = gsan_malloc(size, device, shadow_granularity=1, write_once=write_once, accessed_ranges=[(0, 4),
+                                                                                                  (size - 4, 4)])
+    assert ptr
+    # A CUDA memory-access error invalidates the child context.
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "gsan"
+        target = uint8_cuda_tensor_from_ptr(ptr + size // 2, 4, device).view(torch.int32)
+        _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+        torch.cuda.synchronize(device)
+    gsan_free(ptr, device)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("write_once", [False, True])
+def test_sparse_shadow_hole_faults(write_once):
+    result = run_in_process(_run_sparse_shadow_hole_access, args=(write_once, ))
+    assert isinstance(result.exc, RuntimeError)
+    assert "illegal memory access" in str(result.exc).lower()
+
+
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("granularity", [1, 4])
 @pytest.mark.parametrize("write_once", [False, True])
@@ -442,6 +465,8 @@ def test_sparse_shadow_coalesces_nearby_ranges(granularity, write_once):
         pointer = allocate(extent, [(0, 4), (second, 4), (third, 4)])
         with pytest.raises(ValueError, match="include_layout"):
             export_allocation_handles(pointer, kind, include_granularity=True, write_once=write_once)
+        with pytest.raises((RuntimeError, ValueError)):
+            export_allocation_memhandle_regions(pointer)
         real, shadow, size, gran, layout = export(pointer)
         # Fill a two-page gap to save a mapping, but retain the larger hole.
         assert layout == [(0, 4 * page), (9 * page, page)]
