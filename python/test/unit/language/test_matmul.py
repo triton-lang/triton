@@ -253,12 +253,13 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
+@pytest.mark.parametrize("reset_value", [0, 1])
 @pytest.mark.parametrize("snapshot", [False, True])
-def test_tma_matmul_accumulator_intermediate_read(device, reset_period, snapshot):
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, SNAPSHOT: tl.constexpr):
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr):
         acc = tl.zeros((256, 16), tl.float32)
         for k in range(6):
             a = A.load([0, k * 128])
@@ -271,7 +272,7 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, snapshot
                     C.store([(k // 2) * 256, 0], acc)
             if RESET_PERIOD:
                 if k % RESET_PERIOD == RESET_PERIOD - 1:
-                    acc = tl.full((256, 16), 1.0, tl.float32)
+                    acc = tl.full((256, 16), RESET_VALUE, tl.float32)
         C.store([3 * 256, 0], acc)
 
     a = torch.ones((256, 768), device=device, dtype=torch.float16)
@@ -280,12 +281,16 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, snapshot
     a_desc = TensorDescriptor.from_tensor(a, [256, 128])
     b_desc = TensorDescriptor.from_tensor(b, [128, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, snapshot, num_stages=3, num_warps=4)
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
 
-    values = {0: [128, 384, 640, 768], 2: [128, 129, 129, 1], 4: [128, 384, 129, 257]}[reset_period]
+    values = {
+        0: [128, 384, 640, 768],
+        2: [128, 128 + reset_value, 128 + reset_value, reset_value],
+        4: [128, 384, 128 + reset_value, 256 + reset_value],
+    }[reset_period]
     expected = torch.tensor(values, device=device, dtype=torch.float32)
     expected = expected[:, None, None].expand(4, 256, 16).reshape_as(c)
     if snapshot:
