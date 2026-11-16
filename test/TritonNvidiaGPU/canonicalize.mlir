@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -canonicalize | FileCheck %s --check-prefixes=CHECK,BARRIER,COMMON
-// RUN: triton-opt %s -gluon-canonicalize | FileCheck %s --check-prefixes=BARRIER,COMMON
+// RUN: triton-opt %s -gluon-canonicalize | FileCheck %s --check-prefixes=BARRIER,COMMON,LIVENESS
 
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0], [64, 0]], block = []}>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
@@ -254,5 +254,24 @@ tt.func @fdiv_constant_no_target(%x: f32) -> f32 {
   %three = arith.constant 3.0 : f32
   %a = arith.divf %x, %three : f32
   tt.return %a : f32
+}
+}
+
+module {
+// LIVENESS-LABEL: @live_and_dead_iter_args
+// LIVENESS: %[[SUM:.*]] = scf.for {{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (i32)
+// LIVENESS: %[[NEXT:.*]] = arith.addi %[[ACC]], %{{.*}} : i32
+// LIVENESS: scf.yield %[[NEXT]] : i32
+// LIVENESS: tt.return %[[SUM]] : i32
+tt.func @live_and_dead_iter_args(%n: i32, %x: i32) -> i32 {
+  %zero = arith.constant 0 : i32
+  %one = arith.constant 1 : i32
+  %sum, %unused = scf.for %i = %zero to %n step %one
+      iter_args(%acc = %zero, %dead = %one) -> (i32, i32) : i32 {
+    %next = arith.addi %acc, %x : i32
+    %unused_next = arith.addi %dead, %x : i32
+    scf.yield %next, %unused_next : i32, i32
+  }
+  tt.return %sum : i32
 }
 }
