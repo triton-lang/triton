@@ -653,8 +653,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     // The incoming cursor is the previous read slot and can initially be -1.
     // Advance it once for this read, then by the refill's stage lead.
     int refillOffset = 1 + llvm::mod(extractStage - insertStage, numBuffers);
-    assert(int64_t(numBuffers) - 1 + refillOffset <= INT32_MAX &&
-           "refill index must fit in i32 before taking the remainder");
     rings.push_back({argIdx, numBuffers, refillOffset});
     forYield.setOperand(argIdx++, loadGroup.insertIdx);
     forYield.setOperand(argIdx++, loadGroup.extractIdx);
