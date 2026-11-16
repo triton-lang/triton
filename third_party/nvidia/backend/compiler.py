@@ -522,6 +522,7 @@ class CUDABackend(BaseBackend):
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
             enable_nvptx_tti=True,
+            merge_nvptx_assert_blocks=is_enabled(options, "consan"),
         )
 
         # Get some metadata
