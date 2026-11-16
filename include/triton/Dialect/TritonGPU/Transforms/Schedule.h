@@ -15,8 +15,16 @@ namespace triton {
 
 namespace gpu {
 
+/// The loop carries the insert and extract cursors in consecutive arguments.
+struct LoadRing {
+  int insertArg;
+  int numBuffers;
+  int refillOffset;
+};
+using LoadRings = DenseMap<scf::ForOp, SmallVector<LoadRing>>;
+
 /// Lower the loops to prepare them for pipeline expansion.
-void lowerLoops(ModuleOp moduleOp);
+LoadRings lowerLoops(ModuleOp moduleOp);
 
 bool hasGpuBarriers(scf::ForOp forOp);
 bool isSafeToPipeline(scf::ForOp forOp);

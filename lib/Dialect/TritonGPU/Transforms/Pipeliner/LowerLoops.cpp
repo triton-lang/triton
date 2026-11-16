@@ -16,6 +16,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -458,7 +459,8 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
 }
 
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
-                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      SmallVectorImpl<LoadRing> &rings) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
   llvm::SmallVector<Operation *> scalarLoads;
@@ -637,19 +639,28 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            schedule);
     }
   }
+
+  // Automatically discover dependencies and schedule new insert/extract ops to
+  // correct stages.
+  scheduleDependencies(forOp, schedule);
+
   // Patch the yield with the updated counters. Subtract to account for the loop
   // counter.
   argIdx = newOperandIndex - 1;
   for (auto &[numBuffers, loadGroup] : loadGroups) {
+    int insertStage = schedule[loadGroup.insertIdx.getDefiningOp()].first;
+    int extractStage = schedule[loadGroup.extractIdx.getDefiningOp()].first;
+    // The incoming cursor is the previous read slot and can initially be -1.
+    // Advance it once for this read, then by the refill's stage lead.
+    int refillOffset = 1 + llvm::mod(extractStage - insertStage, numBuffers);
+    assert(int64_t(numBuffers) - 1 + refillOffset <= INT32_MAX &&
+           "refill index must fit in i32 before taking the remainder");
+    rings.push_back({argIdx, numBuffers, refillOffset});
     forYield.setOperand(argIdx++, loadGroup.insertIdx);
     forYield.setOperand(argIdx++, loadGroup.extractIdx);
     if (loadGroup.phase)
       forYield.setOperand(argIdx++, loadGroup.phase);
   }
-
-  // Automatically discover dependencies and schedule new insert/extract ops to
-  // correct stages.
-  scheduleDependencies(forOp, schedule);
 
   if (hasAsyncLoads) {
     // Insert sync point for any possibly outstanding loads after the loop. This
@@ -1203,28 +1214,34 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
 /////////////////////////////
 
 void lowerLoop(scf::ForOp forOp,
-               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               LoadRings &rings) {
   CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp))) {
     return;
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
-  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis);
+  SmallVector<LoadRing> loadRings;
+  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis, loadRings);
   newForOp = cast<scf::ForOp>(lowerTMADescriptors(newForOp, schedule));
   schedule.serialize(newForOp);
+  if (!loadRings.empty())
+    rings.try_emplace(newForOp, std::move(loadRings));
 }
 
 } // namespace
 
-void lowerLoops(ModuleOp moduleOp) {
+LoadRings lowerLoops(ModuleOp moduleOp) {
   triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
-    return;
+    return {};
+  LoadRings rings;
   for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis);
+    lowerLoop(forOp, axisInfoAnalysis, rings);
   }
+  return rings;
 }
 
 } // namespace gpu
