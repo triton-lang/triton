@@ -744,17 +744,23 @@ def test_ragged_tensor_metadata_replay(n_slices, capacity):
         assert pointers == [field.data_ptr() for field in fields]
 
 
-@pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
-def test_remap_ragged_tensor_metadata(n_slices):
+@pytest.mark.parametrize("n_slices,slice_map_values", [(9, None), (32, None), (911, None), (1025, None), (0, []),
+                                                       (1, [0]), (1, [-1]), (2, [0, 1]), (2, [1, 0]), (3, [-1, 2, 0]),
+                                                       (3, [-1, 1, 0]), (3, [-1, -1, -1])])
+def test_remap_ragged_tensor_metadata(n_slices, slice_map_values):
     device = "cuda"
     max_slice_size = 200
     n_total_rows = max_slice_size * n_slices
     slice_sizes = torch.randint(0, max_slice_size, (n_slices, ), dtype=torch.int32, device=device)
-    slice_sizes[torch.randint(0, n_slices, (1, ))] = 0
-    # randomly permute slices
-    slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
-    # discard random slices
-    slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
+    if slice_map_values is None:
+        slice_sizes[torch.randint(0, n_slices, (1, ))] = 0
+        # randomly permute slices
+        slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
+        # discard random slices
+        slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
+    else:
+        slice_sizes = torch.tensor([16, 32, 16][:n_slices], device=device, dtype=torch.int32)
+        slice_map = torch.tensor(slice_map_values, device=device, dtype=torch.int32)
     tri_metadata = make_ragged_tensor_metadata(slice_sizes, n_total_rows)
     ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows)
     tri_metadata = remap_ragged_tensor_metadata(tri_metadata, slice_map)
@@ -763,6 +769,25 @@ def test_remap_ragged_tensor_metadata(n_slices):
     assert_equal(tri_metadata.slice_offs, ref_metadata.slice_offs)
     assert_equal(tri_metadata.block_offs_data, ref_metadata.block_offs_data)
     assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
+
+    if n_slices == 0:
+        return
+    from triton_kernels.matmul import matmul, scoped_opt_flags_constraints
+
+    # A remap changes expert IDs, while activations stay at their original rows.
+    local_capacity = int(slice_map.max().item()) + 1
+    scales = (torch.arange(local_capacity, device=device) % 7 + 1).half()
+    weights = scales[:, None, None] * torch.eye(32, device=device, dtype=torch.float16)
+    x = torch.ones((n_total_rows, 32), device=device, dtype=torch.float16)
+    output = torch.full_like(x, -777)
+    expected = torch.full_like(x, -777)
+    row_experts = torch.repeat_interleave(torch.arange(n_slices, device=device), slice_sizes)
+    local_experts = slice_map[row_experts]
+    kept_rows = (local_experts != -1).nonzero().flatten()
+    expected[kept_rows] = scales[local_experts[kept_rows]][:, None]
+    with scoped_opt_flags_constraints({"is_persistent": False, "block_m": 16, "block_n": 32, "block_k": 32}):
+        matmul(x, weights, None, c=output, a_ragged_metadata=tri_metadata)
+    assert_equal(output, expected)
 
 
 @pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])

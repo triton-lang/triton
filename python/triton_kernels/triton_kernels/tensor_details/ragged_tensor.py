@@ -270,51 +270,6 @@ def make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows):
 
 
 @triton.jit
-def _generic_compaction(Out, compute_vals_and_cond_fn, compute_vals_and_cond_fn_args, sentinel, N, BLOCK: tl.constexpr):
-    curr_sum = 0
-    for start in range(0, N, BLOCK):
-        offs = start + tl.arange(0, BLOCK)
-        vals, conds = compute_vals_and_cond_fn(*compute_vals_and_cond_fn_args, offs)
-        # compute values
-        exc_cumsum = curr_sum + tl.cumsum(conds, 0) - conds
-        active_flags = conds.to(tl.int1)
-        rev_arange = N - start - 1 - tl.arange(0, BLOCK)
-        write_indx = exc_cumsum + tl.where(active_flags, 0, rev_arange)
-        out = tl.where(active_flags, vals, sentinel)
-        # store
-        tl.store(Out + write_indx, out, mask=offs < N)
-        # update running sum
-        curr_sum += tl.sum(conds, 0)
-    return curr_sum
-
-
-@triton.jit
-def _compact_from_slice_map(Vals, SliceMap, n_slices, offs):
-    slice_ids = offs
-    mask = slice_ids < n_slices
-    conds = (tl.load(SliceMap + slice_ids, mask=mask, other=-1) != -1).to(tl.int32)
-    vals = tl.load(Vals + offs, mask=mask)
-    return vals, conds
-
-
-@triton.jit
-def _compact_block_schedule(BlockSchedule, SliceMap, n_blocks, offs):
-    block_id = tl.load(BlockSchedule + offs, mask=offs < n_blocks, other=-1)
-    block_id = block_id.to(tl.uint32, bitcast=True)
-    slice_id = block_id & 0x0000FFFF
-    mask = slice_id != 65535
-    conds = (tl.load(SliceMap + slice_id, mask=mask, other=-1) != -1).to(tl.int32)
-    block_id = block_id.to(tl.int32, bitcast=True)
-    conds = conds.to(tl.int32, bitcast=True)
-    new_slice_id = tl.load(SliceMap + slice_id, mask=mask)
-    pid_mask = tl.full([
-        1,
-    ], 0xFFFF0000, dtype=tl.uint32)
-    new_block_id = ((block_id & pid_mask) | new_slice_id).to(tl.int32, bitcast=True)
-    return new_block_id, conds
-
-
-@triton.jit
 def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
                                   BatchOffsOut, BatchOffsInp,  #
                                   BlockOffsOut, block_offs_out_stride_m,  #
@@ -326,40 +281,64 @@ def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
                                   BLOCK: tl.constexpr  #
                                   ):
     pid_m = tl.program_id(0)
-    # number of valid slices
-
     # offset pointers
     BlockOffsOut += pid_m * block_offs_out_stride_m
     BlockOffsInp += pid_m * block_offs_in_stride_m
     BlockScheduleOut += pid_m * block_schedule_out_stride_m
     BlockScheduleInp += pid_m * block_schedule_in_stride_m
-    # compute batch sizes for this slice by compacting input batch sizes
-    _generic_compaction(BatchSizesOut, _compact_from_slice_map,  #
-                        (BatchSizesInp, SliceMap, n_slices), -1, n_slices,  #
-                        BLOCK=BLOCK)
-    # compute batch offsets for this slice by compacting input batch offsets
-    _generic_compaction(BatchOffsOut, _compact_from_slice_map,  #
-                        (BatchOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
-                        BLOCK=BLOCK)
-    # compute block offsets
-    n_compacted_blocks = _generic_compaction(BlockOffsOut, _compact_from_slice_map,  #
-                                             (BlockOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
-                                             BLOCK=BLOCK)
-    # compute block schedule
-    n_total_blocks = _generic_compaction(BlockScheduleOut, _compact_block_schedule,  #
-                                         (BlockScheduleInp, SliceMap, n_blocks), -1, n_blocks,  #
-                                         BLOCK=BLOCK)
-    # Record the total number of tiles in the trailing slot
-    tl.store(BlockOffsOut + n_compacted_blocks, n_total_blocks)
+    for start in range(0, n_slices + 1, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        tl.store(BlockOffsOut + offs, -1, offs <= n_slices)
+        if pid_m == 0:
+            tl.store(BatchSizesOut + offs, -1, offs < n_slices)
+            tl.store(BatchOffsOut + offs, -1, offs <= n_slices)
+    # Finish sentinel writes before another lane scatters into the same slots.
+    tl.debug_barrier()
+
+    local_capacity = 0
+    for start in range(0, n_slices, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        local_slice = tl.load(SliceMap + offs, offs < n_slices, other=-1)
+        keep = local_slice != -1
+        local_capacity = tl.maximum(local_capacity, tl.max(local_slice, 0) + 1)
+        block_offs = tl.load(BlockOffsInp + offs, keep, other=0)
+        tl.store(BlockOffsOut + local_slice, block_offs, keep)
+        if pid_m == 0:
+            sizes = tl.load(BatchSizesInp + offs, keep, other=0)
+            slice_offs = tl.load(BatchOffsInp + offs, keep, other=0)
+            tl.store(BatchSizesOut + local_slice, sizes, keep)
+            tl.store(BatchOffsOut + local_slice, slice_offs, keep)
+
+    n_total_blocks = 0
+    for start in range(0, n_blocks, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        block_id = tl.load(BlockScheduleInp + offs, offs < n_blocks, other=-1)
+        slice_id = block_id & 0x0000FFFF
+        local_slice = tl.load(SliceMap + slice_id, slice_id != 65535, other=-1)
+        keep = (local_slice != -1).to(tl.int32)
+        new_block_id = (block_id & ~0xFFFF) | local_slice
+        prefix = n_total_blocks + tl.cumsum(keep, 0) - keep
+        write_indx = prefix + tl.where(keep != 0, 0, n_blocks - offs - 1)
+        tl.store(BlockScheduleOut + write_indx, tl.where(keep != 0, new_block_id, -1), offs < n_blocks)
+        n_total_blocks += tl.sum(keep, 0)
+    tl.store(BlockOffsOut + local_capacity, n_total_blocks)
 
 
 def remap_ragged_tensor_metadata(src_ragged_tensor_metadata: RaggedTensorMetadata,
                                  slice_map: torch.Tensor) -> RaggedTensorMetadata:
     """
-    Let `src` be a ragged tensor, and `src_slices`/`src_ragged_tensor_metadata` be its slices/metadata.
+    Remap source slice IDs to local IDs without moving the source data.
 
-    This function returns the metadata of `dst`, i.e. the ragged tensor s.t.:
-    dst_slices = [`src_slices[slice_id]` if `slice_id != -1` for slice_id in `slice_map`]
+    `slice_map[i]` is the local ID of source slice `i`, or -1 to discard it.
+    Nonnegative IDs must be unique and smaller than the number of source slices.
+    They may be permuted or have gaps. The local slot capacity is one past the
+    largest mapped ID, or zero when all slices are discarded. A matmul's local
+    weight tensor must have that many expert slots.
+
+    Sizes and source row/block offsets are indexed by local ID. Unmapped slots
+    remain -1, and each block-offset row stores its total scheduled tiles at the
+    local slot capacity. The block schedule retains source order and uses local
+    IDs, with unused schedule entries padded with -1.
     """
     assert slice_map.ndim == 1
     assert slice_map.shape[0] == src_ragged_tensor_metadata.slice_sizes.shape[0]
@@ -398,44 +377,21 @@ def remap_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_map):
     reference implementation of `remap_ragged_tensor_metadata`
     """
 
-    def compact(vals, conds, sentinel):
-        assert conds.shape == vals.shape
-        keep = conds.nonzero().flatten()
-        sentinels = torch.full(((conds == 0).sum().item(), ), sentinel, dtype=vals.dtype, device=vals.device)
-        return torch.cat((vals[keep], sentinels))
-
-    def make_mask(block_pid_map):
-        slice_id = (block_pid_map & 0x0000FFFF)
-        valid_id = slice_id != 65535
-        valid_slice_id = slice_id[valid_id]
-        mask = torch.zeros_like(slice_id)
-        mask[valid_id] = (slice_map[valid_slice_id] != -1).to(torch.int32)
-        return mask
-
-    def map_slice_id(block_pid_map):
-        slice_id = (block_pid_map & 0x0000FFFF)
-        valid_id = slice_id != 65535
-        slice_id[valid_id] = slice_map[slice_id[valid_id]]
-        return (block_pid_map & 0xFFFF0000) | slice_id
-
-    n_slices = len(ragged_tensor_metadata.slice_sizes)
-    n_block_sizes = ragged_tensor_metadata.block_offs_data.shape[0]
-    slice_global = torch.arange(n_slices, device=ragged_tensor_metadata.slice_sizes.device)
-    slice_local = slice_map[slice_global] != -1
-    slice_mask = torch.cat((slice_local, torch.zeros((1, ), dtype=torch.bool, device=slice_local.device)))
-    slice_sizes = compact(ragged_tensor_metadata.slice_sizes, slice_mask[:-1], -1)
-    slice_offs = compact(ragged_tensor_metadata.slice_offs, slice_mask, -1)
-    block_offs_data = []
-    block_schedule_data = []
-    for i in range(n_block_sizes):
-        block_offs = compact(ragged_tensor_metadata.block_offs_data[i, :], slice_mask, -1)
-        block_schedule = ragged_tensor_metadata.block_schedule_data[i, :]
-        block_schedule = map_slice_id(compact(block_schedule, make_mask(block_schedule), -1))
-        # replace the first -1 in `block_offs` with the number of valid blocks
-        indx = (block_offs == -1).nonzero()[0].item()
-        block_offs[indx] = (block_schedule != -1).sum().item()
-        # update block_offs/block_schedules/
-        block_offs_data += [block_offs]
-        block_schedule_data += [block_schedule]
-    return RaggedTensorMetadata(slice_sizes, slice_offs, torch.stack(block_offs_data, dim=0),
-                                torch.stack(block_schedule_data, dim=0))
+    kept = (slice_map != -1).nonzero().flatten()
+    local_ids = slice_map[kept].long()
+    local_capacity = int(local_ids.max().item()) + 1 if local_ids.numel() else 0
+    slice_sizes = torch.full_like(ragged_tensor_metadata.slice_sizes, -1)
+    slice_offs = torch.full_like(ragged_tensor_metadata.slice_offs, -1)
+    block_offs = torch.full_like(ragged_tensor_metadata.block_offs_data, -1)
+    block_schedule = torch.full_like(ragged_tensor_metadata.block_schedule_data, -1)
+    slice_sizes[local_ids] = ragged_tensor_metadata.slice_sizes[kept]
+    slice_offs[local_ids] = ragged_tensor_metadata.slice_offs[kept]
+    block_offs[:, local_ids] = ragged_tensor_metadata.block_offs_data[:, kept]
+    for i, source_schedule in enumerate(ragged_tensor_metadata.block_schedule_data):
+        valid = source_schedule[source_schedule != -1]
+        local_slices = slice_map[valid & 0x0000FFFF]
+        keep = local_slices != -1
+        schedule = (valid[keep] & 0xFFFF0000) | local_slices[keep]
+        block_schedule[i, :schedule.numel()] = schedule
+        block_offs[i, local_capacity] = schedule.numel()
+    return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs, block_schedule)
