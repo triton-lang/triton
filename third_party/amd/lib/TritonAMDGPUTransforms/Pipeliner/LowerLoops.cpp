@@ -132,27 +132,21 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 namespace SingleDotSchedule {
 namespace {
 using namespace mlir::SingleDotSchedule;
-using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
+using OldClusterIds = DenseMap<Operation *, int>;
 
-ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
-  DenseMap<tt::CoarseSchedule::ClusterHash, int> clusterMap;
-  for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-    auto [stage, cluster] = stageAndCluster;
-    tt::CoarseSchedule::ClusterHash clusterHash =
-        tt::CoarseSchedule::hashCluster(cluster);
-    clusterMap[clusterHash] = *cluster;
-  }
-
-  return clusterMap;
+// Must run before schedule.clusters.clear() invalidates the stored iterators.
+OldClusterIds getOldClusterIds(tt::CoarseSchedule &schedule) {
+  OldClusterIds oldClusterIds;
+  for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster)
+    oldClusterIds[op] = *stageAndCluster.second;
+  return oldClusterIds;
 }
 
 // Remap global and compute clusters to the right place
-void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
-                   Clusters &clusters) {
+void remapClusters(tt::CoarseSchedule &schedule,
+                   const OldClusterIds &oldClusterIds, Clusters &clusters) {
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-    tt::CoarseSchedule::ClusterHash clusterHash =
-        tt::CoarseSchedule::hashCluster(stageAndCluster.second);
-    int oldClusterId = clusterMap[clusterHash];
+    int oldClusterId = oldClusterIds.lookup(op);
     if (oldClusterId == 0) {
       stageAndCluster.second = clusters[SCHED_GLOBAL_LOAD];
     } else {
@@ -297,9 +291,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
-  // Create a hash map to associate cluster hash in old schedule with its
-  // clusterID
-  ClusterMap clusterMap = createClusterMap(schedule);
+  OldClusterIds oldClusterIds = getOldClusterIds(schedule);
 
   // Make assignments
   Clusters clusterVec;
@@ -313,7 +305,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
   clusters[SCHED_ASYNC_WAIT] = clusterVec[asyncWaitCluster];
 
-  remapClusters(schedule, clusterMap, clusters);
+  remapClusters(schedule, oldClusterIds, clusters);
 
   LDBG("Cluster schedule:" << "  GLOBAL_LOAD cluster = " << globalLoadCluster
                            << ", LOCAL_STORE cluster = " << localStoreCluster
