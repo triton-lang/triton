@@ -414,7 +414,7 @@ if __name__ == "__main__":
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
     bench("no cluster", lambda: t7.matmul(A, W, W_scale))
-    for CTAS_M, CTAS_N in [(2, 1), (1, 2), (2, 2), (2, 4), (4, 4)]:
+    for CTAS_M, CTAS_N in [(2, 1), (1, 2), (2, 2), (2, 4)]:
         bench(f"{CTAS_M}x{CTAS_N} cluster", lambda: matmul(A, W, W_scale, CTAS_M, CTAS_N))
 
 # %%
@@ -424,5 +424,4 @@ if __name__ == "__main__":
 # 1x2 cluster: 8588 TFLOPS
 # 2x2 cluster: 8538 TFLOPS
 # 2x4 cluster: 8731 TFLOPS
-# 4x4 cluster: 8785 TFLOPS
 # ```
