@@ -114,7 +114,8 @@ class Prefetcher {
                                scf::ForOp newForOp, IRMapping &mapping,
                                const CarriedArgs &carriedArgs);
   Value getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
-                            OpBuilder &builder, IRMapping &mapping);
+                            OpBuilder &builder, IRMapping &mapping,
+                            DenseMap<Value, Value> &cache);
   SmallVector<Value> createLoopArgs(OpBuilder &builder,
                                     CarriedArgs &carriedArgs);
   void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
@@ -366,14 +367,14 @@ Value Prefetcher::getCurrentTrackedValue(triton::DotOp dot, bool isA,
 }
 
 Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
-                                      OpBuilder &builder, IRMapping &mapping) {
+                                      OpBuilder &builder, IRMapping &mapping,
+                                      DenseMap<Value, Value> &cache) {
   Value value = getTrackedValue(dot, isA, isToken);
   if (!value)
     return Value();
   if (isLoopCarriedValue(value))
     return mapping.lookupOrDefault(getYieldValue(value));
 
-  DenseMap<Value, Value> yieldCache;
   return cloneLoopValue(
       value, builder,
       [this, &builder, &mapping](BlockArgument arg) -> Value {
@@ -385,7 +386,7 @@ Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
                                        forOp.getStep());
         return mapping.lookupOrDefault(getYieldValue(arg));
       },
-      yieldCache);
+      cache);
 }
 
 LogicalResult Prefetcher::initialize() {
@@ -673,17 +674,18 @@ SmallVector<Value>
 Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
                               const CarriedArgs &carriedArgs) {
   SmallVector<Value> yieldValues;
+  DenseMap<Value, Value> yieldCache;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
     Value nextASource = getNextTrackedValue(
-        dot, /*isA=*/true, /*isToken=*/false, builder, mapping);
+        dot, /*isA=*/true, /*isToken=*/false, builder, mapping, yieldCache);
     Value nextBSource = getNextTrackedValue(
-        dot, /*isA=*/false, /*isToken=*/false, builder, mapping);
+        dot, /*isA=*/false, /*isToken=*/false, builder, mapping, yieldCache);
     Value nextAToken = getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/true,
-                                           builder, mapping);
+                                           builder, mapping, yieldCache);
     Value nextBToken = getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/true,
-                                           builder, mapping);
+                                           builder, mapping, yieldCache);
 
     if (carriedArgs.aSource.contains(dot))
       yieldValues.push_back(nextASource);
