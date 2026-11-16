@@ -462,8 +462,21 @@ if __name__ == "__main__" and is_cdna4():
 # CDNA5 also provides async copies from global memory to shared memory. In
 # Gluon, they are available as `global_to_shared` in `cdna5.async_copy`, and
 # they use the same `commit_group` and `wait_group` as on CDNA4.
-# `elementwise_async_copy_cdna5_kernel` only replaces the copy of
-# `elementwise_async_copy_kernel` with `global_to_shared`.
+#
+# Another thing changed in CDNA5 changes are  wait counters. CDNA5 offers the
+# following counters:
+#
+# - `loadcnt` counts global loads into registers.
+# - `storecnt` counts global stores.
+# - `asynccnt` counts async copies between global memory and shared memory,
+# - `tensorcnt` counts TDM copies, which we introduce in the next tutorial.
+# - `dscnt` counts shared memory accesses.
+#
+# Each counter also has its own wait instruction, such as `s_wait_loadcnt` and
+# `s_wait_asynccnt`, instead of one `s_waitcnt` for all counters. So a wait for
+# one kind of instruction no longer waits for the other kinds.
+#
+# Let's use the same elementwise kernel as before to demonstrate async copies.
 
 
 @gluon.jit
@@ -538,10 +551,8 @@ if __name__ == "__main__" and is_cdna5():
 # memory address for each lane, here in `v24`, and it doesn't use `M0`. The
 # kernel doesn't set `M0` at all.
 #
-# The wait also differs. CDNA5 splits `vmcnt` into separate counters. Global
-# loads into registers use `loadcnt`, stores use `storecnt`, and async copies
-# use `asynccnt`. So `wait_group` becomes `s_wait_asynccnt`, which only waits
-# for async copies, and never for stores or loads into registers.
+# The wait also differs. `wait_group` becomes `s_wait_asynccnt`, which only
+# waits for async copies, and never for stores or loads into registers.
 #
 # Since each lane has its own shared memory address, one copy instruction
 # doesn't have to fill consecutive shared memory. On CDNA4, the layout that
