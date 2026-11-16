@@ -178,6 +178,7 @@ jobs:
 
           # Test gluon
           TRITON_CI_CACHE_PHASE=gluon pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
+          TRITON_CI_CACHE_PHASE=gluon pytest --capture=tee-sys -rfs -n 8 python/tutorials/gluon/amd/
 
           TRITON_CI_CACHE_PHASE=attention pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
@@ -394,6 +395,8 @@ jobs:
             third_party/amd/python/examples/gluon/f16_fa_cdna5.py
           TRITON_DISABLE_LINE_INFO=0 run_rocjitsu_pytest 8 8 \
             third_party/amd/python/examples/gluon/mxfp_fa_cdna5.py
+          run_rocjitsu_pytest 8 8 \
+            python/tutorials/gluon/amd/
       - name: Run Triton tests on gfx1250-rocjitsu
         shell: bash
         run: |
