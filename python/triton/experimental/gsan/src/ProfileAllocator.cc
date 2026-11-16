@@ -23,7 +23,10 @@ CUresult ensureInitialized() {
     return CUDA_SUCCESS;
   CUdeviceptr reserve = 0;
   size_t alignment = 0;
-  CUresult err = getReserveAlignment(alignment);
+  auto requestedType = handleType == CU_MEM_HANDLE_TYPE_NONE
+                           ? defaultShareableHandleType()
+                           : handleType;
+  CUresult err = getReserveAlignment(requestedType, alignment);
   if (err == CUDA_SUCCESS)
     err = cuMemAddressReserve(&reserve, gsan_profile::kReserveSize, alignment,
                               0, 0);

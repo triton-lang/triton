@@ -227,7 +227,8 @@ inline void freeNode(AllocNode *leaf) {
   coalesceUp(leaf->parent);
 }
 
-inline CUresult getReserveAlignment(size_t &alignment) {
+inline CUresult getReserveAlignment(CUmemAllocationHandleType handleType,
+                                    size_t &alignment) {
   // All pools share a reservation. Its base must satisfy the minimum mapping
   // granularity of every visible device, including devices first used later.
   alignment = 0;
@@ -238,7 +239,7 @@ inline CUresult getReserveAlignment(size_t &alignment) {
   CUmemAllocationProp prop = {};
   prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  prop.requestedHandleTypes = getRequestedShareableHandleType();
+  prop.requestedHandleTypes = handleType;
   for (int device = 0; device < numDevices; ++device) {
     prop.location.id = device;
     size_t granularity = 0;

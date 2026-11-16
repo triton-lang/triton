@@ -140,7 +140,8 @@ int gsanEnsureInit() {
     return 0;
 
   size_t alignment = 0;
-  CUresult err = getReserveAlignment(alignment);
+  CUresult err = getReserveAlignment(getRequestedShareableHandleType(),
+                                     alignment);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     return -1;
