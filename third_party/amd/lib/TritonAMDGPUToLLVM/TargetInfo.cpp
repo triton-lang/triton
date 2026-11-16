@@ -226,6 +226,59 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
   b.barrier(targets);
 }
 
+void TargetInfo::releaseBeforeAtomicBarrier(Location loc,
+                                            RewriterBase &rewriter,
+                                            MemSyncScope scope) const {
+  // The workgroup fences around s_barrier do not wait for this wave's global
+  // writes: within a workgroup they are already ordered (the waves share one
+  // L1, or one L0 in CU mode). The release fence of a GPU or system scope
+  // atomic waits only for the issuing wave's writes, so writes other waves
+  // still have in flight could become visible after the atomic.
+  if (scope == MemSyncScope::CTA)
+    return;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    // Only wait for this wave's writes to reach L2 (s_waitcnt vmcnt(0); the
+    // gfx9 encoding leaves expcnt and lgkmcnt at their maximum). The atomic's
+    // own release, issued after the barrier, then writes back L2 once for all
+    // waves; a release fence here would repeat that writeback in every wave.
+    ROCDL::SWaitcntOp::create(rewriter, loc, /*bitfield=*/0x0F70);
+    return;
+  case ISAFamily::CDNA5:
+  case ISAFamily::RDNA4:
+    // Same as above with gfx12 counters: wait for this wave's stores, and let
+    // the atomic's release write back L2 (global_wb) once for all waves.
+    ROCDL::WaitStorecntOp::create(rewriter, loc, /*count=*/0);
+    return;
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m: {
+    // gfx11 has no store-counter wait intrinsic. Its releases never write
+    // back L2, so an agent-scope release lowers to just the vmcnt/vscnt waits
+    // at every scope. Agent scope also keeps this fence distinct from the
+    // workgroup fences around the barrier: InstCombine merges adjacent fences
+    // of equal scope and ordering regardless of their MMRA tags, which would
+    // drop this one.
+    auto fence = LLVM::FenceOp::create(
+        rewriter, loc, LLVM::AtomicOrdering::release, /*syncscope=*/"agent");
+    Attribute globalMMRA =
+        rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "global");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), globalMMRA);
+    return;
+  }
+  default: {
+    auto fence =
+        LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                              getAtomicSyncScope(scope));
+    Attribute globalMMRA =
+        rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "global");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), globalMMRA);
+    return;
+  }
+  }
+}
+
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
   // Always insert a workgroup barrier before each cluster barrier. In the case
