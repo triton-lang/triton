@@ -400,6 +400,144 @@ def test_configure_supports_swapped_cuda_device_ids():
     assert result.exc is None
 
 
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("ranges", [[(-1, 1)], [(0, 0)], [(4095, 2)], [(10, 4), (12, 4)], [(12, 1), (0, 1)]])
+def test_sparse_shadow_rejects_invalid_coverage(ranges):
+    with pytest.raises((ValueError, OverflowError)):
+        gsan_malloc(4096, torch.cuda.current_device(), shadow_granularity=1, accessed_ranges=ranges)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("granularity", [1, 4])
+@pytest.mark.parametrize("write_once", [False, True])
+def test_sparse_shadow_coalesces_nearby_ranges(granularity, write_once):
+    from triton.experimental.gsan._testing_utils import shadow_cell_tensor_from_address
+
+    device = torch.cuda.current_device()
+    kind = ShareableHandleType.POSIX_FILE_DESCRIPTOR
+    cell_size = 4 if write_once else 24
+    with ExitStack() as stack:
+
+        def allocate(size, ranges):
+            pointer = gsan_malloc(size, device, shadow_granularity=granularity, write_once=write_once,
+                                  accessed_ranges=ranges)
+            assert pointer
+            stack.callback(gsan_free, pointer, device)
+            return pointer
+
+        def export(pointer):
+            result = export_allocation_handles(pointer, kind, write_once=write_once, include_granularity=True,
+                                               include_layout=True)
+            stack.callback(os.close, result[0])
+            for handle in result[1]:
+                stack.callback(os.close, handle)
+            return result
+
+        # Discover the actual VMM page size from one minimally backed cell.
+        probe = allocate(4, [])
+        page = export(probe)[-1][0][1]
+        second = 3 * page * granularity // cell_size
+        third = 9 * page * granularity // cell_size
+        extent = 12 * page * granularity // cell_size
+        pointer = allocate(extent, [(0, 4), (second, 4), (third, 4)])
+        with pytest.raises(ValueError, match="include_layout"):
+            export_allocation_handles(pointer, kind, include_granularity=True, write_once=write_once)
+        real, shadow, size, gran, layout = export(pointer)
+        # Fill a two-page gap to save a mapping, but retain the larger hole.
+        assert layout == [(0, 4 * page), (9 * page, page)]
+        assert len(shadow) == 2
+
+        with triton.knobs.compilation.scope():
+            triton.knobs.compilation.instrumentation_mode = "gsan"
+            target = uint8_cuda_tensor_from_ptr(pointer, 4, device).view(torch.int32)
+            _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+            torch.cuda.synchronize(device)
+            history = shadow_cell_tensor_from_address(pointer).cpu()
+            assert torch.count_nonzero(history).item() > 0
+            alias = import_allocation_handles(real, shadow, size, device, kind, shadow_granularity=gran,
+                                              write_once=write_once, shadow_layout=layout)
+            stack.callback(gsan_free, alias, device)
+            assert torch.equal(shadow_cell_tensor_from_address(alias).cpu(), history)
+            # The newly backed gap is tracked too, with shared alias history.
+            gap = (3 * page // 2) * granularity // cell_size
+            target = uint8_cuda_tensor_from_ptr(alias + gap, 4, device).view(torch.int32)
+            _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+            torch.cuda.synchronize(device)
+            assert uint8_cuda_tensor_from_ptr(pointer + gap, 4, device).view(torch.int32).item() == 1
+            history = shadow_cell_tensor_from_address(pointer + gap).cpu()
+            assert torch.count_nonzero(history).item() > 0
+            assert torch.equal(shadow_cell_tensor_from_address(alias + gap).cpu(), history)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("granularity", [1, 2, 4, 8])
+def test_sparse_shadow_peer_alias_preserves_history(granularity):
+
+    device = torch.cuda.current_device()
+    kind = ShareableHandleType.POSIX_FILE_DESCRIPTOR
+    size = 32 << 20
+    with ExitStack() as stack:
+        pointer = gsan_malloc(size, device, shadow_granularity=granularity, accessed_ranges=[(0, 4), (size - 4, 4)])
+        assert pointer
+        stack.callback(gsan_free, pointer, device)
+        real, shadows, alloc_size, exported_granularity, layout = export_allocation_handles(
+            pointer, kind, include_granularity=True, include_layout=True)
+        stack.callback(os.close, real)
+        for handle in shadows:
+            stack.callback(os.close, handle)
+        assert exported_granularity == granularity
+        alias = import_allocation_handles(real, shadows, alloc_size, device, kind, shadow_granularity=granularity,
+                                          shadow_layout=layout)
+        stack.callback(gsan_free, alias, device)
+        with triton.knobs.compilation.scope():
+            triton.knobs.compilation.instrumentation_mode = "gsan"
+            for offset in (0, size - 4):
+                target = uint8_cuda_tensor_from_ptr(alias + offset, 4, device).view(torch.int32)
+                _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+            torch.cuda.synchronize(device)
+        for offset in (0, size - 4):
+            assert uint8_cuda_tensor_from_ptr(pointer + offset, 4, device).view(torch.int32).item() == 1
+            original = shadow_cell_from_address(pointer + offset).write_clock
+            imported = shadow_cell_from_address(alias + offset).write_clock
+            assert original.epoch == imported.epoch > 0
+            assert original.thread_id == imported.thread_id
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("write_once", [False, True])
+def test_sparse_shadow_rejects_invalid_import_layout(write_once):
+
+    device = torch.cuda.current_device()
+    kind = ShareableHandleType.POSIX_FILE_DESCRIPTOR
+    with ExitStack() as stack:
+        pointer = gsan_malloc(8 << 20, device, shadow_granularity=1, write_once=write_once,
+                              accessed_ranges=[(0, 4096), (4 << 20, 4096)])
+        assert pointer
+        stack.callback(gsan_free, pointer, device)
+        assert is_write_once_allocation(pointer) == write_once
+        real, shadow, size, gran, layout = export_allocation_handles(pointer, kind, include_granularity=True,
+                                                                     include_layout=True, write_once=write_once)
+        stack.callback(os.close, real)
+        for handle in shadow:
+            stack.callback(os.close, handle)
+        assert len(shadow) == len(layout) == 2
+        with pytest.raises(ValueError, match="one shadow handle per range"):
+            import_allocation_handles(real, shadow[:-1], size, device, kind, shadow_granularity=gran,
+                                      write_once=write_once, shadow_layout=layout)
+        with pytest.raises(RuntimeError):
+            import_allocation_handles(real, shadow, size, device, kind, shadow_granularity=gran, write_once=write_once,
+                                      shadow_layout=[layout[0], (layout[1][0] + 1, layout[1][1] - 1)])
+        # A failed partial import must release its VA node without destroying
+        # the owner's handles. A subsequent correct import remains usable.
+        alias = import_allocation_handles(real, shadow, size, device, kind, shadow_granularity=gran,
+                                          write_once=write_once, shadow_layout=layout)
+        stack.callback(gsan_free, alias, device)
+        assert is_write_once_allocation(alias) == write_once
+        target = uint8_cuda_tensor_from_ptr(alias, 4096, device)
+        target.fill_(23)
+        assert torch.all(uint8_cuda_tensor_from_ptr(pointer, 4096, device) == 23).item()
+
+
 @pytest.mark.xdist_group("gsan-multi-gpu")
 @pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
 def test_configure_supports_sparse_global_device_ids():

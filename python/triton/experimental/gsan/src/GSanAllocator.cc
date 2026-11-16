@@ -383,8 +383,10 @@ error:
 } // namespace
 
 // TODO: Handle streams?
-void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
-                                int shadowGranularity, bool writeOnce = false) {
+void *
+gsanMallocWithGranularity(ssize_t size, int device, void *stream,
+                          int shadowGranularity, bool writeOnce = false,
+                          const std::vector<ShadowRange> *accessed = nullptr) {
   if (size <= 0 || !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
 
@@ -427,6 +429,36 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
   AllocNode *node = allocateNode(root, allocSize);
   if (node == nullptr)
     return nullptr;
+
+  if (accessed) {
+    const size_t cellSize = gsan::getShadowCellSize(writeOnce);
+    // A separate mapping consumes driver resources on every importing peer.
+    // Fill gaps of at most two pages to reduce that cost without dropping any
+    // shadow coverage. Each original range contains at least one page, so the
+    // extra backing is bounded by twice the original page-rounded coverage.
+    const size_t maxGap = 2 * granularity;
+    for (const auto &range : *accessed) {
+      const size_t begin = (range.offset / shadowGranularity * cellSize) /
+                           granularity * granularity;
+      const size_t end =
+          roundUp(cdiv(range.offset + range.size, shadowGranularity) * cellSize,
+                  granularity);
+      if (!node->shadowRanges.empty() &&
+          begin <= node->shadowRanges.back().offset +
+                       node->shadowRanges.back().size + maxGap) {
+        auto &previous = node->shadowRanges.back();
+        previous.size =
+            std::max(previous.offset + previous.size, end) - previous.offset;
+      } else {
+        node->shadowRanges.push_back({begin, end - begin});
+      }
+    }
+    // Keep a valid exportable handle even for a completely untouched
+    // allocation. Accesses in the remaining holes fail with a CUDA
+    // memory-access error.
+    if (node->shadowRanges.empty())
+      node->shadowRanges.push_back({0, granularity});
+  }
 
   err = createAllocation(
       node, allocSize,
@@ -515,12 +547,12 @@ void *gsanGetReservePointer() {
   return reinterpret_cast<void *>(alloc->reserveBaseAddress);
 }
 
-int gsanExportAllocationHandles(void *void_ptr,
-                                ShareableHandle *realShareableHandle,
-                                ShareableHandle *shadowShareableHandle,
-                                size_t *allocSize,
-                                CUmemAllocationHandleType handleType,
-                                bool includeGranularity) {
+int gsanExportAllocationHandles(
+    void *void_ptr, ShareableHandle *realShareableHandle,
+    ShareableHandle *shadowShareableHandle, size_t *allocSize,
+    CUmemAllocationHandleType handleType, bool includeGranularity,
+    std::vector<ShadowRange> *layout = nullptr,
+    std::vector<ShareableHandle> *shadows = nullptr) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       allocSize == nullptr || !isSupportedShareableHandleType(handleType)) {
     return -1;
@@ -552,8 +584,12 @@ int gsanExportAllocationHandles(void *void_ptr,
           defaultGranularity)
     return -2;
 
+  if (!layout && !node->shadowRanges.empty())
+    return -3;
+  if (layout)
+    *layout = node->shadowRanges;
   CUresult err = exportAllocation(node, realShareableHandle,
-                                  shadowShareableHandle, handleType);
+                                  shadowShareableHandle, handleType, shadows);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     return -1;
@@ -593,6 +629,8 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
     return -1;
   }
 
+  if (!node->shadowRanges.empty())
+    return -1;
   *realPtr = static_cast<uintptr_t>(node->virtualAddress);
   *realSize = node->allocSize;
   *shadowPtr = static_cast<uintptr_t>(
@@ -646,12 +684,13 @@ int gsanExportRuntimeStateHandle(int device, ShareableHandle *shareableHandle,
   return 0;
 }
 
-void *gsanImportAllocationHandles(const ShareableHandle *realShareableHandle,
-                                  const ShareableHandle *shadowShareableHandle,
-                                  CUmemAllocationHandleType handleType,
-                                  size_t allocSize, int device,
-                                  int shadowGranularity,
-                                  bool writeOnce = false) {
+void *gsanImportAllocationHandles(
+    const ShareableHandle *realShareableHandle,
+    const ShareableHandle *shadowShareableHandle,
+    CUmemAllocationHandleType handleType, size_t allocSize, int device,
+    int shadowGranularity, bool writeOnce = false,
+    const std::vector<ShadowRange> &layout = {},
+    const std::vector<ShareableHandle> *shadows = nullptr) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       !isSupportedShareableHandleType(handleType) || allocSize == 0 ||
       !gsan::isValidShadowGranularity(shadowGranularity))
@@ -681,11 +720,12 @@ void *gsanImportAllocationHandles(const ShareableHandle *realShareableHandle,
   if (node == nullptr)
     return nullptr;
 
+  node->shadowRanges = layout;
   err = importAllocation(
       node, allocSize,
       gsan::getShadowAddress(node->virtualAddress, alloc->reserveBaseAddress),
       getShadowSize(allocSize, node->virtualAddress), *realShareableHandle,
-      *shadowShareableHandle, handleType, device);
+      *shadowShareableHandle, handleType, device, shadows);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     freeNode(node);
@@ -790,11 +830,54 @@ bool parseShadowGranularityArg(PyObject *obj, int *out) {
   return true;
 }
 
+bool parseRanges(PyObject *object, size_t limit,
+                 std::vector<ShadowRange> &ranges) {
+  PyObject *sequence =
+      PySequence_Fast(object, "expected a sequence of (offset, length) ranges");
+  if (!sequence)
+    return false;
+  size_t previousEnd = 0;
+  bool valid = true;
+  for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(sequence); ++i) {
+    PyObject *pair = PySequence_Fast(PySequence_Fast_GET_ITEM(sequence, i),
+                                     "expected an (offset, length) range");
+    if (!pair) {
+      valid = false;
+      break;
+    }
+    if (PySequence_Fast_GET_SIZE(pair) != 2) {
+      PyErr_SetString(PyExc_ValueError,
+                      "ranges must contain offset and length");
+      Py_DECREF(pair);
+      valid = false;
+      break;
+    }
+    size_t offset = PyLong_AsSize_t(PySequence_Fast_GET_ITEM(pair, 0));
+    size_t length = PyLong_AsSize_t(PySequence_Fast_GET_ITEM(pair, 1));
+    Py_DECREF(pair);
+    if (PyErr_Occurred()) {
+      valid = false;
+      break;
+    }
+    if (!length || offset < previousEnd || offset >= limit ||
+        length > limit - offset) {
+      PyErr_SetString(PyExc_ValueError, "ranges must be sorted, disjoint, "
+                                        "nonempty and within the allocation");
+      valid = false;
+      break;
+    }
+    ranges.push_back({offset, length});
+    previousEnd = offset + length;
+  }
+  Py_DECREF(sequence);
+  return valid;
+}
+
 PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
                    Py_ssize_t nargs) {
-  if (nargs < 2 || nargs > 5) {
+  if (nargs < 2 || nargs > 6) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.malloc expected 2 to 5 positional arguments, got %zd",
+                 "%s.malloc expected 2 to 6 positional arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
@@ -815,10 +898,19 @@ PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (writeOnce < 0)
     return nullptr;
   int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
-  if (nargs == 5 && !parseShadowGranularityArg(args[4], &shadowGranularity))
+  if (nargs >= 5 && !parseShadowGranularityArg(args[4], &shadowGranularity))
     return nullptr;
-  return PyLong_FromVoidPtr(gsanMallocWithGranularity(
-      size, device, stream, shadowGranularity, writeOnce));
+  const bool sparse = nargs == 6 && args[5] != Py_None;
+  std::vector<ShadowRange> ranges;
+  if (sparse && (size <= 0 || !parseRanges(args[5], size, ranges))) {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError,
+                      "sparse allocations require a positive size");
+    return nullptr;
+  }
+  return PyLong_FromVoidPtr(
+      gsanMallocWithGranularity(size, device, stream, shadowGranularity,
+                                writeOnce, sparse ? &ranges : nullptr));
 }
 
 PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
@@ -1236,24 +1328,25 @@ PyObject *pyIsWriteOnceAllocation(PyObject *self, PyObject *arg) {
   void *ptr = nullptr;
   if (!parseVoidPtrArg(arg, &ptr))
     return nullptr;
-  uintptr_t realPtr = 0, shadowPtr = 0;
-  size_t realSize = 0, shadowSize = 0;
-  if (gsanExportAllocationMemhandleRegions(ptr, &realPtr, &realSize, &shadowPtr,
-                                           &shadowSize) != 0) {
+  const auto address = reinterpret_cast<CUdeviceptr>(ptr);
+  std::lock_guard lg(mut);
+  const AllocNode *node = alloc ? findAllocation(address) : nullptr;
+  if (!node || node->maxFreeBlockSize != 0 || address < node->virtualAddress ||
+      address >= node->virtualAddress + node->allocSize) {
     PyErr_SetString(PyExc_ValueError,
                     "expected a live GSan allocation pointer");
     return nullptr;
   }
   return PyBool_FromLong(
-      gsan::isWriteOnceAddress(realPtr, alloc->reserveBaseAddress));
+      gsan::isWriteOnceAddress(address, alloc->reserveBaseAddress));
 }
 
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs < 2 || nargs > 4) {
+  if (nargs < 2 || nargs > 5) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.export_allocation_handles expected 2 to 4 positional "
+                 "%s.export_allocation_handles expected 2 to 5 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
@@ -1276,19 +1369,34 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                     "write_once does not match the allocation mode");
     return nullptr;
   }
-  int includeGranularity = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+  int includeGranularity = nargs >= 4 ? PyObject_IsTrue(args[3]) : 0;
   if (includeGranularity < 0)
     return nullptr;
-
+  int includeLayout = nargs == 5 ? PyObject_IsTrue(args[4]) : 0;
+  if (includeLayout < 0)
+    return nullptr;
+  if (includeLayout && !includeGranularity) {
+    PyErr_SetString(PyExc_ValueError,
+                    "include_layout requires include_granularity=True");
+    return nullptr;
+  }
+  std::vector<ShadowRange> layout;
+  std::vector<ShareableHandle> shadows;
   ShareableHandle realShareableHandle = {};
   ShareableHandle shadowShareableHandle = {};
   size_t allocSize = 0;
-  int rc = gsanExportAllocationHandles(ptr, &realShareableHandle,
-                                       &shadowShareableHandle, &allocSize,
-                                       handleType, includeGranularity != 0);
+  int rc = gsanExportAllocationHandles(
+      ptr, &realShareableHandle, &shadowShareableHandle, &allocSize, handleType,
+      includeGranularity != 0, includeLayout ? &layout : nullptr,
+      includeLayout ? &shadows : nullptr);
   if (rc == -2) {
     PyErr_SetString(PyExc_ValueError,
                     "Non-default pools require include_granularity=True");
+    return nullptr;
+  }
+  if (rc == -3) {
+    PyErr_SetString(PyExc_ValueError,
+                    "Sparse shadows require include_layout=True");
     return nullptr;
   }
   if (rc != 0) {
@@ -1296,17 +1404,61 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
-  if (!includeGranularity)
-    return Py_BuildValue(
-        "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
-        shareableHandleToPyObject(shadowShareableHandle, handleType),
-        static_cast<unsigned long long>(allocSize));
-  return Py_BuildValue(
-      "(NNKi)", shareableHandleToPyObject(realShareableHandle, handleType),
-      shareableHandleToPyObject(shadowShareableHandle, handleType),
-      static_cast<unsigned long long>(allocSize),
-      gsan::getShadowGranularity(reinterpret_cast<uintptr_t>(ptr),
-                                 alloc->reserveBaseAddress));
+  // Python integer handles do not own their file descriptors. Transfer
+  // ownership to the caller only after the complete tuple has been built.
+  PyObject *ranges = nullptr;
+  PyObject *shadowObject = nullptr;
+  if (layout.empty()) {
+    ranges = Py_NewRef(Py_None);
+    shadowObject = shareableHandleToPyObject(shadowShareableHandle, handleType);
+  } else {
+    ranges = PyList_New(layout.size());
+    shadowObject = PyList_New(shadows.size());
+    for (size_t i = 0; ranges && shadowObject && i < layout.size(); ++i) {
+      PyObject *range = Py_BuildValue(
+          "(KK)", static_cast<unsigned long long>(layout[i].offset),
+          static_cast<unsigned long long>(layout[i].size));
+      if (!range) {
+        Py_CLEAR(ranges);
+        break;
+      }
+      PyList_SET_ITEM(ranges, i, range);
+      PyObject *handle = shareableHandleToPyObject(shadows[i], handleType);
+      if (!handle) {
+        Py_CLEAR(shadowObject);
+        break;
+      }
+      PyList_SET_ITEM(shadowObject, i, handle);
+    }
+  }
+  PyObject *result = nullptr;
+  if (ranges && shadowObject) {
+    auto size = static_cast<unsigned long long>(allocSize);
+    auto *real = shareableHandleToPyObject(realShareableHandle, handleType);
+    if (real) {
+      int granularity = gsan::getShadowGranularity(
+          reinterpret_cast<uintptr_t>(ptr), alloc->reserveBaseAddress);
+      if (includeLayout)
+        result = Py_BuildValue("(OOKiO)", real, shadowObject, size, granularity,
+                               ranges);
+      else if (includeGranularity)
+        result = Py_BuildValue("(OOKi)", real, shadowObject, size, granularity);
+      else
+        result = Py_BuildValue("(OOK)", real, shadowObject, size);
+      Py_DECREF(real);
+    }
+  }
+  Py_XDECREF(ranges);
+  Py_XDECREF(shadowObject);
+  if (!result && handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
+    close(realShareableHandle.fd);
+    if (layout.empty())
+      close(shadowShareableHandle.fd);
+    else
+      for (const auto &handle : shadows)
+        close(handle.fd);
+  }
+  return result;
 }
 
 PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
@@ -1346,9 +1498,9 @@ PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs < 5 || nargs > 7) {
+  if (nargs < 5 || nargs > 8) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.import_allocation_handles expected 5 to 7 positional "
+                 "%s.import_allocation_handles expected 5 to 8 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
@@ -1362,9 +1514,7 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
   if (!parseIntArg(args[3], "device", &device) ||
       !parseShareableHandleTypeArg(args[4], "handle_type", &handleType) ||
       !parseShareableHandleArg(args[0], "real_handle", handleType,
-                               &realShareableHandle) ||
-      !parseShareableHandleArg(args[1], "shadow_handle", handleType,
-                               &shadowShareableHandle)) {
+                               &realShareableHandle)) {
     return nullptr;
   }
 
@@ -1376,12 +1526,59 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
   if (writeOnce < 0)
     return nullptr;
   int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
-  if (nargs == 7 && !parseShadowGranularityArg(args[6], &shadowGranularity))
+  if (nargs >= 7 && !parseShadowGranularityArg(args[6], &shadowGranularity))
     return nullptr;
+  std::vector<ShadowRange> layout;
+  if (nargs == 8 && args[7] != Py_None) {
+    const size_t cellSize =
+        gsan::getShadowCellSize(static_cast<bool>(writeOnce));
+    if (allocSize > std::numeric_limits<size_t>::max() / cellSize) {
+      PyErr_SetString(PyExc_ValueError,
+                      "allocation size overflows shadow extent");
+      return nullptr;
+    }
+    if (!parseRanges(args[7], cdiv(allocSize, shadowGranularity) * cellSize,
+                     layout))
+      return nullptr;
+    if (layout.empty()) {
+      PyErr_SetString(PyExc_ValueError,
+                      "sparse shadow layout must not be empty");
+      return nullptr;
+    }
+  }
+
+  std::vector<ShareableHandle> shadows;
+  if (layout.empty()) {
+    if (!parseShareableHandleArg(args[1], "shadow_handle", handleType,
+                                 &shadowShareableHandle))
+      return nullptr;
+  } else {
+    PyObject *sequence =
+        PySequence_Fast(args[1], "expected one shadow handle per range");
+    if (!sequence)
+      return nullptr;
+    if (static_cast<size_t>(PySequence_Fast_GET_SIZE(sequence)) !=
+        layout.size()) {
+      Py_DECREF(sequence);
+      PyErr_SetString(PyExc_ValueError, "expected one shadow handle per range");
+      return nullptr;
+    }
+    shadows.resize(layout.size());
+    for (size_t i = 0; i < shadows.size(); ++i) {
+      if (!parseShareableHandleArg(PySequence_Fast_GET_ITEM(sequence, i),
+                                   "shadow_handle", handleType, &shadows[i])) {
+        Py_DECREF(sequence);
+        return nullptr;
+      }
+    }
+    Py_DECREF(sequence);
+    shadowShareableHandle = shadows.front();
+  }
 
   void *ptr = gsanImportAllocationHandles(
       &realShareableHandle, &shadowShareableHandle, handleType, allocSize,
-      device, shadowGranularity, writeOnce);
+      device, shadowGranularity, writeOnce, layout,
+      layout.empty() ? nullptr : &shadows);
   if (ptr == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
     return nullptr;
