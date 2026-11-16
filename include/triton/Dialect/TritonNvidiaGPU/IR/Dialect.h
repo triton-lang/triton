@@ -98,6 +98,10 @@ inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
 
+// Whether an async-proxy shared payload can access another CTA's memory.
+// Completion mbarriers have their own routing.
+bool hasCrossCTAAsyncSharedAccess(Operation *op);
+
 // Return the declared MMA N, restricted to a true N subview.
 unsigned getMMAv5InstructionN(gpu::MemDescType type);
 
