@@ -1249,14 +1249,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
-// 64 KiB of static LDS and 8 waves per workgroup. gfx942 fits one workgroup per
-// CU (8 waves over 4 SIMDs = 2 waves per EU) and gfx950 fits two (4 per EU).
-// Running one workgroup needs ceil(8 / 4) = 2 waves per EU.
-// CHECK: module attributes {{.*}}ttg.max_waves_per_eu = 2 : i32, ttg.min_waves_per_eu = 2 : i32
-// GFX950: module attributes {{.*}}ttg.max_waves_per_eu = 4 : i32, ttg.min_waves_per_eu = 2 : i32
+// global_smem is sized statically so that LLVM accounts for the kernel's LDS
+// usage when it computes occupancy.
+// COMMON: llvm.mlir.global internal @global_smem() {{.*}}: !llvm.array<65536 x i8>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: @waves_per_eu_static_lds
-  tt.func public @waves_per_eu_static_lds() {
+  // COMMON-LABEL: @static_lds_global_smem
+  tt.func public @static_lds_global_smem() {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     tt.return
   }

@@ -5,7 +5,7 @@ import triton.language as tl
 import pytest
 
 import pathlib
-from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_rubin
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
@@ -727,3 +727,89 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+def test_compiled_config_prune(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': bs}) for bs in (32, 64, 128)]
+    seen = {}
+
+    def compiled_config_prune(compiled, named_args, **kwargs):
+        seen.update(compiled)
+        assert {**named_args, **kwargs}["N"] == N
+        return [config for config, kernel in compiled.items() if config.kwargs['BLOCK_SIZE'] != 32]
+
+    @triton.autotune(configs=configs, key=['N'], prune_configs_by={'compiled_config_prune': compiled_config_prune},
+                     do_bench=do_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    _kernel[grid](dst, src, N=N)
+    torch.testing.assert_close(src, dst)
+    # The hook sees every config, compiled but not yet launched.
+    assert set(seen) == set(configs)
+    assert all(kernel.metadata.num_warps == 4 for kernel in seen.values())
+    # The rejected config is not benchmarked.
+    assert _kernel.configs_timings[configs[0]] == [float("inf")] * 3
+    assert all(timing[0] != float("inf") for timing in map(_kernel.configs_timings.get, configs[1:]))
+    assert _kernel.best_config != configs[0]
+
+
+def test_compiled_config_prune_all(device):
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 32}), triton.Config(kwargs={'BLOCK_SIZE': 128})]
+
+    @triton.autotune(configs=configs, key=['N'],
+                     prune_configs_by={'compiled_config_prune': lambda compiled, named_args, **kwargs: []})
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    grid = lambda META: (triton.cdiv(N, META['BLOCK_SIZE']), )
+    with pytest.raises(triton.TritonError, match="`compiled_config_prune` should return at least one config"):
+        _kernel[grid](dst, src, N=N)
+
+
+@triton.jit
+def _transpose_128x128(src, dst):
+    # Uses 64 KiB of static LDS.
+    rows = tl.arange(0, 128)[:, None]
+    cols = tl.arange(0, 128)[None, :]
+    tl.store(dst + cols * 128 + rows, tl.load(src + rows * 128 + cols))
+
+
+@pytest.mark.skipif(not is_hip(), reason="waves_per_eu is AMD-specific")
+def test_autotune_skips_unmet_waves_per_eu(device):
+    src = torch.arange(128 * 128, device=device, dtype=torch.float32).reshape(128, 128)
+    dst = torch.empty_like(src)
+    # With 8 warps, one workgroup occupies at least 2 waves per EU, so LLVM
+    # cannot honor waves_per_eu=1.
+    configs = [triton.Config({'waves_per_eu': w}, num_warps=8) for w in (1, 2)]
+    kernel = triton.autotune(configs=configs, key=[], do_bench=do_bench)(_transpose_128x128)
+    kernel[(1, )](src, dst)
+    torch.testing.assert_close(dst, src.T, rtol=0, atol=0)
+    assert kernel.configs_timings[configs[0]] == [float("inf")] * 3
+    assert kernel.configs_timings[configs[1]][0] != float("inf")
+    assert kernel.best_config == configs[1]
+
+    # waves_per_eu is only a hint: a direct launch with an unmet value still runs.
+    dst.zero_()
+    _transpose_128x128[(1, )](src, dst, num_warps=8, waves_per_eu=1)
+    torch.testing.assert_close(dst, src.T, rtol=0, atol=0)
+
+    # If no config meets its hint, the autotuner benchmarks all of them.
+    configs = [triton.Config({'waves_per_eu': 1}, num_warps=8), triton.Config({'waves_per_eu': 1}, num_warps=16)]
+    kernel = triton.autotune(configs=configs, key=[], do_bench=do_bench)(_transpose_128x128)
+    with pytest.warns(UserWarning, match="no config met all of its optimization hints"):
+        kernel[(1, )](src, dst)
+    assert all(timing[0] != float("inf") for timing in kernel.configs_timings.values())

@@ -250,8 +250,7 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
 
     def run_codegen(source, triple, processor, features, **kwargs):
         calls.append((source, triple, processor, features, kwargs))
-        return (".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
-                ".amdhsa_kernel test_kernel\n  .amdhsa_group_segment_fixed_size 0\n.end_amdhsa_kernel\n")
+        return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
 
     monkeypatch.setattr(compiler, "compile_amdgpu", run_codegen)
     if disable_opt is not None:
@@ -417,9 +416,7 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
     # MachineFunction, the scheduling DAG appended after the marker. The knob
     # gates that single call.
     monkeypatch.setattr(compiler, "translate_to_mir", lambda *args: events.append("mir"))
-    monkeypatch.setattr(
-        compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm\n.amdhsa_kernel test_kernel\n"
-        "  .amdhsa_group_segment_fixed_size 0\n.end_amdhsa_kernel\n")
+    monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
 
@@ -441,8 +438,7 @@ def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
 
     def replace_mir(path, *args):
         replacement_calls.append((path, args))
-        return (".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
-                ".amdhsa_kernel test_kernel\n  .amdhsa_group_segment_fixed_size 0\n.end_amdhsa_kernel\n")
+        return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
 
     monkeypatch.setattr(compiler, "translate_mir_to_asm", replace_mir)
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: pytest.fail("MIR replacement bypassed"))

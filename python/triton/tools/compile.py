@@ -185,7 +185,9 @@ def compile_kernel(args: CompileArgs):
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
         "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch
         "kernel_docstring": doc_string,
-        "shared": ccinfo.metadata.shared,
+        # Dynamic shared memory to request at launch. On HIP, LDS is allocated
+        # statically, so this is 0 even when metadata.shared is not.
+        "shared": ccinfo.packed_metadata[2],
         "num_warps": args.num_warps,
         "algo_info": "_".join([const_sig, meta_sig]),
         "gridX": grid[0],

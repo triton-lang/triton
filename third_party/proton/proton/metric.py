@@ -43,7 +43,9 @@ def _get_kernel(kernel_fn, *args):
     if warp_size is None:
         warp_size = driver.active.get_current_target().warp_size
     num_threads = kernel.metadata.num_warps * warp_size
-    return kernel.function, num_threads, kernel.metadata.shared
+    # Pass the dynamic shared memory to request at launch, which is 0 on HIP
+    # where LDS is allocated statically.
+    return kernel.function, num_threads, kernel.packed_metadata[2]
 
 
 def set_metric_kernels():
