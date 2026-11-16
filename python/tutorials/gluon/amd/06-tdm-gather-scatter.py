@@ -373,8 +373,10 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
                   M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
                   stride_am: gl.constexpr, stride_wn: gl.constexpr, stride_scale: gl.constexpr,
                   stride_ym: gl.constexpr,  #
-                  BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr,  #
-                  GATHER: gl.constexpr, SCATTER: gl.constexpr):
+                  NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr, SCATTER: gl.constexpr):
+    BLOCK_M: gl.constexpr = 256
+    BLOCK_N: gl.constexpr = 256
+    BLOCK_K: gl.constexpr = 256
     gl.static_assert(ROWS_PER_EXPERT % BLOCK_M == 0)
     num_warps: gl.constexpr = gl.num_warps()
     layouts: gl.constexpr = t5.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
@@ -423,18 +425,16 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
     matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N, stride_ym, off_m, off_n, y_smem_layout, SCATTER)
 
 
-def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256,
-           NUM_BUFFERS=2):
+def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, NUM_BUFFERS=2):
     E, N, K = W.shape[0], W.shape[1], A.shape[1]
     M = E * rows_per_expert
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
-    grid = (M // BLOCK_M * triton.cdiv(N, BLOCK_N), )
+    grid = (M // 256 * triton.cdiv(N, 256), )
     matmul_kernel[grid](
         A, W, W_scale, Y, gather_idx, scatter_idx,  #
         M, E, rows_per_expert, N, K,  #
         A.stride(0), W.stride(1), W_scale.stride(0), Y.stride(0),  #
-        BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS,  #
-        gather_idx is not None, scatter_idx is not None)
+        NUM_BUFFERS, gather_idx is not None, scatter_idx is not None)
     return Y
 
 

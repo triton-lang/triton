@@ -706,7 +706,7 @@ class MXWmmaLayouts:
 @gluon.constexpr_function
 def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     # Operand A has shape [BLOCK_M, BLOCK_K] in fp8
-    # Operand W has shape [BLOCK_N, BLOCK_K // 2] in packed fp4, so transposed
+    # Operand W has shape [BLOCK_N, BLOCK_K // 2] in packed fp4
     a_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_M, BLOCK_K], [1, 0])
     w_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_N, BLOCK_K // 2], [1, 0])
     a_smem_layout, w_smem_layout, acc_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
@@ -753,8 +753,10 @@ def matmul_cdna5_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS: gl.co
 @gluon.jit
 def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
                         stride_am, stride_wn, stride_scale, stride_ym,  #
-                        BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr,
-                        PRESHUFFLE: gl.constexpr):
+                        NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
+    BLOCK_M: gl.constexpr = 256
+    BLOCK_N: gl.constexpr = 256
+    BLOCK_K: gl.constexpr = 256
 
     GROUP: gl.constexpr = 128 if PRESHUFFLE else 1
     layouts: gl.constexpr = get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, gl.num_warps())
@@ -798,13 +800,13 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     tdm.async_wait(0)
 
 
-def matmul_cdna5(A, W, W_scale, preshuffle=True, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3):
+def matmul_cdna5(A, W, W_scale, preshuffle=True, NUM_BUFFERS=3):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
+    grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
     matmul_cdna5_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),
-                              BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, preshuffle)
+                              NUM_BUFFERS, preshuffle)
     return Y
 
 
