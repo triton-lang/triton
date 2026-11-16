@@ -156,6 +156,35 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
+bool areTMemRowsAligned(MemDescType lhsType, MemDescType accType) {
+  // The MMA lowering addresses A at (m, k) and D at (m, n) through these
+  // inverse layouts. Rows are linear in the coordinates, so they match for
+  // every instruction iff A's row ignores K, D's row ignores N, and both map M
+  // to the same rows.
+  auto *ctx = lhsType.getContext();
+  auto kRow = StringAttr::get(ctx, "row");
+  auto lhsInv = toLinearLayout(lhsType).pseudoinvert();
+  auto accInv = toLinearLayout(accType).pseudoinvert();
+  auto lhsDims = to_vector(lhsInv.getInDimNames());
+  auto accDims = to_vector(accInv.getInDimNames());
+  auto lhsShape = getShapePerCTA(lhsType);
+  auto accShape = getShapePerCTA(accType);
+  auto rowIgnores = [&](const LinearLayout &inv, StringAttr dim, int64_t size) {
+    for (int i = 0; i < llvm::Log2_64(size); ++i)
+      if (inv.getBasis(dim, i, kRow) != 0)
+        return false;
+    return true;
+  };
+  if (!rowIgnores(lhsInv, lhsDims[1], lhsShape[1]) ||
+      !rowIgnores(accInv, accDims[1], accShape[1]))
+    return false;
+  for (int i = 0; i < llvm::Log2_64(std::min(lhsShape[0], accShape[0])); ++i)
+    if (lhsInv.getBasis(lhsDims[0], i, kRow) !=
+        accInv.getBasis(accDims[0], i, kRow))
+      return false;
+  return true;
+}
+
 uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t offset,
                                int32_t dim) {
   auto layoutShape =
@@ -567,15 +596,10 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
           "unsupported 32-byte swizzle atomicity");
   }
 
-  auto isInterleaved = [](MemDescType memdesc) {
-    auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
-    return enc && enc.getBlockM() == 64 &&
-           getTmemAllocSizes(memdesc).numRows != 64;
-  };
-
-  if (isInterleaved(aType) && isInterleaved(dType)) {
+  if (isa<TensorMemoryEncodingAttr>(aType.getEncoding()) &&
+      !areTMemRowsAligned(aType, dType)) {
     return op->emitOpError(
-        "does not support blockM=64 with interleaved blocks in TMEM layout");
+        "requires the TMEM LHS and accumulator to use the same TMEM rows");
   }
   if (encoding.getTwoCTAs() != itf.getTwoCtas())
     return op->emitOpError("accumulator layout must match the MMA CTA group");
