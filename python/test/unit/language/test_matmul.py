@@ -270,14 +270,17 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_va
             if SNAPSHOT:
                 if k % 2 == 0:
                     C.store([(k // 2) * 256, 0], acc)
+            elif k == 5:
+                # Observe accumulation before the last reset, without taking
+                # intermediate snapshots or reading the post-loop reset value.
+                C.store([0, 0], acc)
             if RESET_PERIOD:
                 if k % RESET_PERIOD == RESET_PERIOD - 1:
                     acc = tl.full((256, 16), RESET_VALUE, tl.float32)
-        C.store([3 * 256, 0], acc)
 
     a = torch.ones((256, 768), device=device, dtype=torch.float16)
     b = torch.ones((768, 16), device=device, dtype=torch.float16)
-    c = torch.empty((1024, 16), device=device, dtype=torch.float32)
+    c = torch.empty(((3 if snapshot else 1) * 256, 16), device=device, dtype=torch.float32)
     a_desc = TensorDescriptor.from_tensor(a, [256, 128])
     b_desc = TensorDescriptor.from_tensor(b, [128, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
@@ -288,15 +291,13 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_va
 
     values = {
         0: [128, 384, 640, 768],
-        2: [128, 128 + reset_value, 128 + reset_value, reset_value],
+        2: [128, 128 + reset_value, 128 + reset_value, 256 + reset_value],
         4: [128, 384, 128 + reset_value, 256 + reset_value],
     }[reset_period]
+    values = values[:3] if snapshot else values[-1:]
     expected = torch.tensor(values, device=device, dtype=torch.float32)
-    expected = expected[:, None, None].expand(4, 256, 16).reshape_as(c)
-    if snapshot:
-        torch.testing.assert_close(c, expected, atol=0, rtol=0)
-    else:
-        torch.testing.assert_close(c[-256:], expected[-256:], atol=0, rtol=0)
+    expected = expected[:, None, None].expand(len(values), 256, 16).reshape_as(c)
+    torch.testing.assert_close(c, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
