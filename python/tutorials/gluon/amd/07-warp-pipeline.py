@@ -1,20 +1,28 @@
 """
-Warp Pipelining
-===============
+Warp Pipeline
+=============
 
-A SIMD holds several warps at the same time, and in each cycle it issues
-instructions from the warps that are ready. Matrix, vector, LDS and memory
-instructions use different units, so instructions from different warps can
-execute at the same time. On CDNA5, a warp that issues a WMMA can't issue its
-next instruction until the WMMA finishes, so one warp alone can't overlap its
-WMMAs with its other work. Warp pipelining splits the warps of a CTA into two
-groups that run the same loop one stage apart, so the WMMAs of one group overlap
-with the memory accesses of the other. It is similar to warp specialization on
-NVIDIA GPUs, but all warps run the same code.
+Many units on AMD GPUs can execute instructions in parallel. What we have built
+already shows this when we overlap global memory accesses with MFMA/WMMA. But
+these previous examples overlap instructions within a warp. AMD GPUs also allow
+overlapping instructions across warps. This includes 2 different forms of
+overlapping: hardware-controlled overlap, where we increase the occupancy of
+warps without any control and let the hardware decide how to schedule
+instructions across warps, and software-controlled overlap, which we will
+discuss in this tutorial.
 
-In this tutorial, we will explain how warp pipelining works and how to split a
-loop into stages. In the end, we will apply it to the fp8 x mxfp4 matmul of
-`05-mfma-wmma-scaled.py`.
+The way we achieve software-controlled overlap across warps is called "block
+pingpong", or "warp pipeline" in Gluon. It is similar to the concept of "warp
+specialization", but implemented differently. At a high level, we split the
+kernel program into stages and let the stages run at a shifted pace for
+different warps. Therefore, instructions from different stages can be executed
+in parallel. Typically, we want to overlap different types of stages, for
+example memory vs. compute, or different types of compute.
+
+Gluon exposes warp pipeline via the API `warp_pipeline_stage` to declare a
+stage, and it automatically does the overlap for us. This tutorial will explain
+how warp pipeline works and showcase it in the matmul kernel we built in the
+previous chapters.
 """
 
 import importlib
@@ -24,7 +32,6 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd import cdna5
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 
 t5 = importlib.import_module("05-mfma-wmma-scaled")
@@ -42,250 +49,266 @@ if __name__ == "__main__" and not is_cdna5():
 warp_size = gl.constexpr(32)
 
 # %%
-# In Gluon, warp pipelining is exposed as `gl.amd.warp_pipeline_stage`. Each
-# `with` block of it in a loop becomes a stage. The compiler splits the warps
-# into two groups, warps 0-3 and warps 4-7, so each SIMD has one warp of each
-# group. Before the loop, a conditional barrier holds back the second group by
-# one stage. At every stage boundary, the two groups meet at a barrier, so they
-# stay one stage apart. After the loop, another conditional barrier aligns them
-# again. The `priority` of a stage becomes an `s_setprio` for the warps that run
-# the stage.
+# All our previous tutorials assume 4 warps. Now we switch to the 8-warp
+# configuration, where 2 warps share a SIMD. Note that the two warps of a SIMD
+# can only run at the same time if they meet the occupancy requirements: the
+# VGPRs of both warps must fit in the 1024 VGPRs of the SIMD, and the shared
+# memory of the CTA must fit in the 320 KB of the WGP.
 #
-# Let's look at the barriers of a small loop, with a stage that loads from
-# global memory and a stage that computes.
+# In Gluon, we use `gl.amd.warp_pipeline_stage` to split a loop into stages for
+# 8 warps. Each `with gl.amd.warp_pipeline_stage(...)` groups a region of Gluon
+# ops as a stage. The compiler will interleave 2 different stages from the 2
+# warps on one SIMD. This interleaving is achieved by using conditional
+# barriers, where the stages of one warp are executed earlier, leaving a gap of
+# one stage. Specifically, let's call warps 0-3 group0 and warps 4-7 group1, and
+# let group0 go first. Before the loop, a conditional barrier holds back group1,
+# so group0 starts one stage earlier. Then, at the end of each stage, group0 and
+# group1 wait for each other at a barrier, so group0 always stays one stage
+# ahead of group1. After the loop, another conditional barrier lets group1 catch
+# up. Let's say each warp repeats stage 0 and stage 1. The timeline of each
+# group looks like below, where `|` means a barrier.
+#
+# ```
+# group0: stage 0 | stage 1 | stage 0 | stage 1 |
+# group1:         | stage 0 | stage 1 | stage 0 | stage 1
+# ```
+#
+# Warp pipeline can help to overlap compute and memory accesses, especially the
+# memory accesses that have no explicit wait in Gluon, such as shared memory
+# (LDS) reads. Async copies and TDM copies have explicit waits, so with several
+# buffers, a single warp already hides their latency. Shared memory reads don't.
+# The compiler puts their wait right before the first use of the data. Recall
+# from the previous tutorials that we can use subtiling to overlap them with the
+# WMMAs. But a single warp can still only overlap them partly, because it issues
+# its instructions in order and stops at each wait.
+#
+# Warp pipeline can achieve an even better interleaving of shared memory reads
+# and WMMAs, and keep both units busy. While one warp waits for its shared
+# memory reads, the SIMD can run the WMMAs of the other warp. But the two warps
+# run the same loop, so without coordination, they tend to read shared memory at
+# the same time, and then run WMMAs at the same time. While both read, the
+# matrix core is idle, and while both run WMMAs, the shared memory is idle. Warp
+# pipeline keeps the two groups one stage apart, so that one group reads shared
+# memory while the other group runs WMMAs, and both stay busy.
+#
+# We can build a simple memory + WMMA loop. It keeps a block of `A` and `B` in
+# shared memory, and each iteration runs the WMMAs of the block without any
+# access to global memory. As in `04-mfma-wmma.py`, the loop splits the K
+# dimension of the block into two sub-tiles with `slice`. It reads each sub-tile
+# from shared memory and runs one WMMA per sub-tile, so the compiler can issue
+# the reads of the second sub-tile while the WMMA of the first one runs. First,
+# we run it without stages, with 4 and 8 warps.
 
 
 @gluon.jit
-def two_stage_kernel(x_ptr, y_ptr, N):
-    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[1], threads_per_warp=[warp_size], warps_per_cta=[8],
-                                            order=[0])
-    offs = gl.arange(0, 256, layout)
-    acc = gl.zeros([256], gl.float32, layout)
-    for i in range(N):
-        with gl.amd.warp_pipeline_stage("load", priority=1):
-            x = gl.load(x_ptr + i * 256 + offs)
+def wmma_kernel(y_ptr, k):
+    BLOCK_K: gl.constexpr = 256
+    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
+    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
+    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
+    for _ in range(0, k, BLOCK_K):
+        a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+        b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+        acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+        b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+        acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+    m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
+    n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
+    gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
+
+
+# %%
+# Next, let's split the loop into stages. Here we show a 2-stage version and a
+# 4-stage version. The 2-stage version has a "memory" stage that reads both
+# halves and a "compute" stage that runs both WMMAs. The 4-stage version has one
+# "memory" stage and one "compute" stage per half.
+
+
+@gluon.jit
+def wmma_2stage_kernel(y_ptr, k):
+    BLOCK_K: gl.constexpr = 256
+    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
+    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
+    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
+    for _ in range(0, k, BLOCK_K):
+        with gl.amd.warp_pipeline_stage("memory", priority=1):
+            a0 = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+            b0 = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+            a1 = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+            b1 = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
         with gl.amd.warp_pipeline_stage("compute", priority=0):
-            acc = acc * x + 1.0
-    gl.store(y_ptr + offs, acc)
+            acc = wmma_scaled(a0, None, "e4m3", b0, b_scale, "e2m1", acc)
+            acc = wmma_scaled(a1, None, "e4m3", b1, b_scale, "e2m1", acc)
+    m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
+    n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
+    gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
 
+
+@gluon.jit
+def wmma_4stage_kernel(y_ptr, k):
+    BLOCK_K: gl.constexpr = 256
+    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
+    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
+    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
+    for _ in range(0, k, BLOCK_K):
+        with gl.amd.warp_pipeline_stage("memory0", priority=1):
+            a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+            b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+        with gl.amd.warp_pipeline_stage("compute0", priority=0):
+            acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        with gl.amd.warp_pipeline_stage("memory1", priority=1):
+            a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
+            b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+        with gl.amd.warp_pipeline_stage("compute1", priority=0):
+            acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+    m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
+    n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
+    gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
+
+
+# %%
+# Let's look at the TTGIR of `wmma_2stage_kernel`.
 
 if __name__ == "__main__":
-    x = torch.randn(64 * 256, device="cuda")
-    y = torch.empty(256, device="cuda")
-    compiled = two_stage_kernel[(1, )](x, y, 64, num_warps=8)
-    asm = compiled.asm["amdgcn"]
-    lines = [line.strip() for line in asm[asm.index(".text"):asm.index(".Lfunc_end")].splitlines()]
-    pattern = r"(s_barrier|s_setprio|v_cmp|s_and_saveexec|global_load|v_add_f32)"
-    head = next(i for i, line in enumerate(lines) if "Loop Header" in line)
-    tail = max(i for i, line in enumerate(lines) if line.startswith("s_cbranch_scc1"))
-    print("before the loop:")
-    for line in lines[:head]:
-        if re.match(pattern, line):
-            print(f"  {line}")
-    print("loop:")
-    barriers = 0
-    for line in lines[head:]:
-        if re.match(pattern, line):
-            print(f"  {line}")
-        barriers += line.startswith("s_barrier_wait")
-        if barriers == 2:
-            break
-    print("after the loop:")
-    for line in lines[tail:]:
-        if re.match(pattern, line):
-            print(f"  {line}")
-        if line.startswith("s_barrier_wait"):
-            break
+    y = torch.empty(256 * 256, device="cuda")
+    compiled = wmma_2stage_kernel[(1, )](y, 1024, num_warps=8)
+    for line in compiled.asm["ttgir"].splitlines():
+        if re.search(r"scf\.for|scf\.execute_region|local_load|dot_scaled|warp_pipeline", line):
+            # Drop the types, the locations and the prefix of the attributes.
+            line = re.split(r" : tensor| : !ttg| -> | lhs = | iter_args| loc\(", line)[0][4:]
+            print(line.replace(" : i32", "").replace("triton.warp_pipeline.", ""))
 
 # %%
 # ```
-# before the loop:
-#   s_barrier_signal -1
-#   v_cmp_gt_u32_e32 vcc_lo, 0x80, v0
-#   s_barrier_wait -1
-#   v_cmpx_lt_u32_e32 0x7f, v0
-#   s_barrier_signal -1
-#   s_barrier_wait -1
-#   s_setprio 1
-# loop:
-#   global_load_b32 v2, v[6:7], off
-#   s_setprio 0
-#   s_barrier_signal -1
-#   s_barrier_wait -1
-#   v_add_f32_e32 v2, 1.0, v2
-#   s_setprio 1
-#   s_barrier_signal -1
-#   s_barrier_wait -1
-# after the loop:
-#   s_setprio 0
-#   s_and_saveexec_b32 s0, vcc_lo
-#   s_barrier_signal -1
-#   s_barrier_wait -1
+# %acc = scf.for %_ = %c0_i32 to %k step %c256_i32
+#   %acc_6:4 = scf.execute_region
+#     %a0_8 = ttg.local_load %a0
+#     %b0_10 = ttg.local_load %b0_9
+#     %a1_11 = ttg.local_load %a1
+#     %b1_13 = ttg.local_load %b1_12
+#   } {priority = 1, stage = "memory"}
+#   %acc_7 = scf.execute_region
+#     %acc_8 = tt.dot_scaled %acc_6#0 scale %cst, %acc_6#1 scale %cst_2, %acc_5
+#     %acc_9 = tt.dot_scaled %acc_6#2 scale %cst, %acc_6#3 scale %cst_2, %acc_8
+#   } {priority = 0, stage = "compute"}
+# } {pipelined_for}
 # ```
 #
-# Before the loop, all warps meet at a barrier, and `v_cmp_gt_u32` marks the
-# threads of warps 0-3 in `vcc_lo`. Then `v_cmpx_lt_u32` turns off warps 0-3,
-# so only warps 4-7 run one more barrier. Warps 0-3 go ahead and run the first
-# stage, and warps 4-7 pass their barrier only at the end of that stage, so they
-# start the loop one stage later. In the loop, each stage ends with the
-# `s_setprio` of the next stage and a barrier. After the loop,
-# `s_and_saveexec_b32` turns warps 0-3 back on, and they run one more barrier
-# while warps 4-7 finish their last stage.
+# Each pipeline stage becomes an `scf.execute_region` with its name and
+# priority. The loop of the stages is marked as `pipelined_for`, so that the
+# compiler knows to pipeline this loop across group0 and group1. When the
+# compiler lowers the TTGIR, the `pipelined_for` loop gets a conditional barrier
+# before the loop to hold back group1, and another conditional barrier after the
+# loop to let group1 catch up. Each `scf.execute_region` is inlined into the
+# loop and ends with a barrier at the stage boundary, and its priority becomes
+# an `s_setprio` before the stage, which sets the scheduling priority of the
+# warps that run the stage. The generated assembly looks like below:
+#
+# ```
+# ; before the loop: hold back group1 by one stage
+# v_cmpx_lt_u32 0x7f, v0          ; turn off group0
+# s_barrier_signal -1             ; group1 waits until group0 finishes "memory"
+# s_barrier_wait -1
+# s_setprio 1
+#
+# ; loop
+# ds_load_b128 ... (x64)          ; "memory" stage, without a wait
+# s_setprio 0
+# s_barrier_signal -1             ; stage boundary
+# s_barrier_wait -1
+# s_wait_dscnt 0x2e               ; "compute" stage, waits for the first WMMA
+# v_wmma_scale_f32_16x16x128_f8f6f4 ...
+# s_wait_dscnt 0x2c               ; waits for the second WMMA
+# v_wmma_scale_f32_16x16x128_f8f6f4 ...
+# ...
+# s_setprio 1
+# s_barrier_signal -1             ; stage boundary
+# s_barrier_wait -1
+#
+# ; after the loop: let group1 catch up
+# s_setprio 0
+# s_and_saveexec_b32 s0, vcc_lo   ; turn on only group0
+# s_barrier_signal -1             ; group0 waits until group1 finishes "compute"
+# s_barrier_wait -1
+# ```
+#
+# Note that the "memory" stage doesn't wait for its shared memory reads, and the
+# waits are in the "compute" stage. The compiler puts each `s_wait_dscnt` right
+# before the first WMMA that uses the data. This helps in two ways. First, the
+# "memory" stage only issues the reads, so it ends early. The stage boundary is
+# a barrier for both groups, so a wait for all reads there would also hold the
+# other group, even after it finished its WMMAs. Second, the "compute" stage
+# waits for the operands of one WMMA at a time, so its first WMMAs run while its
+# later reads still arrive.
+#
+# The compiler only adds a wait at a stage boundary when the two groups depend
+# on each other through shared memory. For example, when one group writes shared
+# memory that the other group reads in its next stage, or when a buffer is
+# refilled while the other group may still read it. This loop only reads shared
+# memory, so there is no such dependency, and no wait at the stage boundary.
 
 # %%
-# The stages decide what overlaps. While one group runs a stage, the other group
-# runs the stage before it. A loop with two stages overlaps the two with each
-# other, and there are several useful ways to split a loop. A split between
-# memory accesses and compute hides the latency of the loads behind the WMMAs.
-# A split between LDS reads and WMMAs keeps the matrix core busy while the
-# operands arrive. A split between WMMAs and vector instructions fits attention
-# kernels, where the softmax runs many VALU instructions.
-#
-# The following small WMMA loops show each split. They only show the stages, and
-# their performance doesn't matter here. In the printout, `G` is a global load,
-# `T` is a TDM copy, `R` is an LDS read, `W` is a WMMA, `V` is another vector
-# instruction, and `|` is a barrier.
-
-
-@gluon.jit
-def offs_2d(rows: gl.constexpr, cols: gl.constexpr, layout: gl.constexpr):
-    r = gl.arange(0, rows, gl.SliceLayout(1, layout))
-    c = gl.arange(0, cols, gl.SliceLayout(0, layout))
-    return r[:, None] * cols + c[None, :]
-
-
-@gluon.jit
-def wmma_w_gmem_kernel(a_ptr, b_ptr, c_ptr, N: gl.constexpr):
-    wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0]],
-                                                     reg_bases=[], instr_shape=[16, 16, 32])
-    a_layout: gl.constexpr = gl.DotOperandLayout(0, wmma_layout, 8)
-    b_layout: gl.constexpr = gl.DotOperandLayout(1, wmma_layout, 8)
-    acc = gl.zeros([128, 16], gl.float32, wmma_layout)
-    for i in range(N):
-        with gl.amd.warp_pipeline_stage("mem", priority=1):
-            a = gl.load(a_ptr + i * 128 * 32 + offs_2d(128, 32, a_layout))
-            b = gl.load(b_ptr + i * 32 * 16 + offs_2d(32, 16, b_layout))
-        with gl.amd.warp_pipeline_stage("wmma", priority=0):
-            acc = cdna5.wmma(a, b, acc)
-    gl.store(c_ptr + offs_2d(128, 16, wmma_layout), acc)
-
-
-@gluon.jit
-def wmma_w_smem_kernel(a_ptr, b_ptr, c_ptr, N: gl.constexpr):
-    wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0]],
-                                                     reg_bases=[], instr_shape=[16, 16, 32])
-    a_layout: gl.constexpr = gl.DotOperandLayout(0, wmma_layout, 8)
-    b_layout: gl.constexpr = gl.DotOperandLayout(1, wmma_layout, 8)
-    smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    a_blocked: gl.constexpr = gl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[8, 4], warps_per_cta=[8, 1],
-                                               order=[1, 0])
-    b_blocked: gl.constexpr = gl.BlockedLayout(size_per_thread=[1, 2], threads_per_warp=[4, 8], warps_per_cta=[8, 1],
-                                               order=[1, 0])
-    a_smem = gl.allocate_shared_memory(gl.bfloat16, [128, 32], smem_layout,
-                                       gl.load(a_ptr + offs_2d(128, 32, a_blocked)))
-    b_smem = gl.allocate_shared_memory(gl.bfloat16, [32, 16], smem_layout, gl.load(b_ptr + offs_2d(32, 16, b_blocked)))
-    acc = gl.zeros([128, 16], gl.float32, wmma_layout)
-    for i in range(N):
-        with gl.amd.warp_pipeline_stage("lds", priority=1):
-            a = a_smem.load(a_layout)
-            b = b_smem.load(b_layout)
-        with gl.amd.warp_pipeline_stage("wmma", priority=0):
-            acc = cdna5.wmma(a, b, acc)
-    gl.store(c_ptr + offs_2d(128, 16, wmma_layout), acc)
-
-
-@gluon.jit
-def wmma_w_valu_kernel(a_ptr, b_ptr, c_ptr, N: gl.constexpr):
-    wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[1, 0], [2, 0], [4, 0]],
-                                                     reg_bases=[], instr_shape=[16, 16, 32])
-    a_layout: gl.constexpr = gl.DotOperandLayout(0, wmma_layout, 8)
-    b_layout: gl.constexpr = gl.DotOperandLayout(1, wmma_layout, 8)
-    a = gl.load(a_ptr + offs_2d(128, 32, a_layout))
-    b = gl.load(b_ptr + offs_2d(32, 16, b_layout))
-    s = gl.zeros([128, 16], gl.float32, wmma_layout)
-    acc = gl.zeros([128, 16], gl.float32, wmma_layout)
-    for i in range(N):
-        with gl.amd.warp_pipeline_stage("wmma", priority=0):
-            s = cdna5.wmma(a, b, s)
-        with gl.amd.warp_pipeline_stage("valu", priority=1):
-            acc = acc + gl.exp2(s * 0.5 - gl.max(s, axis=1)[:, None])
-    gl.store(c_ptr + offs_2d(128, 16, wmma_layout), acc)
-
+# Now let's run the kernels and compare their time.
 
 if __name__ == "__main__":
-    A = torch.randn(64 * 128 * 32, device="cuda", dtype=torch.bfloat16)
-    B = torch.randn(64 * 32 * 16, device="cuda", dtype=torch.bfloat16)
-    C = torch.empty(128 * 16, device="cuda")
-    for kernel in [wmma_w_gmem_kernel, wmma_w_smem_kernel, wmma_w_valu_kernel]:
-        print(f"{kernel.fn.__name__}:")
-        compiled = kernel[(1, )](A, B, C, 64, num_warps=8)
-        asm = compiled.asm["amdgcn"]
-        # The loop of interest is the innermost loop with WMMAs.
-        for body in asm.split("Loop Header")[1:]:
-            body = body[:body.index("s_cbranch")]
-            if "v_wmma" in body:
-                break
-        order = ""
-        for line in body.splitlines():
-            line = line.strip()
-            for prefix, kind in [("global_load", "G"), ("tensor_load", "T"), ("ds_load", "R"), ("v_wmma", "W"),
-                                 ("s_barrier_wait", "|"), ("v_", "V")]:
-                if line.startswith(prefix):
-                    order += kind
-                    break
-        # Count the repeated letters, for example "RRR" becomes "3R".
-        runs = []
-        for kind in order:
-            if runs and runs[-1][1] == kind:
-                runs[-1][0] += 1
-            else:
-                runs.append([1, kind])
-        stages = " ".join(kind if kind == "|" else f"{n}{kind}" for n, kind in runs).split("| ")[1:]
-        for i in range(0, len(stages), 2):
-            print("  | " + "| ".join(stages[i:i + 2]).strip())
+    k = 2048 * 256
+    for name, kernel, num_warps in [("wmma_w4", wmma_kernel, 4), ("wmma_w8", wmma_kernel, 8),
+                                    ("wmma_w8_s2", wmma_2stage_kernel, 8), ("wmma_w8_s4", wmma_4stage_kernel, 8)]:
+        ms = triton.testing.do_bench(lambda: kernel[(1024, )](y, k, num_warps=num_warps))
+        print(f"{name}: {ms:.2f} ms")
 
 # %%
 # ```
-# wmma_w_gmem_kernel:
-#   | 8V 1W | 18G
-#   | 8V 1W | 1V
-# wmma_w_smem_kernel:
-#   | 1W | 4R
-#   | 1W | 4R
-#   ...
-# wmma_w_valu_kernel:
-#   | 34V | 1W
-#   | 34V |
+# wmma_w4: 5.02 ms
+# wmma_w8: 6.34 ms
+# wmma_w8_s2: 11.88 ms
+# wmma_w8_s4: 4.62 ms
 # ```
 #
-# In the first kernel, a "mem" stage issues 18 global loads, while a "wmma"
-# stage runs the WMMA after 8 vector instructions that pack the loaded
-# operands. In the second kernel, an "lds" stage reads the operands of the next
-# WMMA from the LDS, and the compiler unrolls the loop, so the pattern repeats.
-# In the third kernel, the "valu" stage runs 34 vector instructions for the
-# softmax-like update, while the other group runs the WMMA.
+# With 8 warps and no stages, each warp computes a 64 x 128 part of the block
+# instead of 128 x 128, so the CTA reads 256 KB from shared memory per iteration
+# instead of 192 KB, and the two warps of a SIMD often read shared memory at the
+# same time. `wmma_w8_s2` holds the operands of both halves in registers at the
+# same time. It needs more than the 512 VGPRs that a warp can use with 8 warps,
+# so the compiler spills some registers to scratch memory inside the loop.
+# `wmma_w8_s4` holds the operands of only one half and uses 424 VGPRs. Each
+# "compute" stage of one group runs next to a "memory" stage of the other group,
+# so the matrix core stays busy while the shared memory reads of the other group
+# arrive.
+#
+# So the size of the stages matters. A stage should be large enough to overlap
+# with the stage of the other group, but small enough that the registers of the
+# two warps of a SIMD still fit.
+#
+# Here we only show the overlap of memory accesses and compute. In practice, we
+# can also overlap different types of compute. For example, in attention, we can
+# overlap the vector instructions of the softmax with the WMMAs of the QK and PV
+# matmuls.
 
 # %%
-# Now we apply warp pipelining to the fp8 x mxfp4 matmul of
+# Now we apply warp pipeline to the fp8 x mxfp4 matmul of
 # `05-mfma-wmma-scaled.py`. The kernel uses 8 warps, and each K block runs in
-# five stages. The first stage reads the first half of the K block from LDS, and
-# the second stage runs its WMMAs. The third and fourth stages do the same for
-# the second half. The last stage refills the buffer slot that the first stage
-# read. So while one group runs a "wmma" stage, the other group reads the LDS or
-# copies.
-#
-# A few rules keep the stages correct. First, waits go between stages. We call
-# `tdm.async_wait` before the first stage, outside of any stage. Second, only
-# the leading group copies. `tdm.async_wait` only waits for the copies of the
-# current warp, and the second group runs one stage behind. If it copied part of
-# a tile, the first group could read that part before the copy completes, so all
-# copies take `warp_used_hint=0b1111`, and only warps 0-3 copy. Third, the
-# buffer slots are constants. We unroll the loop over the 3 buffers, so the
-# compiler can tell which slot each stage accesses, and it doesn't add extra
-# waits and barriers. The K blocks that are left after the loop run in a tail
-# with the same stages, but without the refill. Last, the refill goes into the
-# slot that the first stage read. When the leading group refills it, the second
-# group runs the fourth stage, so both groups have finished reading the slot.
+# four stages. The first stage reads the first half of the K block from shared
+# memory, and the second stage runs its WMMAs. The third and fourth stages do
+# the same for the second half. The first stage also refills the buffer slot of
+# the previous K block, which both groups have finished reading. So while one
+# group runs a "wmma" stage, the other group reads shared memory or copies.
 #
 # We give the stages that access memory priority 1, so their instructions issue
 # next to the WMMAs of the other group.
@@ -298,6 +321,9 @@ def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws
     w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
     ws_desc = tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128], pred=pred,
                                            clamp_bounds=True)
+    # Only group0 copies. tdm.async_wait only waits for the copies of the current
+    # warp, and group1 runs one stage behind, so group0 could read a part copied
+    # by group1 before the copy completes.
     tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
     tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
     tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
@@ -306,7 +332,6 @@ def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws
 @gluon.jit
 def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
     HALF_K: gl.constexpr = a_smem.shape[2] // 2
-    # The scales of half a K block need their own layout.
     ws_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
     a = a_smem.index(slot).slice(half * HALF_K, HALF_K, 1).load(layouts.a_reg_layout)
     w = w_smem.index(slot).slice(half * HALF_K // 2, HALF_K // 2, 1).permute([1, 0]).load(layouts.w_reg_layout)
@@ -318,7 +343,10 @@ def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_sm
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                   M, N, K: gl.constexpr,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
-                  BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr):
+                  NUM_BUFFERS: gl.constexpr):
+    BLOCK_M: gl.constexpr = 256
+    BLOCK_N: gl.constexpr = 256
+    BLOCK_K: gl.constexpr = 256
     gl.static_assert(K % BLOCK_K == 0)
     layouts: gl.constexpr = t5.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, gl.num_warps())
 
@@ -340,24 +368,24 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
 
     num_k: gl.constexpr = K // BLOCK_K
     TAIL: gl.constexpr = num_k % NUM_BUFFERS
-    for i in gl.static_range(NUM_BUFFERS):
+    for i in gl.static_range(NUM_BUFFERS - 1):
         matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(0, num_k - TAIL, NUM_BUFFERS):
         for i in gl.static_range(NUM_BUFFERS):
-            tdm.async_wait((NUM_BUFFERS - 1) * 3)
+            # A wait can't be inside a stage, so we wait before the first stage.
+            tdm.async_wait((NUM_BUFFERS - 2) * 3)
             with gl.amd.warp_pipeline_stage("lds_low", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, 0, a_smem, w_smem, ws_smem, layouts)
+                next_k = k + i + NUM_BUFFERS - 1
+                matmul_ld_gmem(next_k, next_k < num_k, (i + NUM_BUFFERS - 1) % NUM_BUFFERS, off_m, off_n, a_desc,
+                               w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
             with gl.amd.warp_pipeline_stage("wmma_low", priority=0):
                 acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
             with gl.amd.warp_pipeline_stage("lds_high", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
                 acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-            with gl.amd.warp_pipeline_stage("refill", priority=1):
-                next_k = k + i + NUM_BUFFERS
-                matmul_ld_gmem(next_k, next_k < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem,
-                               ws_smem, BLOCK_K)
     for i in gl.static_range(TAIL):
         tdm.async_wait((TAIL - 1 - i) * 3)
         for half in gl.static_range(2):
@@ -375,16 +403,16 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, BLOCK_M=256, BLOCK_N=256, BLOCK_K=256, NUM_BUFFERS=3):
+def matmul(A, W, W_scale, NUM_BUFFERS=3):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
+    grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
     matmul_kernel[grid](
         A, W, W_scale, Y,  #
         M, N, K,  #
         A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),  #
-        BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, num_warps=8)
+        NUM_BUFFERS, num_warps=8)
     return Y
 
 
@@ -398,8 +426,8 @@ def test_matmul(M, N, K):
 
 
 # %%
-# We compare the warp pipelined kernel with the kernel of
-# `05-mfma-wmma-scaled.py` on an MI455X GPU with M = N = K = 8192.
+# We can compare this kernel with the kernel of `05-mfma-wmma-scaled.py` with
+# M = N = K = 8192.
 
 if __name__ == "__main__":
     print("Benchmarking matmul")
@@ -415,9 +443,3 @@ if __name__ == "__main__":
 
     bench("4 warp", lambda: t5.matmul_cdna5(A, W, W_scale))
     bench("8 warp", lambda: matmul(A, W, W_scale))
-
-# %%
-# ```
-# 4 warp: 7860 TFLOPS
-# 8 warp: 7765 TFLOPS
-# ```
