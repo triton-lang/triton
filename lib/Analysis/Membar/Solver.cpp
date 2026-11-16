@@ -109,6 +109,7 @@ std::optional<CutSolution> choose(const MembarCFG &cfg,
   SmallVector<unsigned> slack, order;
   for (const Node &node : cfg.nodes)
     slack.append(ACTIONS.size(), node.insertionCost);
+  SmallVector<unsigned> loopSlack = slack;
   CutSolution result{llvm::BitVector(slack.size())};
   auto cost = [&](unsigned site) {
     return cfg.nodes[site / ACTIONS.size()].insertionCost;
@@ -128,8 +129,24 @@ std::optional<CutSolution> choose(const MembarCFG &cfg,
         return id / ACTIONS.size() == site / ACTIONS.size() &&
                slack[id] == charge;
       });
-    for (unsigned id : *cut)
+    // A cold exit can share a loop barrier, but saving its one-off cost
+    // need not pull a rendezvous earlier on every iteration. At equal loop
+    // depth, compare savings within the loop, then distance to the consumer
+    // (the witness lists sites from the consumer back to the producer).
+    unsigned siteCost = cost(site);
+    if (siteCost > 1 && loopSlack[site] > charge &&
+        llvm::all_of(*cut, [&](unsigned id) {
+          return ACTIONS[id % ACTIONS.size()] == Action::RegionBarrier &&
+                 cost(id) == siteCost;
+        }))
+      site = *llvm::min_element(*cut, [&](unsigned a, unsigned b) {
+        return loopSlack[a] < loopSlack[b];
+      });
+    for (unsigned id : *cut) {
       slack[id] -= charge;
+      if (cost(id) <= siteCost)
+        loopSlack[id] -= charge;
+    }
     result.sites.set(site);
     result.cost += cost(site);
     result.lowerBound += charge;
