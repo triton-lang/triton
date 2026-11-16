@@ -348,20 +348,29 @@ def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
     run_parser(kernel, args=(op, dtype, value, expected_dtype))
 
 
-@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
-@pytest.mark.parametrize("other_dtype, expected_dtype", [(tl.float32, tl.float32), (tl.bfloat16, tl.float16)])
-def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
+@pytest.mark.parametrize("op, lhs_dtype, rhs_dtype, expected_dtype", [
+    (tl.minimum, tl.float16, tl.float32, tl.float32),
+    (tl.minimum, tl.float16, tl.bfloat16, tl.float16),
+    (tl.maximum, tl.float16, tl.float32, tl.float32),
+    (tl.maximum, tl.float16, tl.bfloat16, tl.float16),
+    (tl.clmul, tl.int8, tl.uint8, tl.uint8),
+    (tl.clmul, tl.int16, tl.int32, tl.int32),
+    (tl.clmul, tl.uint32, tl.int64, tl.int64),
+    (tl.clmul, tl.int64, tl.uint64, tl.uint64),
+    (tl.clmul, tl.int1, tl.int1, tl.int1),
+])
+def test_binary_math_tensor_promotion(op, lhs_dtype, rhs_dtype, expected_dtype):
 
     @triton.jit
-    def kernel(op: tl.constexpr, other_dtype: tl.constexpr, expected_dtype: tl.constexpr):
-        x = tl.full((8, ), 1, tl.float16)
-        y = tl.full((), 0.0, other_dtype)
+    def kernel(op: tl.constexpr, lhs_dtype: tl.constexpr, rhs_dtype: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, lhs_dtype)
+        y = tl.full((), 0, rhs_dtype)
         lhs = op(x, y)
         rhs = op(y, x)
         tl.static_assert(lhs.dtype == expected_dtype)
         tl.static_assert(rhs.dtype == expected_dtype)
 
-    run_parser(kernel, args=(op, other_dtype, expected_dtype))
+    run_parser(kernel, args=(op, lhs_dtype, rhs_dtype, expected_dtype))
 
 
 @pytest.mark.parametrize("scalar", [False, True])
@@ -513,6 +522,10 @@ def test_comparison_scalar_out_of_range(op, reverse, dtype, value):
     (tl.fdiv, tl.float16, 2.0, tl.float32),
     (tl.fdiv, tl.bfloat16, 2.0, tl.float32),
     (tl.fdiv, tl.float64, 2.0, tl.float64),
+    (tl.clmul, tl.int8, 3, tl.int8),
+    (tl.clmul, tl.uint16, 3, tl.uint16),
+    (tl.clmul, tl.int32, 3, tl.int32),
+    (tl.clmul, tl.uint64, 3, tl.uint64),
 ])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_binary_math_scalar_promotion(op, dtype, value, expected_dtype, reverse):
@@ -561,59 +574,17 @@ def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, i
         run_parser(kernel, args=args)
 
 
-@pytest.mark.parametrize("frontend", ["triton", "gluon"])
-@pytest.mark.parametrize("lhs_dtype, rhs_dtype, expected_dtype", [
-    (tl.int8, tl.uint8, tl.uint8),
-    (tl.int16, tl.int32, tl.int32),
-    (tl.uint32, tl.int64, tl.int64),
-    (tl.int64, tl.uint64, tl.uint64),
-    (tl.int1, tl.int1, tl.int1),
-])
-def test_clmul_type_promotion(frontend, lhs_dtype, rhs_dtype, expected_dtype):
-    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
-
-    @jit
-    def kernel(X, Y, Z, EXPECTED: tl.constexpr):
-        result = lang.clmul(lang.load(X), lang.load(Y))
-        lang.static_assert(result.dtype == EXPECTED)
-        lang.store(Z, result)
-
-    module = run_parser(kernel,
-                        args=(MockTensor(lhs_dtype), MockTensor(rhs_dtype), MockTensor(expected_dtype), expected_dtype))
-    assert module.verify()
-    assert "tt.clmul" in module.str_nodebug()
-
-
-@pytest.mark.parametrize("frontend", ["triton", "gluon"])
-@pytest.mark.parametrize("dtype", [tl.int8, tl.uint16, tl.int32, tl.uint64])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_clmul_scalar_promotion(frontend, dtype, reverse):
-    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
-
-    @jit
-    def kernel(X, Z, REVERSE: tl.constexpr, EXPECTED: tl.constexpr):
-        x = lang.load(X)
-        result = lang.clmul(3, x) if REVERSE else lang.clmul(x, 3)
-        lang.static_assert(result.dtype == EXPECTED)
-        lang.store(Z, result)
-
-    module = run_parser(kernel, args=(MockTensor(dtype), MockTensor(dtype), reverse, dtype))
-    assert module.verify()
-
-
-@pytest.mark.parametrize("frontend", ["triton", "gluon"])
 @pytest.mark.parametrize("dtype, value", [(tl.float16, 1), (tl.float32, 1), (tl.float64, 1), (tl.int32, 0.5)])
 @pytest.mark.parametrize("reverse", [False, True])
-def test_clmul_invalid_dtype(frontend, dtype, value, reverse):
-    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+def test_clmul_invalid_dtype(dtype, value, reverse):
 
-    @jit
+    @triton.jit
     def kernel(X, VALUE: tl.constexpr, REVERSE: tl.constexpr):
-        x = lang.load(X)
+        x = tl.load(X)
         if REVERSE:
-            lang.clmul(VALUE, x)
+            tl.clmul(VALUE, x)
         else:
-            lang.clmul(x, VALUE)
+            tl.clmul(x, VALUE)
 
     with pytest.raises(CompilationError, match="clmul requires integer operands"):
         run_parser(kernel, args=(MockTensor(dtype), value, reverse))

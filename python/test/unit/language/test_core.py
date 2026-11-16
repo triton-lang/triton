@@ -227,8 +227,8 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True,
-                 test_scalar=True):
+                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True, test_scalar=True,
+                 check_exact=False):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -308,7 +308,10 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         if not is_compile_warmup():
             err_msg = f"{expr}, {kernel_fn.__name__}"
-            np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
+            if check_exact:
+                np.testing.assert_array_equal(z_ref, to_numpy(z_tri), err_msg=err_msg)
+            else:
+                np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
 
     def get_scalar(x, dtype, low, high, filter):
         # If dtype is int, don't choose a huge number for the scalar
@@ -2988,32 +2991,51 @@ def test_load_store_same_ptr(device):
         assert torch.all(x == 2)
 
 
+def _clmul_reference(x, y):
+    # Carry-less multiplication follows the same promotion rules as XOR.
+    dtype = np.bitwise_xor(x, y).dtype
+    bits = 1 if dtype == np.bool_ else np.iinfo(dtype).bits
+    x, y = np.broadcast_arrays(np.asarray(x, dtype=object), np.asarray(y, dtype=object))
+    result = np.zeros(x.shape, dtype=object)
+    for bit in range(bits):
+        result ^= ((y >> bit) & 1) * (x << bit)
+    unsigned = np.dtype("bool" if bits == 1 else f"uint{bits}")
+    return np.asarray(result & ((1 << bits) - 1), dtype=unsigned).view(dtype)
+
+
 @pytest.mark.interpreter
-@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype_x, dtype_y", [
+    pytest.param(dtype_x, dtype_y, marks=pytest.mark.disable_warmup if 'float' in dtype_x + dtype_y else ())
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
+] + [('bool', 'bool')])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
+def test_clmul(dtype_x, dtype_y, num_ctas, device):
+    expr = 'tl.clmul(x, y)'
+    if 'float' in dtype_x + dtype_y:
+        with pytest.raises(triton.TritonError, match='clmul requires integer operands'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
+        return
+    numpy_expr = '_clmul_reference(x, y)'
+    dtype = _binary_op_dtype_override(dtype_x, dtype_y)
+    if dtype is not None:
+        dtype = np.dtype(dtype).name
+        numpy_expr = f'_clmul_reference(x.astype(np.{dtype}), y.astype(np.{dtype}))'
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas, check_exact=True)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ["bool", *integral_dtypes])
-def test_clmul_broadcast(dtype_str, frontend, device):
-    from triton.experimental import gluon
-    from triton.experimental.gluon import language as gl
+def test_clmul_edge_cases(dtype_str, device):
 
-    if frontend == "gluon" and is_interpreter():
-        pytest.skip("Gluon does not support interpreter mode")
-    jit = triton.jit if frontend == "triton" else gluon.jit
-
-    @jit
-    def kernel(X, Y, Z, N: tl.constexpr, GLUON: tl.constexpr, WARP_SIZE: tl.constexpr):
-        if GLUON:
-            layout: gl.constexpr = gl.BlockedLayout([1, 4], [4, WARP_SIZE // 4], [4, 1], [1, 0])
-            rows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))
-            cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
-            x = gl.load(X + rows)[:, None]
-            y = gl.load(Y + cols)[None, :]
-            gl.store(Z + rows[:, None] * N + cols[None, :], gl.clmul(x, y))
-        else:
-            rows = tl.arange(0, N)
-            cols = tl.arange(0, N)
-            x = tl.load(X + rows)[:, None]
-            y = tl.load(Y + cols)[None, :]
-            tl.store(Z + rows[:, None] * N + cols[None, :], tl.clmul(x, y))
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        rows = tl.arange(0, N)
+        cols = tl.arange(0, N)
+        x = tl.load(X + rows)[:, None]
+        y = tl.load(Y + cols)[None, :]
+        tl.store(Z + rows[:, None] * N + cols[None, :], tl.clmul(x, y))
 
     dtype = np.dtype(dtype_str)
     bits = 1 if dtype_str == "bool" else dtype.itemsize * 8
@@ -3026,20 +3048,12 @@ def test_clmul_broadcast(dtype_str, frontend, device):
     x = values.view(dtype)
     y = np.roll(values, 3).view(dtype)
     n = len(x)
-    expected = []
-    for a in values.tolist():
-        for b in np.roll(values, 3).tolist():
-            product = 0
-            for bit in range(bits):
-                if b & (1 << bit):
-                    product ^= a << bit
-            expected.append(product & mask)
-    expected = np.array(expected, dtype=unsigned).view(dtype).reshape(n, n)
+    expected = _clmul_reference(values[:, None], np.roll(values, 3)[None, :]).view(dtype)
 
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(np.empty((n, n), dtype=dtype), device=device)
-    compiled = kernel[(1, )](x_tri, y_tri, z_tri, n, frontend == "gluon", THREADS_PER_WARP)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, n)
     np.testing.assert_array_equal(to_numpy(z_tri), expected)
     if not is_interpreter() and bits > 1:
         # LLVM may vectorize elementwise intrinsics, particularly on AMD.

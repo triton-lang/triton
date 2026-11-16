@@ -8,6 +8,7 @@
 // RUN: triton-opt %t/fp4.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100a -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
+// RUN: triton-opt %t/clmul.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=93' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx93 | FileCheck %s --check-prefix=CLMUL
 
 //--- common.mlir
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
@@ -830,6 +831,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
   tt.func public @fp_trunc_f64_to_bf16_rtz(%out: !tt.ptr<bf16>, %arg: f64) {
     %result = tt.fp_to_fp %arg, rounding = rtz : f64 -> bf16
     tt.store %out, %result : !tt.ptr<bf16>
+    tt.return
+  }
+}
+
+//--- clmul.mlir
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CLMUL-LABEL: .visible .entry clmul_i64(
+  // CLMUL-NOT: xor.b64
+  // CLMUL: clmad.lo.u64 %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}}, 0;
+  // CLMUL-NOT: xor.b64
+  // CLMUL: ret;
+  tt.func public @clmul_i64(%x: i64, %y: i64, %out: !tt.ptr<i64>) {
+    %product = tt.clmul %x, %y : i64
+    tt.store %out, %product : !tt.ptr<i64>
+    tt.return
+  }
+
+  // CLMUL-LABEL: .visible .entry clmul_xor_i64(
+  // CLMUL-NOT: xor.b64
+  // CLMUL: clmad.lo.u64 %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}};
+  // CLMUL-NOT: xor.b64
+  // CLMUL: ret;
+  tt.func public @clmul_xor_i64(%x: i64, %y: i64, %acc: i64, %out: !tt.ptr<i64>) {
+    %product = tt.clmul %x, %y : i64
+    %result = arith.xori %product, %acc : i64
+    tt.store %out, %result : !tt.ptr<i64>
     tt.return
   }
 }
