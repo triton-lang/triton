@@ -151,7 +151,8 @@ static void expandLoops(ModuleOp moduleOp, const LoadRings &rings) {
       Value shifted = arith::AddIOp::create(rewriter, loc, readCursor, advance);
       Value size =
           arith::ConstantIntOp::create(rewriter, loc, ring.numBuffers, 32);
-      Value slot = arith::RemSIOp::create(rewriter, loc, shifted, size);
+      // The cursor is at least -1 and advance is positive.
+      Value slot = arith::RemUIOp::create(rewriter, loc, shifted, size);
       insert.replaceAllUsesWith(slot);
       // Only the dead insert increment still uses this argument.
       forOp.getRegionIterArg(ring.insertArg).replaceAllUsesWith(readCursor);

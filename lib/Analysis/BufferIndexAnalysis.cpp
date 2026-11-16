@@ -15,23 +15,31 @@ static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
 }
 
 /// A buffer index decomposed as `baseValue + constantOffset`, optionally
-/// under a known modulus (recorded when the index is wrapped by remsi or
+/// under a known modulus (recorded when the index is wrapped by a remainder or
 /// the pipeliner's select/cmpi idiom). Two expressions rooted at the
 /// same base value with different offsets (modulo the same recorded modulus,
 /// when both carry one) provably target different slots.
 struct BufferIndexExpr {
+  enum class Wrap { None, CursorIncrement, UnsignedRefill };
+
   Value baseValue;
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
   Value indexedSource;
+  Wrap wrap = Wrap::None;
 
   bool operator==(const BufferIndexExpr &other) const {
     return baseValue == other.baseValue &&
            constantOffset == other.constantOffset && modulus == other.modulus &&
-           indexedSource == other.indexedSource;
+           indexedSource == other.indexedSource && wrap == other.wrap;
   }
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
+    // The cursor increment proves -1 <= base < N. With 1 <= offset <= N,
+    // the refill dividend fits in [0, 2N-1] in the unsigned index type.
+    if ((wrap == Wrap::UnsignedRefill && other.wrap != Wrap::CursorIncrement) ||
+        (other.wrap == Wrap::UnsignedRefill && wrap != Wrap::CursorIncrement))
+      return false;
     return baseValue == other.baseValue &&
            indexedSource == other.indexedSource && modulus == other.modulus &&
            constantOffset != other.constantOffset;
@@ -198,6 +206,7 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
     return std::nullopt;
   BufferIndexExpr result{baseExpr.baseValue, baseExpr.constantOffset + *c};
   result.modulus = *mod;
+  result.wrap = BufferIndexExpr::Wrap::CursorIncrement;
   return result;
 }
 
@@ -227,14 +236,19 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  // arith.remsi(x, N): strip the remainder and record N as the modulus.
-  // N must be a positive compile-time constant.
-  if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
-    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs());
-      // Nested modulus: keep the full remsi as the expression root.
+  Operation *rem = indexValue.getDefiningOp();
+  if (isa_and_nonnull<arith::RemSIOp, arith::RemUIOp>(rem)) {
+    if (auto mod = getConstantIntValue(rem->getOperand(1)); mod && *mod > 0) {
+      auto result = analyzeBufferIndex(rem->getOperand(0));
+      // Nested moduli do not in general reduce to a single modulus.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
+      if (isa<arith::RemUIOp>(rem)) {
+        if (!result.baseValue || result.constantOffset < 1 ||
+            result.constantOffset > *mod)
+          return BufferIndexExpr{indexValue, 0};
+        result.wrap = BufferIndexExpr::Wrap::UnsignedRefill;
+      }
       result.modulus = *mod;
       return result;
     }

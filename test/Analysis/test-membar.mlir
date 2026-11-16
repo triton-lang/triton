@@ -1761,6 +1761,61 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
+// CHECK-LABEL: disjoint_unsigned_refill
+tt.func @disjoint_unsigned_refill(%cst: tensor<128x128xf16>, %ub: i32) {
+  %init = arith.constant -1 : i32
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c3 = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+  %result = scf.for %i = %c0 to %ub step %c1 iter_args(%cursor = %init) -> (i32) : i32 {
+    %inc = arith.addi %cursor, %c1 : i32
+    %wrap = arith.cmpi sge, %inc, %c3 : i32
+    %read = arith.select %wrap, %c0, %inc : i32
+    %shifted = arith.addi %cursor, %c3 : i32
+    %refill = arith.remui %shifted, %c3 : i32
+    %dst = ttg.memdesc_index %ring[%refill] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %src = ttg.memdesc_index %ring[%read] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %dst : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttg.local_load
+    %load = ttg.local_load %src : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+    scf.yield %read : i32
+  }
+  tt.return
+}
+
+// CHECK-LABEL: must_barrier_signed_unsigned_refill
+// At cursor = 4, the unsigned dividend is 5 and the wrapped signed dividend
+// is -2147483645. Both remainders are zero.
+tt.func @must_barrier_signed_unsigned_refill(%cst: tensor<128x128xf16>, %run: i1) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c4 = arith.constant 4 : i32
+  %c5 = arith.constant 5 : i32
+  %max = arith.constant 2147483647 : i32
+  %ub = arith.select %run, %c1, %c0 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<5x128x128xf16, #shared, #smem, mutable>
+  %result = scf.for %i = %c0 to %ub step %c1 iter_args(%cursor = %c4) -> (i32) : i32 {
+    %inc = arith.addi %cursor, %c1 : i32
+    %wrap = arith.cmpi sge, %inc, %c5 : i32
+    %next = arith.select %wrap, %c0, %inc : i32
+    %a = arith.remui %inc, %c5 : i32
+    %sum = arith.addi %cursor, %max : i32
+    %b = arith.remsi %sum, %c5 : i32
+    %dst = ttg.memdesc_index %ring[%a] : !ttg.memdesc<5x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %src = ttg.memdesc_index %ring[%b] : !ttg.memdesc<5x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_store
+    ttg.local_store %cst, %dst : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %load = ttg.local_load %src : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+    scf.yield %next : i32
+  }
+  tt.return
+}
+
 // CHECK-LABEL: must_barrier_irreducible_cfg
 // The first cycle is a natural loop: natural_header dominates natural_latch,
 // so its retreating edge is accepted. The later cycle bb1 -> bb2 -> bb1 has two

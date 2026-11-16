@@ -47,7 +47,7 @@
 // CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remsi %[[INS_IDX_2]], %[[CONSTANT_2]]
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remui %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK:   %[[ASUB3:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[ASUB3]]
 // CHECK:   %[[BSUB3:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}

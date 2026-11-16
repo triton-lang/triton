@@ -95,7 +95,7 @@
 // CHECK:             %[[VAL_76:.*]]:3 = ttng.warp_group_dot_wait %[[VAL_75]], %[[VAL_73]], %[[VAL_74]] {pendings = 1 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>, !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>, !ttg.memdesc<64x256xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_77:.*]] = arith.addi %[[VAL_60]], %[[VAL_13]] : i32
 // CHECK:             %[[VAL_78:.*]] = arith.addi %[[VAL_62]], %[[VAL_6]] : i32
-// CHECK:             %[[VAL_80:.*]] = arith.remsi %[[VAL_78]], %[[VAL_6]] : i32
+// CHECK:             %[[VAL_80:.*]] = arith.remui %[[VAL_78]], %[[VAL_6]] : i32
 // CHECK:             %[[VAL_81:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             ttng.barrier_expect %[[VAL_81]], 49152, %[[VAL_65]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_82:.*]] = ttg.memdesc_index %[[VAL_43]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>

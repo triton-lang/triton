@@ -48,7 +48,7 @@
 // CHECK:   %[[arg_b0_dot_op_1:.*]] = arith.mulf %[[arg_b0_dot_op_0]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_1]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remsi %[[INS_IDX_2]], %[[CONSTANT_2]]
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remui %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK:   %[[ASUB3:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[ASUB3]]
 // CHECK:   %[[BSUB3:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
@@ -194,7 +194,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:     %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:     tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remsi %[[INS_IDX_2]], %[[CONSTANT_2]]
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remui %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
 // CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
@@ -297,7 +297,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK:     %[[arg_b0_dot_op:.*]] = ttg.local_load %[[B0]]
 // CHECK:     tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remsi %[[INS_IDX_2]], %[[CONSTANT_2]]
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.remui %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
 // CHECK:   scf.yield {{.*}}, %[[EXT_IDX_3]]
