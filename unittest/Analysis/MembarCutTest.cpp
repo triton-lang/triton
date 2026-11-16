@@ -73,6 +73,37 @@ TEST(MembarCut, RefreshAfterEachSelectedSite) {
   EXPECT_TRUE(solution->sites.test(site(3, Action::RegionBarrier)));
 }
 
+TEST(MembarCut, DeferLoopBarrierToConsumer) {
+  // Header 1 goes through prefix 2 to consumer 3, or exits to consumer 5.
+  // Both overwrite scratch read by 3 on the preceding iteration.
+  auto cfg = linearCFG({0, 4, 4, 4, 4, 1});
+  cfg.nodes[1].next.push_back({5});
+  cfg.nodes[4].next = {{1, true}};
+  auto solution = solveMembarCut(
+      cfg, {{3, 3, Need::RegionOrder}, {3, 5, Need::RegionOrder}});
+  ASSERT_TRUE(solution);
+  EXPECT_EQ(solution->sites.count(), 2u);
+  EXPECT_TRUE(solution->sites.test(site(3, Action::RegionBarrier)));
+  EXPECT_TRUE(solution->sites.test(site(5, Action::RegionBarrier)));
+  EXPECT_EQ(solution->cost, 5u);
+  EXPECT_EQ(solution->lowerBound, 4u);
+}
+
+TEST(MembarCut, ShareLoopBarrierAcrossConsumers) {
+  // Each trip branches at 2 to either consumer 3 or 4, then reaches producer
+  // 5. A single barrier at the fork orders both consumers on the next trip.
+  auto cfg = linearCFG({0, 4, 4, 4, 4, 4, 4, 1});
+  cfg.nodes[1].next.push_back({7});
+  cfg.nodes[2].next.push_back({4});
+  cfg.nodes[3].next = {{5}};
+  cfg.nodes[6].next = {{1, true}};
+  auto solution = solveMembarCut(
+      cfg, {{5, 3, Need::RegionOrder}, {5, 4, Need::RegionOrder}});
+  ASSERT_TRUE(solution);
+  EXPECT_EQ(solution->sites.count(), 1u);
+  EXPECT_TRUE(solution->sites.test(site(2, Action::RegionBarrier)));
+}
+
 TEST(MembarCut, OrderedHandoffUsesFirstBFSArrival) {
   // The short arm 0 -> 2 -> 4 reaches the sink having waited. The longer
   // arm 0 -> 1 -> 3 -> 4 would reach it without waiting.

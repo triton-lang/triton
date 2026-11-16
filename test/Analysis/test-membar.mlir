@@ -534,8 +534,8 @@ tt.func @for_alias(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
 }
 
 // The loop reuses the same physical offset for %1 and %2 even though neither
-// is an operand of scf.yield. The loop header orders reuse across iterations,
-// and the second barrier orders reuse within one.
+// is an operand of scf.yield. Barriers before the allocations order reuse
+// across and within iterations. The exit barrier orders the final load.
 // CHECK-LABEL: for_reuse
 tt.func @for_reuse(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
@@ -547,12 +547,13 @@ tt.func @for_reuse(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
   %b0 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   %0 = ttg.local_alloc %a0 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   %c_shared_init = ttg.local_alloc %cst : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK: ttg.barrier local
+  // CHECK: arith.cmpi slt
   // CHECK-NEXT: cf.cond_br
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>) {
     %a1 = ttg.local_load %a_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
     %b1 = ttg.local_load %b_shared_init : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
-    // CHECK: ttg.local_alloc {{.*}}allocation.offset = [[REUSED:[0-9]+]]
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_alloc {{.*}}allocation.offset = [[REUSED:[0-9]+]]
     %1 = ttg.local_alloc %a1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc {{.*}}allocation.offset = [[REUSED]]
@@ -561,7 +562,8 @@ tt.func @for_reuse(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %
     %2 = ttg.local_alloc %a1 : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
     scf.yield %c_shared, %a_shared, %b_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
   }
-  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
   %r = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
 }
@@ -2151,15 +2153,18 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // range(program_id(0), 64, 64) runs at most once. Membar still follows the
-// backedge, so the loop barrier also orders the store before the exit read.
+// backedge, so it orders reuse inside the loop and before the exit read.
 // CHECK-LABEL: @single_visit_keeps_exit
 // CHECK: ttg.barrier all
 // CHECK-NEXT: cf.br
 // CHECK: arith.cmpi slt
-// CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: cf.cond_br {{.*}}, ^[[EXIT:bb[0-9]+]]
+// CHECK: arith.cmpi eq
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: cf.cond_br
 // CHECK-NOT: ttg.barrier
 // CHECK: ^[[EXIT]]:
+// CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: {{.*}} = ttg.local_load
 tt.func @single_visit_keeps_exit(%value: !loop_input, %dst: !loop_dst) {
   %pid = tt.get_program_id x : i32
