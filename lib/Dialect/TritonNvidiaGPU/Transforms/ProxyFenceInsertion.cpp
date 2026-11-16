@@ -22,12 +22,7 @@ namespace {
 enum : uint8_t { kCTAScope = 1, kClusterScope = 2 };
 
 uint8_t getProxyFenceScope(Operation *op) {
-  auto load = dyn_cast<AsyncLoadOpInterface>(op);
-  auto mma = dyn_cast<MMAv5OpInterface>(op);
-  bool cluster = (load && load.getMulticast()) || (mma && mma.getTwoCtas()) ||
-                 (isa<TMEMCopyOp>(op) && getModuleTwoCTAs(op)) ||
-                 (isa<CLCTryCancelOp>(op) && gpu::lookupNumCTAs(op) > 1);
-  return cluster ? kClusterScope : kCTAScope;
+  return hasCrossCTAAsyncSharedAccess(op) ? kClusterScope : kCTAScope;
 }
 
 using BufferAccess = const BufferRegionFootprint *;
