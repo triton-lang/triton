@@ -14,13 +14,17 @@ struct LaunchState {
   uint32_t *completionClock;
 };
 
-// Allocate 8 TiB per pool
+// Most pools reserve 8 TiB. Byte-granular normal shadow needs 24 bytes
+// per data byte, so give it 24 TiB of shadow and 1 TiB of data.
 static constexpr size_t kPoolReserveSize = 1ull << 43;
 // A normal/write-once pair for each power-of-two granularity from 1 to 16.
 // The low pool-index bit selects the mode; the remaining bits encode log2
 // granularity. Pool offsets are relative to the reservation base.
 static constexpr int kNumPools = 10;
-static constexpr size_t kReserveSize = kNumPools * kPoolReserveSize;
+static constexpr size_t kByteDataSize = 1ull << 40;
+static constexpr size_t kBytePoolSize = 25 * kByteDataSize;
+static constexpr size_t kReserveSize =
+    kBytePoolSize + (kNumPools - 1) * kPoolReserveSize;
 // Default normal granularity. Write-once allocations default to one byte.
 static constexpr int kShadowMemGranularityBytes = 4;
 
@@ -36,16 +40,32 @@ enum class AtomicScope : uint8_t {
 
 using epoch_t = uint16_t;
 
-struct alignas(4) ScalarClock {
+// The release flag applies only to writes in normal shadow cells. Keep it
+// alongside the read count so stored clocks retain all 16 epoch bits.
+struct ScalarClock {
   epoch_t epoch;
-  thread_id_t threadId : 12; // Supports 4096 threads
-  AtomicScope scope : 2;
-  // For a release write, the epoch is actually an index into the thread's
-  // circular clock buffer where the full vector clock is stored.
-  bool isRelease : 1;
+  thread_id_t threadId;
+  AtomicScope scope;
+  bool isRelease;
 };
-static constexpr int kMaxThreads = 1 << 12;
-static_assert(sizeof(ScalarClock) == 4);
+
+struct alignas(4) PackedClock {
+  uint32_t epoch : 16;
+  uint32_t threadId : 14;
+  AtomicScope scope : 2;
+};
+
+inline GSAN_HOST_DEVICE PackedClock packClock(ScalarClock clock) {
+  return {clock.epoch, clock.threadId, clock.scope};
+}
+
+inline GSAN_HOST_DEVICE ScalarClock unpackClock(PackedClock clock,
+                                                bool isRelease = false) {
+  return {static_cast<epoch_t>(clock.epoch),
+          static_cast<thread_id_t>(clock.threadId), clock.scope, isRelease};
+}
+static constexpr int kMaxThreads = 1 << 14;
+static_assert(sizeof(PackedClock) == 4);
 static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 3);
 
 // TODO: Change to struct-of-array for better coalescing?
@@ -53,8 +73,9 @@ struct alignas(4) ShadowCell {
   static constexpr int kReadClockSize = 4;
   static constexpr uint32_t kLockBit = 1u << 16;
   static constexpr uint32_t kReadCountMask = kLockBit - 1;
-  ScalarClock readClocks[kReadClockSize];
-  ScalarClock writeClock;
+  static constexpr uint32_t kWriteReleaseBit = 1u << 17;
+  PackedClock readClocks[kReadClockSize];
+  PackedClock writeClock;
   // Keep the saturating 16-bit read count and lock in one native atomic word.
   uint32_t readCountAndLock;
 };
@@ -64,10 +85,10 @@ static_assert(alignof(ShadowCell) == 4);
 // The entire scalar clock is accessed atomically. There is no lock or
 // reader state, and zero denotes a cell without an instrumented write.
 struct WriteOnceShadowCell {
-  ScalarClock writeClock;
+  PackedClock writeClock;
 };
-static_assert(sizeof(WriteOnceShadowCell) == sizeof(ScalarClock));
-static_assert(alignof(WriteOnceShadowCell) == alignof(ScalarClock));
+static_assert(sizeof(WriteOnceShadowCell) == sizeof(PackedClock));
+static_assert(alignof(WriteOnceShadowCell) == alignof(PackedClock));
 
 inline GSAN_HOST_DEVICE constexpr size_t getShadowCellSize(bool writeOnce) {
   return writeOnce ? sizeof(WriteOnceShadowCell) : sizeof(ShadowCell);
@@ -180,8 +201,8 @@ static_assert(sizeof(MBarrierTable) == 16);
 
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
-static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;
-static constexpr uintptr_t kMaxGPUs = 32;
+static constexpr uintptr_t kPerDeviceStateStride = 1ull << 32;
+static constexpr uintptr_t kMaxGPUs = 64;
 static constexpr uintptr_t kGlobalsReserveSize =
     kPerDeviceStateStride * kMaxGPUs;
 
@@ -207,7 +228,23 @@ inline GSAN_HOST_DEVICE int getPoolIndexForGranularity(int granularity,
 
 inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address,
                                          uintptr_t reserveBase) {
-  return (address - reserveBase) / kPoolReserveSize;
+  auto offset = address - reserveBase;
+  return offset < kBytePoolSize
+             ? 0
+             : 1 + (offset - kBytePoolSize) / kPoolReserveSize;
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t poolOffset(int pool) {
+  return pool == 0 ? 0 : kBytePoolSize + (pool - 1) * kPoolReserveSize;
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t poolDataOffset(int pool) {
+  // Normal four-byte cells can back 1 TiB of data with 6 TiB of shadow.
+  if (pool == 0)
+    return kBytePoolSize - kByteDataSize;
+  if (pool == 4)
+    return kPoolReserveSize - (1ull << 40);
+  return kPoolReserveSize / 2;
 }
 
 // Assumes address is in this process's GSan reservation.
@@ -220,9 +257,8 @@ inline GSAN_HOST_DEVICE int getShadowGranularity(uintptr_t address,
 inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(
     uintptr_t reserveBase, int granularity = kShadowMemGranularityBytes,
     bool writeOnce = false) {
-  return reserveBase +
-         getPoolIndexForGranularity(granularity, writeOnce) * kPoolReserveSize +
-         kPoolReserveSize / 2;
+  int pool = getPoolIndexForGranularity(granularity, writeOnce);
+  return reserveBase + poolOffset(pool) + poolDataOffset(pool);
 }
 
 // Assumes address is in this process's GSan reservation.
@@ -239,9 +275,9 @@ inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr,
 // Assumes address is in gsan-managed memory
 inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress,
                                                    uintptr_t reserveBase) {
-  auto offset = virtualAddress - reserveBase;
-  auto poolBase = reserveBase + (offset & ~(kPoolReserveSize - 1));
-  auto realBase = poolBase + kPoolReserveSize / 2;
+  int pool = getPoolIndex(virtualAddress, reserveBase);
+  auto poolBase = reserveBase + poolOffset(pool);
+  auto realBase = poolBase + poolDataOffset(pool);
   auto byteOffset = virtualAddress - realBase;
   auto cellOffset =
       byteOffset / getShadowGranularity(virtualAddress, reserveBase);
@@ -251,8 +287,10 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress,
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   auto offset = addr - reserveBase;
-  return offset < kReserveSize &&
-         (offset & (kPoolReserveSize - 1)) >= kPoolReserveSize / 2;
+  if (offset >= kReserveSize)
+    return false;
+  int pool = getPoolIndex(addr, reserveBase);
+  return offset - poolOffset(pool) >= poolDataOffset(pool);
 }
 
 enum class AddressCategory { Unmanaged, Normal, WriteOnce };

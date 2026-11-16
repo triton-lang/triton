@@ -24,13 +24,14 @@ GSAN_DEVICE uint32_t forbiddenGranularities(uintptr_t begin, uintptr_t end,
   return result;
 }
 
-GSAN_DEVICE void recordCell(uintptr_t cell, uintptr_t begin, uintptr_t end,
-                            uint32_t flags) {
+GSAN_DEVICE void recordCell(uintptr_t reserveBase, uintptr_t cell,
+                            uintptr_t begin, uintptr_t end, uint32_t flags) {
   unsigned first = begin > cell ? begin - cell : 0;
   unsigned last = end < cell + kGranularity ? end - cell : kGranularity;
   uint32_t mask = ((1u << last) - 1) & ~((1u << first) - 1);
   // The profiling pool has one contiguous four-byte cell per 16 data bytes.
-  auto *shadow = reinterpret_cast<uint32_t *>(metadataAddress(cell));
+  auto *shadow =
+      reinterpret_cast<uint32_t *>(metadataAddress(cell, reserveBase));
   uint32_t old = atomicOr(shadow, flags | ((flags & kWrite) ? mask : 0));
   uint32_t violations = 0;
   if ((flags & kWrite) && (old & mask))
@@ -61,7 +62,7 @@ GSAN_DEVICE void recordRange(void *state, uintptr_t begin, int nbytes,
   if (distribute)
     cell += kGranularity * __nvvm_read_ptx_sreg_laneid();
   for (; cell < end; cell += distribute ? kGranularity * 32 : kGranularity)
-    recordCell(cell, begin, end, flags);
+    recordCell(reserveBase, cell, begin, end, flags);
 }
 
 GSAN_DEVICE void tensor(void *state, const char *stack, int count, int nbytes,

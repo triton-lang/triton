@@ -135,30 +135,6 @@ AllocNode *findAllocation(CUdeviceptr address) {
       address);
 }
 
-CUresult getReserveAlignment(size_t &alignment) {
-  // All pools share a reservation. Its base must satisfy the minimum mapping
-  // granularity of every visible device, including devices first used later.
-  alignment = 0;
-  int numDevices = 0;
-  CUresult err = cuDeviceGetCount(&numDevices);
-  if (err != CUDA_SUCCESS)
-    return err;
-  CUmemAllocationProp prop = {};
-  prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-  prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  prop.requestedHandleTypes = getRequestedShareableHandleType();
-  for (int device = 0; device < numDevices; ++device) {
-    prop.location.id = device;
-    size_t granularity = 0;
-    err = cuMemGetAllocationGranularity(&granularity, &prop,
-                                        CU_MEM_ALLOC_GRANULARITY_MINIMUM);
-    if (err != CUDA_SUCCESS)
-      return err;
-    alignment = std::max(alignment, granularity);
-  }
-  return CUDA_SUCCESS;
-}
-
 int gsanEnsureInit() {
   if (alloc)
     return 0;
@@ -179,9 +155,10 @@ int gsanEnsureInit() {
 
   CUdeviceptr globalsBase;
   err = cuMemAddressReserve(&globalsBase, /*size*/ gsan::kGlobalsReserveSize,
-                            /*alignment*/ gsan::kGlobalsReserveSize,
+                            /*alignment*/ gsan::kPerDeviceStateStride,
                             /*addr*/ 0, /*flags*/ 0);
   if (err != CUDA_SUCCESS) {
+    cuMemAddressFree(reserveBase, gsan::kReserveSize);
     printCUDAError(err);
     return -1;
   }
@@ -196,11 +173,11 @@ int gsanEnsureInit() {
     root->virtualAddress =
         gsan::getRealBaseAddress(reserveBase, granularity, writeOnce);
 
-    // Both physical mappings must fit in their respective half of the pool.
-    auto shadowSize = gsan::kPoolReserveSize / 2;
+    auto shadowSize = gsan::poolDataOffset(i);
+    auto dataSize = gsan::poolOffset(i + 1) - gsan::poolOffset(i) - shadowSize;
     auto realSize =
         granularity * (shadowSize / gsan::getShadowCellSize(writeOnce));
-    realSize = roundDownToPowerOfTwo(std::min(shadowSize, realSize));
+    realSize = roundDownToPowerOfTwo(std::min(dataSize, realSize));
     root->size = realSize;
     root->maxFreeBlockSize = realSize;
   }
@@ -266,7 +243,8 @@ CUresult refreshConfigForDevice(int device) {
       auto res =
           std::from_chars(userClockSize, userClockSizeEnd, clockBufferSize);
       if (res.ec != std::errc() || res.ptr != userClockSizeEnd ||
-          clockBufferSize <= 0) {
+          clockBufferSize <= 0 ||
+          clockBufferSize > std::numeric_limits<gsan::epoch_t>::max()) {
         auto errc = make_error_code(res.ec);
         auto msg = errc.message();
         fprintf(stderr, "Invalid TRITON_GSAN_CLOCK_BUFFER_SIZE value: %s",
@@ -340,7 +318,11 @@ CUresult ensureRuntimeStateMapped(int device) {
   auto perDeviceStateSize =
       (sizeof(gsan::GlobalState) + config.numSMs * perSMStateSize);
   size_t allocSize = roundUp(perDeviceStateSize, granularity);
-  assert(allocSize <= gsan::kPerDeviceStateStride);
+  if (allocSize > gsan::kPerDeviceStateStride) {
+    fprintf(stderr, "GSan clock state exceeds the per-device stride. Reduce "
+                    "clock_buffer_size.\n");
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
 
   CUmemGenericAllocationHandle allocHandle = 0;
   bool mapped = false;
@@ -942,9 +924,10 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (clockBufferSizeRequested) {
     if (!parseIntArg(args[3], "clock_buffer_size", &requestedClockBufferSize))
       return nullptr;
-    if (requestedClockBufferSize <= 0) {
+    if (requestedClockBufferSize <= 0 ||
+        requestedClockBufferSize > std::numeric_limits<gsan::epoch_t>::max()) {
       PyErr_Format(PyExc_ValueError,
-                   "clock_buffer_size must be positive, got %d",
+                   "clock_buffer_size must be between 1 and 65535, got %d",
                    requestedClockBufferSize);
       return nullptr;
     }

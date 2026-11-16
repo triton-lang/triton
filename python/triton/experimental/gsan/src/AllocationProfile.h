@@ -8,7 +8,7 @@ using gsan::uintptr_t;
 
 // A separate CUDA reservation, independent of every GSan race-checking pool.
 // The lower half contains compact metadata; the upper half contains data.
-constexpr uintptr_t kReserveSize = 1ull << 40;
+constexpr uintptr_t kReserveSize = 1ull << 44;
 constexpr uintptr_t kDataSize = kReserveSize / 2;
 constexpr int kGranularity = 16;
 
@@ -35,8 +35,8 @@ inline GSAN_HOST_DEVICE bool isManaged(uintptr_t address, uintptr_t reserve) {
   return offset >= kDataSize && offset < kReserveSize;
 }
 
-inline GSAN_HOST_DEVICE uintptr_t metadataAddress(uintptr_t address) {
-  auto base = address & ~(kReserveSize - 1);
+inline GSAN_HOST_DEVICE uintptr_t metadataAddress(uintptr_t address,
+                                                  uintptr_t base) {
   return base +
          (address - base - kDataSize) / kGranularity * sizeof(ProfileCell);
 }

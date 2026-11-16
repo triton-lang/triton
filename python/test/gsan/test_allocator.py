@@ -43,13 +43,13 @@ _ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
 @pytest.mark.parametrize("granularity", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("write_once", [False, True])
 def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, write_once):
-    pool_size = gsan_testing.POOL_RESERVE_SIZE_BYTES
+    tib = 1 << 40
     pool_index = 2 * (granularity.bit_length() - 1) + write_once
-    shadow_base = reserve_base + pool_index * pool_size
-    data_base = shadow_base + pool_size // 2
+    shadow_base = reserve_base + (0 if pool_index == 0 else (25 + 8 * (pool_index - 1)) * tib)
+    shadow_size = {0: 24, 4: 7}.get(pool_index, 4) * tib
+    data_base = shadow_base + shadow_size
     cell_size = 4 if write_once else 24
-    # The buddy root is bounded by the available data and shadow space.
-    capacity = min(pool_size // 2, pool_size // 2 // cell_size * granularity)
+    capacity = min((25 if pool_index == 0 else 8) * tib - shadow_size, shadow_size // cell_size * granularity)
     capacity = 1 << (capacity.bit_length() - 1)
     for offset in [0, 1, granularity - 1, granularity, 0x200000, capacity - 1]:
         address = data_base + offset
@@ -59,8 +59,33 @@ def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, writ
         assert gsan_testing.shadow_cell_size(address, reserve_base) == cell_size
         assert gsan_testing.shadow_cell_address(address,
                                                 reserve_base) == shadow_base + offset // granularity * cell_size
-    for address in [0, reserve_base - 1, shadow_base, data_base - 1, reserve_base + 10 * pool_size, (1 << 64) - 1]:
+    for address in [0, reserve_base - 1, shadow_base, data_base - 1, reserve_base + 97 * tib, (1 << 64) - 1]:
         assert not gsan_testing.is_gsan_managed(address, reserve_base)
+
+
+def _run_high_rank_shadow_clock():
+    device = torch.cuda.current_device()
+    configure(device_ranks={device: 63}, num_devices=64, clock_buffer_size=2)
+    sms = torch.cuda.get_device_properties(device).multi_processor_count
+    with ExitStack() as cleanup, triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "gsan"
+        for write_once in (False, True):
+            ptr = gsan_malloc(4, device, write_once=write_once)
+            assert ptr
+            cleanup.callback(gsan_free, ptr, device)
+            target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+            _store_reset_target[(1, )](target, WIDTH=1, num_warps=1)
+            torch.cuda.synchronize(device)
+            history = shadow_cell_from_address(ptr)
+            clock = history if write_once else history.write_clock
+            assert 63 * sms <= clock.thread_id < 64 * sms
+            assert clock.epoch > 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_high_rank_shadow_clock():
+    result = run_in_process(_run_high_rank_shadow_clock)
+    assert result.exc is None
 
 
 def _run_configure_check(device_ranks: dict[int, int], num_devices: int) -> None:
@@ -474,7 +499,8 @@ def test_default_topology_uses_cuda_device_indices():
 def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     pool_index = 2 * (1, 2, 4, 8, 16).index(shadow_granularity)
-    real_base = reserve_ptr + (2 * pool_index + 1) * gsan_testing.POOL_RESERVE_SIZE_BYTES // 2
+    pool_start = 0 if pool_index == 0 else 25 + (pool_index - 1) * 8
+    real_base = reserve_ptr + (pool_start + {0: 24, 4: 7}.get(pool_index, 4)) * (1 << 40)
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)
@@ -696,7 +722,7 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
 def _run_byte_pool_import_capacity_check():
     device = torch.cuda.current_device()
     block_size = 128 * 1024**2
-    capacity = 128 * 1024**3
+    span = 129 * 1024**3
     handle_type = ShareableHandleType.POSIX_FILE_DESCRIPTOR
     with ExitStack() as cleanup:
         real_ptr = gsan_malloc(block_size, device, shadow_granularity=1)
@@ -712,7 +738,7 @@ def _run_byte_pool_import_capacity_check():
         # Reuse one physical allocation to fill the pool with peer mappings.
         # Only 128 MiB of data and 3 GiB of shadow storage are physically backed.
         pointers = {real_ptr}
-        for _ in range(capacity // block_size - 1):
+        for _ in range(span // block_size - 1):
             imported_ptr = import_allocation_handles(real_fd, shadow_fd, alloc_size, device, handle_type,
                                                      shadow_granularity=granularity)
             assert imported_ptr != 0
@@ -720,8 +746,7 @@ def _run_byte_pool_import_capacity_check():
             assert imported_ptr not in pointers
             pointers.add(imported_ptr)
 
-        assert max(pointers) - min(pointers) == capacity - block_size
-        assert gsan_malloc(8, device, shadow_granularity=1) == 0
+        assert max(pointers) - min(pointers) == span - block_size
 
         # Exercise both mappings at the far end of the enlarged address range.
         last_ptr = max(pointers)

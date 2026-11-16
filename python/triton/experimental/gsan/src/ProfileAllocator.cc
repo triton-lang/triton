@@ -22,8 +22,11 @@ CUresult ensureInitialized() {
   if (allocator)
     return CUDA_SUCCESS;
   CUdeviceptr reserve = 0;
-  CUresult err = cuMemAddressReserve(&reserve, gsan_profile::kReserveSize,
-                                     gsan_profile::kReserveSize, 0, 0);
+  size_t alignment = 0;
+  CUresult err = getReserveAlignment(alignment);
+  if (err == CUDA_SUCCESS)
+    err = cuMemAddressReserve(&reserve, gsan_profile::kReserveSize, alignment,
+                              0, 0);
   if (err != CUDA_SUCCESS)
     return err;
   allocator = std::make_unique<ProfileAllocator>();
@@ -93,7 +96,8 @@ extern "C" void *gsanProfileMalloc(ssize_t size, int device, void *stream) {
   if (!node)
     return nullptr;
   err = createAllocation(
-      node, allocSize, gsan_profile::metadataAddress(node->virtualAddress),
+      node, allocSize,
+      gsan_profile::metadataAddress(node->virtualAddress, allocator->reserve),
       metadataSize(allocSize), prop, reinterpret_cast<CUstream>(stream));
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
@@ -113,18 +117,21 @@ extern "C" void gsanProfileFree(void *ptr, ssize_t, int, void *stream) {
     fprintf(stderr, "gsanProfileFree called with an invalid pointer\n");
     return;
   }
-  releaseAllocation(node, gsan_profile::metadataAddress(address),
-                    metadataSize(node->allocSize),
-                    reinterpret_cast<CUstream>(stream));
+  releaseAllocation(
+      node, gsan_profile::metadataAddress(address, allocator->reserve),
+      metadataSize(node->allocSize), reinterpret_cast<CUstream>(stream));
 }
 
-bool profileGetLayout(uintptr_t address, uintptr_t &base, size_t &size) {
+bool profileGetLayout(uintptr_t address, uintptr_t &base, size_t &size,
+                      uintptr_t *reserve) {
   std::lock_guard guard(mutex);
   auto *node = findAllocation(address);
   if (!node)
     return false;
   base = node->virtualAddress;
   size = node->allocSize;
+  if (reserve)
+    *reserve = allocator->reserve;
   return true;
 }
 
@@ -185,7 +192,8 @@ PyObject *pyLayout(PyObject *, PyObject *arg) {
   return Py_BuildValue(
       "(KKK)", static_cast<unsigned long long>(node->virtualAddress),
       static_cast<unsigned long long>(node->allocSize),
-      static_cast<unsigned long long>(gsan_profile::metadataAddress(address)));
+      static_cast<unsigned long long>(
+          gsan_profile::metadataAddress(address, allocator->reserve)));
 }
 
 PyObject *pyRegions(PyObject *, PyObject *arg) {
@@ -201,8 +209,8 @@ PyObject *pyRegions(PyObject *, PyObject *arg) {
   return Py_BuildValue(
       "(KKKK)", static_cast<unsigned long long>(node->virtualAddress),
       static_cast<unsigned long long>(node->allocSize),
-      static_cast<unsigned long long>(
-          gsan_profile::metadataAddress(node->virtualAddress)),
+      static_cast<unsigned long long>(gsan_profile::metadataAddress(
+          node->virtualAddress, allocator->reserve)),
       static_cast<unsigned long long>(metadataSize(node->allocSize)));
 }
 
@@ -258,9 +266,10 @@ PyObject *pyImport(PyObject *, PyObject *args) {
   auto *node = allocateNode(&allocator->root, size);
   if (!node)
     return PyErr_NoMemory();
-  err = importAllocation(node, size,
-                         gsan_profile::metadataAddress(node->virtualAddress),
-                         metadataSize(size), real, shadow, type, device);
+  err = importAllocation(
+      node, size,
+      gsan_profile::metadataAddress(node->virtualAddress, allocator->reserve),
+      metadataSize(size), real, shadow, type, device);
   if (err != CUDA_SUCCESS) {
     freeNode(node);
     return cudaError(err);

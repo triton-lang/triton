@@ -94,6 +94,7 @@ void summarize(Record &record, CUstream stream) {
 
 class ProfileCUDAAllocator;
 struct Segment {
+  uintptr_t reserve;
   pool::AllocNode root;
   Stream allocationStream;
 };
@@ -219,9 +220,10 @@ class ProfileCUDAAllocator final
                        "profiling allocator out of memory");
       size_t mapped;
       uintptr_t mappedBase;
-      bool found = profileGetLayout(base, mappedBase, mapped);
-      TORCH_INTERNAL_ASSERT(found && mappedBase == base && mapped >= capacity);
       auto created = std::make_unique<Segment>();
+      bool found =
+          profileGetLayout(base, mappedBase, mapped, &created->reserve);
+      TORCH_INTERNAL_ASSERT(found && mappedBase == base && mapped >= capacity);
       created->root.virtualAddress = base;
       created->root.size = pool::roundDownToPowerOfTwo(mapped);
       created->root.maxFreeBlockSize = created->root.size;
@@ -280,8 +282,9 @@ public:
       Context context(stream.device);
       check(context.error);
       check(cuMemsetD32Async(
-          gsan_profile::metadataAddress(segment->root.virtualAddress), 0,
-          segment->root.size / gsan_profile::kGranularity, stream.stream));
+          gsan_profile::metadataAddress(segment->root.virtualAddress,
+                                        segment->reserve),
+          0, segment->root.size / gsan_profile::kGranularity, stream.stream));
     }
   }
   c10::DataPtr allocate(size_t bytes) override {
@@ -381,8 +384,9 @@ public:
           summarize(*record, stream);
       }
       check(cuMemsetD32Async(
-          gsan_profile::metadataAddress(block->node->virtualAddress), 0,
-          pool::cdiv(block->requested, gsan_profile::kGranularity), stream));
+          gsan_profile::metadataAddress(block->node->virtualAddress,
+                                        block->segment->reserve),
+          0, pool::cdiv(block->requested, gsan_profile::kGranularity), stream));
       if (block->users.empty()) {
         // The whole segment is confined to this allocation stream, so reuse
         // naturally follows the summary and reset, without a CPU wait.
@@ -513,8 +517,9 @@ public:
       check(context.error);
       check(cuCtxSynchronize());
       check(cuMemsetD32(
-          gsan_profile::metadataAddress(block.node->virtualAddress), 0,
-          pool::cdiv(block.requested, gsan_profile::kGranularity)));
+          gsan_profile::metadataAddress(block.node->virtualAddress,
+                                        block.segment->reserve),
+          0, pool::cdiv(block.requested, gsan_profile::kGranularity)));
       pool::freeNode(block.node);
       it = pending_.erase(it);
     }

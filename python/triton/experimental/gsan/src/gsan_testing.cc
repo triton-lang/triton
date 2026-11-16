@@ -179,8 +179,10 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
 PyShadowCell toPyShadowCell(const gsan::ShadowCell &cell) {
   PyShadowCell out;
   for (size_t i = 0; i < gsan::ShadowCell::kReadClockSize; ++i)
-    out.readClocks[i] = toPyScalarClock(cell.readClocks[i]);
-  out.writeClock = toPyScalarClock(cell.writeClock);
+    out.readClocks[i] = toPyScalarClock(gsan::unpackClock(cell.readClocks[i]));
+  out.writeClock = toPyScalarClock(gsan::unpackClock(
+      cell.writeClock,
+      cell.readCountAndLock & gsan::ShadowCell::kWriteReleaseBit));
   out.numReads = cell.readCountAndLock & gsan::ShadowCell::kReadCountMask;
   return out;
 }
@@ -382,7 +384,7 @@ void init_gsan_testing(py::module_ &m) {
           "decode_write_once_clock expected at least 4 bytes");
     gsan::WriteOnceShadowCell cell;
     std::memcpy(&cell, data.c_str(), sizeof(cell));
-    return toPyScalarClock(cell.writeClock);
+    return toPyScalarClock(gsan::unpackClock(cell.writeClock));
   });
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);
