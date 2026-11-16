@@ -783,12 +783,13 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks,
         break;
       }
     }
+    auto producerPartitionId = state.partitionId;
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
     if (state.release(b, node->op->getLoc()) == AsyncOp::TC5MMA) {
-      // The last async GET still signals the empty barrier. Wait at the end
-      // of the aref lifetime, outside any loop that can acquire it again.
+      // Wait for the last async GET before teardown. The producer owns the
+      // stage and phase needed to wait on the empty barrier.
       b.setInsertionPoint(arefOp->getBlock()->getTerminator());
-      state.acquire(b, arefOp.getLoc(), {std::nullopt, {}});
+      state.acquire(b, arefOp.getLoc(), {producerPartitionId, {}});
     }
   }
 
