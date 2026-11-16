@@ -34,7 +34,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 
-t5 = importlib.import_module("05-mfma-wmma-scaled")
+t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
 
 
 def is_cdna5():
@@ -426,13 +426,12 @@ def test_matmul(M, N, K):
 
 
 # %%
-# We can compare this kernel with the kernel of `05-mfma-wmma-scaled.py` with
-# M = N = K = 8192.
+# We can compare this kernel with the kernel of `05-mfma-wmma-scaled.py`.
 
 if __name__ == "__main__":
     print("Benchmarking matmul")
     print("===================")
-    M, N, K = 8192, 8192, 8192
+    M, N, K = 2048, 2048, 16384
     A = t5.random_fp8(M, K)
     W, W_scale, _ = t5.random_mxfp4(N, K)
     W_scale = t5.preshuffle_scales_cdna5(W_scale)
@@ -443,3 +442,9 @@ if __name__ == "__main__":
 
     bench("4 warp", lambda: t5.matmul_cdna5(A, W, W_scale))
     bench("8 warp", lambda: matmul(A, W, W_scale))
+
+# %%
+# ```
+# 4 warp: 2750 TFLOPS
+# 8 warp: 3101 TFLOPS
+# ```

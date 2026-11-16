@@ -29,7 +29,7 @@ from triton.experimental.gluon.language.amd.cdna5 import tdm
 from triton.experimental.gluon.language.amd.cdna5 import async_copy as cp
 from triton.experimental.gluon.amd.cdna5 import TensorDescriptor
 
-t1 = importlib.import_module("01-buffer-ops")
+t1 = importlib.import_module("amd.01-buffer-ops")
 
 
 def is_cdna5():

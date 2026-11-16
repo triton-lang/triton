@@ -24,7 +24,7 @@ PHASES = (
     ("python/test/regression", "warmup-regression"),
 )
 IMPORT_PATHS = (ROOT / "python" / "triton_kernels", ROOT / "python" / "test" / "unit" / "language",
-                ROOT / "python" / "tutorials" / "gluon", ROOT / "python" / "tutorials" / "gluon" / "amd")
+                ROOT / "python" / "tutorials" / "gluon")
 
 
 def _pythonpath(environment):

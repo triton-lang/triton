@@ -20,8 +20,8 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 
-t1 = importlib.import_module("01-buffer-ops")
-t5 = importlib.import_module("05-mfma-wmma-scaled")
+t1 = importlib.import_module("amd.01-buffer-ops")
+t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
 
 
 def is_cdna5():
@@ -286,11 +286,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 12.4 TB/s
-# tdm gather: 19.1 TB/s
+# global load: 13.9 TB/s
+# tdm gather: 19.5 TB/s
 # ```
 #
-# The TDM gather is 54% faster than the global load kernel.
+# The TDM gather is 40% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -493,6 +493,6 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# mlp1: 6547 TFLOPS
-# mlp2: 6016 TFLOPS
+# mlp1: 6484 TFLOPS
+# mlp2: 6040 TFLOPS
 # ```

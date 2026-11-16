@@ -22,8 +22,8 @@ from triton.experimental.gluon.language.amd.cdna4 import async_copy, buffer
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
-t1 = importlib.import_module("01-buffer-ops")
-t4 = importlib.import_module("04-mfma-wmma")
+t1 = importlib.import_module("amd.01-buffer-ops")
+t4 = importlib.import_module("amd.04-mfma-wmma")
 
 
 def is_cdna4():
@@ -845,7 +845,7 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# bf16: 2209 TFLOPS
-# fp8 x mxfp4: 7498 TFLOPS
-# fp8 x mxfp4, preshuffled scales: 7619 TFLOPS
+# bf16: 2297 TFLOPS
+# fp8 x mxfp4: 7763 TFLOPS
+# fp8 x mxfp4, preshuffled scales: 7888 TFLOPS
 # ```

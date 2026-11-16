@@ -23,8 +23,8 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna5 import async_copy, buffer, cluster, tdm, wmma_scaled
 
-t5 = importlib.import_module("05-mfma-wmma-scaled")
-t7 = importlib.import_module("07-warp-pipeline")
+t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
+t7 = importlib.import_module("amd.07-warp-pipeline")
 
 
 def is_cdna5():
@@ -416,3 +416,13 @@ if __name__ == "__main__":
     bench("no cluster", lambda: t7.matmul(A, W, W_scale))
     for CTAS_M, CTAS_N in [(2, 1), (1, 2), (2, 2), (2, 4), (4, 4)]:
         bench(f"{CTAS_M}x{CTAS_N} cluster", lambda: matmul(A, W, W_scale, CTAS_M, CTAS_N))
+
+# %%
+# ```
+# no cluster: 7717 TFLOPS
+# 2x1 cluster: 8380 TFLOPS
+# 1x2 cluster: 8588 TFLOPS
+# 2x2 cluster: 8538 TFLOPS
+# 2x4 cluster: 8731 TFLOPS
+# 4x4 cluster: 8785 TFLOPS
+# ```

@@ -32,7 +32,7 @@ from triton.experimental.gluon.language.amd.cdna4 import buffer
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cp
 from triton.experimental.gluon.language.amd import cdna5
 
-t1 = importlib.import_module("01-buffer-ops")
+t1 = importlib.import_module("amd.01-buffer-ops")
 
 
 def is_cdna4():

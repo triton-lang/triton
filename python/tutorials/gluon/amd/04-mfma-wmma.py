@@ -24,8 +24,8 @@ from triton.experimental.gluon.language.amd import cdna4, cdna5
 from triton.experimental.gluon.language.amd.cdna4 import async_copy, buffer
 from triton.experimental.gluon.language.amd.cdna5 import tdm
 
-t1 = importlib.import_module("01-buffer-ops")
-t2 = importlib.import_module("02-async-copy")
+t1 = importlib.import_module("amd.01-buffer-ops")
+t2 = importlib.import_module("amd.02-async-copy")
 
 
 def is_cdna4():
@@ -1164,6 +1164,6 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# padded: 2145 TFLOPS
-# partitioned: 2206 TFLOPS
+# padded: 2237 TFLOPS
+# partitioned: 2320 TFLOPS
 # ```
