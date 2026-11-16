@@ -5,6 +5,12 @@
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2056 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_track_barrier_write_for_buffer_
+  // CHECK-NOT: tt.load
+  // CHECK: tt.load %{{[^ ]+}} : tensor<1x1x!tt.ptr<i64>
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} {ignore_cta} : tensor<1x2x1x1x2x!tt.ptr<i8>
+  // CHECK: tt.return
   // Track four total arrivals and the original total bytes, not per-warp bytes.
   // CHECK-LABEL: @distributed_expect
   // CHECK: ttng.init_barrier
