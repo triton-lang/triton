@@ -2,10 +2,11 @@
 Warp Pipeline
 =============
 
-Many units on AMD GPUs can execute instructions in parallel. What we have built
-already shows this when we overlap global memory accesses with MFMA/WMMA. But
-these previous examples overlap instructions within a warp. AMD GPUs also allow
-overlapping instructions across warps. This includes 2 different forms of
+Many units on AMD GPUs can execute instructions in parallel, this includes
+overlapping compute and memory accesses, or different types of compute. What
+we have seen in previous tutorials already demonstrates this idea of overlapping
+memory and compute within a warp. We can also extend this idea to overlap
+instructions across warps as well. This includes 2 different forms of
 overlapping: hardware-controlled overlap, where we increase the occupancy of
 warps without any control and let the hardware decide how to schedule
 instructions across warps, and software-controlled overlap, which we will
