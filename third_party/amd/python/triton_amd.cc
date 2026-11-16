@@ -1,5 +1,4 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
@@ -521,11 +520,6 @@ void init_triton_amd(py::module_ &m) {
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
         target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
-  });
-
-  m.def("get_shared_memory_size", [](const std::string &arch) {
-    return mlir::triton::amdgpu::TargetFeatures(llvm::StringRef(arch))
-        .getSharedMemorySize();
   });
 
   m.def("supports_multi_cta_launch", [](const std::string &arch) {

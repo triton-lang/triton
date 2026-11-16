@@ -7,7 +7,6 @@ from triton.backends.compiler import GPUTarget
 from triton.compiler import ASTSource
 from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
-from triton.runtime.errors import OutOfResources
 
 
 @triton.jit
@@ -117,31 +116,6 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
     shared = compiled.metadata.shared
     assert (shared > 0) == transpose
     assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
-    assert compiled.packed_metadata[2] == 0
-
-
-@pytest.mark.parametrize("arch, max_shared", [("gfx942", 65536), ("gfx950", 163840)])
-def test_compile_only_amd_static_lds_out_of_resources(arch, max_shared, monkeypatch):
-    from triton.backends.amd import compiler
-    from triton.experimental import gluon
-    from triton.experimental.gluon import language as gl
-
-    @gluon.jit
-    def kernel(src, dst):
-        layout: gl.constexpr = gl.BlockedLayout([1], [64], [4], [0])
-        offsets = gl.arange(0, 65536, layout=layout)
-        shared = gl.allocate_shared_memory(gl.float32, [65536], gl.SwizzledSharedLayout(1, 1, 1, [0]))
-        shared.store(gl.load(src + offsets))
-        gl.barrier()
-        gl.store(dst + offsets, shared.load(layout))
-
-    monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: pytest.fail("LLVM codegen reached"))
-    source = gluon.GluonASTSource(fn=kernel, signature={"src": "*fp32", "dst": "*fp32"})
-    with pytest.raises(OutOfResources) as exc_info:
-        triton.compile(source, target=GPUTarget("hip", arch, 64))
-    assert exc_info.value.required == 262144
-    assert exc_info.value.limit == max_shared
-    assert exc_info.value.name == "shared memory"
 
 
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
