@@ -157,10 +157,16 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
-    if (isConstantZeroTensor(forOp.getInitArgs()[arg.getArgNumber() - 1])) {
+    unsigned iterArgIdx = arg.getArgNumber() - 1;
+    if (isConstantZeroTensor(forOp.getInitArgs()[iterArgIdx])) {
       loopArgIsZero = true;
     }
-    v = forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+    // Deferring a reset to the next MMA does not preserve the final iteration's
+    // reset when the accumulator is observed after the loop. Keep the reset,
+    // but still allow optimizing the loop's initial zero accumulator.
+    if (!forOp.getResult(iterArgIdx).use_empty())
+      return std::nullopt;
+    v = forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
   }
 
   auto defOp = v.getDefiningOp();
