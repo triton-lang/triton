@@ -105,6 +105,7 @@ def test_gsan_profile_access_granularity_and_write_once(dtype, count, fresh_knob
     torch.testing.assert_close(output, torch.full_like(output, 17))
     for name in ("source", "output"):
         row = _allocation(profile, name)
+        assert "accessed_ranges" not in row
         assert row["write_once_candidate"]
         # At 1024 elements / 128 threads the byte kernel has eight-byte
         # per-thread accesses, even though the allocation is 16-byte aligned.
@@ -378,10 +379,28 @@ def test_gsan_profile_pool_is_ignored_by_race_checker(operation, fresh_knobs, wi
     torch.testing.assert_close(output, expected)
 
 
+@pytest.mark.parametrize("retire", [False, True])
+def test_gsan_profile_accessed_ranges(retire, fresh_knobs):
+    block_bytes = 16 * 1024
+    elements_per_block = block_bytes // 4
+    with AllocationProfile(include_accessed_ranges=True) as profile:
+        data = torch.empty(4 * elements_per_block + 1, dtype=torch.int32, device="cuda")
+        profile.track(data, name="data")
+        output = torch.empty_like(data[:1])
+        _copy[(1, )](data, output, 1)
+        _fill[(1, )](data[elements_per_block:], 1)
+        _atomic[(1, )](data[-1:])
+        if retire:
+            del data
+    # The read and write touch adjacent blocks; only the atomic touches the tail.
+    assert _allocation(profile, "data")["accessed_ranges"] == [[0, 2 * block_bytes], [4 * block_bytes, 4]]
+
+
 def test_gsan_profile_unaccessed_and_empty_storage(fresh_knobs):
-    with AllocationProfile() as profile:
+    with AllocationProfile(include_accessed_ranges=True) as profile:
         profile.track(torch.empty(0, device="cuda"), name="empty")
         profile.track(torch.empty(16, device="cuda"), name="unaccessed")
+    assert _allocation(profile, "unaccessed")["accessed_ranges"] == []
     for row in profile.report()["allocations"]:
         assert "observed" not in row
         assert row["cells_read"] == 0
@@ -740,7 +759,7 @@ def test_gsan_profile_retirement_failure_is_reported(monkeypatch, fresh_knobs):
         raise RuntimeError("simulated summary failure")
 
     with monkeypatch.context() as patch:
-        with AllocationProfile() as profile:
+        with AllocationProfile(include_accessed_ranges=True) as profile:
             output = torch.empty(32, device="cuda")
             profile.track(output, name="output")
             _fill[(1, )](output, 32)
@@ -750,6 +769,7 @@ def test_gsan_profile_retirement_failure_is_reported(monkeypatch, fresh_knobs):
     assert not row["write_once_candidate"]
     assert row["max_granularity"] is None
     assert any("simulated summary failure" in reason for reason in row["reasons"])
+    assert row["accessed_ranges"] is None
 
 
 def test_gsan_profile_retirement_during_capture_is_reported(fresh_knobs):
@@ -822,7 +842,7 @@ def test_gsan_profile_invalid_range(address, nbytes, fresh_knobs):
 
 def test_gsan_profile_exception_suppresses_recommendations(fresh_knobs):
     with pytest.raises(RuntimeError, match="workload failed"):
-        with AllocationProfile() as profile:
+        with AllocationProfile(include_accessed_ranges=True) as profile:
             output = torch.empty(32, device="cuda")
             profile.track(output, name="output")
             _fill[(1, )](output, 32)
@@ -831,6 +851,7 @@ def test_gsan_profile_exception_suppresses_recommendations(fresh_knobs):
     assert report["warnings"] == ["profile context exited with an exception"]
     assert not report["allocations"][0]["write_once_candidate"]
     assert report["allocations"][0]["max_granularity"] is None
+    assert report["allocations"][0]["accessed_ranges"] is None
     assert triton.knobs.compilation.instrumentation_mode == ""
     with pytest.raises(RuntimeError, match="re-entered"):
         with profile:
@@ -914,8 +935,10 @@ def test_gsan_profile_peer_writes_share_shadow(overlap, fresh_knobs):
 
     if not torch.cuda.can_device_access_peer(1, 0):
         pytest.skip("requires peer access")
+    tail_offset = 32 * 1024
+    nbytes = tail_offset + 512 * 4
     with ExitStack() as stack:
-        ptr = _allocator.malloc(4096, 0)
+        ptr = _allocator.malloc(nbytes, 0)
         stack.callback(_allocator.free_allocation, ptr, 0)
         real, shadow, size = _allocator.export_allocation_handles(ptr,
                                                                   _allocator.ShareableHandleType.POSIX_FILE_DESCRIPTOR)
@@ -930,9 +953,9 @@ def test_gsan_profile_peer_writes_share_shadow(overlap, fresh_knobs):
                 _allocator.free_allocation(peer, 1)
 
         stack.callback(free_peer)
-        output = uint8_cuda_tensor_from_ptr(ptr, 4096, 0).view(torch.int32)
-        alias = uint8_cuda_tensor_from_ptr(peer, 4096, 1).view(torch.int32)
-        with AllocationProfile(devices=[0, 1]) as profile:
+        output = uint8_cuda_tensor_from_ptr(ptr, nbytes, 0).view(torch.int32)
+        alias = uint8_cuda_tensor_from_ptr(peer, nbytes, 1).view(torch.int32)
+        with AllocationProfile(devices=[0, 1], include_accessed_ranges=True) as profile:
             profile.track(output, name="owner", allocation_id="shared")
             profile.track(alias, name="peer", allocation_id="shared")
             profile.prepare()
@@ -940,7 +963,7 @@ def test_gsan_profile_peer_writes_share_shadow(overlap, fresh_knobs):
                 _fill[(1, )](output, 512)
                 torch.cuda.synchronize()
             with torch.cuda.device(1):
-                _fill[(1, )](alias if overlap else alias[512:], 512)
+                _fill[(1, )](alias if overlap else alias[tail_offset // 4:], 512)
         report = profile.report()
         assert not report["warnings"]
         assert len(report["allocations"]) == 1
@@ -948,9 +971,11 @@ def test_gsan_profile_peer_writes_share_shadow(overlap, fresh_knobs):
         assert row["write_once_candidate"] == (not overlap)
         assert row["bytes_written"] == (512 if overlap else 1024) * 4
         assert row["cells_with_repeated_writes"] == (128 if overlap else 0)
-        assert row["profiling_metadata_bytes"] == 1024
-        count = 512 if overlap else 1024
-        torch.testing.assert_close(output[:count], torch.full_like(output[:count], 17))
+        assert row["profiling_metadata_bytes"] == nbytes // 4
+        assert row["accessed_ranges"] == ([[0, 16 * 1024]] if overlap else [[0, 16 * 1024], [tail_offset, 512 * 4]])
+        torch.testing.assert_close(output[:512], torch.full_like(output[:512], 17))
+        if not overlap:
+            torch.testing.assert_close(output[-512:], torch.full_like(output[-512:], 17))
 
 
 def _distributed_checks(rank, world_size, init_method, backend, *, shared=False):
@@ -1001,7 +1026,7 @@ def _distributed_checks(rank, world_size, init_method, backend, *, shared=False)
         assert all(row["write_once_candidate"] for row in report["allocations"])
         # Rank-local allocations may come and go independently after the
         # initial collective prepare. Their retired reports must survive reuse.
-        with AllocationProfile(group=dist.group.WORLD) as profile:
+        with AllocationProfile(group=dist.group.WORLD, include_accessed_ranges=True) as profile:
             profile.prepare()
             for i in range(rank + 1):
                 temporary = torch.empty(1024, dtype=torch.int32, device="cuda")
@@ -1011,6 +1036,11 @@ def _distributed_checks(rank, world_size, init_method, backend, *, shared=False)
         rows = profile.report()["allocations"]
         assert len(rows) == world_size * (world_size + 1) // 2
         assert all(row["write_once_candidate"] and row["bytes_written"] == 4096 for row in rows)
+        assert all(row["accessed_ranges"] == [[0, 4096]] for row in rows)
+        with AllocationProfile(group=dist.group.WORLD, include_accessed_ranges=rank == 0) as profile:
+            pass
+        with pytest.raises(ValueError, match="include_accessed_ranges"):
+            profile.report()
         # Collective validation must fail on every rank before data collectives.
         with AllocationProfile(group=dist.group.WORLD) as profile:
             profile.track_pointer(output.data_ptr(), 16 * (rank + 1), owner=output, name="bad-size",
@@ -1140,7 +1170,7 @@ def _distributed_shared_checks(rank, world_size):
     import torch.distributed as dist
     with _shared_profile_buffers(rank, world_size) as buffers:
         for overlap in (False, True):
-            with AllocationProfile(group=dist.group.WORLD) as profile:
+            with AllocationProfile(group=dist.group.WORLD, include_accessed_ranges=True) as profile:
                 for i, buffer in enumerate(buffers):
                     profile.track(buffer, name=f"owner{i}", allocation_id=f"allocation/{i}")
                 # Each rank writes a disjoint, aligned portion of allocation 0.
@@ -1156,6 +1186,7 @@ def _distributed_shared_checks(rank, world_size):
             row = next(r for r in report["allocations"] if "owner0" in r["names"])
             assert row["write_once_candidate"] == (not overlap)
             assert row["bytes_written"] == world_size * 128 * 4
+            assert row["accessed_ranges"] == [[0, buffers[0].nbytes]]
             assert row["cells_with_repeated_writes"] == (32 if overlap else 0)
             assert profile.report() == report
             torch.testing.assert_close(buffers[0][:world_size * 128],
