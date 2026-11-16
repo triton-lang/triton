@@ -335,14 +335,26 @@ class Autotuner(KernelInterface):
         failed = []
         for config in configs:
             current = {**kwargs, **config.all_kwargs()}
+            full_nargs = {**self.nargs, **current}
             # Config pre-hooks may change the specialization, e.g. by setting
-            # tensor descriptor block shapes, so run them before compiling.
+            # tensor descriptor block shapes. Use the benchmark hook lifecycle
+            # so their side effects are cleaned up even if compilation fails or
+            # the compiled config is later rejected.
             if config.pre_hook:
-                config.pre_hook({**self.nargs, **current})
+                config.pre_hook(full_nargs)
+            self.pre_hook(full_nargs)
             try:
-                kernel = self.fn.run(*args, **{**current, "warmup": True})
-                if isinstance(kernel, FutureKernel):
-                    kernel = kernel.result()
+                try:
+                    kernel = self.fn.run(*args, **{**current, "warmup": True})
+                    if isinstance(kernel, FutureKernel):
+                        kernel = kernel.result()
+                except Exception as e:
+                    try:
+                        self.post_hook(full_nargs, exception=e)
+                    finally:
+                        # Run cleanup before propagating the error.
+                        raise
+                self.post_hook(full_nargs, exception=None)
             except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
                 if verbose:
                     print(f"Autotuning failed for config {config} with {e}")

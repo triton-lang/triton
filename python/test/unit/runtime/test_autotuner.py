@@ -761,6 +761,59 @@ def test_compiled_config_prune(device):
     assert _kernel.best_config != configs[0]
 
 
+@pytest.mark.parametrize("rejection", [None, "compile", "prune"])
+def test_compiled_config_prune_hook_cleanup(device, rejection):
+    src = torch.zeros(32, device=device)
+    dst = torch.empty_like(src)
+    hooks = {"active": 0, "completed": 0, "failed": 0}
+
+    def config_pre_hook(args):
+        args["src"].add_(10)
+
+    def pre_hook(args, reset_only=False):
+        if not reset_only:
+            hooks["active"] += 1
+
+    def post_hook(args, exception):
+        assert hooks["active"] == 1
+        args["src"].sub_(10)
+        hooks["active"] -= 1
+        hooks["completed"] += 1
+        hooks["failed"] += exception is not None
+
+    def compiled_config_prune(compiled, named_args, **kwargs):
+        # Compilation must restore the input even for rejected candidates.
+        torch.testing.assert_close(src, torch.zeros_like(src))
+        return [config for config in compiled if rejection != "prune" or config.kwargs["BLOCK_SIZE"] == 64]
+
+    def bench(kernel_call, quantiles):
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    configs = [
+        triton.Config({"BLOCK_SIZE": bs, "FAIL": rejection == "compile" and bs == 32}, pre_hook=config_pre_hook)
+        for bs in (32, 64)
+    ]
+
+    @triton.autotune(configs=configs, key=[], pre_hook=pre_hook, post_hook=post_hook,
+                     prune_configs_by={"compiled_config_prune": compiled_config_prune}, do_bench=bench)
+    @triton.jit
+    def kernel(src, dst, BLOCK_SIZE: tl.constexpr, FAIL: tl.constexpr):
+        tl.static_assert(not FAIL, "reject this candidate")
+        offsets = tl.arange(0, BLOCK_SIZE)
+        values = tl.load(src + offsets, mask=offsets < 32, other=0)
+        tl.store(dst + offsets, values, mask=offsets < 32)
+
+    kernel[(1, )](src, dst)
+    # The final launch runs its config hook once, without benchmark cleanup.
+    torch.testing.assert_close(dst, torch.full_like(dst, 10))
+    torch.testing.assert_close(src, torch.full_like(src, 10))
+    assert hooks == {"active": 0, "completed": 4 if rejection is None else 3, "failed": int(rejection == "compile")}
+    if rejection is not None:
+        assert kernel.configs_timings[configs[0]] == [float("inf")] * 3
+        assert kernel.best_config == configs[1]
+
+
 def test_compiled_config_prune_all(device):
     N = 1024
     src = torch.randn(N, device=device)
