@@ -886,9 +886,8 @@ def test_gsan_profile_thread_guard(fresh_knobs):
 
 
 def test_profile_arena_uses_base_relative_metadata():
-    from triton.experimental.gsan import _profile_allocator as allocator
-
     from contextlib import ExitStack
+    from triton.experimental.gsan import _profile_allocator as allocator
 
     device = torch.cuda.current_device()
     base = allocator.get_reserve_pointer()

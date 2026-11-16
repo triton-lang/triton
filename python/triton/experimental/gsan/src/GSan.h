@@ -56,7 +56,11 @@ struct alignas(4) PackedClock {
 };
 
 inline GSAN_HOST_DEVICE PackedClock packClock(ScalarClock clock) {
-  return {clock.epoch, clock.threadId, clock.scope};
+  PackedClock packed{};
+  packed.epoch = clock.epoch;
+  packed.threadId = clock.threadId;
+  packed.scope = clock.scope;
+  return packed;
 }
 
 inline GSAN_HOST_DEVICE ScalarClock unpackClock(PackedClock clock,
