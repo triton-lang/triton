@@ -140,8 +140,8 @@ int gsanEnsureInit() {
     return 0;
 
   size_t alignment = 0;
-  CUresult err = getReserveAlignment(getRequestedShareableHandleType(),
-                                     alignment);
+  CUresult err =
+      getReserveAlignment(getRequestedShareableHandleType(), alignment);
   if (err != CUDA_SUCCESS) {
     printCUDAError(err);
     return -1;
@@ -174,13 +174,8 @@ int gsanEnsureInit() {
     root->virtualAddress =
         gsan::getRealBaseAddress(reserveBase, granularity, writeOnce);
 
-    auto shadowSize = gsan::poolDataOffset(i);
-    auto dataSize = gsan::poolOffset(i + 1) - gsan::poolOffset(i) - shadowSize;
-    auto realSize =
-        granularity * (shadowSize / gsan::getShadowCellSize(writeOnce));
-    realSize = roundDownToPowerOfTwo(std::min(dataSize, realSize));
-    root->size = realSize;
-    root->maxFreeBlockSize = realSize;
+    root->size = gsan::poolDataSize(i);
+    root->maxFreeBlockSize = root->size;
   }
   return 0;
 }

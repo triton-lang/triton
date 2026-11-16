@@ -388,7 +388,12 @@ void init_gsan_testing(py::module_ &m) {
   });
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);
-  m.attr("POOL_RESERVE_SIZE_BYTES") = gsan::kPoolReserveSize;
+  m.def("pool_data_bounds", [](int pool) {
+    if (pool < 0 || pool >= gsan::kNumPools)
+      throw py::value_error("invalid pool index");
+    return py::make_tuple(gsan::poolOffset(pool) + gsan::poolShadowSize(pool),
+                          gsan::poolOffset(pool + 1));
+  });
   m.attr("GLOBAL_STATE_SIZE_BYTES") = sizeof(gsan::GlobalState);
   m.attr("THREAD_STATE_HEADER_SIZE_BYTES") = kThreadStateHeaderSize;
   m.attr("PER_DEVICE_STATE_STRIDE_BYTES") = gsan::kPerDeviceStateStride;

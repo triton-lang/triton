@@ -43,14 +43,14 @@ _ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
 @pytest.mark.parametrize("granularity", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("write_once", [False, True])
 def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, write_once):
-    tib = 1 << 40
     pool_index = 2 * (granularity.bit_length() - 1) + write_once
-    shadow_base = reserve_base + (0 if pool_index == 0 else (25 + 8 * (pool_index - 1)) * tib)
-    shadow_size = {0: 24, 4: 7}.get(pool_index, 4) * tib
-    data_base = shadow_base + shadow_size
+    data_sizes = [tib << 40 for tib in (1, 1, 1, 2, 1, 8, 1, 4, 2, 8)]
+    shadow_sizes = [size // (1 << (i // 2)) * (4 if i % 2 else 24) for i, size in enumerate(data_sizes)]
+    shadow_base = reserve_base + sum(data_sizes[:pool_index]) + sum(shadow_sizes[:pool_index])
+    data_base = shadow_base + shadow_sizes[pool_index]
+    capacity = data_sizes[pool_index]
     cell_size = 4 if write_once else 24
-    capacity = min((25 if pool_index == 0 else 8) * tib - shadow_size, shadow_size // cell_size * granularity)
-    capacity = 1 << (capacity.bit_length() - 1)
+    assert gsan_testing.pool_data_bounds(pool_index) == (data_base - reserve_base, data_base + capacity - reserve_base)
     for offset in [0, 1, granularity - 1, granularity, 0x200000, capacity - 1]:
         address = data_base + offset
         assert gsan_testing.is_gsan_managed(address, reserve_base)
@@ -59,7 +59,7 @@ def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, writ
         assert gsan_testing.shadow_cell_size(address, reserve_base) == cell_size
         assert gsan_testing.shadow_cell_address(address,
                                                 reserve_base) == shadow_base + offset // granularity * cell_size
-    for address in [0, reserve_base - 1, shadow_base, data_base - 1, reserve_base + 97 * tib, (1 << 64) - 1]:
+    for address in [0, reserve_base - 1, shadow_base, data_base - 1, data_base + capacity, (1 << 64) - 1]:
         assert not gsan_testing.is_gsan_managed(address, reserve_base)
 
 
@@ -499,8 +499,8 @@ def test_default_topology_uses_cuda_device_indices():
 def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     pool_index = 2 * (1, 2, 4, 8, 16).index(shadow_granularity)
-    pool_start = 0 if pool_index == 0 else 25 + (pool_index - 1) * 8
-    real_base = reserve_ptr + (pool_start + {0: 24, 4: 7}.get(pool_index, 4)) * (1 << 40)
+    real_base = reserve_ptr + gsan_testing.pool_data_bounds(pool_index)[0]
+    assert reserve_size == 97 << 40
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)

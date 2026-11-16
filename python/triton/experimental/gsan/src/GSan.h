@@ -14,17 +14,10 @@ struct LaunchState {
   uint32_t *completionClock;
 };
 
-// Most pools reserve 8 TiB. Byte-granular normal shadow needs 24 bytes
-// per data byte, so give it 24 TiB of shadow and 1 TiB of data.
-static constexpr size_t kPoolReserveSize = 1ull << 43;
 // A normal/write-once pair for each power-of-two granularity from 1 to 16.
 // The low pool-index bit selects the mode; the remaining bits encode log2
 // granularity. Pool offsets are relative to the reservation base.
 static constexpr int kNumPools = 10;
-static constexpr size_t kByteDataSize = 1ull << 40;
-static constexpr size_t kBytePoolSize = 25 * kByteDataSize;
-static constexpr size_t kReserveSize =
-    kBytePoolSize + (kNumPools - 1) * kPoolReserveSize;
 // Default normal granularity. Write-once allocations default to one byte.
 static constexpr int kShadowMemGranularityBytes = 4;
 
@@ -97,6 +90,29 @@ static_assert(alignof(WriteOnceShadowCell) == alignof(PackedClock));
 inline GSAN_HOST_DEVICE constexpr size_t getShadowCellSize(bool writeOnce) {
   return writeOnce ? sizeof(WriteOnceShadowCell) : sizeof(ShadowCell);
 }
+
+// Each power-of-two buddy root gets exactly enough VA for its shadow.
+// Keep at least 1 TiB per pool and the previous 2-4 TiB capacities. Within
+// the 97 TiB budget, the remaining space buys 8 TiB more write-once data.
+inline GSAN_HOST_DEVICE constexpr size_t poolDataSize(int pool) {
+  constexpr int dataTiB[kNumPools] = {1, 1, 1, 2, 1, 8, 1, 4, 2, 8};
+  return static_cast<size_t>(dataTiB[pool]) << 40;
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t poolShadowSize(int pool) {
+  const int granularity = 1 << (pool >> 1);
+  return poolDataSize(pool) / granularity * getShadowCellSize(pool & 1);
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t poolOffset(int pool) {
+  size_t offset = 0;
+  for (int i = 0; i < pool; ++i)
+    offset += poolDataSize(i) + poolShadowSize(i);
+  return offset;
+}
+
+static constexpr size_t kReserveSize = poolOffset(kNumPools);
+static_assert(kReserveSize == (97ull << 40));
 
 struct GlobalState {
   // Base address of gsan managed memory
@@ -230,25 +246,29 @@ inline GSAN_HOST_DEVICE int getPoolIndexForGranularity(int granularity,
   return 2 * log2Granularity + writeOnce;
 }
 
+struct PoolLayout {
+  int index;
+  size_t shadowOffset;
+  size_t dataOffset;
+};
+
+// Specialize the search so the device compares offsets against constants
+// and never sums pool sizes or reads a table when instrumenting an access.
+template <int begin = 0, int end = kNumPools>
+inline GSAN_HOST_DEVICE PoolLayout lookupPool(size_t offset) {
+  if constexpr (end - begin == 1) {
+    constexpr size_t start = poolOffset(begin);
+    return {begin, start, start + poolShadowSize(begin)};
+  } else {
+    constexpr int mid = (begin + end) / 2;
+    return offset < poolOffset(mid) ? lookupPool<begin, mid>(offset)
+                                    : lookupPool<mid, end>(offset);
+  }
+}
+
 inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address,
                                          uintptr_t reserveBase) {
-  auto offset = address - reserveBase;
-  return offset < kBytePoolSize
-             ? 0
-             : 1 + (offset - kBytePoolSize) / kPoolReserveSize;
-}
-
-inline GSAN_HOST_DEVICE constexpr size_t poolOffset(int pool) {
-  return pool == 0 ? 0 : kBytePoolSize + (pool - 1) * kPoolReserveSize;
-}
-
-inline GSAN_HOST_DEVICE constexpr size_t poolDataOffset(int pool) {
-  // Normal four-byte cells can back 1 TiB of data with 6 TiB of shadow.
-  if (pool == 0)
-    return kBytePoolSize - kByteDataSize;
-  if (pool == 4)
-    return kPoolReserveSize - (1ull << 40);
-  return kPoolReserveSize / 2;
+  return lookupPool(address - reserveBase).index;
 }
 
 // Assumes address is in this process's GSan reservation.
@@ -262,7 +282,7 @@ inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(
     uintptr_t reserveBase, int granularity = kShadowMemGranularityBytes,
     bool writeOnce = false) {
   int pool = getPoolIndexForGranularity(granularity, writeOnce);
-  return reserveBase + poolOffset(pool) + poolDataOffset(pool);
+  return reserveBase + poolOffset(pool) + poolShadowSize(pool);
 }
 
 // Assumes address is in this process's GSan reservation.
@@ -279,13 +299,11 @@ inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr,
 // Assumes address is in gsan-managed memory
 inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress,
                                                    uintptr_t reserveBase) {
-  int pool = getPoolIndex(virtualAddress, reserveBase);
-  auto poolBase = reserveBase + poolOffset(pool);
-  auto realBase = poolBase + poolDataOffset(pool);
-  auto byteOffset = virtualAddress - realBase;
-  auto cellOffset =
-      byteOffset / getShadowGranularity(virtualAddress, reserveBase);
-  return poolBase + getShadowCellSize(virtualAddress, reserveBase) * cellOffset;
+  auto offset = virtualAddress - reserveBase;
+  auto pool = lookupPool(offset);
+  auto cellOffset = (offset - pool.dataOffset) >> (pool.index >> 1);
+  return reserveBase + pool.shadowOffset +
+         getShadowCellSize(pool.index & 1) * cellOffset;
 }
 
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
@@ -293,8 +311,7 @@ inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
   auto offset = addr - reserveBase;
   if (offset >= kReserveSize)
     return false;
-  int pool = getPoolIndex(addr, reserveBase);
-  return offset - poolOffset(pool) >= poolDataOffset(pool);
+  return offset >= lookupPool(offset).dataOffset;
 }
 
 enum class AddressCategory { Unmanaged, Normal, WriteOnce };
