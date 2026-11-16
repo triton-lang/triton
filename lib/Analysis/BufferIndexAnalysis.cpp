@@ -6,6 +6,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PointerUnion.h"
 #include <optional>
 
 namespace mlir {
@@ -14,27 +15,26 @@ static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
   return ((offset % modulus) + modulus) % modulus;
 }
 
-/// A buffer index decomposed as `baseValue + constantOffset`, optionally
+/// A buffer index decomposed as `base + constantOffset`, optionally
 /// under a known modulus (recorded when the index is wrapped by remsi or
 /// the pipeliner's select/cmpi idiom). Two expressions rooted at the
 /// same base value with different offsets (modulo the same recorded modulus,
 /// when both carry one) provably target different slots.
 struct BufferIndexExpr {
-  Value baseValue;
+  // A block denotes the number of iterations since entering that loop header.
+  llvm::PointerUnion<Value, Block *> base;
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
   Value indexedSource;
 
   bool operator==(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           constantOffset == other.constantOffset && modulus == other.modulus &&
-           indexedSource == other.indexedSource;
+    return base == other.base && constantOffset == other.constantOffset &&
+           modulus == other.modulus && indexedSource == other.indexedSource;
   }
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           indexedSource == other.indexedSource && modulus == other.modulus &&
-           constantOffset != other.constantOffset;
+    return base == other.base && indexedSource == other.indexedSource &&
+           modulus == other.modulus && constantOffset != other.constantOffset;
   }
 };
 
@@ -196,7 +196,7 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   // general; keep the full select as the expression root.
   if (baseExpr.modulus)
     return std::nullopt;
-  BufferIndexExpr result{baseExpr.baseValue, baseExpr.constantOffset + *c};
+  BufferIndexExpr result{baseExpr.base, baseExpr.constantOffset + *c};
   result.modulus = *mod;
   return result;
 }
@@ -205,7 +205,7 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
 // wider index type if the pipeline counter can reach the integer range.
 BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
-    return BufferIndexExpr{nullptr, *c};
+    return BufferIndexExpr{Value{}, *c};
 
   if (auto addOp = indexValue.getDefiningOp<arith::AddIOp>()) {
     auto composeWithConstant = [&](Value nonConst,
@@ -215,7 +215,7 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
       // full addi as the expression root.
       if (baseExpr.modulus)
         return BufferIndexExpr{indexValue, 0};
-      return {baseExpr.baseValue, baseExpr.constantOffset + constant};
+      return {baseExpr.base, baseExpr.constantOffset + constant};
     };
     if (auto offset = getConstantIntValue(addOp.getRhs()))
       return composeWithConstant(addOp.getLhs(), *offset);
@@ -241,6 +241,45 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   }
 
   return BufferIndexExpr{indexValue, 0};
+}
+
+// A cursor seeded at S and advanced by one on every backedge has value
+// (S + iteration) modulo N. Independent cursors can then share the header as
+// their symbolic base without changing the pipeliner's register live ranges.
+void useLoopIterationBase(BufferIndexExpr &expr, DominanceInfo &dominance) {
+  if (!expr.modulus)
+    return;
+  auto cursor = dyn_cast_or_null<BlockArgument>(llvm::cast<Value>(expr.base));
+  if (!cursor)
+    return;
+  Block *header = cursor.getOwner();
+  std::optional<int64_t> seed;
+  bool advances = false;
+  for (auto pred = header->pred_begin(), end = header->pred_end(); pred != end;
+       ++pred) {
+    auto branch = dyn_cast<BranchOpInterface>((*pred)->getTerminator());
+    if (!branch)
+      return;
+    Value incoming = branch.getSuccessorOperands(
+        pred.getSuccessorIndex())[cursor.getArgNumber()];
+    if (dominance.dominates(header, *pred)) {
+      auto next = analyzeBufferIndex(incoming);
+      if (next.base != expr.base || next.modulus != expr.modulus ||
+          next.constantOffset != 1)
+        return;
+      advances = true;
+    } else {
+      auto initial = getConstantIntValue(incoming);
+      if (!initial || *initial < -1 || *initial >= *expr.modulus ||
+          (seed && *seed != *initial))
+        return;
+      seed = initial;
+    }
+  }
+  if (seed && advances) {
+    expr.base = header;
+    expr.constantOffset += *seed;
+  }
 }
 
 triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
@@ -312,6 +351,7 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
   if (!index)
     return;
   auto expr = analyzeBufferIndex(index.getIndex());
+  useLoopIterationBase(expr, dominanceInfo);
   expr.indexedSource = index.getSrc();
   slice.bufferIndexExpr = intern(std::move(expr));
 }

@@ -2100,6 +2100,92 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
 
+// The two cursors advance together. The next trip overwrites the previous
+// read, but the load and store in a single trip always use different slots.
+// CHECK-LABEL: @lockstep_cursors
+tt.func @lockstep_cursors(%input: tensor<128xi32, #writer>, %ub: i32) {
+  %minus_one = arith.constant -1 : i32
+  %zero = arith.constant 0 : i32
+  %one = arith.constant 1 : i32
+  %three = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<3x128xi32, #shared, #smem, mutable>
+  scf.for %i = %zero to %ub step %one iter_args(%r = %minus_one, %w = %one) -> (i32, i32) : i32 {
+    %rr = arith.addi %r, %one : i32
+    %wr = arith.addi %w, %one : i32
+    %r_wrap = arith.cmpi sge, %rr, %three : i32
+    %w_in_range = arith.cmpi slt, %wr, %three : i32
+    %read = arith.select %r_wrap, %zero, %rr : i32
+    %write = arith.select %w_in_range, %wr, %zero : i32
+    %src = ttg.memdesc_index %ring[%read] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %dst = ttg.memdesc_index %ring[%write] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.local_store
+    %v = ttg.local_load %src : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+    ttg.local_store %input, %dst : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    scf.yield %read, %write : i32, i32
+  }
+  tt.return
+}
+
+// In a four-slot ring, the cursor starting two slots ahead is disjoint. The
+// second writer starts a full turn ahead (-1 vs. 3) and aliases the reader.
+// CHECK-LABEL: @lockstep_same_slot
+tt.func @lockstep_same_slot(%input: tensor<128xi32, #writer>, %ub: i32) {
+  %minus_one = arith.constant -1 : i32
+  %zero = arith.constant 0 : i32
+  %one = arith.constant 1 : i32
+  %three = arith.constant 3 : i32
+  %four = arith.constant 4 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<4x128xi32, #shared, #smem, mutable>
+  scf.for %i = %zero to %ub step %one iter_args(%r = %minus_one, %w = %one, %alias = %three) -> (i32, i32, i32) : i32 {
+    %rr = arith.addi %r, %one : i32
+    %wr = arith.addi %w, %one : i32
+    %ar = arith.addi %alias, %one : i32
+    %read = arith.remsi %rr, %four : i32
+    %write = arith.remsi %wr, %four : i32
+    %same = arith.remsi %ar, %four : i32
+    %src = ttg.memdesc_index %ring[%read] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %dst = ttg.memdesc_index %ring[%write] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %overlap = ttg.memdesc_index %ring[%same] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.local_store
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    %v = ttg.local_load %src : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+    ttg.local_store %input, %dst : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    ttg.local_store %input, %overlap : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    scf.yield %read, %write, %same : i32, i32, i32
+  }
+  tt.return
+}
+
+// Holding the write cursor for one trip can make it coincide with the reader.
+// CHECK-LABEL: @independent_cursor_advance
+tt.func @independent_cursor_advance(%input: tensor<128xi32, #writer>, %ub: i32, %hold_at: i32) {
+  %zero = arith.constant 0 : i32
+  %one = arith.constant 1 : i32
+  %two = arith.constant 2 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+  scf.for %i = %zero to %ub step %one iter_args(%r = %zero, %w = %one) -> (i32, i32) : i32 {
+    %rr = arith.addi %r, %one : i32
+    %wr = arith.addi %w, %one : i32
+    %read = arith.remsi %rr, %two : i32
+    %write = arith.remsi %wr, %two : i32
+    %src = ttg.memdesc_index %ring[%read] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %dst = ttg.memdesc_index %ring[%write] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_store
+    %v = ttg.local_load %src : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+    ttg.local_store %input, %dst : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %hold = arith.cmpi eq, %i, %hold_at : i32
+    %next_write = arith.select %hold, %w, %write : i32
+    scf.yield %read, %next_write : i32, i32
+  }
+  tt.return
+}
+
 // Argument descriptors have no allocation IDs. Different slots are disjoint
 // only when their indexed source is the same.
 // CHECK-LABEL: @shared_argument_buffer_indices
