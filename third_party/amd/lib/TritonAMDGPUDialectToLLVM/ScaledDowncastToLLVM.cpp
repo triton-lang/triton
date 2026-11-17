@@ -338,6 +338,96 @@ struct ScaledDowncastFp8OpPattern
   const AMD::TargetInfo &targetInfo;
 };
 
+struct ScaledDowncastFp6OpPattern
+    : ConvertOpToLLVMPattern<amdgpu::ScaledDowncastFp6Op> {
+  ScaledDowncastFp6OpPattern(const LLVMTypeConverter &converter,
+                             const AMD::TargetInfo &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(amdgpu::ScaledDowncastFp6Op downcastOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo.getISAFamily() != amdgpu::ISAFamily::CDNA4)
+      return downcastOp.emitError("scaled FP6 downcast requires CDNA4");
+
+    // Each conversion reads 32 values that must be register-consecutive and
+    // consecutive along the scaled axis.
+    MLIRContext *ctx = downcastOp.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto outputTy = downcastOp.getOutput().getType();
+    LinearLayout outputLL = triton::gpu::toLinearLayout(outputTy);
+    int64_t axis = downcastOp.getAxis();
+    const auto &regBases = outputLL.getBases().lookup(kReg);
+    for (int i = 0; i < 5; ++i) {
+      SmallVector<int32_t> expected(outputTy.getRank(), 0);
+      expected[axis] = 1 << i;
+      if (i >= static_cast<int>(regBases.size()) ||
+          ArrayRef(regBases[i]) != ArrayRef(expected))
+        return downcastOp.emitError(
+            "scaled FP6 downcast requires each thread to hold 32 consecutive "
+            "values along the scaled axis in consecutive registers");
+    }
+
+    auto loc = downcastOp.getLoc();
+    auto inputVals =
+        unpackUniqueTensorElements(loc, adaptor.getInput(), rewriter);
+    auto scaleVals =
+        unpackUniqueTensorElements(loc, adaptor.getScale(), rewriter);
+    int64_t numValues = inputVals.size();
+    auto scaleRegisters = computeScaleRegisters(downcastOp, numValues);
+    bool isE2M3 = downcastOp.getFormat() == ScaleDotElemType::E2M3;
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type v16f32 = vec_ty(f32_ty, 16);
+    Type v6i32 = vec_ty(i32_ty, 6);
+    SmallVector<Value> results;
+    results.reserve(numValues);
+    for (int64_t i = 0; i < numValues; i += 32) {
+      if (failed(verifyGroupUsesSingleScale(
+              rewriter, downcastOp, scaleRegisters, i, 32,
+              "each 2xpk16 conversion group must share one scale")))
+        return failure();
+      // The instruction places lo[j] in code slot 2j and hi[j] in slot 2j+1.
+      Value lo = b.undef(v16f32), hi = b.undef(v16f32);
+      for (int j = 0; j < 16; ++j) {
+        auto toF32 = [&](Value v) -> Value {
+          return isa<Float32Type>(v.getType()) ? v : b.fpext(f32_ty, v);
+        };
+        lo = b.insert_element(lo, toF32(inputVals[i + 2 * j]), b.i32_val(j));
+        hi = b.insert_element(hi, toF32(inputVals[i + 2 * j + 1]),
+                              b.i32_val(j));
+      }
+      Value scaleF32 = scaleToF32(b, scaleVals[scaleRegisters[i]]);
+      Value packed =
+          isE2M3 ? ROCDL::CvtScaleF322xPk16Fp6F32Op::create(rewriter, loc,
+                                                            v6i32, lo, hi,
+                                                            scaleF32)
+                       .getResult()
+                 : ROCDL::CvtScaleF322xPk16Bf6F32Op::create(rewriter, loc,
+                                                            v6i32, lo, hi,
+                                                            scaleF32)
+                       .getResult();
+      // Two 16-byte groups: 12 bytes of codes followed by 4 zero bytes.
+      for (int group = 0; group < 2; ++group) {
+        for (int w = 0; w < 3; ++w)
+          appendBytesFromWord(
+              b, b.extract_element(packed, b.i32_val(3 * group + w)), 4,
+              results);
+        for (int pad = 0; pad < 4; ++pad)
+          results.push_back(b.int_val(8, 0));
+      }
+    }
+
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), results,
+                                            rewriter, downcastOp.getType());
+    rewriter.replaceOp(downcastOp, result);
+    return success();
+  }
+
+  const AMD::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateScaledDowncastOpToLLVMPatterns(
@@ -345,4 +435,5 @@ void mlir::triton::AMD::populateScaledDowncastOpToLLVMPatterns(
     const AMD::TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<ScaledDowncastFp4OpPattern>(typeConverter, targetInfo, benefit);
   patterns.add<ScaledDowncastFp8OpPattern>(typeConverter, targetInfo, benefit);
+  patterns.add<ScaledDowncastFp6OpPattern>(typeConverter, targetInfo, benefit);
 }

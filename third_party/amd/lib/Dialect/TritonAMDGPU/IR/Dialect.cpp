@@ -774,6 +774,11 @@ std::optional<LinearLayout> ScaledDowncastFp8Op::computeScaleLayout(
   return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
 }
 
+std::optional<LinearLayout> ScaledDowncastFp6Op::computeScaleLayout(
+    const LinearLayout &outputLayout, int64_t axis, int64_t elementsPerScale) {
+  return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
+}
+
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
   auto srcTypeVal = getSource().getType();
@@ -1206,6 +1211,44 @@ LogicalResult ScaledDowncastFp8Op::verify() {
       *this, /*groupSize=*/8,
       /*groupDescription=*/"8 elements",
       /*blockDescription=*/"a multiple of 8 elements");
+}
+
+LogicalResult ScaledDowncastFp6Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  if (getFormat() != ScaleDotElemType::E2M3 &&
+      getFormat() != ScaleDotElemType::E3M2)
+    return emitError() << "format must be e2m3 or e3m2";
+  if (inputTy.getShape() != outputTy.getShape())
+    return emitError() << "input and output must have the same shape";
+  if (inputTy.getEncoding() != outputTy.getEncoding())
+    return emitError() << "input and output must have the same encoding";
+  if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
+    return failure();
+  return verifyScaledDowncastScaleLayout(
+      *this, /*groupSize=*/32,
+      /*groupDescription=*/"32 elements",
+      /*blockDescription=*/"a multiple of 32 elements");
+}
+
+Attribute ScaledDowncastFp6Op::inferDstEncoding(unsigned opIdx,
+                                                Attribute srcEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, srcEnc))
+      return *scaleEnc;
+    return {};
+  }
+  return srcEnc;
+}
+
+Attribute ScaledDowncastFp6Op::inferSrcEncoding(unsigned opIdx,
+                                                Attribute dstEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, dstEnc))
+      return *scaleEnc;
+  }
+  return dstEnc;
 }
 
 Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,

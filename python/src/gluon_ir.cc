@@ -1395,6 +1395,12 @@ void init_gluon_ir(py::module_ &m) {
               int axis) -> Value {
              return self.create<ttag::ScaledDowncastFp4Op>(input, scale, axis);
            })
+      .def("create_scaled_downcast_fp6",
+           [](GluonOpBuilder &self, Value input, Value scale, int axis,
+              tt::ScaleDotElemType format) -> Value {
+             return self.create<ttag::ScaledDowncastFp6Op>(input, scale, axis,
+                                                           format);
+           })
       .def("create_scaled_downcast_fp8",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
               int axis) -> Value {

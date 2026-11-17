@@ -926,6 +926,61 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
 }
 
 //===----------------------------------------------------------------------===//
+// ScaledDowncastFp6Op
+//===----------------------------------------------------------------------===//
+
+def ScaledDowncastFp6Op : TT_AMDGPU_Op<"scaled_downcast_fp6", [
+    Pure,
+    DeclareOpInterfaceMethods<CastFpOpInterface>]> {
+  let summary = "Scale and downcast floating-point values to packed FP6";
+
+  let description = [{
+    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to FP6
+    (`format` is e2m3 or e3m2), rounding to nearest even and saturating to the
+    largest finite magnitude. The i8 result has the shape and encoding of the
+    input and holds packed FP6 along `axis`: each group of 16 bytes holds 16
+    codes in 12 bytes, least significant bits first, followed by 4 zero
+    bytes. This is the form of FP6 `tt.dot_scaled` operands.
+
+    The scale must be compact along `axis`, and each scale block must cover a
+    multiple of 32 values. Each thread must hold runs of 32 consecutive values
+    along `axis`, starting at multiples of 32, in consecutive registers.
+
+    This is hardware accelerated with `v_cvt_scalef32_2xpk16_{fp6,bf6}_f32` on
+    CDNA4.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[F16, BF16, F32]>:$input,
+    RankedTensorOf<[I8, F8E8M0FNU]>:$scale,
+    I32Attr:$axis,
+    TT_ScaleDotElemTypeAttr:$format);
+  let results = (outs RankedTensorOf<[I8]>:$output);
+
+  let builders = [
+      OpBuilder<(ins "Value":$input, "Value":$scale, "int32_t":$axis,
+                     "::mlir::triton::ScaleDotElemType":$format), [{
+        auto inputTy = cast<RankedTensorType>(input.getType());
+        build($_builder, $_state, inputTy.clone($_builder.getI8Type()), input,
+              scale, axis, format);
+      }]>
+  ];
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t elementsPerScale);
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
 

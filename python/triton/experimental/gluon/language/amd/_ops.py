@@ -336,6 +336,12 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       packed into one output byte (even element -> low nibble, next element ->
       high nibble), so the result extent along ``axis`` is halved (the inverse
       of ``scaled_upcast``).
+    * ``"e2m3"`` / ``"e3m2"`` (packed fp6, CDNA4): the ``uint8`` output keeps
+      the shape and layout of ``input``; each group of 16 bytes along ``axis``
+      holds 16 codes packed into 12 bytes followed by 4 zero bytes, the operand
+      form of FP6 ``mfma_scaled`` operands. Each
+      thread must hold runs of 32 consecutive values along ``axis``, and each
+      scale block must span a multiple of 32 values.
 
     ``axis`` (default: last dim) selects the dimension along which scales are
     shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per
@@ -343,5 +349,15 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     span a multiple of 8 consecutive input elements.
     """
     axis = _unwrap_if_constexpr(axis)
+    format = _unwrap_if_constexpr(format)
+    if format in ("e2m3", "e3m2"):
+        rank = _validate_scaled_downcast_common(input, scale)
+        axis = _normalize_axis(axis, rank, "axis is required for fp6 scaled_downcast")
+        _check_scaled_downcast_scale_shape(
+            input.type.shape, scale.type.shape, axis, input.type.shape[axis],
+            "Expected scale shape for fp6 scaled_downcast to match the input shape on non-axis dimensions")
+        handle = _semantic.builder.create_scaled_downcast_fp6(input.handle, scale.handle, axis,
+                                                              _semantic._str_to_fp_type(format))
+        return ttgl.tensor(handle, input.type.with_element_ty(ttgl.uint8))
     elem_type = _downcast_format_to_elem_type(format)
     return _scaled_downcast(input, scale, elem_type, axis, _semantic)
