@@ -345,6 +345,34 @@ bool ttng::requiresAccMultiBuffering(ttng::MMAv5OpInterface mma,
   return false;
 }
 
+bool ttng::hasUnalignedNestedAccLoads(ttng::MMAv5OpInterface mma,
+                                      scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc))
+    return false;
+  // Every MMA starts a new accumulation.
+  Value useAcc = mma.useAccumulator();
+  if (matchPattern(useAcc, m_Zero()))
+    return false;
+  // The next iteration's use flag, when it is a loop-carried value.
+  Value nextUseAcc;
+  if (auto arg = dyn_cast<BlockArgument>(useAcc);
+      arg && arg.getOwner() == forOp.getBody() && arg.getArgNumber() > 0)
+    nextUseAcc = forOp.getYieldedValues()[arg.getArgNumber() - 1];
+  return llvm::any_of(tmemAlloc->getUsers(), [&](Operation *user) {
+    if (!isa<ttng::TMEMLoadOp>(user) || user->getBlock() == forOp.getBody() ||
+        !forOp->isProperAncestor(user))
+      return false;
+    // A nested read is aligned when the next MMA starts a new accumulation
+    // on the path through the read.
+    if (!nextUseAcc)
+      return true;
+    std::optional<bool> nextUseAccOnRead =
+        inferNextAccOnRead(nextUseAcc, user, forOp);
+    return !nextUseAccOnRead.has_value() || *nextUseAccOnRead;
+  });
+}
+
 bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {

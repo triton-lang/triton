@@ -48,6 +48,13 @@ public:
     Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
                           op.getPredicate());
+    // A two-CTA completion arrives on both CTAs' barrier copies, but each
+    // wait only proves its own copy completed. Hold the pair together until
+    // both observed it, or the leader can reuse the barrier (the next
+    // iteration's MMA once the barrier lifecycle is hoisted out of the loop)
+    // and flip the lagging peer's copy back to the phase it waits on.
+    if (op.getTwoCtas())
+      ClusterBarrierOp::create(rewriter, loc);
     InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
