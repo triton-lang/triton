@@ -161,9 +161,7 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
     if (isConstantZeroTensor(forOp.getInitArgs()[iterArgIdx])) {
       loopArgIsZero = true;
     }
-    // Deferring a reset to the next MMA does not preserve the final iteration's
-    // reset when the accumulator is observed after the loop. Keep the reset,
-    // but still allow optimizing the loop's initial zero accumulator.
+    // The accumulator is observed after the loop
     if (!forOp.getResult(iterArgIdx).use_empty())
       return std::nullopt;
     v = forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
