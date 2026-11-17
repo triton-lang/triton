@@ -4,6 +4,7 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
   Membar.cpp
+  Membar/AsyncFenceModel.cpp
   Membar/CFGBuilder.cpp
   Membar/Solver.cpp
   Membar/Dependencies.cpp

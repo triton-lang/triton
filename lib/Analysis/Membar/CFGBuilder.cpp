@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar/CFGBuilder.h"
+#include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "triton/Analysis/Membar/TmemModel.h"
 
 #include "mlir/Analysis/CFGLoopInfo.h"
@@ -218,3 +219,4 @@ auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
 }
 
 template class mlir::triton::membar::MembarCFGBuilder<MembarModel>;
+template class mlir::triton::membar::MembarCFGBuilder<AsyncFenceModel>;

@@ -5,9 +5,12 @@
 
 namespace mlir::triton::membar {
 
-// Loop-carried shared hazards and ordered TMEM handoffs each need one extra
-// state. The latter always ends with a region barrier.
-enum class Path { Any, LoopCarried, WaitThenOrder };
+enum class Path {
+  Any,
+  LoopCarried,
+  WaitThenOrder,    // Complete a TMEM access before a region barrier.
+  ClusterThenProxy, // A cluster acquire lets the owner use a CTA proxy fence.
+};
 
 struct Demand {
   unsigned source, sink;

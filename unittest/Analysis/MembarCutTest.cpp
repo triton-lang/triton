@@ -173,23 +173,23 @@ TEST(MembarCut, WeightedSharedSite) {
 
 // Give each original node a separate predecessor for its insertion gap. This
 // preserves the order of gap actions relative to the node's fixed.before.
-void checkPlacements(
-    const MembarCFG<OpModel> &cfg, Demand demand,
-    llvm::function_ref<bool(const llvm::BitVector &)> covered) {
+void checkPlacements(const MembarCFG<OpModel> &cfg, Demand demand,
+                     llvm::function_ref<bool(const llvm::BitVector &)> covered,
+                     llvm::ArrayRef<Action> offered = ACTIONS) {
   unsigned points = cfg.nodes.size();
-  llvm::BitVector legal(points * ACTIONS.size());
+  llvm::BitVector legal(points * offered.size());
   auto fixed = cfg;
   addPoints(fixed, points);
   for (unsigned i = 0; i < points; ++i) {
     if (cfg.nodes[i].insertionCost)
-      legal.set(i * ACTIONS.size(), (i + 1) * ACTIONS.size());
+      legal.set(i * offered.size(), (i + 1) * offered.size());
     fixed.nodes[i].insertionCost = 0;
     for (auto &edge : fixed.nodes[i].next)
       edge.to += points;
     fixed.nodes[points + i].next.push_back({i});
   }
 
-  auto solution = solveMembarCut(cfg, {demand});
+  auto solution = solveMembarCut(cfg, {demand}, offered);
   ASSERT_EQ(solution.has_value(), covered(legal));
   if (solution) {
     EXPECT_TRUE(covered(solution->sites));
@@ -210,13 +210,13 @@ void checkPlacements(
       if (!(mask & (1u << i)))
         continue;
       sites.set(id);
-      unsigned point = id / ACTIONS.size();
+      unsigned point = id / offered.size();
       cost += cfg.nodes[point].insertionCost;
       fixed.nodes[points + point].fixed.after |=
-          coverage(ACTIONS[id % ACTIONS.size()]);
+          coverage(offered[id % offered.size()]);
     }
     bool feasible = covered(sites);
-    EXPECT_EQ(solveMembarCut(fixed, {demand}).has_value(), feasible);
+    EXPECT_EQ(solveMembarCut(fixed, {demand}, offered).has_value(), feasible);
     if (feasible)
       optimum = std::min(optimum, cost);
   }
@@ -257,6 +257,45 @@ TEST(MembarCut, OrderedWaitAndBarrier) {
   checkPlacements(cfg, demand, [](const llvm::BitVector &s) {
     return s[waitM] || s[barrierU];
   });
+}
+
+TEST(MembarCut, CTAFenceAfterClusterAcquire) {
+  // Peer store -> CTA fence -> cluster rendezvous -> local TMA reader.
+  // A gap at the rendezvous is still on the writer's side.
+  auto cfg = linearCFG({0, 1, 1, 1});
+  const Action fences[] = {Action::ProxyCluster, Action::ProxyCTA};
+  Demand demand{0, 3, Need::ProxyCTA, Path::ClusterThenProxy};
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCTA);
+
+  // A relaxed cluster barrier leaves the remote store in the cluster window.
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) { return s[2] || s[4] || s[6]; }, fences);
+
+  cfg.nodes[2].fixed.after = bit(Need::ClusterAcquire);
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) {
+        return s[2] || s[4] || s[6] || s[7]; // Cluster at 1/2/3 or CTA at 3.
+      },
+      fences);
+
+  auto alreadyCovered = [](const llvm::BitVector &) { return true; };
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCluster);
+  checkPlacements(cfg, demand, alreadyCovered, fences);
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCTA);
+  cfg.nodes[3].fixed.before = coverage(Action::ProxyCTA);
+  checkPlacements(cfg, demand, alreadyCovered, fences);
+
+  // On the path bypassing the acquire, the fixed CTA fence at the join still
+  // excludes the producer's remote write.
+  cfg.nodes[1].next.push_back({3});
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) {
+        return s[2] || s[6]; // Cluster at the fork or the join.
+      },
+      fences);
 }
 
 TEST(MembarCut, WorkerFencesFollowTheirIssuerThroughTheJoin) {

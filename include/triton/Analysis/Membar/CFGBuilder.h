@@ -5,21 +5,31 @@
 #include "triton/Analysis/Membar/TmemModel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <map>
 #include <optional>
 #include <utility>
 
 namespace mlir::triton::membar {
 
-enum class Action { WaitLoad, WaitStore, RegionBarrier, WarpBarrier };
+enum class Action {
+  WaitLoad,
+  WaitStore,
+  RegionBarrier,
+  WarpBarrier,
+  ProxyCluster,
+  ProxyCTA
+};
 
-constexpr unsigned bit(Action action) { return 1u << unsigned(action); }
 enum class Need {
-  WaitLoad = unsigned(Action::WaitLoad),
-  WaitStore = unsigned(Action::WaitStore),
-  RegionOrder = unsigned(Action::RegionBarrier),
-  WarpOrder = unsigned(Action::WarpBarrier),
-  WarpConvergence
+  WaitLoad,
+  WaitStore,
+  RegionOrder,
+  WarpOrder,
+  WarpConvergence,
+  ProxyCTA,
+  ProxyCluster,
+  ClusterAcquire
 };
 
 constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
@@ -28,11 +38,21 @@ constexpr unsigned warpBarrier =
 constexpr unsigned fullBarrier = bit(Need::RegionOrder) | warpBarrier;
 
 constexpr unsigned coverage(Action action) {
-  if (action == Action::RegionBarrier)
+  switch (action) {
+  case Action::WaitLoad:
+    return bit(Need::WaitLoad) | bit(Need::WarpConvergence);
+  case Action::WaitStore:
+    return bit(Need::WaitStore) | bit(Need::WarpConvergence);
+  case Action::RegionBarrier:
     return fullBarrier;
-  if (action == Action::WarpBarrier)
+  case Action::WarpBarrier:
     return warpBarrier;
-  return bit(action) | bit(Need::WarpConvergence);
+  case Action::ProxyCluster:
+    return bit(Need::ProxyCluster) | bit(Need::ProxyCTA);
+  case Action::ProxyCTA:
+    return bit(Need::ProxyCTA);
+  }
+  llvm_unreachable("unknown synchronization action");
 }
 
 enum class Boundary {
