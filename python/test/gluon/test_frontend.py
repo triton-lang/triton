@@ -46,6 +46,24 @@ def test_chained_comparison_range():
 
 @filecheck_test
 @gluon.jit
+def test_gdc_arch_exports():
+    # CHECK-LABEL: test_gdc_arch_exports
+    # CHECK: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    hopper.gdc.wait()
+    hopper.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    blackwell.gdc.wait()
+    blackwell.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    rubin.gdc.wait()
+    rubin.gdc.launch_dependents()
+
+
+@filecheck_test
+@gluon.jit
 def test_atomic_poll_tensor():
     # CHECK-LABEL: test_atomic_poll_tensor
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
