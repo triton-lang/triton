@@ -161,9 +161,6 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
     if (isConstantZeroTensor(forOp.getInitArgs()[iterArgIdx])) {
       loopArgIsZero = true;
     }
-    // The accumulator is observed after the loop
-    if (!forOp.getResult(iterArgIdx).use_empty())
-      return std::nullopt;
     v = forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
   }
 
@@ -250,6 +247,13 @@ public:
       bool loopArgIsZero = false;
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
+
+      auto accArg = dyn_cast<BlockArgument>(accUse);
+      if (zeroInitOp && accArg &&
+          !forOp.getResult(accArg.getArgNumber() - 1).use_empty()) {
+        // The accumulator is observed after the loop
+        zeroInitOp = std::nullopt;
+      }
 
       if (!zeroInitOp && !loopArgIsZero) {
         continue;
