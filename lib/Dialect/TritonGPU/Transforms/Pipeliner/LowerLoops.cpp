@@ -734,8 +734,8 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
-                             Value alloc, int phaseArgIdx,
-                             int barrierIdxArgIdx, bool multibufferAccumulator) {
+                             Value alloc, int phaseArgIdx, int barrierIdxArgIdx,
+                             bool multibufferAccumulator) {
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
