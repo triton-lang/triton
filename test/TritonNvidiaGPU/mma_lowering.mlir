@@ -180,3 +180,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#sharedT = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @early_a_release_keeps_completion_order
+  tt.func @early_a_release_keeps_completion_order(
+      %a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #sharedT, #ttg.shared_memory>,
+      %d: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %early: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>,
+      %full: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>) {
+    %true = arith.constant true
+    // CHECK: ttng.tc_gen5_mma {{.*}} {is_async}
+    // CHECK-NEXT: ttng.tc_gen5_commit %{{[^ ]+}} {early_a_release}
+    // CHECK-NEXT: ttng.tc_gen5_commit
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true {is_async} : !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #sharedT, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %early {early_a_release} : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_commit %full : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}

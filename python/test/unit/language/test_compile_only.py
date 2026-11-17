@@ -116,8 +116,6 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
     shared = compiled.metadata.shared
     assert (shared > 0) == transpose
     assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
-    # LDS is allocated statically, so none is requested at launch.
-    assert compiled.packed_metadata[2] == 0
 
 
 # A 128x128 fp32 transpose uses 64 KiB of static LDS. With 8 waves per

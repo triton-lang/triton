@@ -243,10 +243,6 @@ private:
     OpBuilder b(mod.getBodyRegion());
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    // Size global_smem statically so that the LLVM AMDGPU backend sees the
-    // kernel's LDS usage when it computes occupancy and honors
-    // amdgpu-waves-per-eu.
-    //
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto sharedSize = mod->getAttrOfType<IntegerAttr>("ttg.shared");

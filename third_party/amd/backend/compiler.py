@@ -511,7 +511,7 @@ class HIPBackend(BaseBackend):
         return (
             metadata.num_warps,
             metadata.num_ctas,
-            0,
+            metadata.shared,
         )
 
     @staticmethod
@@ -930,11 +930,6 @@ class HIPBackend(BaseBackend):
                 dump_ir=dump_llvm_ir,
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
-        # LDS is allocated statically, so the kernel descriptor holds the final
-        # LDS size, including anything LLVM added on top of Triton's allocation.
-        shared = re.search(r"^\s*\.amdhsa_group_segment_fixed_size\s+(\d+)\s*$", amdgcn, re.MULTILINE)
-        if shared is not None:
-            metadata["shared"] = int(shared.group(1))
         # The waves per EU LLVM achieved given the kernel's LDS, register usage
         # and workgroup size. waves_per_eu is only a hint that LLVM drops (with a
         # warning) when it cannot be met; the autotuner uses this to skip such

@@ -1761,6 +1761,37 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
+// CHECK-LABEL: masked_buffer_indices
+tt.func @masked_buffer_indices(%value: tensor<128x128xf16>, %cursor: i32) {
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable>
+  %next = arith.addi %cursor, %c1 : i32
+
+  %a = arith.andi %cursor, %c3 : i32
+  %b = arith.andi %c3, %next : i32
+  %dst = ttg.memdesc_index %ring[%a] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src = ttg.memdesc_index %ring[%b] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %value, %dst : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %read = ttg.local_load %src : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+
+  // Masking out bit zero lets cursor 0 and its successor both select slot 0.
+  %c = arith.andi %cursor, %c2 : i32
+  %d = arith.andi %next, %c2 : i32
+  %dst2 = ttg.memdesc_index %ring[%c] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src2 = ttg.memdesc_index %ring[%d] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %read, %dst2 : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %read2 = ttg.local_load %src2 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
 // CHECK-LABEL: must_barrier_irreducible_cfg
 // The first cycle is a natural loop: natural_header dominates natural_latch,
 // so its retreating edge is accepted. The later cycle bb1 -> bb2 -> bb1 has two

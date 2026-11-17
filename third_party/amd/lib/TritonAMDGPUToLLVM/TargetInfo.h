@@ -64,6 +64,8 @@ public:
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
+  void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                  MemSyncScope scope) const override;
   void clusterBarrier(Location loc, RewriterBase &rewriter,
                       Operation *sourceOp) const override;
 

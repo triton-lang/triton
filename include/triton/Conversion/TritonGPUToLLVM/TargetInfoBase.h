@@ -49,6 +49,13 @@ public:
   virtual void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
                             Value value, Value pred,
                             MemSyncScope scope) const = 0;
+  // Release in every thread/warp before the CTA or cluster barrier that
+  // precedes a release atomic at `scope`; the atomic itself may run in a single
+  // thread after that barrier. Targets whose release by one thread does not
+  // cover global writes made earlier by other warps must release this thread's
+  // writes at `scope` here.
+  virtual void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                          MemSyncScope scope) const {}
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space

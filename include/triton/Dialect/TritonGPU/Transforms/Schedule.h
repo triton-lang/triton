@@ -15,8 +15,17 @@ namespace triton {
 
 namespace gpu {
 
+/// Before expansion, insertArg and insertArg + 1 carry the insert and extract
+/// cursors. refillOffset counts slots from the incoming extract cursor.
+struct LoadRing {
+  int insertArg;
+  int numBuffers;
+  int refillOffset;
+};
+using LoadRings = DenseMap<scf::ForOp, SmallVector<LoadRing>>;
+
 /// Lower the loops to prepare them for pipeline expansion.
-void lowerLoops(ModuleOp moduleOp);
+LoadRings lowerLoops(ModuleOp moduleOp);
 
 bool hasGpuBarriers(scf::ForOp forOp);
 bool isSafeToPipeline(scf::ForOp forOp);

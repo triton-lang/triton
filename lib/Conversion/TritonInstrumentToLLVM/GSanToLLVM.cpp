@@ -635,7 +635,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -718,7 +718,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -849,7 +849,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -932,7 +932,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();

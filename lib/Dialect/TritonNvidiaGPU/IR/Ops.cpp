@@ -35,6 +35,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -1406,6 +1407,10 @@ LogicalResult TCGen5CommitOp::canonicalize(TCGen5CommitOp op,
 LogicalResult TCGen5CommitOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
+  auto module = (*this)->getParentOfType<ModuleOp>();
+  if (getEarlyARelease() && module->hasAttr(gpu::AttrTargetName) &&
+      !TargetFeatures::fromModuleOp(module).supportsEarlyARelease())
+    return emitOpError("Early A release requires Rubin");
   auto numDescs = getDescs().size();
   if (numDescs > 4)
     return emitOpError("expected 0 to 4 descriptors, got ") << numDescs;

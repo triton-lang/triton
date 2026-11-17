@@ -22,12 +22,6 @@ class Language(Enum):
 
 class BaseBackend(metaclass=ABCMeta):
     supports_native_tensor_specialization = True
-    # Optional `(metadata) -> bool` callable. When set, the autotuner compiles
-    # each candidate config before benchmarking it and skips the ones for which
-    # it returns False, e.g. because the compiler could not honor an
-    # optimization hint. It only affects autotuning: kernels are never rejected
-    # at compile or launch time because of it.
-    autotune_config_filter = None
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
