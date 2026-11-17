@@ -214,7 +214,7 @@ bool usesTensorMemory(ModuleOp module) {
       .wasInterrupted();
 }
 
-void TMemModel::describe(Operation *op, OpModel &model,
+void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
                          ArrayRef<MemoryAccess> accesses) {
   // A verified scalar callback cannot access or publish TMEM.
   if (isa<MapElementwiseOp>(op))
@@ -222,7 +222,7 @@ void TMemModel::describe(Operation *op, OpModel &model,
   if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
     Action kind = wait.getKind() == TMEMWaitKind::LOAD ? Action::WaitLoad
                                                        : Action::WaitStore;
-    model.fixedAfter |= coverage(kind);
+    fixed.after |= coverage(kind);
     return;
   }
   // Footprints preserve TMEM rows and columns. Unknown footprints alias all

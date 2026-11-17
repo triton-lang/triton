@@ -12,10 +12,11 @@ constexpr unsigned unseen = std::numeric_limits<unsigned>::max();
 
 auto origin(const Demand &d) { return std::tie(d.first, d.path, d.source); }
 
-class CutSolver {
+template <typename Facts> class CutSolver {
 public:
-  CutSolver(const MembarCFG &cfg, ArrayRef<Demand> unsorted)
-      : cfg(cfg), demands(unsorted) {
+  CutSolver(const MembarCFG<Facts> &cfg, ArrayRef<Demand> unsorted,
+            ArrayRef<Action> actions)
+      : cfg(cfg), demands(unsorted), actions(actions) {
     llvm::sort(demands, [](const Demand &a, const Demand &b) {
       return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
     });
@@ -27,17 +28,20 @@ private:
   std::optional<SiteList> shortestCut(const llvm::BitVector &selected,
                                       size_t &first) const;
 
-  const MembarCFG &cfg;
+  const MembarCFG<Facts> &cfg;
   SmallVector<Demand> demands;
+  ArrayRef<Action> actions;
 };
 
 // Keep the first uncovered path with the fewest distinct legal sites. A
 // covered prefix stays covered while the placement grows.
-std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
-                                               size_t &first) const {
+template <typename Facts>
+std::optional<SiteList>
+CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
+                              size_t &first) const {
   SmallVector<unsigned> credits(cfg.nodes.size(), 0), parent, queue;
   for (unsigned id : selected.set_bits())
-    credits[id / ACTIONS.size()] |= coverage(ACTIONS[id % ACTIONS.size()]);
+    credits[id / actions.size()] |= coverage(actions[id % actions.size()]);
   llvm::SparseSet<unsigned> labels;
   labels.setUniverse(selected.size());
   std::optional<SiteList> best;
@@ -70,16 +74,16 @@ std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
       if (next == queue.size())
         break;
       unsigned state = queue[next++];
-      const Node &from = cfg.nodes[state == root ? d.source : state / 2];
+      const Node<Facts> &from = cfg.nodes[state == root ? d.source : state / 2];
       bool advanced = state & 1;
-      if ((state != root && covered(from.effects.fixedInside, advanced)) ||
-          covered(from.effects.fixedAfter, advanced))
+      if ((state != root && covered(from.fixed.inside, advanced)) ||
+          covered(from.fixed.after, advanced))
         continue;
       for (Edge edge : from.next) {
         bool after = advanced || (d.path == Path::LoopCarried &&
                                   cfg.invalidatesIteration(edge, d.source));
         if (covered(credits[edge.to], after) ||
-            covered(cfg.nodes[edge.to].effects.fixedBefore, after))
+            covered(cfg.nodes[edge.to].fixed.before, after))
           continue;
         unsigned child = 2 * edge.to + after;
         if (parent[child] == unseen) {
@@ -100,16 +104,17 @@ std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
     bool needsBarrier = d.path == Path::WaitThenOrder;
     for (unsigned state = sink; state != root; state = parent[state]) {
       unsigned point = state / 2;
-      const Node &node = cfg.nodes[point];
-      unsigned mask = credits[point] | node.effects.fixedBefore;
+      const Node<Facts> &node = cfg.nodes[point];
+      unsigned mask = credits[point] | node.fixed.before;
       if (state != sink)
-        mask |= node.effects.fixedInside | node.effects.fixedAfter;
+        mask |= node.fixed.inside | node.fixed.after;
       needsBarrier &= !(mask & bit(Need::RegionOrder));
       if (!node.insertionCost)
         continue;
-      for (Action action : llvm::reverse(ACTIONS))
-        if (coverage(action) & bit(needsBarrier ? Need::RegionOrder : d.first))
-          labels.insert(point * ACTIONS.size() + unsigned(action));
+      Need need = needsBarrier ? Need::RegionOrder : d.first;
+      for (unsigned i = actions.size(); i-- > 0;)
+        if (coverage(actions[i]) & bit(need))
+          labels.insert(point * actions.size() + i);
       if (best && labels.size() >= best->size())
         break;
     }
@@ -121,14 +126,15 @@ std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
   return best;
 }
 
-std::optional<CutSolution> CutSolver::choose(bool reverseTies) const {
+template <typename Facts>
+std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
   SmallVector<unsigned> slack, order;
-  for (const Node &node : cfg.nodes)
-    slack.append(ACTIONS.size(), node.insertionCost);
+  for (const Node<Facts> &node : cfg.nodes)
+    slack.append(actions.size(), node.insertionCost);
   SmallVector<unsigned> loopSlack = slack;
   CutSolution result{llvm::BitVector(slack.size())};
   auto cost = [&](unsigned site) {
-    return cfg.nodes[site / ACTIONS.size()].insertionCost;
+    return cfg.nodes[site / actions.size()].insertionCost;
   };
   size_t first = 0;
   while (auto cut = shortestCut(result.sites, first)) {
@@ -142,7 +148,7 @@ std::optional<CutSolution> CutSolver::choose(bool reverseTies) const {
     // Reverse the choice of gap, preserving action preference at that gap.
     if (reverseTies)
       site = *llvm::find_if(*cut, [&](unsigned id) {
-        return id / ACTIONS.size() == site / ACTIONS.size() &&
+        return id / actions.size() == site / actions.size() &&
                slack[id] == charge;
       });
     // A cold exit can share a loop barrier, but saving its one-off cost
@@ -152,7 +158,7 @@ std::optional<CutSolution> CutSolver::choose(bool reverseTies) const {
     unsigned siteCost = cost(site);
     if (siteCost > 1 && loopSlack[site] > charge &&
         llvm::all_of(*cut, [&](unsigned id) {
-          return ACTIONS[id % ACTIONS.size()] == Action::RegionBarrier &&
+          return actions[id % actions.size()] == Action::RegionBarrier &&
                  cost(id) == siteCost;
         }))
       site = *llvm::min_element(*cut, [&](unsigned a, unsigned b) {
@@ -184,9 +190,11 @@ std::optional<CutSolution> CutSolver::choose(bool reverseTies) const {
 
 } // namespace
 
-std::optional<CutSolution> solveMembarCut(const MembarCFG &cfg,
-                                          ArrayRef<Demand> demands) {
-  CutSolver solver(cfg, demands);
+template <typename Facts>
+std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
+                                          ArrayRef<Demand> demands,
+                                          ArrayRef<Action> actions) {
+  CutSolver solver(cfg, demands, actions);
   auto best = solver.choose(false);
   if (!best || best->cost == best->lowerBound)
     return best;
@@ -197,5 +205,8 @@ std::optional<CutSolution> solveMembarCut(const MembarCFG &cfg,
   best->lowerBound = std::max(best->lowerBound, other->lowerBound);
   return best;
 }
+
+template std::optional<CutSolution>
+solveMembarCut(const MembarCFG<OpModel> &, ArrayRef<Demand>, ArrayRef<Action>);
 
 } // namespace mlir::triton::membar
