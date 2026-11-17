@@ -1,9 +1,28 @@
+import struct
+
 import pytest
 import torch
 
 from triton._internal_testing import is_cuda
 from triton.experimental.gsan import create_mem_pool
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
+
+
+@pytest.mark.parametrize("rank", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("high_word, expected", [
+    (0, [0, 0x123456780, 0xFFFFFFFF0, 0xFFFFFFFF0]),
+    (0x0F71, [0x1000000000, 0x7123456780, 0xFFFFFFFFF0, 0xFFFFFFFF0]),
+])
+def test_tma_descriptor_byte_strides(rank, high_word, expected):
+    from triton._C.libtriton import gsan_testing
+
+    # Native stride slots run from the innermost noncontiguous dimension out.
+    # Exercise 64 GiB and the largest encodable stride, alongside small strides.
+    words = [0] * 32
+    words[3:8] = [0, 0x12345678, 0xFFFFFFFF, 0xFFFFFFFF, high_word]
+    descriptor = struct.pack("<32I", *words)
+    strides = gsan_testing.tensor_desc_byte_strides(descriptor, rank, 2)
+    assert strides == list(reversed(expected[:rank - 1])) + [2]
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
