@@ -514,17 +514,6 @@ class HIPBackend(BaseBackend):
             metadata.shared,
         )
 
-    @staticmethod
-    def autotune_config_filter(metadata) -> bool:
-        # waves_per_eu is a best-effort hint: LLVM drops a request that the
-        # kernel's LDS usage or workgroup size make unachievable, so the config
-        # does not run with the occupancy it asks for. Triton requests
-        # "amdgpu-waves-per-eu"="N,N", which pins the occupancy to N when LLVM
-        # honors it.
-        waves_per_eu = getattr(metadata, "waves_per_eu", 0)
-        occupancy = getattr(metadata, "occupancy", None)
-        return not waves_per_eu or occupancy is None or occupancy == waves_per_eu
-
     def get_codegen_implementation(self, options):
         return {"min_dot_size": get_min_dot_size(self.target)}
 
@@ -932,8 +921,7 @@ class HIPBackend(BaseBackend):
             )
         # The waves per EU LLVM achieved given the kernel's LDS, register usage
         # and workgroup size. waves_per_eu is only a hint that LLVM drops (with a
-        # warning) when it cannot be met; the autotuner uses this to skip such
-        # configs (see HIPBackend.autotune_config_filter).
+        # warning) when it cannot be met, so this can differ from waves_per_eu.
         occupancy = re.search(r"^\s*; Occupancy:\s+(\d+)\s*$", amdgcn, re.MULTILINE)
         metadata["occupancy"] = int(occupancy.group(1)) if occupancy is not None else None
         if knobs.amd.dump_amdgcn:

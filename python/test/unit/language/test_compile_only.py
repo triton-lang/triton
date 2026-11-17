@@ -122,21 +122,18 @@ def test_compile_only_amd_static_lds_metadata(arch, transpose):
 # workgroup, gfx942 (64 KiB LDS per CU) fits one workgroup per CU, i.e. 2 waves
 # per EU, and gfx950 (160 KiB) fits two, i.e. 4 waves per EU. Either way one
 # workgroup needs at least ceil(8 waves / 4 SIMDs) = 2 waves per EU. LLVM drops
-# a waves_per_eu outside that range; the kernel still compiles, and the metadata
-# lets the autotuner skip it.
+# a waves_per_eu outside that range; the kernel still compiles, and the
+# occupancy metadata reports what LLVM achieved.
 @pytest.mark.parametrize("arch, waves_per_eu, achievable", [
-    ("gfx942", 0, True),
     ("gfx942", 1, False),
     ("gfx942", 2, True),
     ("gfx942", 3, False),
-    ("gfx950", 0, True),
     ("gfx950", 1, False),
     ("gfx950", 2, True),
     ("gfx950", 4, True),
     ("gfx950", 5, False),
 ])
-def test_compile_only_amd_waves_per_eu_static_lds(arch, waves_per_eu, achievable):
-    from triton.backends.amd.compiler import HIPBackend
+def test_compile_only_amd_occupancy_metadata(arch, waves_per_eu, achievable):
 
     @triton.jit
     def kernel(src, dst):
@@ -151,9 +148,7 @@ def test_compile_only_amd_waves_per_eu_static_lds(arch, waves_per_eu, achievable
     assert compiled.metadata.shared == 64 * 1024
     occupancy = compiled.metadata.occupancy
     assert re.search(rf"; Occupancy: {occupancy}\b", compiled.asm["amdgcn"])
-    if waves_per_eu:
-        assert (occupancy == waves_per_eu) == achievable
-    assert HIPBackend.autotune_config_filter(compiled.metadata) == achievable
+    assert (occupancy == waves_per_eu) == achievable
 
 
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])

@@ -5,7 +5,6 @@ import time
 import inspect
 import hashlib
 import json
-import warnings
 from functools import cached_property
 from typing import Any, Dict, Tuple, List, Optional
 
@@ -124,6 +123,7 @@ class Autotuner(KernelInterface):
         # If we got explicitly called via the old interface, raise a warning
         # and proceed with the old behavior.
         if warmup is not None or rep is not None or use_cuda_graph:
+            import warnings
             warnings.warn(("warmup, rep, and use_cuda_graph parameters are deprecated. See "
                            "https://github.com/triton-lang/triton/pull/4496 for details."), DeprecationWarning,
                           stacklevel=1)
@@ -309,21 +309,17 @@ class Autotuner(KernelInterface):
     def _prune_compiled_configs(self, configs: List[Config], args, kwargs: Dict) -> Tuple[List[Config], List[Config]]:
         """
         Compiles `configs` without launching them and drops the ones that the
-        backend's `autotune_config_filter` or the user's `compiled_config_prune`
-        reject, e.g. because the compiler could not honor an optimization hint.
+        user's `compiled_config_prune` rejects, e.g. because the compiler could
+        not honor an optimization hint.
         Configs that fail to compile are rejected too, so they are not compiled
         a second time by `_bench`. Returns the configs to benchmark and the
         rejected ones.
         """
-        from ..compiler.compiler import make_backend
         from ..compiler.errors import CompileTimeAssertionFailure
         from ._async_compile import FutureKernel
 
         # The interpreter does not compile kernels, so there is nothing to inspect.
-        if knobs.runtime.interpret:
-            return configs, []
-        backend_filter = make_backend(driver.active.get_current_target()).autotune_config_filter
-        if backend_filter is None and self.compiled_config_prune is None:
+        if knobs.runtime.interpret or self.compiled_config_prune is None:
             return configs, []
         # Let _bench report conflicting meta-parameters.
         if any(kwargs.keys() & config.kwargs.keys() for config in configs):
@@ -366,17 +362,7 @@ class Autotuner(KernelInterface):
             else:
                 compiled[config] = kernel
 
-        if backend_filter is not None:
-            kept = {config: kernel for config, kernel in compiled.items() if backend_filter(kernel.metadata)}
-            if kept or uninspectable:
-                compiled = kept
-            elif compiled:
-                # Backend filters skip configs whose hints were not honored. If that
-                # leaves nothing, the hints are best-effort, so benchmark them anyway.
-                warnings.warn(f"Autotuning {self.base_fn.__name__}: no config met all of its optimization "
-                              "hints; benchmarking all configs that compiled.")
-
-        if self.compiled_config_prune is not None and compiled:
+        if compiled:
             kept = self.compiled_config_prune(compiled, self.nargs, **kwargs)
             if not kept:
                 raise AutotunerError("No valid autotuner configs after pruning. "
@@ -560,9 +546,9 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
                 are benchmarked, e.g. by inspecting `CompiledKernel.metadata`. It should have the signature
                 `compiled_config_prune(compiled: Dict[triton.Config, CompiledKernel], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return the configs to benchmark, chosen from the keys of `compiled`. It should return at least one config.
-                Backends may also skip compiled configs whose optimization hints could not be honored (on AMD, a
-                `waves_per_eu` that LLVM could not achieve), before this function is called. Neither applies when
-                only one config remains, since the autotuner then uses it without benchmarking.
+                For example, on AMD it can skip configs whose `waves_per_eu` hint LLVM could not achieve by comparing
+                `CompiledKernel.metadata.occupancy` with `config.kwargs["waves_per_eu"]`. It does not apply when only
+                one config remains, since the autotuner then uses it without benchmarking.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.
