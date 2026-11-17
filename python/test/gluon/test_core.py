@@ -2979,10 +2979,13 @@ def test_amd_mfma_small_k(M, N, K, instr_shape, k_width, cdna4_only, block_k_div
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
-@pytest.mark.parametrize("a_type, b_type, cd_regclass",
-                         [(a_type, b_type, None)
-                          for a_type in ["e2m1", "e4m3", "e5m2"]
-                          for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"), ("e2m1", "e2m1", "v")])
+@pytest.mark.parametrize(
+    "a_type, b_type, cd_regclass", [(a_type, b_type, None)
+                                    for a_type in ["e2m1", "e4m3", "e5m2"]
+                                    for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"),
+                                                                               ("e2m1", "e2m1", "v")] +
+    [(a_type, b_type, None)
+     for a_type, b_type in [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2"), ("e4m3", "e2m3"), ("e3m2", "e2m1")]])
 @pytest.mark.parametrize("has_scale", [True, False])
 def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device='cuda'):
 
@@ -2994,6 +2997,9 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         DIV_FACTOR_B: tl.constexpr = 2 if b_type == "e2m1" else 1
         K_A: tl.constexpr = K // DIV_FACTOR_A
         K_B: tl.constexpr = K // DIV_FACTOR_B
+        # FP6 operands feed 32 consecutive values (two 16-byte groups) per lane.
+        K_WIDTH_A: tl.constexpr = 32 if a_type == "e2m3" or a_type == "e3m2" else 16
+        K_WIDTH_B: tl.constexpr = 32 if b_type == "e2m3" or b_type == "e3m2" else 16
 
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
                                                              warps_per_cta=[2, 2])
@@ -3001,13 +3007,13 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         a_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
         a_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [4, 1], [1, 0])
         a_load_layout: ttgl.constexpr = a_packed_layout if a_type == "e2m1" else a_unpacked_layout
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16)
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=K_WIDTH_A)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [M, K // 32])
 
         b_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [32, 2], [4, 1], [1, 0])
         b_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0])
         b_load_layout: ttgl.constexpr = b_packed_layout if b_type == "e2m1" else b_unpacked_layout
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=K_WIDTH_B)
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [N, K // 32])
 
         a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_load_layout))[:, None]
@@ -3048,6 +3054,14 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         elif dtype == 'e5m2':
             v = torch.randint(20, 40, size, dtype=torch.uint8)
             v_ref = v.view(torch.float8_e5m2).to(torch.float32)
+        elif dtype in ('e2m3', 'e3m2'):
+            # Packed along K: each 16-byte group holds 16 codes in 12 bytes followed by 4 padding bytes.
+            k_dim = 1 if operand == 0 else 0
+            codes = torch.randint(8, 24, size, dtype=torch.int32).movedim(k_dim, -1)
+            groups = pack_fp6(codes).reshape(*codes.shape[:-1], -1, 12)
+            v = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(codes.shape)
+            v = v.movedim(-1, k_dim).contiguous()
+            v_ref = fp6_values(dtype, codes.movedim(-1, k_dim)).float()
         else:
             assert dtype == 'e2m1'
             pack_dim = 1 if operand == 0 else 0
@@ -3072,13 +3086,12 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
         out = torch.empty((M, N), dtype=torch.float32, device=device)
         compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
-        out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
-        torch.testing.assert_close(out, out_ref)
+        a_ref, b_ref = a_ref * a_scale_ref, b_ref * b_scale_ref
     else:
         out = torch.empty((M, N), dtype=torch.float32, device=device)
         compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
-        out_ref = torch.matmul(a_ref, b_ref)
-        torch.testing.assert_close(out, out_ref)
+    out_ref = torch.matmul(a_ref, b_ref)
+    torch.testing.assert_close(out, out_ref)
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
@@ -3087,7 +3100,8 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 256)])
 @pytest.mark.parametrize("instr_shape", [[16, 16, 128], [32, 32, 64]])
-@pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3")])
+@pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3"),
+                                            ("e2m3", "e3m2"), ("e3m2", "e2m1"), ("e4m3", "e2m3")])
 @pytest.mark.parametrize("block_k_div", [2, 4])
 def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_div):
     BLOCK_K = instr_shape[2] // block_k_div
@@ -3102,8 +3116,10 @@ def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_d
         load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=instr_shape, transposed=True,
                                                              warps_per_cta=[2, 2])
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width=16)
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width=16)
+        K_WIDTH_A: ttgl.constexpr = 32 if a_type == "e2m3" or a_type == "e3m2" else 16
+        K_WIDTH_B: ttgl.constexpr = 32 if b_type == "e2m3" or b_type == "e3m2" else 16
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width=K_WIDTH_A)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width=K_WIDTH_B)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [N, BLOCK_K // 32])
 
@@ -3140,6 +3156,13 @@ def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_d
         if dtype == "e2m1":
             v = MXFP4Tensor(size=(m, n)).random()
             return v.to_packed_tensor(1 if operand == 0 else 0), v.to(torch.float32)
+        if dtype in ("e2m3", "e3m2"):
+            # Packed along K: each 16-byte group holds 16 codes in 12 bytes followed by 4 padding bytes.
+            k_dim = 1 if operand == 0 else 0
+            codes = torch.randint(8, 24, (m, n), dtype=torch.int32).movedim(k_dim, -1)
+            groups = pack_fp6(codes).reshape(*codes.shape[:-1], -1, 12)
+            v = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(codes.shape)
+            return v.movedim(-1, k_dim).contiguous(), fp6_values(dtype, codes.movedim(-1, k_dim)).float()
         v = torch.randint(20, 40, (m, n), dtype=torch.uint8)
         torch_dtype = torch.float8_e4m3fn if dtype == "e4m3" else torch.float8_e5m2
         return v, v.view(torch_dtype).to(torch.float32)

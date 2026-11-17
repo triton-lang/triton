@@ -1678,6 +1678,9 @@ class TritonSemantic(Generic[TensorTy]):
         """
         triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16":
                      tl.float16}.get(float_format)
+        if triton_ty is None and float_format in ("e2m3", "e3m2"):
+            assert val.dtype == tl.uint8, f"{float_format} format must be packed as uint8. Got {val.dtype}"
+            return val
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
             assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
@@ -1722,7 +1725,7 @@ class TritonSemantic(Generic[TensorTy]):
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
         lhs_format_enum = self._str_to_fp_type(lhs_format)
         rhs_format_enum = self._str_to_fp_type(rhs_format)
-        allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
+        allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "bf16", "fp16"}
         assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
         assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
         rhs_scale_is_none = rhs_scale is None or (isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None)
