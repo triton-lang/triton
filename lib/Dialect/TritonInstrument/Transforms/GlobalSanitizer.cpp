@@ -44,13 +44,10 @@ static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
 static constexpr int64_t kGSanMBarrierRecordBytes = 176;
 
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
-  if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
-    return;
-
   OpBuilder builder(op);
-  ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
-                                             op.getCoord(), op.getPred(),
-                                             /*isStore=*/false);
+  ExperimentalGSanTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getCoord(), op.getOffsets(),
+      op.getPred(), /*isStore=*/false);
 }
 
 static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
@@ -97,9 +94,9 @@ static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                     ValueRange coords) {
   OpBuilder builder(op);
-  ExperimentalGSanTensorDescAccessOp::create(builder, op->getLoc(), descValue,
-                                             coords, /*pred=*/Value{},
-                                             /*isStore=*/true);
+  ExperimentalGSanTensorDescAccessOp::create(
+      builder, op->getLoc(), descValue, coords, /*offsets=*/ValueRange{},
+      /*pred=*/Value{}, /*isStore=*/true);
 }
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {

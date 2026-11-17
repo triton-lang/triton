@@ -763,6 +763,64 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, m
 
 
 @gluon.jit
+def tma_im2col_gsan_kernel(desc, out, pred, COORDS: ttgl.constexpr, OFFSETS: ttgl.constexpr,
+                           MULTICAST: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, desc.nbytes_per_cta, pred=pred)
+    tma.async_load_im2col(desc, COORDS, OFFSETS, bar, smem, pred=pred, multicast=MULTICAST)
+    mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    mbarrier.invalidate(bar)
+    if pred:
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
+                                                    cga_layout=desc.layout.cga_layout)
+        values = smem.load(layout)
+        rows = ttgl.arange(0, desc.block_shape[0], layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, desc.block_shape[1], layout=ttgl.SliceLayout(0, layout))
+        ttgl.store(out + rows[:, None] * desc.block_shape[1] + cols[None, :], values)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("rank", [3, 4, 5])
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tma_im2col_gsan_shadow(fresh_knobs, with_allocator, rank, pred, num_ctas):
+    from triton.experimental.gsan import create_mem_pool
+    from triton.experimental.gsan._testing import shadow_cell_address
+    from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
+
+    skip_if_unsupported_cluster_size(num_ctas)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    shape = [2] + [3] * (rank - 2) + [20]
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=[[0, 0]] if num_ctas > 1 else [])
+    with torch.cuda.use_mem_pool(pool):
+        source = torch.arange(1, math.prod(shape) + 1, dtype=torch.int32, device="cuda").reshape(shape)
+        output = torch.zeros((16, 32), dtype=torch.int32, device="cuda")
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
+        source, shape, list(source.stride()), [16, 32], layout,
+        element_strides=[1] + [2] * (rank - 2) + [1],
+        pixel_box_lower_corner=[-1] * (rank - 2), pixel_box_upper_corner=[-1] * (rank - 2))
+    shadow = uint8_cuda_tensor_from_ptr(shadow_cell_address(source.data_ptr()), source.numel() * 24,
+                                        source.device.index)
+    before = shadow.cpu()
+    coords = [0] + [1] * (rank - 2) + [4]
+    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, [1] * (rank - 2), num_ctas > 1,
+                                             num_ctas=num_ctas)
+    assert "__triton_gsan_load_im2col_tensor_desc" in compiled.asm["llir"]
+    after = shadow.cpu()
+    changed = (before.reshape(-1, 24) != after.reshape(-1, 24)).any(dim=1)
+    # Every nonzero value identifies the input element TMA actually loaded.
+    # This checks the shadow footprint against hardware addressing and OOB fill.
+    loaded = output.cpu().flatten()
+    expected = torch.zeros(source.numel(), dtype=torch.bool)
+    expected[(loaded[loaded > 0] - 1).long()] = True
+    assert expected.any().item() == pred
+    torch.testing.assert_close(changed, expected)
+
+
+@gluon.jit
 def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()

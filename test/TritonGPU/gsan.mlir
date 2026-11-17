@@ -560,3 +560,57 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @tma_im2col_3d
+  tt.func @tma_im2col_3d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1] offsets = [%arg2], false, %arg3
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord] offsets = [%offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @tma_im2col_4d
+  tt.func @tma_im2col_4d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2], false, %arg3
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord] offsets = [%offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @tma_im2col_5d
+  tt.func @tma_im2col_5d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2, %arg2], false, %arg3
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord, %coord] offsets = [%offset, %offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}

@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -18,6 +19,7 @@
 namespace tt = mlir::triton;
 namespace tti = mlir::triton::instrument;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -36,6 +38,8 @@ static constexpr StringLiteral kGSanLoadRangeRuntimeFn =
     "__triton_gsan_load_range";
 static constexpr StringLiteral kGSanLoadTensorDescRuntimeFn =
     "__triton_gsan_load_tensor_desc";
+static constexpr StringLiteral kGSanLoadIm2ColTensorDescRuntimeFn =
+    "__triton_gsan_load_im2col_tensor_desc";
 static constexpr StringLiteral kGSanStoreTensorDescRuntimeFn =
     "__triton_gsan_store_tensor_desc";
 static constexpr StringLiteral kGSanLoadIndexedTensorDescRuntimeFn =
@@ -114,6 +118,10 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
               i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanLoadIm2ColTensorDescRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
+              ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadIndexedTensorDescRuntimeFn ||
              funcName == kGSanStoreIndexedTensorDescRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
@@ -501,10 +509,23 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto descTy = cast<tt::TensorDescType>(op.getDesc().getType());
+    auto descTy = op.getDesc().getType();
     ArrayRef<int64_t> blockShape = descTy.getShape();
-    if (blockShape.empty() || blockShape.size() > 5 ||
-        blockShape.size() != op.getCoords().size()) {
+    unsigned rank = op.getCoords().size();
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
+    if (isIm2Col) {
+      if constexpr (std::is_same_v<AccessOp,
+                                  tti::ExperimentalGSanTensorDescAccessOp>) {
+        if (op.getIsStore() || rank < 3 || rank > 5 ||
+            op.getOffsets().size() != rank - 2)
+          return rewriter.notifyMatchFailure(
+              op, "expected an im2col load with three to five coordinates and "
+                  "spatial offsets");
+      } else {
+        return rewriter.notifyMatchFailure(op, "im2col atomics are unsupported");
+      }
+    } else if (blockShape.empty() || blockShape.size() > 5 ||
+               blockShape.size() != rank) {
       return rewriter.notifyMatchFailure(
           op, "expected one to five descriptor coordinates");
     }
@@ -522,20 +543,21 @@ public:
 
     auto *ctx = rewriter.getContext();
     TritonLLVMOpBuilder b(loc, rewriter);
-    unsigned rank = blockShape.size();
     auto coordsTy = array_ty(i32_ty, rank);
     Value coords = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), coordsTy,
                                           b.i32_val(1), /*alignment=*/0);
-    auto shapeTy = array_ty(i16_ty, rank);
+    auto shapeTy = array_ty(i16_ty, blockShape.size());
     Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
                                          b.i32_val(1), /*alignment=*/0);
     for (auto [dim, coord] : llvm::enumerate(adaptor.getCoords())) {
       Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
       b.store(coord, coordSlot);
+    }
+    for (auto [dim, extent] : llvm::enumerate(blockShape)) {
       Value shapeSlot = b.gep(ptr_ty(ctx), shapeTy, shape,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
-      b.store(b.i16_val(blockShape[dim]), shapeSlot);
+      b.store(b.i16_val(extent), shapeSlot);
     }
 
     Value warpId = getLaneAndWarpId(rewriter, loc).second;
@@ -554,17 +576,30 @@ public:
       funcName = kGSanAtomicTensorDescRuntimeFn;
     } else {
       funcName = op.getIsStore() ? kGSanStoreTensorDescRuntimeFn
-                                 : kGSanLoadTensorDescRuntimeFn;
+                                : kGSanLoadTensorDescRuntimeFn;
+      if (isIm2Col)
+        funcName = kGSanLoadIm2ColTensorDescRuntimeFn;
     }
     auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
-    SmallVector<Value> args{
-        *gsanGlobalStatePtr,
-        castToGenericPointer(rewriter, loc, adaptor.getDesc()),
-        coords,
-        b.i32_val(rank),
-        shape,
-        b.i32_val(elemTy.getIntOrFloatBitWidth() / 8)};
+    SmallVector<Value> args{*gsanGlobalStatePtr,
+                            castToGenericPointer(rewriter, loc, adaptor.getDesc()),
+                            coords, b.i32_val(rank), shape};
+    if constexpr (std::is_same_v<AccessOp,
+                                tti::ExperimentalGSanTensorDescAccessOp>) {
+      if (isIm2Col) {
+        auto offsetsTy = array_ty(i16_ty, rank - 2);
+        Value offsets = LLVM::AllocaOp::create(
+            rewriter, loc, ptr_ty(ctx), offsetsTy, b.i32_val(1), /*alignment=*/0);
+        for (auto [dim, offset] : llvm::enumerate(adaptor.getOffsets())) {
+          Value slot = b.gep(ptr_ty(ctx), offsetsTy, offsets,
+                             ValueRange{b.i32_val(0), b.i32_val(dim)});
+          b.store(offset, slot);
+        }
+        args.push_back(offsets);
+      }
+    }
+    args.push_back(b.i32_val(elemTy.getIntOrFloatBitWidth() / 8));
     if constexpr (std::is_same_v<
                       AccessOp,
                       tti::ExperimentalGSanAtomicTensorDescAccessOp>) {
