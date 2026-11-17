@@ -1,4 +1,5 @@
 #include "python/triton/experimental/gsan/src/GSan.h"
+#include "python/triton/experimental/gsan/src/TMA.cuh"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
@@ -373,6 +374,19 @@ void init_gsan_testing(py::module_ &m) {
 
   m.def("is_write_once_address", gsan::isWriteOnceAddress);
   m.def("is_gsan_managed", gsan::isGsanManaged);
+  m.def("tensor_desc_byte_strides",
+        [](py::bytes data, int rank, int bytesPerElem) {
+          if (data.size() < 64 || rank < 1 || rank > 5 || bytesPerElem <= 0)
+            throw py::value_error("Invalid tensor descriptor arguments");
+          std::array<uint64_t, 8> descriptor;
+          std::memcpy(descriptor.data(), data.c_str(), sizeof(descriptor));
+          auto desc =
+              gsan::decodeTensorDesc(descriptor.data(), rank, bytesPerElem);
+          std::vector<uint64_t> strides;
+          for (int dim = 0; dim < rank; ++dim)
+            strides.push_back(desc.byteStride(dim));
+          return strides;
+        });
   m.def("shadow_cell_size", [](uintptr_t addr, uintptr_t reserveBase) {
     return gsan::getShadowCellSize(addr, reserveBase);
   });
