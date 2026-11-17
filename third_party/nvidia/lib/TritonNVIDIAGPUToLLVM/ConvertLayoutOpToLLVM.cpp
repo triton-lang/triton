@@ -61,9 +61,9 @@ struct ConvertLayoutOpSwizzlingConversion
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
       auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
       if (offsets[i])
-        smemBase = LLVM::GEPOp::create(rewriter, loc, smemBase.getType(),
-                                       rewriter.getI8Type(), smemBase,
-                                       ArrayRef<LLVM::GEPArg>{offsets[i]});
+        smemBase = LLVM::GEPOp::create(
+            rewriter, loc, smemBase.getType(), rewriter.getI8Type(), smemBase,
+            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(offsets[i])});
       auto inVals =
           unpackUniqueTensorElements(loc, adaptor.getSrcs()[i], rewriter);
       auto outVals = transferWithinBlockSwizzling(

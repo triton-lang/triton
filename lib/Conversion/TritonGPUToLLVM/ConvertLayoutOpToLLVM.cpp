@@ -119,9 +119,9 @@ struct ConvertLayoutOpConversion
     auto smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     if (scratchOffset)
-      smemBase = LLVM::GEPOp::create(rewriter, loc, smemBase.getType(),
-                                     rewriter.getI8Type(), smemBase,
-                                     ArrayRef<LLVM::GEPArg>{scratchOffset});
+      smemBase = LLVM::GEPOp::create(
+          rewriter, loc, smemBase.getType(), rewriter.getI8Type(), smemBase,
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(scratchOffset)});
     auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
     auto outVals = mlir::convertLayoutViaSharedMemory(
         loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op,
