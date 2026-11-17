@@ -15,7 +15,8 @@ namespace triton {
 
 namespace gpu {
 
-/// The loop carries the insert and extract cursors in consecutive arguments.
+/// Before expansion, insertArg and insertArg + 1 carry the insert and extract
+/// cursors. refillOffset counts slots from the incoming extract cursor.
 struct LoadRing {
   int insertArg;
   int numBuffers;

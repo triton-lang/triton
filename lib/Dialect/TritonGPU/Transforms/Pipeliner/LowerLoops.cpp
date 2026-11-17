@@ -560,10 +560,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   IRRewriter builder(forOp);
   builder.setInsertionPoint(forOp);
   Location loc = forOp.getLoc();
-  // Create a counter to index into the allocations per loop iteration.
-  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
-  // pipeliner will re-materialize the value in later stages of the pipeline
-  // instead of carrying it as a dependency across multiple iterations.
+  // Separate insert and extract cursors let the pipeliner schedule each
+  // increment in the stage that uses it. Both start at -1 so the first
+  // increment selects slot 0.
   Value minusOne = arith::ConstantIntOp::create(builder, loc, -1, 32);
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
   Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
@@ -603,8 +602,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       argIdx++;
     }
 
-    // Create two counters for the insert and extract indices to avoid creating
-    // long liverange.
     builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
 
     Value numBuffersVal =
@@ -615,6 +612,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     loadGroup.extractIdx = createIncrementModulo(
         builder, loc, extractIdx, numBuffersVal, zero, one, &cndExt);
     if (phase) {
+      // The TMA barrier phase toggles when the extract cursor wraps.
       Value nextPhase = arith::XOrIOp::create(builder, loc, phase, one);
       phase = arith::SelectOp::create(builder, loc, cndExt, nextPhase, phase);
       loadGroup.phase = phase;

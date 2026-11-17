@@ -104,7 +104,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<128x64xf16, #
     %9 = ttng.warp_group_dot %5, %8, %arg7 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared1, #smem> -> tensor<128x256xf32, #mma>
 
     // CHECK: [[V0:%.*]] = arith.addi [[LHS_CURSOR]], %c2_i32
-    // CHECK-NEXT: [[NEXT_LHS_BUF_IDX:%.*]] = arith.remui [[V0]], %c2_i32
+    // CHECK-NEXT: [[NEXT_LHS_BUF_IDX:%.*]] = arith.andi [[V0]], %c1_i32
     // CHECK-NEXT: [[NEXT_LHS_BAR:%.*]] = ttg.memdesc_index [[LHS_BARS]]{{\[}}[[NEXT_LHS_BUF_IDX]]{{\]}}
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_LHS_BAR]], 16384, [[LHS_MASK]]
 
@@ -113,7 +113,7 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<128x64xf16, #
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local %arg0[%c0_i32, [[NEXT_LHS_IDX]]] [[NEXT_LHS_BUF]], [[NEXT_LHS_BAR]], [[LHS_MASK]]
 
     // CHECK: [[V0:%.*]] = arith.addi [[RHS_CURSOR]], %c4_i32
-    // CHECK-NEXT: [[NEXT_RHS_BUF_IDX:%.*]] = arith.remui [[V0]], %c4_i32
+    // CHECK-NEXT: [[NEXT_RHS_BUF_IDX:%.*]] = arith.andi [[V0]], %c3_i32
     // CHECK-NEXT: [[NEXT_RHS_BAR:%.*]] = ttg.memdesc_index [[RHS_BARS]]{{\[}}[[NEXT_RHS_BUF_IDX]]{{\]}}
     // CHECK-NEXT: ttng.barrier_expect [[NEXT_RHS_BAR]], 32768, [[RHS_MASK]]
 

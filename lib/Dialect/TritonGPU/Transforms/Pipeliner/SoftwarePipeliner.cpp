@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/Dump.h"
+#include "llvm/Support/MathExtras.h"
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
 // expander.
@@ -140,6 +141,7 @@ static void expandLoops(ModuleOp moduleOp, const LoadRings &rings) {
       continue;
     }
     forOp = *newForOp;
+    // Derive the refill from the read cursor so Membar can compare their slots.
     llvm::BitVector unusedArgs(forOp.getNumRegionIterArgs());
     for (const LoadRing &ring : loadRings) {
       Value insert = forOp.getYieldedValues()[ring.insertArg];
@@ -149,10 +151,17 @@ static void expandLoops(ModuleOp moduleOp, const LoadRings &rings) {
       Value advance =
           arith::ConstantIntOp::create(rewriter, loc, ring.refillOffset, 32);
       Value shifted = arith::AddIOp::create(rewriter, loc, readCursor, advance);
-      Value size =
-          arith::ConstantIntOp::create(rewriter, loc, ring.numBuffers, 32);
-      // The cursor is at least -1 and advance is positive.
-      Value slot = arith::RemUIOp::create(rewriter, loc, shifted, size);
+      Value slot;
+      if (llvm::isPowerOf2_32(ring.numBuffers)) {
+        // A mask avoids the sign correction for signed remainder in GPU code.
+        Value mask = arith::ConstantIntOp::create(rewriter, loc,
+                                                  ring.numBuffers - 1, 32);
+        slot = arith::AndIOp::create(rewriter, loc, shifted, mask);
+      } else {
+        Value size =
+            arith::ConstantIntOp::create(rewriter, loc, ring.numBuffers, 32);
+        slot = arith::RemSIOp::create(rewriter, loc, shifted, size);
+      }
       insert.replaceAllUsesWith(slot);
       // Only the dead insert increment still uses this argument.
       forOp.getRegionIterArg(ring.insertArg).replaceAllUsesWith(readCursor);
