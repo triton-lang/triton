@@ -23,7 +23,7 @@ static Value convertValueLayout(Value src, Attribute enc,
 
 static void retargetCopyOperandsToEncoding(
     AsyncCopyGlobalToLocalOp copyOp, Attribute newEncoding,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternRewriter &rewriter) {
+    PatternRewriter &rewriter) {
   Value src = copyOp.getSrc();
   Value mask = copyOp.getMask();
   Value other = copyOp.getOther();
@@ -32,17 +32,10 @@ static void retargetCopyOperandsToEncoding(
   auto newSrcTy = srcTy.cloneWithEncoding(newEncoding);
   auto order = getOrder(newSrcTy);
   unsigned contiguity = 1;
-  // The old hint and cached vector widths describe the old register axis.
-  if (getOrder(srcTy)[0] == order[0]) {
-    // Axis analysis has no entries for newly created convert_layout results.
-    contiguity = axisInfoAnalysis.getContiguity(src);
-    if (mask)
-      contiguity =
-          std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
-    contiguity = std::max<unsigned>(contiguity, copyOp.getContiguity());
+  // Contiguity hints describe the register axis of their source layout.
+  if (getOrder(srcTy)[0] == order[0])
     contiguity = std::min<unsigned>(
-        contiguity, getContigPerThread(newSrcTy)[order[0]]);
-  }
+        copyOp.getContiguity(), getContigPerThread(newSrcTy)[order[0]]);
 
   // insert cvt's after src, mask, and other
   src = convertValueLayout(src, newEncoding, rewriter);
@@ -82,11 +75,7 @@ static void retargetCopyOperandsToEncoding(
 // global data.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
-  ModuleAxisInfoAnalysis &axisInfoAnalysis;
   using OpRewritePattern::OpRewritePattern;
-  ClipAsyncCopySizePerThread(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                             MLIRContext *context)
-      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
@@ -138,8 +127,7 @@ struct ClipAsyncCopySizePerThread
         blockedEnc.getOrder(), numWarps, threadsPerWarp,
         blockedEnc.getCGALayout());
 
-    retargetCopyOperandsToEncoding(copyOp, newBlockEnc, axisInfoAnalysis,
-                                   rewriter);
+    retargetCopyOperandsToEncoding(copyOp, newBlockEnc, rewriter);
 
     return success();
   }
@@ -150,14 +138,12 @@ struct ClipAsyncCopySizePerThread
 // so picking a coalesced layout is better.
 struct CoalesceCheapAsyncCopyGlobalToLocal
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
-  ModuleAxisInfoAnalysis &axisInfoAnalysis;
   DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap;
   using OpRewritePattern::OpRewritePattern;
   CoalesceCheapAsyncCopyGlobalToLocal(
-      ModuleAxisInfoAnalysis &axisInfoAnalysis,
       DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap,
       MLIRContext *context)
-      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis),
+      : OpRewritePattern(context),
         coalescedAsyncCopyMap(coalescedAsyncCopyMap) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
@@ -180,7 +166,7 @@ struct CoalesceCheapAsyncCopyGlobalToLocal
     if (newEnc == nullptr || newEnc == srcTy.getEncoding())
       return failure();
 
-    retargetCopyOperandsToEncoding(copyOp, newEnc, axisInfoAnalysis, rewriter);
+    retargetCopyOperandsToEncoding(copyOp, newEnc, rewriter);
 
     return success();
   }
@@ -210,9 +196,9 @@ struct CoalesceAsyncCopyPass
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
+    patterns.add<ClipAsyncCopySizePerThread>(context);
     patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
-        axisInfoAnalysis, coalescedAsyncCopyMap, context);
+        coalescedAsyncCopyMap, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
