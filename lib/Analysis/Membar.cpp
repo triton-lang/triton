@@ -89,7 +89,9 @@ void MembarAnalysis::updateMemoryEffects(
       membarInfo->syncWarps();
   };
   mb::OpModel model;
-  shared.describe(op, model, triton::getMemoryAccesses(op), clusterStages);
+  mb::FixedSync fixed;
+  shared.describe(op, model, fixed, triton::getMemoryAccesses(op),
+                  clusterStages);
   // The flow visits guarded operations separately. Join pending completions
   // and peer-visible waits before the lanes split.
   if (!cluster && isa<cf::CondBranchOp, scf::IfOp>(op) &&
@@ -98,7 +100,7 @@ void MembarAnalysis::updateMemoryEffects(
     model.sharedIn.threadDemands.mayNotifyPeer = true;
   }
   // Model a leading barrier before handling the operation's effects.
-  applyFixed(model.fixedBefore);
+  applyFixed(fixed.before);
   syncIfNeeded(op, model.sharedIn, membarInfo, builder, cluster);
   if (builder && model.needsWarp && !membarInfo->warpsSynced) {
     builder->setInsertionPoint(op);
@@ -107,16 +109,16 @@ void MembarAnalysis::updateMemoryEffects(
                                    triton::gpu::BarrierScope::Warp);
     membarInfo->syncWarps();
   }
-  if (model.fixedInside) {
+  if (fixed.inside) {
     // Preserve effects reachable from entry before the scratch rendezvous.
     if (!membarInfo->allPathsFromEntrySynced)
       membarInfo->entryBlockInfo.join(model.sharedIn);
-    applyFixed(model.fixedInside);
+    applyFixed(fixed.inside);
   }
   // Even if a barrier was inserted, retain the operation's outgoing effects.
   membarInfo->addBlockInfo(model.sharedOut);
   // Model a trailing barrier after handling the operation's effects.
-  applyFixed(model.fixedAfter);
+  applyFixed(fixed.after);
 }
 
 void ModuleMembarAnalysis::run() { run<MembarAnalysis>(); }

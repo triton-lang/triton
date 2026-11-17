@@ -44,7 +44,6 @@ enum class Boundary {
 // Observe the input before the operation and start new producers at its output.
 // A scratch rendezvous lies between those two sets of effects.
 struct OpModel {
-  unsigned fixedBefore = 0, fixedInside = 0, fixedAfter = 0;
   BlockInfo sharedIn, sharedOut;
   SmallVector<TMemAccess, 1> tmemAccesses;
   // Native transfers need a completion wait; descriptor asm needs region order.
@@ -61,19 +60,26 @@ struct Edge {
   bool invalidatesIteration = false;
 };
 
+struct FixedSync {
+  unsigned before = 0, inside = 0, after = 0;
+
+  bool operator==(const FixedSync &) const = default;
+};
+
 // Arrival observes incoming effects; departure starts outgoing dependencies.
 // A fixed internal rendezvous orders paths passing through the operation.
-struct Node {
+template <typename Facts> struct Node {
   Operation *op = nullptr;
   // Zero wherever the execution group cannot rendezvous.
   unsigned insertionCost = 0;
   unsigned body = 0;
-  OpModel effects;
+  FixedSync fixed;
+  Facts effects;
   SmallVector<Edge, 2> next;
 };
 
-struct MembarCFG {
-  SmallVector<Node, 0> nodes;
+template <typename Facts> struct MembarCFG {
+  SmallVector<Node<Facts>, 0> nodes;
 
   // A callee entry or loop backedge can rebind SSA values in its own body.
   bool invalidatesIteration(Edge edge, unsigned source) const {
@@ -82,26 +88,39 @@ struct MembarCFG {
   }
 };
 
+class MembarModel {
+public:
+  using Facts = OpModel;
+  MembarModel(std::map<Operation *, SMemModel> &models, TMemModel *tmem)
+      : models(models), tmem(tmem) {}
+
+  const BufferIndexAnalysis &getIndices(FunctionOpInterface function);
+  std::optional<Facts> describe(Operation *op, FixedSync &fixed,
+                                Block *active = nullptr);
+
+private:
+  std::map<Operation *, SMemModel> &models;
+  TMemModel *tmem;
+};
+
 unsigned getBlockWeight(Block *block, const BufferIndexAnalysis &indices,
                         unsigned invocationWeight);
 
-class MembarCFGBuilder {
+template <typename Model> class MembarCFGBuilder {
+  using Facts = typename Model::Facts;
+
 public:
-  MembarCFGBuilder(std::map<Operation *, SMemModel> &models, TMemModel *tmem,
-                   const llvm::SetVector<Operation *> &callbacks,
+  MembarCFGBuilder(Model &model, const llvm::SetVector<Operation *> &callbacks,
                    const DenseMap<Operation *, unsigned> &calleeWeights)
-      : models(models), tmem(tmem), callbacks(callbacks),
-        calleeWeights(calleeWeights) {}
+      : model(model), callbacks(callbacks), calleeWeights(calleeWeights) {}
 
   /// Build one execution region and link its reachable noinline callees.
-  MembarCFG build(Region &root);
+  MembarCFG<Facts> build(Region &root);
 
 private:
-  void addRegion(MembarCFG &cfg, Region &region);
-  OpModel describe(Operation *op, SMemModel &shared);
+  void addRegion(MembarCFG<Facts> &cfg, Region &region);
 
-  std::map<Operation *, SMemModel> &models;
-  TMemModel *tmem;
+  Model &model;
   const llvm::SetVector<Operation *> &callbacks;
   const DenseMap<Operation *, unsigned> &calleeWeights;
 };

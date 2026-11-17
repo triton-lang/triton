@@ -20,8 +20,11 @@ struct CutSolution {
   uint64_t lowerBound = 0;
 };
 
-std::optional<CutSolution> solveMembarCut(const MembarCFG &cfg,
-                                          ArrayRef<Demand> demands);
+// Site gap * actions.size() + i emits actions[i] before the gap operation.
+template <typename Facts>
+std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
+                                          ArrayRef<Demand> demands,
+                                          ArrayRef<Action> actions = ACTIONS);
 
 } // namespace mlir::triton::membar
 

@@ -1,14 +1,17 @@
 #include "triton/Analysis/Membar/Dependencies.h"
 #include "triton/Analysis/Membar/TmemModel.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SparseSet.h"
 #include <tuple>
 
 namespace mlir::triton::membar {
 namespace {
 
-// A producer's shared slices have different alias facts across iterations.
-enum Fact : unsigned { Shared, CarriedShared, TMem, Warp, NumFacts };
+auto stopAt(Need need) {
+  // A TMEM wait can still need a later cross-warp rendezvous.
+  return [mask = bit(need) & fullBarrier](unsigned state, unsigned fixed) {
+    return fixed & mask ? 0u : state;
+  };
+}
 
 std::optional<Path> sharedNeed(const BlockInfo &out, const OpModel &in,
                                bool carried,
@@ -42,8 +45,9 @@ bool tmemConflicts(ArrayRef<TMemAccess> before, ArrayRef<TMemAccess> after) {
   return false;
 }
 
-std::optional<Path> tmemNeed(const Node &producer, const Node &consumer,
-                             TMemModel &tmem, bool needsWait) {
+std::optional<Path> tmemNeed(const Node<OpModel> &producer,
+                             const Node<OpModel> &consumer, TMemModel &tmem,
+                             bool needsWait) {
   auto boundary = consumer.effects.boundary;
   Path ordered = needsWait ? Path::WaitThenOrder : Path::Any;
   // Peer-visible TMEM accesses require a rendezvous before publication.
@@ -61,98 +65,79 @@ std::optional<Path> tmemNeed(const Node &producer, const Node &consumer,
 
 } // namespace
 
-SmallVector<Demand> discoverDemands(const MembarCFG &cfg,
+SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
                                     Allocation &allocation,
                                     const MembarFilterFn &sharedFilter,
                                     TMemModel *tmem) {
-  SmallVector<Demand> demands;
   bool needsWarp = llvm::any_of(
-      cfg.nodes, [](const Node &node) { return node.effects.needsWarp; });
-  bool ordersThreadEffects = llvm::any_of(cfg.nodes, [](const Node &node) {
+      cfg.nodes, [](const auto &node) { return node.effects.needsWarp; });
+  bool ordersThreadEffects = llvm::any_of(cfg.nodes, [](const auto &node) {
     return node.effects.sharedIn.threadDemands.publicationIssuer !=
            ThreadIssuer::None;
   });
-  // The sparse set queues each (consumer, fact) once per producer.
-  llvm::SparseSet<unsigned> arrivals;
-  arrivals.setUniverse(NumFacts * cfg.nodes.size());
-  for (unsigned source = 0; source < cfg.nodes.size(); ++source) {
-    const Node &producer = cfg.nodes[source];
+  SmallVector<Demand> demands;
+  for (auto [source, producer] : llvm::enumerate(cfg.nodes)) {
     const OpModel &out = producer.effects;
     const BlockInfo &shared = out.sharedOut;
     const auto &sync = shared.threadSync;
     bool hasSlices =
         !shared.syncReadSlices.empty() || !shared.syncWriteSlices.empty();
+    if (hasSlices || sync.completion != CompletionSync::None ||
+        (ordersThreadEffects && sync.effectIssuer != ThreadIssuer::None)) {
+      constexpr unsigned fresh = 1, carried = 2;
+      std::optional<BlockInfo> carriedOut;
+      discoverDemands(
+          cfg, demands, source, fresh, stopAt(Need::RegionOrder),
+          [&](const auto &sink, unsigned state) -> Conflict {
+            return {Need::RegionOrder,
+                    sharedNeed(shared, sink.effects, state == carried,
+                               carriedOut, allocation, sharedFilter),
+                    /*stopOnMatch=*/true};
+          },
+          [&](Edge edge, unsigned state) {
+            return hasSlices && cfg.invalidatesIteration(edge, source) ? carried
+                                                                       : state;
+          });
+    }
+
     Need producerNeed = out.tmemProducerNeed.value_or(Need::RegionOrder);
     bool needsWait = producerNeed != Need::RegionOrder;
-    // A completion wait leaves an outgoing issuer but has no input to order.
-    Need warpNeed = needsWait || !out.sharedIn.hasEffects()
-                        ? Need::WarpConvergence
-                        : Need::WarpOrder;
-    const Need needs[] = {Need::RegionOrder, Need::RegionOrder, producerNeed,
-                          warpNeed};
-    arrivals.clear();
-    auto propagate = [&](const Node &node, Fact fact,
-                         unsigned fixedInside = 0) {
-      // A TMEM wait can still need a later cross-warp rendezvous.
-      unsigned stop = bit(needs[fact]) & fullBarrier;
-      if ((fixedInside | node.effects.fixedAfter) & stop)
-        return;
-      for (Edge edge : node.next) {
-        if (cfg.nodes[edge.to].effects.fixedBefore & stop)
-          continue;
-        Fact next = fact == Shared && hasSlices &&
-                            cfg.invalidatesIteration(edge, source)
-                        ? CarriedShared
-                        : fact;
-        arrivals.insert(NumFacts * edge.to + next);
-      }
-    };
-    // Seed outgoing edges so a self-dependency must traverse a loop.
-    if (hasSlices || sync.completion != CompletionSync::None ||
-        (ordersThreadEffects && sync.effectIssuer != ThreadIssuer::None))
-      propagate(producer, Shared);
     if (out.tmemProducerNeed)
-      propagate(producer, TMem);
-    if (needsWarp && shared.hasEffects())
-      propagate(producer, Warp);
+      discoverDemands(cfg, demands, source, 1, stopAt(producerNeed),
+                      [&](const auto &sink, unsigned) -> Conflict {
+                        return {producerNeed,
+                                tmemNeed(producer, sink, *tmem, needsWait)};
+                      });
 
-    std::optional<BlockInfo> carriedOut;
-    for (unsigned i = 0; i < arrivals.size(); ++i) {
-      unsigned arrival = arrivals.begin()[i];
-      unsigned sink = arrival / NumFacts;
-      Fact fact = static_cast<Fact>(arrival % NumFacts);
-      const Node &consumer = cfg.nodes[sink];
-      const OpModel &in = consumer.effects;
-      bool isShared = fact == Shared || fact == CarriedShared;
-      std::optional<Path> path;
-      if (isShared)
-        path = sharedNeed(shared, in, fact == CarriedShared, carriedOut,
-                          allocation, sharedFilter);
-      else if (fact == TMem)
-        path = tmemNeed(producer, consumer, *tmem, needsWait);
-      else if (in.needsWarp)
-        path = Path::Any;
-
-      if (path) {
-        demands.push_back({source, sink, needs[fact], *path});
-        // Ordering the first shared conflict covers later ones on this path.
-        if (isShared)
-          continue;
-      }
-      propagate(consumer, fact, in.fixedInside);
+    // A completion wait leaves an outgoing issuer but has no input to order.
+    if (needsWarp && shared.hasEffects()) {
+      Need warpNeed = needsWait || !out.sharedIn.hasEffects()
+                          ? Need::WarpConvergence
+                          : Need::WarpOrder;
+      discoverDemands(cfg, demands, source, 1, stopAt(warpNeed),
+                      [&](const auto &sink, unsigned) -> Conflict {
+                        return {warpNeed, sink.effects.needsWarp
+                                              ? std::optional(Path::Any)
+                                              : std::nullopt};
+                      });
     }
   }
+  coalesceDemands(demands);
+  return demands;
+}
 
-  // Any region order subsumes loop-carried order at the same endpoints.
-  llvm::sort(demands, [](const Demand &a, const Demand &b) {
-    return std::tie(a.source, a.sink, a.first, a.path) <
-           std::tie(b.source, b.sink, b.first, b.path);
-  });
+void coalesceDemands(SmallVectorImpl<Demand> &demands) {
+  // Ordered handoffs subsume ordinary demands, which subsume loop-carried ones.
+  auto key = [](const Demand &d) {
+    return std::tuple(d.source, d.sink, d.first, d.path == Path::LoopCarried,
+                      d.path == Path::Any);
+  };
+  llvm::sort(demands,
+             [&](const Demand &a, const Demand &b) { return key(a) < key(b); });
   auto sameTerminals = [](const Demand &a, const Demand &b) {
     return a.source == b.source && a.sink == b.sink && a.first == b.first;
   };
   demands.erase(llvm::unique(demands, sameTerminals), demands.end());
-  return demands;
 }
 
 } // namespace mlir::triton::membar
