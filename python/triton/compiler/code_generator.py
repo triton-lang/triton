@@ -359,9 +359,6 @@ class CodeGenerator(ast.NodeVisitor):
         self.pending_annotations: Dict[str, Any] = {}
         self.dereference_name: Callable[[str], Any] = self._define_name_lookup()
         self.fn = None
-        # Are we currently visiting an ast.arg's default value?  These have some
-        # special handling.
-        self.visiting_arg_default_value = False
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
@@ -410,10 +407,6 @@ class CodeGenerator(ast.NodeVisitor):
                     isinstance(val, language.dtype),  #
                     is_namedtuple(val),
                     self._is_constexpr_global(name),  #
-                    # Allow accesses to globals while visiting an ast.arg
-                    # because you should be able to do
-                    #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
-                    self.visiting_arg_default_value,  #
                     knobs.compilation.allow_non_constexpr_globals,
             ]):
                 return val
@@ -656,23 +649,6 @@ class CodeGenerator(ast.NodeVisitor):
                 node, "nested function definitions are not allowed inside a @triton.jit kernel. "
                 "Move the helper function to module level and decorate it with @triton.jit.")
         arg_names = self.visit(node.args)
-        # initialize defaults
-        for i, default_value in enumerate(node.args.defaults[::-1]):
-            arg_node = node.args.args[-i - 1]
-            annotation = arg_node.annotation
-            name = arg_node.arg
-            st_target = ast.Name(id=name, ctx=ast.Store())
-            if annotation is None:
-                init_node = ast.Assign(targets=[st_target], value=default_value)
-            else:
-                init_node = ast.AnnAssign(target=st_target, value=default_value, annotation=annotation, simple=1)
-            try:
-                assert not self.visiting_arg_default_value
-                self.visiting_arg_default_value = True
-                self.visit(init_node)
-            finally:
-                self.visiting_arg_default_value = False
-
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         fn_ty = self.prototype.serialize(self.builder)
@@ -1781,7 +1757,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
     module = generator.module
-    # module takes ownership of the context
+    # expose the context on the module for downstream compiler stages
     module.context = context
     if not module.verify():
         if not fn.is_gluon():
