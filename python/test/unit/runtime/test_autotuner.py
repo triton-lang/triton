@@ -727,3 +727,42 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+@pytest.mark.parametrize("runtime_error", [False, True])
+def test_backend_failure_tuning_policy(runtime_error, fresh_knobs):
+    from triton.runtime.errors import BackendCompilationError
+
+    calls = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            calls.append(kwargs["BLOCK_SIZE"])
+            if kwargs["BLOCK_SIZE"] == 128:
+                if runtime_error:
+                    raise RuntimeError("unexpected execution failure")
+                raise BackendCompilationError("LLVM codegen", "candidate failed")
+            return "valid candidate"
+
+    def bench(call, quantiles):
+        call()
+        return [1.0, 1.0, 1.0]
+
+    bad = triton.Config({"BLOCK_SIZE": 128})
+    good = triton.Config({"BLOCK_SIZE": 32})
+    tuner = triton.runtime.Autotuner(Kernel(), ["BLOCK_SIZE"], [bad, good], key=[], reset_to_zero=None,
+                                     restore_value=None, do_bench=bench)
+    if runtime_error:
+        with pytest.raises(RuntimeError, match="unexpected execution failure"):
+            tuner.run()
+        assert calls == [128]
+        assert not tuner.cache
+    else:
+        assert tuner.run() == "valid candidate"
+        assert tuner.best_config is good
+        assert tuner.configs_timings[bad] == [float("inf")] * 3
+        assert calls == [128, 32, 32]

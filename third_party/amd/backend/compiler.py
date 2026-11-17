@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
+from triton.runtime.errors import BackendCompilationError
 from triton._instrumentation import instrument as _instrument, is_enabled
 from dataclasses import dataclass
 import ctypes
@@ -140,12 +141,23 @@ def _codegen_options(triple: str, processor: str, features: str, *, flags: list[
     )
 
 
-def _raise_codegen_error(library, error: ctypes.c_void_p, fallback: str):
+# C ABI status contract, matching CodegenStatus in amdgpu_codegen.cc.
+_AMD_SUCCESS = 0
+_AMD_SETUP_FAILURE = 1  # Invalid arguments/options, target setup, or allocation.
+_AMD_COMPILATION_FAILURE = 2  # Reported native parsing, codegen, or assembly error.
+# SetupFailure and unknown nonzero statuses raise RuntimeError. Older libraries
+# use status 1 for all failures; those retain their RuntimeError behavior.
+
+
+def _raise_codegen_error(library, error: ctypes.c_void_p, fallback: str, status: int, stage: str = "LLVM codegen"):
     message = ctypes.string_at(error).decode("utf-8") if error.value else fallback
     if error.value:
         library.triton_amdgpu_free(error)
     revision = library.triton_amdgpu_revision().decode("utf-8")
-    raise RuntimeError(f"AMD LLVM {revision}: {message}")
+    error_message = f"AMD LLVM {revision}: {message}"
+    if status == _AMD_COMPILATION_FAILURE:
+        raise BackendCompilationError(stage, error_message)
+    raise RuntimeError(error_message)
 
 
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
@@ -170,8 +182,8 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     error = ctypes.c_void_p()
     status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
                                            ctypes.byref(assembly_size), ctypes.byref(error))
-    if status:
-        _raise_codegen_error(library, error, "unknown AMD code-generation failure")
+    if status != _AMD_SUCCESS:
+        _raise_codegen_error(library, error, "unknown AMD code-generation failure", status)
     try:
         return ctypes.string_at(assembly, assembly_size.value).decode("utf-8")
     finally:
@@ -209,8 +221,8 @@ def translate_to_mir(src: str, triple: str, processor: str, features: str, flags
     status = library.triton_amdgpu_translate_to_mir(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(mir),
                                                     ctypes.byref(mir_size), ctypes.byref(dag), ctypes.byref(dag_size),
                                                     ctypes.byref(error))
-    if status:
-        _raise_codegen_error(library, error, "unknown AMD MIR translation failure")
+    if status != _AMD_SUCCESS:
+        _raise_codegen_error(library, error, "unknown AMD MIR translation failure", status)
     try:
         mir_text = ctypes.string_at(mir, mir_size.value).decode("utf-8")
         dag_text = ctypes.string_at(dag, dag_size.value).decode("utf-8")
@@ -253,8 +265,8 @@ def translate_mir_to_asm(mir_path: str, triple: str, processor: str, features: s
     status = library.triton_amdgpu_translate_mir_to_asm(source, len(source), ctypes.byref(options),
                                                         ctypes.byref(output), ctypes.byref(output_size),
                                                         ctypes.byref(error))
-    if status:
-        _raise_codegen_error(library, error, "unknown AMD MIR code-generation failure")
+    if status != _AMD_SUCCESS:
+        _raise_codegen_error(library, error, "unknown AMD MIR code-generation failure", status)
     try:
         return ctypes.string_at(output, output_size.value).decode("utf-8")
     finally:
@@ -277,12 +289,8 @@ def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
         ctypes.byref(object_size),
         ctypes.byref(error),
     )
-    if status:
-        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD assembly failure"
-        if error.value:
-            library.triton_amdgpu_free(error)
-        revision = library.triton_amdgpu_revision().decode("utf-8")
-        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+    if status != _AMD_SUCCESS:
+        _raise_codegen_error(library, error, "unknown AMD assembly failure", status, stage="assembly")
     try:
         return ctypes.string_at(object_file, object_size.value)
     finally:

@@ -790,3 +790,96 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+@pytest.mark.parametrize("size, waves_per_eu", [(1024, 0), (98304, 0), (65536, 10)])
+@pytest.mark.skip(reason="Requires the rebuilt AMD codegen artifact; re-enable with the download-manifest update")
+def test_amd_codegen_static_lds_compilation_failure(size, waves_per_eu, fresh_knobs, monkeypatch, capfd):
+    import ctypes
+    from triton.backends.amd import compiler
+    from triton.runtime.errors import BackendCompilationError
+
+    attributes = f'"amdgpu-waves-per-eu"="{waves_per_eu}"' if waves_per_eu else ""
+    source = f"""
+@lds = internal addrspace(3) global [{size} x i8] undef, align 16
+define amdgpu_kernel void @lds_kernel(ptr addrspace(1) %out, i32 %index) {attributes} {{
+  %p = getelementptr i8, ptr addrspace(3) @lds, i32 %index
+  store volatile i8 1, ptr addrspace(3) %p
+  %v = load volatile i8, ptr addrspace(3) %p
+  store i8 %v, ptr addrspace(1) %out
+  ret void
+}}
+"""
+    library = compiler._load_amd_codegen(compiler.get_amd_codegen_path())
+    native_compile = library.triton_amdgpu_compile
+
+    def check_output(*args):
+        status = native_compile(*args)
+        assert status == (compiler._AMD_COMPILATION_FAILURE if size > 65536 else compiler._AMD_SUCCESS)
+        if status:
+            assert not ctypes.cast(args[3], ctypes.POINTER(ctypes.c_void_p))[0]
+            assert ctypes.cast(args[4], ctypes.POINTER(ctypes.c_size_t))[0] == 0
+        return status
+
+    monkeypatch.setattr(library, "triton_amdgpu_compile", check_output)
+    triple = compiler.amd.get_target_triple("gfx942")
+    options = dict(flags=[], enable_fp_fusion=True, disable_optimization=False, canonicalize_gep=False,
+                   disabled_passes="", dump_ir=False, enable_timing=False)
+    if size > 65536:
+        with pytest.raises(BackendCompilationError) as exc:
+            compiler.compile_amdgpu(source, triple, "gfx942", "", **options)
+        assert exc.value.stage == "LLVM codegen"
+        assert "AMD LLVM codegen failed" in exc.value.error_message
+        stderr = capfd.readouterr().err
+        assert "local memory" in stderr
+        assert "98304" in stderr
+        assert "65536" in stderr
+    else:
+        assert "lds_kernel:" in compiler.compile_amdgpu(source, triple, "gfx942", "", **options)
+        if waves_per_eu:
+            assert "failed to meet occupancy target" in capfd.readouterr().err
+
+
+@pytest.mark.skip(reason="Requires the rebuilt AMD codegen artifact; re-enable with the download-manifest update")
+def test_amd_codegen_assembly_error_translation(fresh_knobs, capfd):
+    from triton.backends.amd import compiler
+    from triton.runtime.errors import BackendCompilationError
+
+    with pytest.raises(BackendCompilationError) as exc:
+        compiler.assemble_amdgcn("this_is_not_an_instruction\n", "gfx942", "")
+    assert exc.value.stage == "assembly"
+    assert "AMD assembler rejected generated AMDGCN" in exc.value.error_message
+    assert "this_is_not_an_instruction" in capfd.readouterr().err
+
+
+@pytest.mark.skip(reason="Requires the rebuilt AMD codegen artifact; re-enable with the download-manifest update")
+def test_amd_codegen_native_parse_error_translation(fresh_knobs, monkeypatch):
+    from triton.backends.amd import compiler
+    from triton.runtime.errors import BackendCompilationError
+
+    # Bypass core LLVM's parser to exercise the separately pinned C ABI parser.
+    monkeypatch.setattr(compiler, "_serialize_for_amd_codegen", lambda src, _: src.encode())
+    with pytest.raises(BackendCompilationError) as exc:
+        compiler.compile_amdgpu("define invalid", "amdgcn-amd-amdhsa", "gfx942", "", flags=[], enable_fp_fusion=True,
+                                disable_optimization=False, canonicalize_gep=False, disabled_passes="", dump_ir=False,
+                                enable_timing=False)
+    assert exc.value.stage == "LLVM codegen"
+    assert "error:" in exc.value.error_message
+    assert "define invalid" in exc.value.error_message
+
+
+def test_amd_codegen_invalid_options_propagate(fresh_knobs, monkeypatch):
+    from triton.backends.amd import compiler
+
+    make_options = compiler._codegen_options
+
+    def invalid_options(*args, **kwargs):
+        options = make_options(*args, **kwargs)
+        options.abi_version = 0
+        return options
+
+    monkeypatch.setattr(compiler, "_codegen_options", invalid_options)
+    with pytest.raises(RuntimeError, match="incompatible AMD code-generation ABI"):
+        compiler.compile_amdgpu("define amdgpu_kernel void @kernel() { ret void }", "amdgcn-amd-amdhsa", "gfx942", "",
+                                flags=[], enable_fp_fusion=True, disable_optimization=False, canonicalize_gep=False,
+                                disabled_passes="", dump_ir=False, enable_timing=False)
