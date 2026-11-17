@@ -3,6 +3,7 @@
 
 #include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Analysis/Membar/TmemModel.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include <map>
 #include <optional>
@@ -81,11 +82,16 @@ struct MembarCFG {
   }
 };
 
+unsigned getBlockWeight(Block *block, const BufferIndexAnalysis &indices,
+                        unsigned invocationWeight);
+
 class MembarCFGBuilder {
 public:
   MembarCFGBuilder(std::map<Operation *, SMemModel> &models, TMemModel *tmem,
-                   const llvm::SetVector<Operation *> &callbacks)
-      : models(models), tmem(tmem), callbacks(callbacks) {}
+                   const llvm::SetVector<Operation *> &callbacks,
+                   const DenseMap<Operation *, unsigned> &calleeWeights)
+      : models(models), tmem(tmem), callbacks(callbacks),
+        calleeWeights(calleeWeights) {}
 
   /// Build one execution region and link its reachable noinline callees.
   MembarCFG build(Region &root);
@@ -97,6 +103,7 @@ private:
   std::map<Operation *, SMemModel> &models;
   TMemModel *tmem;
   const llvm::SetVector<Operation *> &callbacks;
+  const DenseMap<Operation *, unsigned> &calleeWeights;
 };
 
 } // namespace mlir::triton::membar

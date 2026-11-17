@@ -873,8 +873,7 @@ tt.func @atomic_poll_acquire_loop(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: 
 
 // CHECK-LABEL: convert_layout1
 tt.func private @convert_layout1(%A : !tt.ptr<f16>) {
-  // One barrier before the load orders the stores from all callers.
-  // CHECK: ttg.barrier local
+  // CHECK: ttg.local_alloc
   // CHECK-NEXT: ttg.local_load
   // CHECK-NEXT: tt.return
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -897,9 +896,8 @@ tt.func private @convert_layout2(%A : !tt.ptr<f16>) {
 
 // CHECK-LABEL: convert_layout3
 tt.func private @convert_layout3(%cond : i1) {
-  // The caller may have initialized the storage reused by either arm.
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: cf.cond_br
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: cf.cond_br
   scf.if %cond {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #A_SHARED, #ttg.shared_memory, mutable>
     // CHECK: ttg.local_load
@@ -965,8 +963,12 @@ tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
 tt.func @multiple_calls(%A : !tt.ptr<f16>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: tt.call @convert_layout1
   tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: tt.call @convert_layout2
   tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
   tt.return
 }
@@ -978,6 +980,7 @@ tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
     %cst_ = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
     %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
     // CHECK: ttg.local_alloc
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
@@ -1000,6 +1003,8 @@ tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
   %lb = arith.constant 0 : index
   %ub = arith.constant 10 : index
   %step = arith.constant 1 : index
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: cf.br
   scf.for %iv = %lb to %ub step %step {
     // CHECK-NOT: ttg.barrier local
     // CHECK: tt.call @convert_layout1
@@ -1013,6 +1018,7 @@ tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
 tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.call @convert_layout3(%cond) : (i1) -> ()
@@ -1708,10 +1714,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
 
-  // The second invocation overwrites the caller's scratch.
   // CHECK-LABEL: @nested_entry_c
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: ttg.convert_layout
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.convert_layout
   tt.func private @nested_entry_c() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
@@ -1732,6 +1737,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: %[[FIRST:.*]] = tt.call @nested_entry_b
   // CHECK: ttg.barrier local
   // CHECK-NEXT: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: %[[SECOND:.*]] = tt.call @nested_entry_b
   tt.func @nested_entry_a() -> tensor<128x32xf16, #blockedCallDst> {
     %first = tt.call @nested_entry_b() : () -> tensor<128x32xf16, #blockedCallDst>
