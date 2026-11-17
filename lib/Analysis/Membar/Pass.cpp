@@ -48,24 +48,25 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   std::optional<TMemModel> tmem;
   if (mode != PlacementMode::Shared)
     tmem.emplace(module, regions);
+  auto *tmemModel = tmem ? &*tmem : nullptr;
 
   auto sharedMode = mode == PlacementMode::TensorMemory
                         ? SMemModel::AccessMode::SynchronizationOnly
                         : SMemModel::AccessMode::AllSharedAccesses;
   for (auto function : module.getOps<FunctionOpInterface>()) {
     Allocation &allocation = *moduleAllocation.getFuncData(function);
-    PlacementState state{{allocation, regions, sharedMode, completionScope},
-                         tmem ? &*tmem : nullptr,
-                         isKernel(function) ? Boundary::KernelReturn
-                                            : Boundary::Clean};
+    SMemModel shared(allocation, regions, sharedMode, completionScope);
+    MembarCFGBuilder builder(shared, tmemModel,
+                             isKernel(function) ? Boundary::KernelReturn
+                                                : Boundary::Clean);
     SmallVector<Region *> bodies{&function.getFunctionBody()};
     function.walk([&](gpu::WarpSpecializeOp ws) {
       bodies.push_back(&ws.getDefaultRegion());
       llvm::append_range(bodies, ws.getPartitionRegions());
     });
     for (Region *body : bodies) {
-      auto cfg = state.buildMembarCFG(*body);
-      auto demands = discoverDemands(cfg, allocation, sharedFilter, state.tmem);
+      auto cfg = builder.build(*body);
+      auto demands = discoverDemands(cfg, allocation, sharedFilter, tmemModel);
       auto cut = solveMembarCut(cfg, demands);
       if (!cut)
         return function.emitError("synchronization demand has no legal cut");

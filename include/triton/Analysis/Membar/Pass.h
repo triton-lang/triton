@@ -10,6 +10,16 @@ enum class PlacementMode { Shared, TensorMemory, SharedAndTensorMemory };
 /// Place region-local synchronization after physical allocation and compulsory
 /// cluster rendezvous insertion. Run --convert-scf-to-cf before Membar so
 /// compiler-generated thread guards are visible as CFG branches.
+///
+/// Build a CFG for each function body and warp-specialized role.
+/// Record each operation's memory effects, existing synchronization, and legal
+/// insertion sites. Propagate producer effects through the CFG to find demands
+/// for ordering or completion. A cross-warp handoff from a native TMEM load or
+/// store needs its completion wait followed by a rendezvous.
+///
+/// The solver selects sites on uncovered paths until it covers every demand.
+/// A site can cover several demands. Each enclosing loop multiplies its cost
+/// by four. Emit the selected actions before their operations, waits first.
 LogicalResult placeBarriers(ModuleAllocation &allocation,
                             BufferRegionAnalysis &regions,
                             MembarFilterFn sharedFilter, PlacementMode mode,

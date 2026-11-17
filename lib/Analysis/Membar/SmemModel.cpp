@@ -203,9 +203,12 @@ struct ThreadSyncInfo {
     return kind == ThreadSyncKind::WarpPublication;
   }
 
-  bool requiresAfter() const {
-    return kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync;
+  CompletionSync getCompletionSync() const {
+    if (kind == ThreadSyncKind::CompletionNeedsSync)
+      return CompletionSync::All;
+    if (kind == ThreadSyncKind::SharedCompletionNeedsSync)
+      return CompletionSync::Shared;
+    return CompletionSync::None;
   }
 
   bool hasThreadDemand() const {
@@ -441,19 +444,11 @@ bool SMemModel::hasThreadEffects(Operation *op) {
   });
 }
 
-static CompletionSync getCompletionSync(ThreadSyncInfo sync) {
-  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
-    return CompletionSync::All;
-  if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
-    return CompletionSync::Shared;
-  return CompletionSync::None;
-}
-
 BlockInfo SMemModel::getThreadEffects(Operation *op) {
   BlockInfo effects;
   auto sync = getThreadSyncInfo(op);
   effects.threadSync.effectIssuer = sync.issuer;
-  auto completion = getCompletionSync(sync);
+  auto completion = sync.getCompletionSync();
   effects.threadSync.completion =
       completionScope && completion != CompletionSync::None
           ? completionScope(op, completion)
@@ -586,7 +581,8 @@ void SMemModel::describe(Operation *op, OpModel &model,
     bool isReturn = op->hasTrait<OpTrait::ReturnLike>();
     // Cluster barriers contribute synchronization stages, not payload effects.
     bool hasEffects =
-        sync.requiresBefore() || sync.requiresAfter() || hasScratch ||
+        sync.requiresBefore() ||
+        sync.getCompletionSync() != CompletionSync::None || hasScratch ||
         (!controlFlow && !isReturn && !isa<ttng::ClusterBarrierOp>(op) &&
          hasThreadEffects(op));
 
