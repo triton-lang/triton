@@ -4686,9 +4686,21 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
 
 
+@gluon.constexpr_function
+def _fp6_packed_copy_layout(shared, num_warps):
+    # One 16-byte group per lane, and each warp copies one 1 KiB padding interval
+    # in offset order, so the direct-to-LDS writes stay coalesced.
+    bases = shared.offset_bases
+    lanes = 6
+    warps = num_warps.bit_length() - 1
+    return ttgl.DistributedLinearLayout(reg_bases=bases[:4] + bases[4 + lanes + warps:], lane_bases=bases[4:4 + lanes],
+                                        warp_bases=bases[4 + lanes:4 + lanes + warps], block_bases=[],
+                                        shape=shared.shape)
+
+
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
-@pytest.mark.parametrize("smem", ["unswizzled", "swizzled"])
+@pytest.mark.parametrize("smem", ["unswizzled", "swizzled", "padded"])
 def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
     from triton._internal_testing import fp6_values, pack_fp6
 
@@ -4702,12 +4714,20 @@ def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
         # Each lane copies one 16-value group: 12 global bytes into a 16-byte LDS slot.
-        # Swizzling moves whole 16-byte groups, so it keeps each group intact.
-        PHASE: ttgl.constexpr = 8 if SMEM == "swizzled" else 1
-        a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [1, 0])
-        b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
-        a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
-        b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
+        # Swizzling and padding move whole 16-byte groups, so they keep each group intact.
+        if SMEM == "padded":
+            a_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+                a_layout, [BLOCK_M, BLOCK_K], ttgl.uint8)
+            b_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+                b_layout, [BLOCK_K, BLOCK_N], ttgl.uint8)
+            a_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(a_shared, ttgl.num_warps())
+            b_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(b_shared, ttgl.num_warps())
+        else:
+            PHASE: ttgl.constexpr = 8 if SMEM == "swizzled" else 1
+            a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [1, 0])
+            b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
+            a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
+            b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
         a_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_M, BLOCK_K], a_shared)
         b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_K, BLOCK_N], b_shared)
         row_bytes = K // 4 * 3

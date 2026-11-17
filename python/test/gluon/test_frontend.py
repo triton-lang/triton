@@ -5969,6 +5969,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+def test_compute_efficient_padded_shared_layout_fp6_packed():
+    # Packed FP6 (k_width=32 bytes) pads 16 bytes per 1 KiB and reorders rows
+    # so neither MFMA size has ds_read_b128 bank conflicts.
+    mfma_layout = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True, warps_per_cta=[2, 2])
+    dot_a = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=32)
+    dot_b = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=32)
+    shared_a = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_a, [128, 128], ttgl.uint8)
+    assert shared_a.interval_padding_pairs == [(1024, 16)]
+    assert shared_a.offset_bases == [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0], [4, 0], [32, 0],
+                                     [2, 0], [16, 0], [8, 0], [64, 0]]
+    shared_b = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_b, [128, 64], ttgl.uint8)
+    assert shared_b.offset_bases == [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 1], [0, 4], [0, 32],
+                                     [0, 2], [0, 16], [0, 8]]
+    # Fewer than 64 rows or an N-contiguous operand is not supported.
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_a, [32, 128], ttgl.uint8) is None
+    assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_b, [128, 64], ttgl.uint8,
+                                                                 is_k_contig=False) is None
+
+
 def test_compute_efficient_padded_shared_layout_invalid_returns_none():
     mfma_layout = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 32], transposed=True, warps_per_cta=[2, 2])
     dot_op = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
