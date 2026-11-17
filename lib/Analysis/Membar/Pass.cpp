@@ -71,15 +71,17 @@ void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
 template <typename Model, typename Discover>
 LogicalResult placeRegions(FunctionOpInterface function,
                            MembarCFGBuilder<Model> &builder,
-                           ArrayRef<Action> actions, Discover discover) {
+                           ArrayRef<Action> actions, Discover discover,
+                           bool expandWarpRoles = false) {
   SmallVector<Region *> bodies{&function.getFunctionBody()};
-  function.walk([&](gpu::WarpSpecializeOp ws) {
-    bodies.push_back(&ws.getDefaultRegion());
-    llvm::append_range(bodies, ws.getPartitionRegions());
-  });
+  if (!expandWarpRoles)
+    function.walk([&](gpu::WarpSpecializeOp ws) {
+      bodies.push_back(&ws.getDefaultRegion());
+      llvm::append_range(bodies, ws.getPartitionRegions());
+    });
   for (Region *body : bodies) {
-    auto cfg = builder.build(*body);
-    auto demands = discover(*body, cfg);
+    auto cfg = builder.build(*body, expandWarpRoles);
+    auto demands = discover(cfg);
     auto cut = solveMembarCut(cfg, demands, actions);
     if (!cut)
       return function.emitError("synchronization demand has no legal cut");
@@ -124,7 +126,7 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   for (auto function : moduleAllocation.getRoots()) {
     // Callee footprints are in kernel coordinates.
     Allocation &allocation = *moduleAllocation.getFuncData(function);
-    auto discover = [&](Region &, const auto &cfg) {
+    auto discover = [&](const auto &cfg) {
       return discoverDemands(cfg, allocation, sharedFilter, tmemModel);
     };
     if (failed(placeRegions(function, builder, ACTIONS, discover)))

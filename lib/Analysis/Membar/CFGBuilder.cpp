@@ -148,18 +148,20 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
 }
 
 template <typename Model>
-auto MembarCFGBuilder<Model>::build(Region &root) -> MembarCFG<Facts> {
+void MembarCFGBuilder<Model>::appendWithCallees(MembarCFG<Facts> &cfg,
+                                                Region &root,
+                                                std::optional<Edge> roleExit) {
   struct Callee {
     unsigned entry;
     SmallVector<Edge, 2> continuations;
   };
   DenseMap<Region *, Callee> callees;
-  callees.try_emplace(&root);
-  MembarCFG<Facts> cfg;
+  unsigned entry = cfg.nodes.size();
+  callees.try_emplace(&root, Callee{entry, {}});
   addRegion(cfg, root);
 
-  // Append each reachable callee once, in first-call order.
-  for (unsigned id = 0; id < cfg.nodes.size(); ++id) {
+  // Append each callee once per role so its returns stay in the calling role.
+  for (unsigned id = entry; id < cfg.nodes.size(); ++id) {
     auto call = dyn_cast<CallOpInterface>(cfg.nodes[id].op);
     if (!call)
       continue;
@@ -175,9 +177,43 @@ auto MembarCFGBuilder<Model>::build(Region &root) -> MembarCFG<Facts> {
     callee.continuations.push_back(next);
     next = {callee.entry, true};
   }
-  for (auto &node : cfg.nodes)
+  for (auto &node : MutableArrayRef(cfg.nodes).drop_front(entry)) {
+    node.inWorker = roleExit && roleExit->warp == WarpEdge::ExitWorker;
     if (isa<triton::ReturnOp>(node.op))
       node.next = callees.at(node.op->getParentRegion()).continuations;
+    else if (roleExit && isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(node.op))
+      node.next.push_back(*roleExit);
+  }
+}
+
+template <typename Model>
+auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
+    -> MembarCFG<Facts> {
+  MembarCFG<Facts> cfg;
+  appendWithCallees(cfg, root);
+  if (expandWarpRoles) {
+    for (unsigned id = 0, end = cfg.nodes.size(); id < end; ++id) {
+      auto ws = dyn_cast<ttg::WarpSpecializeOp>(cfg.nodes[id].op);
+      if (!ws)
+        continue;
+      SmallVector<Region *> roles{&ws.getDefaultRegion()};
+      llvm::append_range(roles, ws.getPartitionRegions());
+      // The launch is a non-terminator with one fallthrough edge.
+      Edge continuation = cfg.nodes[id].next.pop_back_val();
+      for (Region *region : roles) {
+        bool worker = region != roles.front();
+        unsigned entry = cfg.nodes.size();
+        cfg.nodes[id].next.push_back(
+            {entry, false, worker ? WarpEdge::EnterWorker : WarpEdge::None});
+        continuation.warp = worker ? WarpEdge::ExitWorker : WarpEdge::None;
+        appendWithCallees(cfg, *region, continuation);
+      }
+    }
+  }
+
+  DenseMap<Operation *, unsigned> gapIds;
+  for (auto [id, node] : llvm::enumerate(cfg.nodes))
+    node.gap = gapIds.try_emplace(node.op, id).first->second;
   return cfg;
 }
 

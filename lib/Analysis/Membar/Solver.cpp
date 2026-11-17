@@ -49,9 +49,13 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
 
   // The root is the departure after the producer. Returning to the producer
   // itself requires traversing a CFG edge.
-  const unsigned root = 2 * cfg.nodes.size();
   for (size_t i = first; i != demands.size(); ++i) {
     const Demand &d = demands[i];
+    // A worker's own effect can leave once. Incoming parent effects follow
+    // the default continuation, while remaining visible to worker consumers.
+    const bool workerSource = cfg.nodes[d.source].inWorker;
+    const unsigned width = workerSource ? 4 : 2;
+    const unsigned root = width * cfg.nodes.size();
     if (queue.empty() || origin(demands[i - 1]) != origin(d)) {
       parent.assign(root, unseen);
       queue.assign(1, root);
@@ -65,34 +69,42 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
     };
 
     // Resume this group's BFS until the sink is reached or the queue is empty.
-    unsigned sink = 2 * d.sink + (d.path == Path::LoopCarried);
-    while (parent[sink] == unseen) {
-      if (d.path == Path::WaitThenOrder && parent[sink + 1] != unseen) {
-        ++sink;
-        break;
+    unsigned sink = unseen;
+    for (;;) {
+      for (unsigned flags = 0; flags < width; ++flags) {
+        unsigned point = width * d.sink + flags;
+        if (parent[point] != unseen &&
+            (d.path != Path::LoopCarried || (flags & 1))) {
+          sink = point;
+          break;
+        }
       }
-      if (next == queue.size())
+      if (sink != unseen || next == queue.size())
         break;
       unsigned state = queue[next++];
-      const Node<Facts> &from = cfg.nodes[state == root ? d.source : state / 2];
+      const Node<Facts> &from =
+          cfg.nodes[state == root ? d.source : state / width];
       bool advanced = state & 1;
       if ((state != root && covered(from.fixed.inside, advanced)) ||
           covered(from.fixed.after, advanced))
         continue;
       for (Edge edge : from.next) {
+        bool mayExitWorker = workerSource && (state == root || (state & 2));
+        if (!edge.follow(mayExitWorker))
+          continue;
         bool after = advanced || (d.path == Path::LoopCarried &&
                                   cfg.invalidatesIteration(edge, d.source));
-        if (covered(credits[edge.to], after) ||
-            covered(cfg.nodes[edge.to].fixed.before, after))
+        const auto &to = cfg.nodes[edge.to];
+        if (covered(credits[to.gap], after) || covered(to.fixed.before, after))
           continue;
-        unsigned child = 2 * edge.to + after;
+        unsigned child = width * edge.to + 2 * mayExitWorker + after;
         if (parent[child] == unseen) {
           parent[child] = state;
           queue.push_back(child);
         }
       }
     }
-    if (parent[sink] == unseen) {
+    if (sink == unseen) {
       if (!best)
         ++first;
       continue;
@@ -103,9 +115,8 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
     labels.clear();
     bool needsBarrier = d.path == Path::WaitThenOrder;
     for (unsigned state = sink; state != root; state = parent[state]) {
-      unsigned point = state / 2;
-      const Node<Facts> &node = cfg.nodes[point];
-      unsigned mask = credits[point] | node.fixed.before;
+      const Node<Facts> &node = cfg.nodes[state / width];
+      unsigned mask = credits[node.gap] | node.fixed.before;
       if (state != sink)
         mask |= node.fixed.inside | node.fixed.after;
       needsBarrier &= !(mask & bit(Need::RegionOrder));
@@ -114,7 +125,7 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
       Need need = needsBarrier ? Need::RegionOrder : d.first;
       for (unsigned i = actions.size(); i-- > 0;)
         if (coverage(actions[i]) & bit(need))
-          labels.insert(point * actions.size() + i);
+          labels.insert(node.gap * actions.size() + i);
       if (best && labels.size() >= best->size())
         break;
     }

@@ -13,10 +13,19 @@ constexpr unsigned site(unsigned point, Action action) {
   return point * ACTIONS.size() + unsigned(action);
 }
 
+// Give each point its own gap unless a test explicitly shares one.
+template <typename Facts>
+void addPoints(MembarCFG<Facts> &cfg, unsigned count) {
+  unsigned first = cfg.nodes.size();
+  cfg.nodes.resize(first + count);
+  for (unsigned i = first; i < cfg.nodes.size(); ++i)
+    cfg.nodes[i].gap = i;
+}
+
 // Node zero is entry. A zero insertion cost marks a node with no legal site.
 MembarCFG<OpModel> linearCFG(llvm::ArrayRef<unsigned> costs) {
   MembarCFG<OpModel> cfg;
-  cfg.nodes.resize(costs.size());
+  addPoints(cfg, costs.size());
   for (unsigned i = 1; i < costs.size(); ++i) {
     cfg.nodes[i - 1].next.push_back({i});
     cfg.nodes[i].insertionCost = costs[i];
@@ -170,7 +179,7 @@ void checkPlacements(
   unsigned points = cfg.nodes.size();
   llvm::BitVector legal(points * ACTIONS.size());
   auto fixed = cfg;
-  fixed.nodes.resize(2 * points);
+  addPoints(fixed, points);
   for (unsigned i = 0; i < points; ++i) {
     if (cfg.nodes[i].insertionCost)
       legal.set(i * ACTIONS.size(), (i + 1) * ACTIONS.size());
@@ -248,6 +257,51 @@ TEST(MembarCut, OrderedWaitAndBarrier) {
   checkPlacements(cfg, demand, [](const llvm::BitVector &s) {
     return s[waitM] || s[barrierU];
   });
+}
+
+TEST(MembarCut, WorkerFencesFollowTheirIssuerThroughTheJoin) {
+  // Two launches in sequence. Each default fences before its join.
+  MembarCFG<OpModel> cfg;
+  addPoints(cfg, 7);
+  cfg.nodes[0].next = {{1}, {2, false, WarpEdge::EnterWorker}};
+  cfg.nodes[1].fixed.after = coverage(Action::RegionBarrier);
+  cfg.nodes[1].next = {{3}};
+  cfg.nodes[2].inWorker = true;
+  cfg.nodes[2].next = {{3, false, WarpEdge::ExitWorker}};
+  cfg.nodes[3].next = {{4}, {5, false, WarpEdge::EnterWorker}};
+  cfg.nodes[4].fixed.after = coverage(Action::RegionBarrier);
+  cfg.nodes[4].next = {{6}};
+  cfg.nodes[5].inWorker = true;
+  cfg.nodes[5].next = {{6, false, WarpEdge::ExitWorker}};
+
+  const Action fences[] = {Action::RegionBarrier};
+  // With no legal insertion gaps, a solution exists only for covered demands.
+  auto covered = [&](unsigned from, unsigned to) {
+    return solveMembarCut(cfg, {{from, to, Need::RegionOrder}}, fences)
+        .has_value();
+  };
+  EXPECT_TRUE(covered(0, 3));  // The default orders its own incoming effects.
+  EXPECT_FALSE(covered(0, 2)); // The worker can consume an inherited effect.
+  EXPECT_FALSE(covered(2, 3)); // The worker's own effects escape its launch.
+  EXPECT_FALSE(covered(2, 5)); // They can enter the next launch's worker.
+  EXPECT_TRUE(covered(2, 6));  // They cannot escape that worker again.
+}
+
+TEST(MembarCut, SharedCalleeFenceIsChargedOnce) {
+  MembarCFG<OpModel> cfg;
+  addPoints(cfg, 3);
+  cfg.nodes[0].next = {{1}, {2, false, WarpEdge::EnterWorker}};
+  cfg.nodes[2].inWorker = true;
+  // Both role contexts execute the same physical instruction.
+  cfg.nodes[2].gap = cfg.nodes[1].gap;
+  cfg.nodes[1].insertionCost = cfg.nodes[2].insertionCost = 4;
+  const Action fences[] = {Action::RegionBarrier};
+  auto cut = solveMembarCut(
+      cfg, {{0, 1, Need::RegionOrder}, {0, 2, Need::RegionOrder}}, fences);
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->sites.count(), 1u);
+  EXPECT_EQ(cut->cost, 4u);
+  EXPECT_EQ(cut->lowerBound, cut->cost);
 }
 
 TEST(MembarCut, OrderedPathsThroughAJoin) {
