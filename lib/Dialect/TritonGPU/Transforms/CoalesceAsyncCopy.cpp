@@ -28,17 +28,21 @@ static void retargetCopyOperandsToEncoding(
   Value mask = copyOp.getMask();
   Value other = copyOp.getOther();
 
-  // Axis analysis has no entries for newly created convert_layout results.
-  unsigned contiguity = axisInfoAnalysis.getContiguity(src);
-  if (mask)
-    contiguity =
-        std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
-  contiguity = std::max<unsigned>(contiguity, copyOp.getContiguity());
-  auto newSrcTy = cast<RankedTensorType>(src.getType())
-                      .cloneWithEncoding(newEncoding);
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  auto newSrcTy = srcTy.cloneWithEncoding(newEncoding);
   auto order = getOrder(newSrcTy);
-  contiguity = std::min<unsigned>(
-      contiguity, getContigPerThread(newSrcTy)[order[0]]);
+  unsigned contiguity = 1;
+  // The old hint and cached vector widths describe the old register axis.
+  if (getOrder(srcTy)[0] == order[0]) {
+    // Axis analysis has no entries for newly created convert_layout results.
+    contiguity = axisInfoAnalysis.getContiguity(src);
+    if (mask)
+      contiguity =
+          std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
+    contiguity = std::max<unsigned>(contiguity, copyOp.getContiguity());
+    contiguity = std::min<unsigned>(
+        contiguity, getContigPerThread(newSrcTy)[order[0]]);
+  }
 
   // insert cvt's after src, mask, and other
   src = convertValueLayout(src, newEncoding, rewriter);
