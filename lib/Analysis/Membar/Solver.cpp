@@ -12,12 +12,29 @@ constexpr unsigned unseen = std::numeric_limits<unsigned>::max();
 
 auto origin(const Demand &d) { return std::tie(d.first, d.path, d.source); }
 
+class CutSolver {
+public:
+  CutSolver(const MembarCFG &cfg, ArrayRef<Demand> unsorted)
+      : cfg(cfg), demands(unsorted) {
+    llvm::sort(demands, [](const Demand &a, const Demand &b) {
+      return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
+    });
+  }
+
+  std::optional<CutSolution> choose(bool reverseTies) const;
+
+private:
+  std::optional<SiteList> shortestCut(const llvm::BitVector &selected,
+                                      size_t &first) const;
+
+  const MembarCFG &cfg;
+  SmallVector<Demand> demands;
+};
+
 // Keep the first uncovered path with the fewest distinct legal sites. A
 // covered prefix stays covered while the placement grows.
-std::optional<SiteList> shortestCut(const MembarCFG &cfg,
-                                    ArrayRef<Demand> demands,
-                                    const llvm::BitVector &selected,
-                                    size_t &first) {
+std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
+                                               size_t &first) const {
   SmallVector<unsigned> credits(cfg.nodes.size(), 0), parent, queue;
   for (unsigned id : selected.set_bits())
     credits[id / ACTIONS.size()] |= coverage(ACTIONS[id % ACTIONS.size()]);
@@ -104,8 +121,7 @@ std::optional<SiteList> shortestCut(const MembarCFG &cfg,
   return best;
 }
 
-std::optional<CutSolution> choose(const MembarCFG &cfg,
-                                  ArrayRef<Demand> demands, bool reverseTies) {
+std::optional<CutSolution> CutSolver::choose(bool reverseTies) const {
   SmallVector<unsigned> slack, order;
   for (const Node &node : cfg.nodes)
     slack.append(ACTIONS.size(), node.insertionCost);
@@ -115,7 +131,7 @@ std::optional<CutSolution> choose(const MembarCFG &cfg,
     return cfg.nodes[site / ACTIONS.size()].insertionCost;
   };
   size_t first = 0;
-  while (auto cut = shortestCut(cfg, demands, result.sites, first)) {
+  while (auto cut = shortestCut(result.sites, first)) {
     if (cut->empty())
       return std::nullopt;
     // Charge this path before searching again with the selected site.
@@ -158,7 +174,7 @@ std::optional<CutSolution> choose(const MembarCFG &cfg,
   for (unsigned site : llvm::reverse(order)) {
     result.sites.reset(site);
     first = 0;
-    if (!shortestCut(cfg, demands, result.sites, first))
+    if (!shortestCut(result.sites, first))
       result.cost -= cost(site);
     else
       result.sites.set(site);
@@ -170,14 +186,11 @@ std::optional<CutSolution> choose(const MembarCFG &cfg,
 
 std::optional<CutSolution> solveMembarCut(const MembarCFG &cfg,
                                           ArrayRef<Demand> demands) {
-  SmallVector<Demand> sorted(demands);
-  llvm::sort(sorted, [](const Demand &a, const Demand &b) {
-    return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
-  });
-  auto best = choose(cfg, sorted, false);
+  CutSolver solver(cfg, demands);
+  auto best = solver.choose(false);
   if (!best || best->cost == best->lowerBound)
     return best;
-  auto other = choose(cfg, sorted, true);
+  auto other = solver.choose(true);
   assert(other && "changing ties cannot change feasibility");
   if (other->cost < best->cost)
     best.swap(other);

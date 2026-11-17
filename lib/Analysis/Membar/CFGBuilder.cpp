@@ -24,7 +24,7 @@ static Block *getGuardArm(Operation *op) {
   return nullptr;
 }
 
-OpModel PlacementState::describe(Operation *op) {
+OpModel MembarCFGBuilder::describe(Operation *op) {
   if (isa<CallOpInterface>(op))
     return {.boundary = Boundary::Clean};
   if (isa<triton::ReturnOp>(op))
@@ -38,7 +38,7 @@ OpModel PlacementState::describe(Operation *op) {
   return model;
 }
 
-MembarCFG PlacementState::buildMembarCFG(Region &region) {
+MembarCFG MembarCFGBuilder::build(Region &region) {
   const auto &indices = shared.getBufferIndexAnalysis();
   MembarCFG cfg{};
   auto &entry = cfg.nodes.emplace_back();

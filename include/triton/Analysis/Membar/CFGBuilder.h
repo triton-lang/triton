@@ -74,15 +74,19 @@ struct MembarCFG {
   SmallVector<Node, 0> nodes;
 };
 
-struct PlacementState {
-  SMemModel shared;
-  TMemModel *tmem;
-  Boundary returnBoundary;
+class MembarCFGBuilder {
+public:
+  MembarCFGBuilder(SMemModel &shared, TMemModel *tmem, Boundary returnBoundary)
+      : shared(shared), tmem(tmem), returnBoundary(returnBoundary) {}
 
-  MembarCFG buildMembarCFG(Region &region);
+  MembarCFG build(Region &region);
 
 private:
   OpModel describe(Operation *op);
+
+  SMemModel &shared;
+  TMemModel *tmem;
+  Boundary returnBoundary;
 };
 
 } // namespace mlir::triton::membar
