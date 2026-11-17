@@ -8,8 +8,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <cassert>
 #include <limits>
 #include <utility>
 
@@ -17,6 +19,29 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::membar;
 namespace ttg = mlir::triton::gpu;
+
+// Include loops enclosing a warp role or a compiler-generated thread scope.
+unsigned
+mlir::triton::membar::getBlockWeight(Block *block,
+                                     const BufferIndexAnalysis &indices,
+                                     unsigned invocationWeight) {
+  unsigned depth = 0;
+  for (;;) {
+    if (auto *loops = indices.getLoopInfo(block->getParent()))
+      depth += loops->getLoopDepth(block);
+    Operation *parent = block->getParentOp();
+    if (isa<FunctionOpInterface>(parent))
+      break;
+    block = parent->getBlock();
+  }
+  constexpr unsigned maxDepth = (std::numeric_limits<unsigned>::digits - 1) / 2;
+  unsigned loopWeight = 1u << (2 * std::min(depth, maxDepth));
+  bool overflow;
+  unsigned weight =
+      llvm::SaturatingMultiply(invocationWeight, loopWeight, &overflow);
+  assert(depth <= maxDepth && !overflow && "Membar block weight overflow");
+  return weight;
+}
 
 static Block *getGuardArm(Operation *op) {
   auto split = dyn_cast<cf::CondBranchOp>(op);
@@ -43,6 +68,7 @@ OpModel MembarCFGBuilder::describe(Operation *op, SMemModel &shared) {
 
 void MembarCFGBuilder::addRegion(MembarCFG &cfg, Region &region) {
   auto function = region.getParentOfType<FunctionOpInterface>();
+  unsigned invocationWeight = calleeWeights.lookup_or(function, 1u);
   SMemModel &shared = models.at(function);
   const auto &indices = shared.getBufferIndexAnalysis();
   unsigned body = cfg.nodes.size();
@@ -50,8 +76,6 @@ void MembarCFGBuilder::addRegion(MembarCFG &cfg, Region &region) {
   bool callback = callbacks.contains(function);
   DenseMap<Block *, unsigned> entries;
   SmallVector<std::pair<unsigned, Operation *>> exits;
-  const auto *loops = indices.getLoopInfo(&region);
-  constexpr unsigned maxDepth = (std::numeric_limits<unsigned>::digits - 1) / 2;
   // Build the CFG for one execution region:
   //   - Insertion costs on retained ops
   //   - One node per retained op via `describe`
@@ -66,9 +90,9 @@ void MembarCFGBuilder::addRegion(MembarCFG &cfg, Region &region) {
     if (arm && block.getSinglePredecessor())
       continue;
     entries.try_emplace(&block, cfg.nodes.size());
-    unsigned depth = loops ? loops->getLoopDepth(&block) : 0;
-    unsigned cost =
-        (arm || callback) ? 0 : 1u << (2 * std::min(depth, maxDepth));
+    unsigned cost = (arm || callback)
+                        ? 0
+                        : getBlockWeight(&block, indices, invocationWeight);
     for (Operation &op : block.without_terminator()) {
       OpModel effects = describe(&op, shared);
       if (effects == OpModel{} && !isa<CallOpInterface>(&op))

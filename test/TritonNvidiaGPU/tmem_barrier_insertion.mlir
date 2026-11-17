@@ -214,16 +214,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // WAIT-LABEL: @tmem_opaque_handoff
-  // WAIT: ttng.tmem_wait load
-  // WAIT: ttg.barrier local
-  // WAIT-NEXT: {{.*}}tt.elementwise_inline_asm
+  // WAIT-NOT: {{ttng\.tmem_wait|ttg\.barrier}}
+  // WAIT: {{.*}}tt.elementwise_inline_asm
   tt.func private @tmem_opaque_handoff() attributes {noinline = true} {
     %opaque = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32
     tt.return
   }
 
   // The load completes before either overwrite. The optional copy needs a
-  // rendezvous with the loading warps. The callee orders publication.
+  // rendezvous with the loading warps.
   // WAIT-LABEL: @wait_same_thread_after_barrier
   // WAIT-NOT: ttng.tmem_wait load
   // WAIT: ttng.tmem_load
@@ -726,10 +725,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Complete the caller's load before reusing its TMEM columns.
   // TMEM-LABEL: @tmem_entry_c
-  // TMEM: ttng.tmem_wait load
-  // TMEM-NEXT: {{.*}} = ttng.tmem_alloc
+  // TMEM-NOT: ttng.tmem_wait load
+  // TMEM: {{.*}} = ttng.tmem_alloc
   // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: tt.return
   tt.func private @tmem_entry_c() {
@@ -742,19 +740,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // TMEM-LABEL: @tmem_entry_b
   // TMEM-NOT: {{ttng\.tmem_wait|ttg\.barrier}}
   // TMEM: tt.call @tmem_entry_c
-  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: tt.return
   tt.func private @tmem_entry_b() {
     tt.call @tmem_entry_c() : () -> ()
     tt.return
   }
 
-  // Both calls share the waits in @tmem_entry_b and @tmem_entry_c.
+  // Wait in the caller before its load, before the second call, and at return.
   // TMEM-LABEL: @tmem_entry_a
   // TMEM-NEXT: {{.*}} = ttng.tmem_alloc
   // TMEM-NEXT: tt.call @tmem_entry_b
+  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: {{.*}} = ttng.tmem_load
+  // TMEM-NEXT: ttng.tmem_wait load
   // TMEM-NEXT: tt.call @tmem_entry_b
+  // TMEM-NEXT: ttng.tmem_wait store
+  // TMEM-NEXT: tt.return
   tt.func @tmem_entry_a() {
     %alloc = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.call @tmem_entry_b() : () -> ()
@@ -1098,10 +1099,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // The wait in @tmem_entry_c also completes the disjoint load.
+  // The caller completes the disjoint load and the callee's store at return.
   // TMEM-LABEL: @tmem_call_disjoint
   // TMEM: ttng.tmem_load
   // TMEM-NEXT: tt.call @tmem_entry_b
+  // TMEM-NEXT: ttng.tmem_wait load
+  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: tt.return
   tt.func @tmem_call_disjoint() {
     %alloc = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
@@ -1135,10 +1138,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 
-  // Complete the caller's initializer before loading its tile.
   // TMEM-LABEL: @tmem_load_argument
   // TMEM: ttg.barrier all
-  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: {{.*}} = ttng.tmem_load
   // TMEM-NEXT: tt.return
   tt.func private @tmem_load_argument(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
@@ -1151,6 +1152,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-LABEL: @tmem_call_load_then_publish
   // WAIT: tt.call @tmem_load_argument
   // WAIT-NEXT: tt.store
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: tt.call @tmem_opaque_handoff
   // WAIT-NEXT: tt.return
   tt.func private @tmem_call_load_then_publish(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>, %out: !tt.ptr<f32>, %value: f32) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
@@ -1163,6 +1166,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // The caller waits for the callee's load before overwriting the tile.
   // TMEM-LABEL: @tmem_call_load_then_store
   // TMEM: ttng.tmem_alloc
+  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: {{.*}} = tt.call @tmem_load_argument
   // TMEM-NEXT: ttng.tmem_wait load
   // TMEM-NEXT: ttng.tmem_store

@@ -7,13 +7,38 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 
+#include <cassert>
 #include <map>
 
 #define DEBUG_TYPE "membar-placement"
 
 namespace mlir::triton::membar {
 namespace {
+
+DenseMap<Operation *, unsigned>
+getCalleeWeights(ModuleAllocation &calls,
+                 std::map<Operation *, SMemModel> &models) {
+  DenseMap<Operation *, unsigned> calleeWeights;
+  // Each root gets a postorder visit without an incoming call.
+  SmallVector<unsigned> pathWeights(calls.getRoots().size(), 1);
+  // walk visits each call path. Propagate just this path's contribution.
+  calls.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+      [&](CallOpInterface call, FunctionOpInterface callee) {
+        auto caller = call->getParentOfType<FunctionOpInterface>();
+        const auto &indices = models.at(caller).getBufferIndexAnalysis();
+        unsigned weight =
+            getBlockWeight(call->getBlock(), indices, pathWeights.back());
+        pathWeights.push_back(weight);
+        unsigned &total = calleeWeights[callee];
+        bool overflow;
+        total = llvm::SaturatingAdd(total, weight, &overflow);
+        assert(!overflow && "Membar callee weight overflow");
+      },
+      [&](FunctionOpInterface) { pathWeights.pop_back(); });
+  return calleeWeights;
+}
 
 void emit(const MembarCFG &cfg, const llvm::BitVector &selected) {
   for (unsigned id : selected.set_bits()) {
@@ -64,7 +89,8 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                        /*followCalls=*/true);
 
   auto callbacks = getTensorCallbackOps(module);
-  MembarCFGBuilder builder(models, tmemModel, callbacks);
+  const auto calleeWeights = getCalleeWeights(moduleAllocation, models);
+  MembarCFGBuilder builder(models, tmemModel, callbacks, calleeWeights);
   for (auto function : moduleAllocation.getRoots()) {
     // Callee footprints are in kernel coordinates. Only kernel SSA values
     // have allocator IDs for target-specific alias checks.
