@@ -1,5 +1,6 @@
 #include "triton/Analysis/Membar/Pass.h"
 #include "triton/Analysis/CallGraph.h"
+#include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Membar/Dependencies.h"
 #include "triton/Analysis/Membar/Solver.h"
@@ -102,6 +103,22 @@ LogicalResult placeRegions(FunctionOpInterface function,
 }
 
 } // namespace
+
+LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions) {
+  const Action actions[] = {Action::ProxyCluster, Action::ProxyCTA};
+  auto callbacks = getTensorCallbackOps(module);
+  CallGraph<int> calls(module);
+  AsyncFenceModel model(regions, gpu::TritonGPUDialect::getNumCTAs(module));
+  const auto calleeWeights = getCalleeWeights(calls, model);
+  MembarCFGBuilder builder(model, callbacks, calleeWeights);
+  for (auto function : calls.getRoots()) {
+    auto discover = [&](auto &cfg) { return model.discoverDemands(cfg); };
+    if (failed(placeRegions(function, builder, actions, discover,
+                            /*expandWarpRoles=*/true)))
+      return failure();
+  }
+  return success();
+}
 
 LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                             BufferRegionAnalysis &regions,
