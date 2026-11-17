@@ -20,29 +20,36 @@ using SyncTransfer = llvm::function_ref<unsigned(unsigned, unsigned)>;
 
 // Visit each (point, state) once, observing the consumer before internal sync.
 // A sync transfer returns zero when it covers the producer. Completion walks
-// omit the transfer so they can propagate an uncommitted cp.async group (age
-// 0).
+// omit the transfer so zero can represent an uncommitted copy.
 template <typename Facts, typename Visit>
-void walkEdges(const MembarCFG<Facts> &cfg, ArrayRef<Edge> edges,
+void walkEdges(const MembarCFG<Facts> &cfg, const Node<Facts> &producer,
                unsigned state, Visit visit, SyncTransfer apply = {},
                EdgeTransfer onEdge = {}) {
   llvm::SmallSetVector<std::pair<unsigned, unsigned>, 16> arrivals;
-  auto enqueue = [&](ArrayRef<Edge> edges, unsigned state) {
+  auto enqueue = [&](ArrayRef<Edge> edges, unsigned state, bool worker) {
     for (Edge edge : edges) {
+      bool nextWorker = worker;
+      if (!edge.follow(nextWorker))
+        continue;
       unsigned live =
           apply ? apply(state, cfg.nodes[edge.to].fixed.before) : state;
       if (!apply || live)
-        arrivals.insert({edge.to, onEdge ? onEdge(edge, live) : live});
+        arrivals.insert(
+            {2 * edge.to + nextWorker, onEdge ? onEdge(edge, live) : live});
     }
   };
-  enqueue(edges, state);
+  enqueue(producer.next, apply ? apply(state, producer.fixed.after) : state,
+          producer.inWorker);
   for (unsigned i = 0; i != arrivals.size(); ++i) {
-    auto [point, incoming] = arrivals[i];
+    auto [arrival, incoming] = arrivals[i];
+    unsigned point = arrival / 2;
     const auto &node = cfg.nodes[point];
-    if (auto next = visit(point, incoming))
+    bool canExitWorker = arrival & 1;
+    if (auto next = visit(point, incoming, canExitWorker))
       enqueue(node.next,
               apply ? apply(apply(*next, node.fixed.inside), node.fixed.after)
-                    : *next);
+                    : *next,
+              canExitWorker);
   }
 }
 
@@ -60,10 +67,9 @@ void discoverDemands(const MembarCFG<Facts> &cfg,
                      SmallVectorImpl<Demand> &demands, unsigned source,
                      unsigned state, SyncTransfer apply, Rule rule,
                      EdgeTransfer onEdge = {}) {
-  const auto &producer = cfg.nodes[source];
   walkEdges(
-      cfg, producer.next, apply(state, producer.fixed.after),
-      [&](unsigned sink, unsigned live) {
+      cfg, cfg.nodes[source], state,
+      [&](unsigned sink, unsigned live, bool) {
         auto conflict = rule(cfg.nodes[sink], live);
         if (conflict.path) {
           demands.push_back({source, sink, conflict.need, *conflict.path});

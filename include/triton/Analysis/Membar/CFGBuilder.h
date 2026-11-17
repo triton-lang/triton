@@ -7,6 +7,7 @@
 #include "llvm/ADT/SetVector.h"
 #include <map>
 #include <optional>
+#include <utility>
 
 namespace mlir::triton::membar {
 
@@ -55,9 +56,20 @@ struct OpModel {
   bool operator==(const OpModel &) const = default;
 };
 
+enum class WarpEdge { None, EnterWorker, ExitWorker };
+
 struct Edge {
   unsigned to;
   bool invalidatesIteration = false;
+  WarpEdge warp = WarpEdge::None;
+
+  // A worker exports its own effects. An effect inherited at launch follows
+  // the default warps to the continuation, including on later loop iterations.
+  bool follow(bool &mayExitWorker) const {
+    if (warp != WarpEdge::ExitWorker)
+      return true;
+    return std::exchange(mayExitWorker, false);
+  }
 };
 
 struct FixedSync {
@@ -76,6 +88,9 @@ template <typename Facts> struct Node {
   FixedSync fixed;
   Facts effects;
   SmallVector<Edge, 2> next;
+  // First CFG point for this operation. Copies in different roles share a gap.
+  unsigned gap = 0;
+  bool inWorker = false;
 };
 
 template <typename Facts> struct MembarCFG {
@@ -114,10 +129,13 @@ public:
                    const DenseMap<Operation *, unsigned> &calleeWeights)
       : model(model), callbacks(callbacks), calleeWeights(calleeWeights) {}
 
-  /// Build one execution region and link its reachable noinline callees.
-  MembarCFG<Facts> build(Region &root);
+  /// Link reachable noinline callees and optionally expand warp-specialized
+  /// roles.
+  MembarCFG<Facts> build(Region &root, bool expandWarpRoles);
 
 private:
+  void appendWithCallees(MembarCFG<Facts> &cfg, Region &root,
+                         std::optional<Edge> roleExit = std::nullopt);
   void addRegion(MembarCFG<Facts> &cfg, Region &region);
 
   Model &model;
