@@ -1638,33 +1638,46 @@ public:
   LogicalResult
   matchAndRewrite_(tt::gpu::ConvertLayoutOp cvtOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    ValueRange remappedOperands = adaptor.getSrc();
-    if (remappedOperands.size() != 2) {
-      // some prior op materialized the fat ptr, e.g.:
-      // %3 = tt.bitcast %2
-      // %4 = tt.splat %3
+    auto remapped = adaptor.getSrcs();
+    if (llvm::all_of(remapped,
+                     [](ValueRange values) { return values.size() == 1; }))
       return success();
+    SmallVector<Value> sources;
+    SmallVector<Type> resultTypes;
+    SmallVector<Value> bases(cvtOp.getNumOperands());
+    for (unsigned i = 0; i < cvtOp.getNumOperands(); ++i) {
+      ValueRange values = remapped[i];
+      if (values.size() == 1) {
+        sources.push_back(values[0]);
+        resultTypes.push_back(cvtOp.getType(i));
+        continue;
+      }
+      if (values.size() != 2 || !isa<tt::PointerType>(values[0].getType()))
+        return rewriter.notifyMatchFailure(cvtOp,
+                                           "non tt.ptr base unimplemented");
+      auto offsetTy = dyn_cast<RankedTensorType>(values[1].getType());
+      if (!offsetTy)
+        return rewriter.notifyMatchFailure(
+            cvtOp, "non RankedTensorType offset unimplemented");
+      bases[i] = values[0];
+      sources.push_back(values[1]);
+      resultTypes.push_back(
+          offsetTy.cloneWithEncoding(cvtOp.getType(i).getEncoding()));
     }
-    Value fatPtrBase = remappedOperands[0];
-    Value fatPtrOffset = remappedOperands[1];
-    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType())) {
-      return rewriter.notifyMatchFailure(cvtOp,
-                                         "non tt.ptr base unimplemented");
+    auto converted =
+        tt::gpu::ConvertLayoutOp::create(rewriter, cvtOp.getLoc(), resultTypes,
+                                         sources, cvtOp.getForceWarpShuffle());
+    SmallVector<SmallVector<Value>> replacements;
+    for (unsigned i = 0; i < sources.size(); ++i) {
+      Value result = converted.getResult(i);
+      if (bases[i]) {
+        replacements.push_back({bases[i], result});
+        fatPtrs[{bases[i], result}] = fatPtrs.at({bases[i], sources[i]});
+      } else {
+        replacements.push_back({result});
+      }
     }
-    auto offsetTensorTy = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
-    if (!offsetTensorTy) {
-      return rewriter.notifyMatchFailure(
-          cvtOp, "non RankedTensorType offset unimplemented");
-    }
-
-    RankedTensorType outType = cvtOp.getResult().getType();
-    auto newOffsetType = RankedTensorType::get(outType.getShape(),
-                                               offsetTensorTy.getElementType(),
-                                               outType.getEncoding());
-    tt::gpu::ConvertLayoutOp cvtOffset = tt::gpu::ConvertLayoutOp::create(
-        rewriter, cvtOp.getLoc(), newOffsetType, fatPtrOffset);
-    rewriter.replaceOpWithMultiple(cvtOp, {{fatPtrBase, cvtOffset}});
-    fatPtrs[{fatPtrBase, cvtOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+    rewriter.replaceOpWithMultiple(cvtOp, replacements);
 
     return success();
   }

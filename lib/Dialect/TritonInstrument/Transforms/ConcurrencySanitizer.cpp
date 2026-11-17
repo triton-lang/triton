@@ -678,12 +678,17 @@ Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
 Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
                          Value ownerCTAs) {
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    LinearLayout srcLayout = ttg::toLinearLayout(convert.getSrc().getType());
-    LinearLayout dstLayout = ttg::toLinearLayout(convert.getType());
     auto kBlock = b.getStringAttr("block");
-    Value loadCTAs = getLocalMemoryRecipientCTAs(
-        b, invertAndComposeLocal(srcLayout, dstLayout, {kBlock}));
-    return arith::OrIOp::create(b, ownerCTAs, loadCTAs);
+    for (unsigned i = 0; i < convert.getNumOperands(); ++i) {
+      if (!cvtNeedsSharedMemory(convert, i))
+        continue;
+      auto srcLayout = ttg::toLinearLayout(convert.getSrc(i).getType());
+      auto dstLayout = ttg::toLinearLayout(convert.getType(i));
+      Value loadCTAs = getLocalMemoryRecipientCTAs(
+          b, invertAndComposeLocal(srcLayout, dstLayout, {kBlock}));
+      ownerCTAs = arith::OrIOp::create(b, ownerCTAs, loadCTAs);
+    }
+    return ownerCTAs;
   }
 
   if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {

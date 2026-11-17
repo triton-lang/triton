@@ -27,7 +27,7 @@ struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
 
-  explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
+  explicit ConvertLayoutOpConversion(const LLVMTypeConverter &typeConverter,
                                      const TargetInfoBase &targetInfo,
                                      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
@@ -36,49 +36,65 @@ struct ConvertLayoutOpConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-
-    auto kRegister = str_attr("register");
-
-    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
-    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
-    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
-
-    assert(to_vector(conversion.getInDimNames()) ==
-           to_vector(conversion.getOutDimNames()));
-    if (conversion.getNumInDims() == 0) {
-      assert(adaptor.getSrc().getType() ==
-             getTypeConverter()->convertType(dstTy));
-      rewriter.replaceOp(op, adaptor.getSrc());
-      return success();
+    auto offsets = triton::getConvertLayoutScratchOffsets(
+        op, [&](RankedTensorType srcTy, RankedTensorType dstTy) {
+          auto bitwidth = triton::getBitwidth(srcTy);
+          auto srcLayout = toLinearLayout(srcTy);
+          auto dstLayout = toLinearLayout(dstTy);
+          auto vecBitwidth = getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+          return triton::getNumScratchElemsSwizzledCvt(
+                     srcLayout, dstLayout, bitwidth,
+                     targetInfo.getSharedMemoryBanks(), srcTile, dstTile) *
+                 bitwidth / 8;
+        });
+    ConvertLayoutBarrier barriers(op, rewriter, targetInfo);
+    SmallVector<Value> results;
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      barriers.beginConversion();
+      results.push_back(lower(op, i, adaptor.getSrcs()[i], offsets[i], rewriter,
+                              [&] { barriers.emit(); }));
     }
-    if (conversion.getNumInDims() == 1)
-      return transferWithinThread(op, conversion, adaptor, rewriter);
-
-    if (cvtNeedsWarpShuffle(op))
-      return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
-
-    transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
-                              rewriter);
+    rewriter.replaceOp(op, results);
     return success();
   }
 
-  LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
-                       OpAdaptor adaptor,
-                       ConversionPatternRewriter &rewriter) const {
+  Value lower(ConvertLayoutOp op, unsigned index, Value src,
+              unsigned scratchOffset, ConversionPatternRewriter &rewriter,
+              llvm::function_ref<void()> emitBarrier) const {
+    MLIRContext *ctx = op.getContext();
+    auto srcTy = op.getSrc(index).getType();
+    auto dstTy = op.getType(index);
+    auto kRegister = str_attr("register");
+    auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
+    assert(to_vector(conversion.getInDimNames()) ==
+           to_vector(conversion.getOutDimNames()));
+    if (conversion.getNumInDims() == 0) {
+      assert(src.getType() == getTypeConverter()->convertType(dstTy));
+      return src;
+    }
+    if (conversion.getNumInDims() == 1)
+      return transferWithinThread(op, index, src, conversion, rewriter);
+    if (cvtNeedsWarpShuffle(op, index))
+      return transferWithinWarp(op, index, src, srcLayout, dstLayout, rewriter);
+    return transferSwizzlingLocalMem(op, index, src, scratchOffset, srcLayout,
+                                     dstLayout, rewriter, emitBarrier);
+  }
+
+  Value transferWithinThread(ConvertLayoutOp op, unsigned index, Value src,
+                             const LinearLayout &conversion,
+                             ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto kRegister = str_attr("register");
-    auto dstTy = op.getType();
+    auto dstTy = op.getType(index);
     auto dims = to_vector(conversion.getInDimNames());
     assert(dims.size() == 1 && dims.front() == kRegister &&
            "expected a register-only conversion");
 
-    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
       auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
@@ -87,43 +103,46 @@ struct ConvertLayoutOpConversion
     }
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
                                             rewriter, dstTy);
-    rewriter.replaceOp(op, result);
-    return success();
+    return result;
   }
 
-  void transferSwizzlingLocalMem(ConvertLayoutOp op, Value src,
-                                 const LinearLayout &srcLayout,
-                                 const LinearLayout &dstLayout,
-                                 ConversionPatternRewriter &rewriter) const {
+  Value transferSwizzlingLocalMem(
+      ConvertLayoutOp op, unsigned index, Value src, unsigned scratchOffset,
+      const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+      ConversionPatternRewriter &rewriter,
+      llvm::function_ref<void()> emitBarrier) const {
     auto loc = op.getLoc();
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
+    auto srcTy = op.getSrc(index).getType();
+    auto dstTy = op.getType(index);
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    if (scratchOffset)
+      smemBase = LLVM::GEPOp::create(rewriter, loc, smemBase.getType(),
+                                     rewriter.getI8Type(), smemBase,
+                                     ArrayRef<LLVM::GEPArg>{scratchOffset});
     auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
     auto outVals = mlir::convertLayoutViaSharedMemory(
         loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op,
-        targetInfo);
+        targetInfo, {}, emitBarrier);
 
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
                                             rewriter, dstTy);
-    rewriter.replaceOp(op, result);
+    return result;
   }
 
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
-  LogicalResult transferWithinWarp(ConvertLayoutOp op,
-                                   const LinearLayout &srcLayout,
-                                   const LinearLayout &dstLayout,
-                                   OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
+  Value transferWithinWarp(ConvertLayoutOp op, unsigned index, Value src,
+                           const LinearLayout &srcLayout,
+                           const LinearLayout &dstLayout,
+                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
+    auto srcTy = op.getSrc(index).getType();
+    auto dstTy = op.getType(index);
     auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
@@ -153,7 +172,7 @@ struct ConvertLayoutOpConversion
     // Here, R denotes the number of 32-bit registers in use after packing (or
     // splitting, if applied to 64-bit types or pointers), and in the `Swap`
     // method, `m` denotes the number of mixed transpositions passed in.
-    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
 
     // If the target layout has a larger register dimension than the source
     // layout, then we broadcast along the register dimension to match size. The
@@ -248,8 +267,7 @@ struct ConvertLayoutOpConversion
 
     Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
                                             rewriter, dstTy);
-    rewriter.replaceOp(op, result);
-    return success();
+    return result;
   }
 
   SmallVector<Value> transferWithinWarpSwapImpl(
@@ -442,11 +460,68 @@ namespace mlir {
 
 using namespace mlir::triton::gpu;
 
+ConvertLayoutBarrier::ConvertLayoutBarrier(ConvertLayoutOp op,
+                                           ConversionPatternRewriter &rewriter,
+                                           const TargetInfoBase &targetInfo)
+    : op(op), rewriter(rewriter), targetInfo(targetInfo) {
+  auto *ctx = op.getContext();
+  for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+    if (!cvtNeedsSharedMemory(op, i))
+      continue;
+    auto src = toLinearLayout(op.getSrc(i).getType());
+    auto dst = toLinearLayout(op.getType(i));
+    warpSync &= isCvtDimSync(src, dst, str_attr("warp"));
+    blockSync &= isCvtDimSync(src, dst, str_attr("block"));
+  }
+}
+
+void ConvertLayoutBarrier::beginConversion() {
+  nextBarrier = 0;
+  rewriter.setInsertionPoint(firstBarrier ? firstBarrier : op.getOperation());
+}
+
+void ConvertLayoutBarrier::emit() {
+  if (nextBarrier == barriers.size()) {
+    // Append the new rendezvous after all previously emitted loads. A cluster
+    // rendezvous can contain multiple operations; remember its entire extent.
+    rewriter.setInsertionPoint(op);
+    auto before = op->getPrevNode();
+    if (warpSync)
+      targetInfo.warpSync(op.getLoc(), rewriter);
+    else if (blockSync)
+      targetInfo.barrier(op.getLoc(), rewriter, triton::gpu::AddrSpace::Local);
+    else
+      targetInfo.clusterBarrier(op.getLoc(), rewriter, op);
+    auto last = op->getPrevNode();
+    // Some targets implement warp synchronization without an instruction.
+    if (last != before) {
+      if (!firstBarrier)
+        firstBarrier = before->getNextNode();
+      barriers.push_back(last);
+    } else {
+      barriers.push_back(nullptr);
+    }
+  }
+  if (auto *barrier = barriers[nextBarrier++])
+    rewriter.setInsertionPointAfter(barrier);
+}
+
+Value lowerConvertLayout(ConvertLayoutOp op, unsigned index, Value src,
+                         unsigned scratchOffset,
+                         const LLVMTypeConverter &typeConverter,
+                         const TargetInfoBase &targetInfo,
+                         ConversionPatternRewriter &rewriter,
+                         llvm::function_ref<void()> emitBarrier) {
+  return ConvertLayoutOpConversion(typeConverter, targetInfo)
+      .lower(op, index, src, scratchOffset, rewriter, emitBarrier);
+}
+
 SmallVector<Value> convertLayoutViaSharedMemory(
     Location loc, ConversionPatternRewriter &rewriter,
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
     ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
-    Operation *sourceOp, const TargetInfoBase &targetInfo, Value storePred) {
+    Operation *sourceOp, const TargetInfoBase &targetInfo, Value storePred,
+    llvm::function_ref<void()> sharedBarrier) {
   auto *ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!storePred)
@@ -462,7 +537,7 @@ SmallVector<Value> convertLayoutViaSharedMemory(
     }));
     auto outVals = convertLayoutViaSharedMemory(
         loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr, smemBase,
-        sourceOp, targetInfo, storePred);
+        sourceOp, targetInfo, storePred, sharedBarrier);
     for (auto &v : outVals) {
       v = b.inttoptr(llvmElemTy, v);
     }
@@ -477,7 +552,7 @@ SmallVector<Value> convertLayoutViaSharedMemory(
         inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
     auto outVals = convertLayoutViaSharedMemory(
         loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
-        sourceOp, targetInfo, storePred);
+        sourceOp, targetInfo, storePred, sharedBarrier);
     for (auto &v : outVals) {
       v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
     }
@@ -534,6 +609,10 @@ SmallVector<Value> convertLayoutViaSharedMemory(
   bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
   bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
   auto emitBarrier = [&]() {
+    if (sharedBarrier) {
+      sharedBarrier();
+      return;
+    }
     if (isWarpSync) {
       targetInfo.warpSync(loc, rewriter);
     } else if (isBlockSync) {

@@ -205,9 +205,11 @@ bool isNoop(Operation *op) {
   if (isa<ReshapeOp, TransOp>(op))
     return true;
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    // The conversion op is a noop if the conversion layout is trivial
-    return minimalCvtLayout(cvt.getSrc().getType(),
-                            cvt.getResult().getType()) == LinearLayout::empty();
+    return llvm::all_of(
+        llvm::seq<unsigned>(cvt.getNumResults()), [&](unsigned i) {
+          return minimalCvtLayout(cvt.getSrc(i).getType(), cvt.getType(i)) ==
+                 LinearLayout::empty();
+        });
   }
   return false;
 }
@@ -667,6 +669,8 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   }
 
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+    if (convert.getNumResults() != 1)
+      return std::nullopt;
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
@@ -892,7 +896,7 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 // Check if the convert will be performed by reordering registers.
 static bool isFreeConvert(Operation *op) {
   auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-  if (!convertOp)
+  if (!convertOp || convertOp.getNumResults() != 1)
     return false;
   return cvtReordersRegisters(convertOp.getSrc().getType(),
                               convertOp.getType());
@@ -951,6 +955,11 @@ LogicalResult getConvertBackwardSlice(
     // TODO: enable this based on needs.
     auto defOp = currentValue.getDefiningOp();
     if (isa_and_nonnull<scf::ForOp, scf::WhileOp, ttg::WarpSpecializeOp>(defOp))
+      return failure();
+    // A batch contains independent conversions with potentially different
+    // ranks. Keep it as a boundary for rematerialization of a single result.
+    if (auto cvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(defOp);
+        cvt && cvt.getNumResults() != 1)
       return failure();
     slice.insert(currentValue);
 
@@ -1395,6 +1404,10 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand =
           cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
               .getOperand(blockArg.getArgNumber() - 1);
+    } else if (auto cvt =
+                   transitiveOperand.getDefiningOp<ttg::ConvertLayoutOp>()) {
+      transitiveOperand =
+          cvt.getSrc(cast<OpResult>(transitiveOperand).getResultNumber());
     } else {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
@@ -1668,7 +1681,7 @@ bool comesFromLoadOrBlockArg(Value v) {
     if (!def)
       break;
     if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(def)) {
-      v = cvtOp.getSrc();
+      v = cvtOp.getSrc(cast<OpResult>(v).getResultNumber());
       continue;
     }
     if (auto transOp = dyn_cast<tt::TransOp>(def)) {

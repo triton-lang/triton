@@ -1278,6 +1278,11 @@ LogicalResult AxisInfoAnalysis::visitOperation(
   for (auto op : operands)
     if (op->getValue().getRank() == 0)
       return success();
+  if (isa<triton::gpu::ConvertLayoutOp>(op) && op->getNumResults() != 1) {
+    for (auto [operand, result] : llvm::zip(operands, results))
+      propagateIfChanged(result, result->join(operand->getValue()));
+    return success();
+  }
   AxisInfo curr;
   if (ConstantInt constant = ConstantEvaluator(op, operands).run())
     curr = AxisInfo::getConstantValueState(op->getResult(0).getType(),

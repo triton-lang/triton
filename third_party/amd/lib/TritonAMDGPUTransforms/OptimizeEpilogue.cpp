@@ -214,7 +214,7 @@ public:
     }
 
     auto cvtOp = val.getDefiningOp<triton::gpu::ConvertLayoutOp>();
-    if (!cvtOp)
+    if (!cvtOp || cvtOp.getNumResults() != 1)
       return mlir::failure();
 
     if (!isProfitableBypassSource(cvtOp.getSrc().getType(), valType))

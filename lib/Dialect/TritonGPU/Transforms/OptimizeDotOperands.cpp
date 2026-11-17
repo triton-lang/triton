@@ -27,7 +27,7 @@ public:
 
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
-    if (!cvtOp->hasOneUse() ||
+    if (cvtOp.getNumResults() != 1 || !cvtOp->hasOneUse() ||
         !isa<triton::DotOp>(cvtOp->use_begin()->getOwner()))
       return failure();
     // Match outerCvt(trans(innerCvt(x))).
@@ -38,7 +38,8 @@ public:
     RankedTensorType srcTy = trans.getSrc().getType();
 
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
-      srcTy = srcCvt.getSrc().getType();
+      srcTy = srcCvt.getSrc(cast<OpResult>(trans.getSrc()).getResultNumber())
+                  .getType();
     }
     RankedTensorType sharedLoadTy = cvtOp.getType();
     auto cvtEncoding =

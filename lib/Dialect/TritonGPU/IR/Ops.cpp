@@ -158,7 +158,7 @@ struct CanonicalizeConvertFromTMEMStore
   matchAndRewrite(nvidia_gpu::TMEMStoreOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
 
     // bail for incompatible layouts
@@ -183,7 +183,7 @@ struct CanonicalizeConvertFromReshape
   matchAndRewrite(triton::ReshapeOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
     // If the layouts are structurally the same, the convert is trivial
     if (isConvertTrivial(convert)) {
@@ -218,7 +218,7 @@ struct CanonicalizeConvertFromTranspose
 
     // If the layouts are structurally the same, the convert is trivial
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert || !isConvertTrivial(convert))
+    if (!convert || convert.getNumResults() != 1 || !isConvertTrivial(convert))
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::TransOp>(
@@ -237,7 +237,7 @@ struct CanonicalizeConvertFromHistogram
                   PatternRewriter &rewriter) const override {
     auto src = op.getSrc();
     auto convert = src.getDefiningOp<ConvertLayoutOp>();
-    if (!convert) {
+    if (!convert || convert.getNumResults() != 1) {
       return failure();
     }
     src = convert.getSrc();
@@ -272,7 +272,7 @@ struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
       return failure();
 
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
 
     rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
@@ -292,7 +292,7 @@ struct CanonicalizeConvertFromAlloc
     if (!op.getSrc())
       return failure();
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
         op, op->getResult(0).getType(), convert.getSrc());
@@ -309,7 +309,7 @@ struct CanonicalizeConvertFromLocalStore
   matchAndRewrite(triton::gpu::LocalStoreOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
                                                            op.getDst());
@@ -325,7 +325,7 @@ struct CanonicalizeConvertFromSplit
   matchAndRewrite(triton::SplitOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    if (!convert || convert.getNumResults() != 1)
       return failure();
     auto srcEncoding = convert.getSrc().getType().getEncoding();
     // Multiple source layout can give the same output layout, if the source
@@ -351,6 +351,9 @@ struct CanonicalizeConvertFromConvert
       rewriter.replaceOp(op, op->getOperands());
       return success();
     }
+
+    if (op.getNumResults() != 1)
+      return failure();
 
     // We don't handle conversions to DotOperandEncodingAttr.  This is a
     // heuristic to accommodate fused attention.
@@ -391,7 +394,8 @@ struct CanonicalizeConvertFromConvert
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
-          op, op->getResultTypes().front(), cvt.getSrc());
+          op, op->getResultTypes().front(),
+          cvt.getSrc(cast<OpResult>(op.getSrc()).getResultNumber()));
       return success();
     }
 
@@ -423,16 +427,29 @@ struct CanonicalizeConvertFromConvert
 };
 
 LogicalResult ConvertLayoutOp::verify() {
-  if (!getForceWarpShuffle())
-    return success();
-
-  auto conversion = minimalCvtLayout(getSrc().getType(), getType());
-  auto dims = conversion.getInDimNames();
-  auto warp = StringAttr::get(getContext(), "warp");
-  auto block = StringAttr::get(getContext(), "block");
-  if (llvm::is_contained(dims, warp) || llvm::is_contained(dims, block))
+  if (getNumOperands() == 0 || getNumOperands() != getNumResults())
     return emitOpError(
-        "force_warp_shuffle requires a conversion within one warp");
+        "requires the same nonzero number of operands and results");
+  for (unsigned i = 0; i < getNumOperands(); ++i) {
+    auto srcTy = getSrc(i).getType();
+    auto dstTy = getType(i);
+    if (srcTy.getShape() != dstTy.getShape())
+      return emitOpError("requires matching shapes for operand and result ")
+             << i;
+    if (srcTy.getElementType() != dstTy.getElementType())
+      return emitOpError(
+                 "requires matching element types for operand and result ")
+             << i;
+    if (!getForceWarpShuffle())
+      continue;
+    auto conversion = minimalCvtLayout(srcTy, dstTy);
+    auto dims = conversion.getInDimNames();
+    auto warp = StringAttr::get(getContext(), "warp");
+    auto block = StringAttr::get(getContext(), "block");
+    if (llvm::is_contained(dims, warp) || llvm::is_contained(dims, block))
+      return emitOpError(
+          "force_warp_shuffle requires a conversion within one warp");
+  }
   return success();
 }
 

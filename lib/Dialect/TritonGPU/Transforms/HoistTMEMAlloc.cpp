@@ -283,7 +283,7 @@ public:
     while (auto cvt = init.getDefiningOp<ConvertLayoutOp>()) {
       if (!init.hasOneUse())
         return failure();
-      init = cvt.getSrc();
+      init = cvt.getSrc(cast<OpResult>(init).getResultNumber());
     }
     auto load = init.getDefiningOp<TMEMTokenLoadOp>();
     if (!load || !load->hasOneUse() || !load.getDep().hasOneUse())

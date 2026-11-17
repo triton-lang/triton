@@ -53,7 +53,7 @@ namespace {
 // producer.
 static Value stripConvertLayout(Value v) {
   while (auto cvt = v.getDefiningOp<ttg::ConvertLayoutOp>())
-    v = cvt.getSrc();
+    v = cvt.getSrc(cast<OpResult>(v).getResultNumber());
   return v;
 }
 
@@ -150,7 +150,7 @@ public:
     // Look through layout conversions.
     Value src = storeOp.getSrc();
     while (auto cvt = src.getDefiningOp<ttg::ConvertLayoutOp>()) {
-      src = cvt.getSrc();
+      src = cvt.getSrc(cast<OpResult>(src).getResultNumber());
     }
 
     // Only support joinin N dimension on the outer most.
@@ -217,7 +217,9 @@ public:
       return failure();
     bool foundReductionAlongN = false;
     auto filter = [&](Operation *op) {
-      if (isa<ttg::ConvertLayoutOp>(op) || op->hasTrait<OpTrait::Elementwise>())
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
+        return cvt.getNumResults() == 1;
+      if (op->hasTrait<OpTrait::Elementwise>())
         return true;
       if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
         foundReductionAlongN = reduce.getAxis() == 1;
@@ -378,6 +380,9 @@ public:
         }
         // Don't iterate though control flow ops.
         if (isa<RegionBranchOpInterface, scf::YieldOp, BranchOpInterface>(user))
+          continue;
+        if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(user);
+            cvt && cvt.getNumResults() != 1)
           continue;
         Attribute userEncoding = inferDstEncoding(user, encoding);
         if (!userEncoding) {

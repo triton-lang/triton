@@ -311,3 +311,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<256xi8, #dst>
   }
 }
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [2, 2], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @convert_layout_variadic_shared
+  // CHECK: llvm.store
+  // CHECK-NOT: rocdl.s.barrier
+  // CHECK: llvm.store
+  // CHECK-NOT: rocdl.s.barrier
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.load
+  // CHECK-NOT: rocdl.s.barrier
+  // CHECK: llvm.load
+  // CHECK-NOT: rocdl.s.barrier
+  // CHECK: llvm.return
+  tt.func private @convert_layout_variadic_shared(%a: tensor<16x16xf32, #src>, %b: tensor<16x16xi32, #src>) -> (tensor<16x16xf32, #dst>, tensor<16x16xi32, #dst>) {
+    %0:2 = ttg.convert_layout %a, %b : tensor<16x16xf32, #src>, tensor<16x16xi32, #src> -> tensor<16x16xf32, #dst>, tensor<16x16xi32, #dst>
+    tt.return %0#0, %0#1 : tensor<16x16xf32, #dst>, tensor<16x16xi32, #dst>
+  }
+}

@@ -635,15 +635,17 @@ def arange(start, end, layout=None, _semantic=None):
 @builtin
 def convert_layout(value, layout, assert_trivial=False, _semantic=None):
     """
-    Convert a tensor to a different distributed layout.
+    Convert tensors to different distributed layouts.
 
     Args:
-        value (tensor): The input tensor.
-        layout (DistributedLayout): The target layout.
-        assert_trivial (bool): If True, asserts that the conversion is trivial (no data movement).
+        value (tensor or tuple of tensors): The input tensor or tensors.
+        layout (DistributedLayout or tuple of layouts): A target layout for all
+            inputs, or one target layout per input tensor. Tuple conversions
+            share synchronization when transferring through shared memory.
+        assert_trivial (bool): If True, asserts that every conversion is trivial (no data movement).
 
     Returns:
-        tensor: The tensor with the new layout.
+        tensor or tuple of tensors: The tensors with their new layouts.
     """
     layout = _unwrap_if_constexpr(layout)
     return _semantic.convert_layout(value, layout, assert_trivial)

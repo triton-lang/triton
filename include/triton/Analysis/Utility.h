@@ -369,10 +369,11 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // The conversion involves data exchange across threads within a warp, or is
 // explicitly forced to use warp shuffles.
-bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op, unsigned index = 0);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op, unsigned index);
 bool cvtNeedsSharedMemory(const triton::LinearLayout &src,
                           const triton::LinearLayout &dst);
 

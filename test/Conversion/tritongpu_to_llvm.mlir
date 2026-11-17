@@ -4536,6 +4536,86 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#src = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // Eight rounds per operand: both stores precede the first rendezvous and
+  // both loads follow it. Scratch reuse needs one more rendezvous per round.
+  // CHECK-LABEL: @convert_layout_variadic_multi_rep
+  // CHECK: llvm.store {{.*}} vector<4xi32>
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.store {{.*}} vector<4xi32>
+  // CHECK: nvvm.bar.warp.sync
+  // CHECK: nvvm.ldmatrix
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: nvvm.ldmatrix
+  // CHECK-COUNT-14: nvvm.bar.warp.sync
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.return
+  tt.func private @convert_layout_variadic_multi_rep(%a: tensor<32x32xf32, #src>, %b: tensor<32x32xf32, #src>) -> (tensor<32x32xf32, #dst>, tensor<32x32xf32, #dst>) {
+    %0:2 = ttg.convert_layout %a, %b : tensor<32x32xf32, #src>, tensor<32x32xf32, #src> -> tensor<32x32xf32, #dst>, tensor<32x32xf32, #dst>
+    tt.return %0#0, %0#1 : tensor<32x32xf32, #dst>, tensor<32x32xf32, #dst>
+  }
+  // Eight and two rounds. Exercise both orders, including appending new
+  // rounds after the first operand has finished loading its results.
+  // CHECK-LABEL: @convert_layout_variadic_unequal_rounds_long_first
+  // CHECK: llvm.store
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.store
+  // CHECK: nvvm.bar.warp.sync
+  // CHECK: llvm.load
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: nvvm.ldmatrix
+  // CHECK-COUNT-14: nvvm.bar.warp.sync
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.return
+  tt.func private @convert_layout_variadic_unequal_rounds_long_first(%a: tensor<32x32xf32, #src>, %b: tensor<32x8xf32, #src>) -> (tensor<32x32xf32, #dst>, tensor<32x8xf32, #dst>) {
+    %0:2 = ttg.convert_layout %a, %b : tensor<32x32xf32, #src>, tensor<32x8xf32, #src> -> tensor<32x32xf32, #dst>, tensor<32x8xf32, #dst>
+    tt.return %0#0, %0#1 : tensor<32x32xf32, #dst>, tensor<32x8xf32, #dst>
+  }
+
+  // Eight and two rounds. Exercise both orders, including appending new
+  // rounds after the first operand has finished loading its results.
+  // CHECK-LABEL: @convert_layout_variadic_unequal_rounds_short_first
+  // CHECK: llvm.store
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.store
+  // CHECK: nvvm.bar.warp.sync
+  // CHECK: nvvm.ldmatrix
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.load
+  // CHECK-COUNT-14: nvvm.bar.warp.sync
+  // CHECK-NOT: nvvm.bar.warp.sync
+  // CHECK: llvm.return
+  tt.func private @convert_layout_variadic_unequal_rounds_short_first(%a: tensor<32x8xf32, #src>, %b: tensor<32x32xf32, #src>) -> (tensor<32x8xf32, #dst>, tensor<32x32xf32, #dst>) {
+    %0:2 = ttg.convert_layout %a, %b : tensor<32x8xf32, #src>, tensor<32x32xf32, #src> -> tensor<32x8xf32, #dst>, tensor<32x32xf32, #dst>
+    tt.return %0#0, %0#1 : tensor<32x8xf32, #dst>, tensor<32x32xf32, #dst>
+  }
+
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Includes a register-only identity with a different shape, a predicate and
+  // pointers. The shared operands must use separate, aligned scratch regions.
+  // CHECK-LABEL: @convert_layout_variadic_mixed_types
+  // CHECK: llvm.zext
+  // CHECK: llvm.ptrtoint
+  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.inttoptr
+  // CHECK: llvm.return
+  tt.func private @convert_layout_variadic_mixed_types(%a: tensor<32x32xi1, #src>, %b: tensor<32x32x!tt.ptr<f32>, #src>, %c: tensor<16x16xi32, #dst>) -> (tensor<32x32xi1, #dst>, tensor<32x32x!tt.ptr<f32>, #dst>, tensor<16x16xi32, #dst>) {
+    %0:3 = ttg.convert_layout %a, %b, %c : tensor<32x32xi1, #src>, tensor<32x32x!tt.ptr<f32>, #src>, tensor<16x16xi32, #dst> -> tensor<32x32xi1, #dst>, tensor<32x32x!tt.ptr<f32>, #dst>, tensor<16x16xi32, #dst>
+    tt.return %0#0, %0#1, %0#2 : tensor<32x32xi1, #dst>, tensor<32x32x!tt.ptr<f32>, #dst>, tensor<16x16xi32, #dst>
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {

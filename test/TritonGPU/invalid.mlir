@@ -1156,3 +1156,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @convert_layout_arity(%a: tensor<128xi32, #blocked>) {
+    // expected-error@+1 {{requires the same nonzero number of operands and results}}
+    %0:2 = "ttg.convert_layout"(%a) : (tensor<128xi32, #blocked>) -> (tensor<128xi32, #blocked>, tensor<128xi32, #blocked>)
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @convert_layout_empty() {
+    // expected-error@+1 {{requires the same nonzero number of operands and results}}
+    "ttg.convert_layout"() : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @convert_layout_pair_shape(%a: tensor<128xi32, #blocked>, %b: tensor<64xi32, #blocked>) {
+    // expected-error@+1 {{requires matching shapes for operand and result 1}}
+    %0:2 = ttg.convert_layout %a, %b : tensor<128xi32, #blocked>, tensor<64xi32, #blocked> -> tensor<128xi32, #blocked>, tensor<128xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @convert_layout_pair_element_type(%a: tensor<128xi32, #blocked>, %b: tensor<64xf32, #blocked>) {
+    // expected-error@+1 {{requires matching element types for operand and result 1}}
+    %0:2 = ttg.convert_layout %a, %b : tensor<128xi32, #blocked>, tensor<64xf32, #blocked> -> tensor<128xi32, #blocked>, tensor<64xi32, #blocked>
+    tt.return
+  }
+}

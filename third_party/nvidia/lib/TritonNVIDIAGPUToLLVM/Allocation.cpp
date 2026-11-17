@@ -44,9 +44,9 @@ struct AllocateSharedMemoryNv
 
 namespace mlir::triton::nvidia_gpu {
 
-static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                              RankedTensorType dstTy,
-                                              TargetInfoBase &targetInfo) {
+static unsigned
+getNumScratchElemsSwizzledCvt(RankedTensorType srcTy, RankedTensorType dstTy,
+                              const TargetInfoBase &targetInfo) {
   auto *ctx = srcTy.getContext();
   auto srcLayout = triton::gpu::toLinearLayout(srcTy);
   auto dstLayout = triton::gpu::toLinearLayout(dstTy);
@@ -67,17 +67,23 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
+unsigned getConvertLayoutScratchSize(RankedTensorType srcTy,
+                                     RankedTensorType dstTy,
+                                     const TargetInfoBase &targetInfo) {
+  return getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo) *
+         getBitwidth(srcTy) / 8;
+}
+
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtOp.getSrc().getType();
-      auto dstTy = cvtOp.getType();
-      if (!cvtNeedsSharedMemory(cvtOp))
-        return 0;
-      // In cuda we always swizzle
-      auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo);
-      return elems * getBitwidth(srcTy) / 8;
+      return getConvertLayoutScratchOffsets(
+                 cvtOp,
+                 [&](RankedTensorType srcTy, RankedTensorType dstTy) {
+                   return getConvertLayoutScratchSize(srcTy, dstTy, targetInfo);
+                 })
+          .back();
     }
     if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(op)) {
       unsigned captureSize = defaultAllocationAnalysisScratchSizeFn(op);

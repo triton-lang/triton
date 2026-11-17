@@ -269,6 +269,8 @@ static Operation *bypassLDS(Operation *load, Operation *use) {
     }
     // Skip explicit layout converts.
     if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(cur)) {
+      if (cvt.getNumResults() != 1)
+        return nullptr;
       cur = cvt.getSrc().getDefiningOp();
       continue;
     }

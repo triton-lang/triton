@@ -592,6 +592,12 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
     return success();
   }
 
+  if (isa<gpu::ConvertLayoutOp>(op) && op->getNumResults() != 1) {
+    for (auto [result, range] : llvm::zip(op->getResults(), argIntValueRanges))
+      joinCallback(result, range);
+    return success();
+  }
+
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
                 SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {

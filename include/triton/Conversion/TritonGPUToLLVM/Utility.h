@@ -827,13 +827,42 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
+// Groups independently emitted conversions into store/barrier/load rounds.
+// Every conversion emits its preamble before the first barrier, then resumes
+// after each existing rendezvous. New rounds are appended after earlier loads.
+class ConvertLayoutBarrier {
+public:
+  ConvertLayoutBarrier(triton::gpu::ConvertLayoutOp op,
+                       ConversionPatternRewriter &rewriter,
+                       const TargetInfoBase &targetInfo);
+  void beginConversion();
+  void emit();
+
+private:
+  triton::gpu::ConvertLayoutOp op;
+  ConversionPatternRewriter &rewriter;
+  const TargetInfoBase &targetInfo;
+  SmallVector<Operation *> barriers;
+  Operation *firstBarrier = nullptr;
+  unsigned nextBarrier = 0;
+  bool warpSync = true;
+  bool blockSync = true;
+};
+
+Value lowerConvertLayout(triton::gpu::ConvertLayoutOp op, unsigned index,
+                         Value src, unsigned scratchOffset,
+                         const LLVMTypeConverter &typeConverter,
+                         const TargetInfoBase &targetInfo,
+                         ConversionPatternRewriter &rewriter,
+                         llvm::function_ref<void()> emitBarrier = {});
+
 // Use storePred is supplied to skip selected producer lanes.
 SmallVector<Value> convertLayoutViaSharedMemory(
     Location loc, ConversionPatternRewriter &rewriter,
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
     ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
-    Operation *sourceOp, const TargetInfoBase &targetInfo,
-    Value storePred = {});
+    Operation *sourceOp, const TargetInfoBase &targetInfo, Value storePred = {},
+    llvm::function_ref<void()> emitBarrier = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,

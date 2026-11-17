@@ -22,6 +22,12 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
+// Offsets of disjoint per-operand scratch regions, followed by the total size.
+// Align each region for vectorized shared-memory instructions.
+SmallVector<unsigned> getConvertLayoutScratchOffsets(
+    gpu::ConvertLayoutOp op,
+    llvm::function_ref<unsigned(RankedTensorType, RankedTensorType)> sizeFn);
+
 unsigned getAtomicResultScratchSize(Value result);
 
 /// Returns whether an operation uses scratch memory across CTAs.

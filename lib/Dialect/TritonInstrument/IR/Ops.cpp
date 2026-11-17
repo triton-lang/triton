@@ -80,6 +80,8 @@ struct PushFPSanThroughViewPattern : public OpRewritePattern<ViewOp> {
 
   LogicalResult matchAndRewrite(ViewOp view,
                                 PatternRewriter &rewriter) const override {
+    if (view->getNumOperands() != 1 || view->getNumResults() != 1)
+      return failure();
     auto fpsan = view->getOperand(0).template getDefiningOp<FPSanOp>();
     if (!fpsan)
       return failure();

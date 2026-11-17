@@ -223,6 +223,8 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
+  if (auto cvt = dyn_cast<ConvertLayoutOp>(op); cvt && cvt.getNumResults() != 1)
+    return true;
   if (isa<DescriptorOpInterface>(op))
     return true;
   if (isa<LoadOp, StoreOp>(op))
@@ -288,6 +290,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
+    if (auto cvt = dyn_cast<ConvertLayoutOp>(user);
+        cvt && cvt.getNumResults() != 1)
+      continue;
     if (auto forOp = dyn_cast<scf::ForOp>(user)) {
       Value arg = forOp.getTiedLoopRegionIterArg(&use);
       Value result = forOp.getTiedLoopResult(&use);
@@ -928,6 +933,8 @@ bool LayoutRematerialization::backwardRematerialization(
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
+    if (convertOp.getNumResults() != 1)
+      continue;
     if (!backwardRematerialization(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
@@ -946,6 +953,8 @@ void LayoutRematerialization::runHoistConvertPass(
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
+    if (convertOp.getNumResults() != 1)
+      continue;
     if (!tryHoist(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.

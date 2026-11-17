@@ -52,3 +52,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dst = #ttg.slice<{dim = 1, parent = #parent}>
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 1152 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @convert_layout_variadic_scratch
+  // The predicate reserves 128 bytes and the pointers reserve 1024 bytes.
+  // The identity operand needs no scratch.
+  // CHECK: ttg.convert_layout {{.*}}allocation.offset = 0 : i32, allocation.size = 1152 : i32
+  tt.func @convert_layout_variadic_scratch(%a: tensor<128xi1, #src>, %b: tensor<128x!tt.ptr<f32>, #src>, %c: tensor<128xi32, #src>) {
+    %0:3 = ttg.convert_layout %a, %b, %c : tensor<128xi1, #src>, tensor<128x!tt.ptr<f32>, #src>, tensor<128xi32, #src> -> tensor<128xi1, #dst>, tensor<128x!tt.ptr<f32>, #dst>, tensor<128xi32, #src>
+    tt.return
+  }
+}

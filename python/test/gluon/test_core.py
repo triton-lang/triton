@@ -443,6 +443,36 @@ def test_copy_kernel(layout, XBLOCK):
     torch.testing.assert_close(out, inp)
 
 
+@pytest.mark.parametrize("block", [32, 64])
+def test_convert_layout_variadic_shared_rounds(block):
+
+    @gluon.jit
+    def kernel(X, A, B, Mask, P, BLOCK: ttgl.constexpr, WARP_SIZE: ttgl.constexpr):
+        src: ttgl.constexpr = ttgl.BlockedLayout([1, 32], [WARP_SIZE, 1], [1, 4], [1, 0])
+        dst: ttgl.constexpr = ttgl.BlockedLayout([4, 8], [8, WARP_SIZE // 8], [4, 1], [1, 0])
+        rows = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, src))
+        cols = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, src))
+        offsets = rows[:, None] * BLOCK + cols[None, :]
+        x = ttgl.load(X + offsets)
+        a, b, mask, ptr = ttgl.convert_layout((x, x * 3 + 7, x > 0, X + offsets), dst)
+        out_rows = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, dst))
+        out_cols = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, dst))
+        out_offsets = out_rows[:, None] * BLOCK + out_cols[None, :]
+        ttgl.store(A + out_offsets, a)
+        ttgl.store(B + out_offsets, b)
+        ttgl.store(Mask + out_offsets, mask)
+        ttgl.store(P + out_offsets, ttgl.load(ptr))
+
+    x = torch.arange(block * block, device="cuda", dtype=torch.int32) - 91
+    a, b, p = (torch.empty_like(x) for _ in range(3))
+    mask = torch.empty_like(x, dtype=torch.bool)
+    kernel[(1, )](x, a, b, mask, p, block, THREADS_PER_WARP, num_warps=4)
+    torch.testing.assert_close(a, x)
+    torch.testing.assert_close(b, x * 3 + 7)
+    torch.testing.assert_close(mask, x > 0)
+    torch.testing.assert_close(p, x)
+
+
 @gluon.jit(noinline=True)
 def _noinline_convert_layout_scratch(input, output, THREADS_PER_WARP: ttgl.constexpr):
     src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])

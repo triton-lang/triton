@@ -32,6 +32,8 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
+      if (cvtOp.getNumResults() != 1)
+        return;
       OpBuilder builder(cvtOp);
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
@@ -57,7 +59,7 @@ public:
                                                    tmpType, cvtOp.getSrc());
       auto newConvert = triton::gpu::LocalLoadOp::create(
           builder, cvtOp.getLoc(), dstType, tmp);
-      cvtOp.replaceAllUsesWith(newConvert.getResult());
+      cvtOp.getResult().replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });
   }

@@ -106,7 +106,7 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
 }
 
 void optimizeConvertLayout(ttg::ConvertLayoutOp convert) {
-  if (!isCrossCTAConversion(convert))
+  if (convert.getNumResults() != 1 || !isCrossCTAConversion(convert))
     return;
 
   SmallVector<OpOperand *> uses;

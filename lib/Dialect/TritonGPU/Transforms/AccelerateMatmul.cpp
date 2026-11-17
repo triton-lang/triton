@@ -162,7 +162,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   auto vType = cast<RankedTensorType>(v.getType());
   Value arg = v;
   while (auto cvtOp = arg.getDefiningOp<ConvertLayoutOp>())
-    arg = cvtOp.getSrc();
+    arg = cvtOp.getSrc(cast<OpResult>(arg).getResultNumber());
   // Preserve the source memory order, but use the MMA operand's CTA layout.
   auto order = getOrderForMemory(cast<RankedTensorType>(arg.getType()));
 
@@ -235,7 +235,7 @@ static bool isTmemCopyCompatibleScale(RankedTensorType argType,
 template <typename OpTy = void>
 static auto getDefiningOpSkippingConvertLayout(Value value) {
   while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
-    value = cvtOp.getSrc();
+    value = cvtOp.getSrc(cast<OpResult>(value).getResultNumber());
   if constexpr (std::is_void_v<OpTy>)
     return value;
   else
@@ -634,7 +634,7 @@ static DescriptorLoadOp
 getTwoCTADescriptorLoad(Value value, SmallVectorImpl<Value> *views = nullptr) {
   while (Operation *op = value.getDefiningOp()) {
     if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
-      value = cvt.getSrc();
+      value = cvt.getSrc(cast<OpResult>(value).getResultNumber());
     } else if (isView(op) && op->getNumOperands() == 1) {
       if (views)
         views->push_back(value);

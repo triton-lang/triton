@@ -18,6 +18,8 @@ namespace {
 // we want to load Q tensor and keep it in register, instead of loading it
 // (neither from global or shared memory) at every iteration of the loop.
 static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp) {
+  if (cvtOp.getNumResults() != 1)
+    return;
   // Check the dst of cvt has dotOperand layout
   RankedTensorType rtType = dyn_cast<RankedTensorType>(cvtOp.getType());
   if (!rtType)

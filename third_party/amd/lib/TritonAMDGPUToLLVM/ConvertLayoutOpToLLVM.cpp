@@ -20,6 +20,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getNumResults() != 1)
+      return failure();
     auto &amdTargInfo =
         static_cast<const mlir::triton::AMD::TargetInfo &>(targetInfo);
     if (!amdTargInfo.supportsPermlaneSwap())
@@ -108,7 +110,8 @@ public:
       return ret;
     };
 
-    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals =
+        unpackUniqueTensorElements(loc, adaptor.getSrcs().front(), rewriter);
     int regDim = pReg.getInDimSize(kReg);
     SmallVector<Value> newInVals(regDim);
     for (int i = 0; i < regDim; ++i)
@@ -340,7 +343,8 @@ public:
   static std::vector<Value>
   repackInputToRegisters(Location loc, OpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter) {
-    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals =
+        unpackUniqueTensorElements(loc, adaptor.getSrcs().front(), rewriter);
     auto numRegs = inVals.size() / regBytes;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::vector<Value> srcRegs(numRegs);
@@ -695,6 +699,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getNumResults() != 1)
+      return failure();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 

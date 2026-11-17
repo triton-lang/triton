@@ -1,9 +1,11 @@
+#include "Allocation.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -31,42 +33,54 @@ struct ConvertLayoutOpSwizzlingConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
-    auto *ctx = op.getContext();
-
-    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-    LinearLayout srcLayout = toLinearLayout(srcTy);
-    LinearLayout dstLayout = toLinearLayout(dstTy);
-    srcLayout = srcLayout.removeZeroBasesAlongDim(str_attr("register"));
-    dstLayout = dstLayout.removeZeroBasesAlongDim(str_attr("register"));
-
-    assert(to_vector(conversion.getInDimNames()) ==
-           to_vector(conversion.getOutDimNames()));
-    if (cvtNeedsSharedMemory(op)) {
+    if (!cvtNeedsSharedMemory(op))
+      return failure();
+    auto offsets = getConvertLayoutScratchOffsets(
+        op, [&](RankedTensorType srcTy, RankedTensorType dstTy) {
+          return nvidia_gpu::getConvertLayoutScratchSize(srcTy, dstTy,
+                                                         targetInfo);
+        });
+    ConvertLayoutBarrier barriers(op, rewriter, targetInfo);
+    SmallVector<Value> results;
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      barriers.beginConversion();
+      if (!cvtNeedsSharedMemory(op, i)) {
+        results.push_back(lowerConvertLayout(op, i, adaptor.getSrcs()[i], 0,
+                                             *getTypeConverter(), targetInfo,
+                                             rewriter));
+        continue;
+      }
+      auto srcTy = op.getSrc(i).getType();
+      auto dstTy = op.getType(i);
+      auto *ctx = op.getContext();
+      auto srcLayout =
+          toLinearLayout(srcTy).removeZeroBasesAlongDim(str_attr("register"));
+      auto dstLayout =
+          toLinearLayout(dstTy).removeZeroBasesAlongDim(str_attr("register"));
       auto loc = op.getLoc();
-
       auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-      auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                op.getOperation());
-      auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
-      auto outVals =
-          transferWithinBlockSwizzling(loc, rewriter, srcLayout, dstLayout,
-                                       inVals, llvmElemTy, smemBase, op);
-
-      Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
-                                              rewriter, dstTy);
-      rewriter.replaceOp(op, result);
-      return success();
+      auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+      if (offsets[i])
+        smemBase = LLVM::GEPOp::create(rewriter, loc, smemBase.getType(),
+                                       rewriter.getI8Type(), smemBase,
+                                       ArrayRef<LLVM::GEPArg>{offsets[i]});
+      auto inVals =
+          unpackUniqueTensorElements(loc, adaptor.getSrcs()[i], rewriter);
+      auto outVals = transferWithinBlockSwizzling(
+          loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op,
+          [&] { barriers.emit(); });
+      results.push_back(packUniqueTensorElements(loc, getTypeConverter(),
+                                                 outVals, rewriter, dstTy));
     }
-    return failure();
+    rewriter.replaceOp(op, results);
+    return success();
   }
 
   SmallVector<Value> transferWithinBlockSwizzling(
       Location loc, ConversionPatternRewriter &rewriter,
       const LinearLayout &srcLayout, const LinearLayout &dstLayout,
       ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
-      Operation *sourceOp) const {
+      Operation *sourceOp, llvm::function_ref<void()> sharedBarrier) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // We handle transformations recursively as they all need a preprocessing
@@ -80,7 +94,7 @@ struct ConvertLayoutOpSwizzlingConversion
       }));
       auto outVals = transferWithinBlockSwizzling(
           loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr,
-          smemBase, sourceOp);
+          smemBase, sourceOp, sharedBarrier);
       for (auto &v : outVals) {
         v = b.inttoptr(llvmElemTy, v);
       }
@@ -93,9 +107,9 @@ struct ConvertLayoutOpSwizzlingConversion
       auto i8ElemTy = i8_ty;
       auto newInVals = llvm::to_vector(llvm::map_range(
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
-      auto outVals =
-          transferWithinBlockSwizzling(loc, rewriter, srcLayout, dstLayout,
-                                       newInVals, i8ElemTy, smemBase, sourceOp);
+      auto outVals = transferWithinBlockSwizzling(
+          loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
+          sourceOp, sharedBarrier);
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
       }
@@ -155,17 +169,7 @@ struct ConvertLayoutOpSwizzlingConversion
     SmallVector<Value> outVals;
     auto affineOffset = b.i32_val(0);
     auto maskSpanAffineOffset = 0;
-    bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
-    bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
-    auto emitBarrier = [&]() {
-      if (isWarpSync) {
-        targetInfo.warpSync(loc, rewriter);
-      } else if (isBlockSync) {
-        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-      } else {
-        targetInfo.clusterBarrier(loc, rewriter, sourceOp);
-      }
-    };
+    auto emitBarrier = sharedBarrier;
     auto dropBlock = [&](const LinearLayout &cvt) {
       SmallVector<StringAttr> inDims = {kReg, kLane, kWarp};
       SmallVector<StringAttr> outDims = {kOffset};

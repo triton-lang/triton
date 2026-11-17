@@ -443,3 +443,28 @@ tt.func @gsan_descriptor_predicate(%desc: !tt.tensordesc<4x4xf32>, %x: i32, %y: 
   tti.experimental_gsan_tensordesc_access %desc[%x, %y], false, %true : !tt.tensordesc<4x4xf32>
   tt.return
 }
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#dst = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @convert_layout_variadic_identity
+  // CHECK-SAME: %[[A:[^:]+]]: {{.*}}, %[[B:[^:]+]]:
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return %[[A]], %[[B]]
+  tt.func @convert_layout_variadic_identity(%a: tensor<128xi32, #src>, %b: tensor<64xf32, #dst>) -> (tensor<128xi32, #src>, tensor<64xf32, #dst>) {
+    %0:2 = ttg.convert_layout %a, %b : tensor<128xi32, #src>, tensor<64xf32, #dst> -> tensor<128xi32, #src>, tensor<64xf32, #dst>
+    tt.return %0#0, %0#1 : tensor<128xi32, #src>, tensor<64xf32, #dst>
+  }
+
+  // CHECK-LABEL: @convert_layout_variadic_second_result
+  // CHECK-SAME: %[[A:[^:]+]]: {{.*}}, %[[B:[^:]+]]:
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return %[[B]]
+  tt.func @convert_layout_variadic_second_result(%a: tensor<128xi32, #src>, %b: tensor<128xi32, #src>) -> tensor<128xi32, #src> {
+    %0:2 = ttg.convert_layout %a, %b : tensor<128xi32, #src>, tensor<128xi32, #src> -> tensor<128xi32, #dst>, tensor<128xi32, #dst>
+    %1 = ttg.convert_layout %0#1 : tensor<128xi32, #dst> -> tensor<128xi32, #src>
+    tt.return %1 : tensor<128xi32, #src>
+  }
+}

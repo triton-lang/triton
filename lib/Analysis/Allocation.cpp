@@ -100,6 +100,24 @@ unsigned getAtomicResultScratchSize(Value result) {
   return getResultBroadcastScratchSize(result);
 }
 
+SmallVector<unsigned> getConvertLayoutScratchOffsets(
+    gpu::ConvertLayoutOp op,
+    llvm::function_ref<unsigned(RankedTensorType, RankedTensorType)> sizeFn) {
+  SmallVector<unsigned> offsets;
+  unsigned size = 0;
+  for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+    if (!cvtNeedsSharedMemory(op, i)) {
+      offsets.push_back(size);
+      continue;
+    }
+    size = llvm::alignTo(size, 128);
+    offsets.push_back(size);
+    size += sizeFn(op.getSrc(i).getType(), op.getType(i));
+  }
+  offsets.push_back(size);
+  return offsets;
+}
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op)) {
     if (handoff.getSource().hasSameWarpAndBlock(handoff.getDestination()))
@@ -127,13 +145,13 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
            getBitwidth(dstTy) / 8;
   }
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-    auto srcTy = cvtLayout.getSrc().getType();
-    auto dstTy = cvtLayout.getType();
-    if (!cvtNeedsSharedMemory(cvtLayout))
-      return 0;
-    // The generic pass uses swizzling
-    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
-    return elems * getBitwidth(srcTy) / 8;
+    return getConvertLayoutScratchOffsets(
+               cvtLayout,
+               [](RankedTensorType srcTy, RankedTensorType dstTy) {
+                 return getNumScratchElemsSwizzledCvt(srcTy, dstTy) *
+                        getBitwidth(srcTy) / 8;
+               })
+        .back();
   }
   if (auto poll = dyn_cast<AtomicPollOp>(op)) {
     // A poll without a timeout can only return true, so its result does not
@@ -182,8 +200,11 @@ bool hasCrossCTAScratch(Operation *op) {
            handoff.getDestination().getBlock();
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
-    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
-                         gpu::toLinearLayout(cvt.getType()), block);
+    return llvm::any_of(
+        llvm::seq<unsigned>(cvt.getNumOperands()), [&](unsigned i) {
+          return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc(i).getType()),
+                               gpu::toLinearLayout(cvt.getType(i)), block);
+        });
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();

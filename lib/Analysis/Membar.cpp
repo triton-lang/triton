@@ -404,12 +404,14 @@ static bool scratchBufferUsesWarpSync(Operation *op) {
   if (!cvt)
     return false;
 
-  auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
-  auto dstTy = cast<RankedTensorType>(cvt.getType());
-  auto srcLayout = triton::gpu::toLinearLayout(srcTy);
-  auto dstLayout = triton::gpu::toLinearLayout(dstTy);
   auto kWarp = StringAttr::get(op->getContext(), "warp");
-  return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
+  return llvm::all_of(
+      llvm::seq<unsigned>(cvt.getNumOperands()), [&](unsigned i) {
+        return !cvtNeedsSharedMemory(cvt, i) ||
+               mlir::isCvtDimSync(
+                   triton::gpu::toLinearLayout(cvt.getSrc(i).getType()),
+                   triton::gpu::toLinearLayout(cvt.getType(i)), kWarp);
+      });
 }
 
 triton::BarrierStages getLocalBarrierStages(Operation *op,

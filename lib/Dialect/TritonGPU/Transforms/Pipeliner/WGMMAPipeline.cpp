@@ -50,7 +50,9 @@ static bool rsDotNeedsWait(Operation *dot, scf::ForOp forOp) {
   }
   if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(a.getDefiningOp())) {
     return !isa<ttg::NvidiaMmaEncodingAttr>(
-        cvt.getSrc().getType().getEncoding());
+        cvt.getSrc(cast<OpResult>(a).getResultNumber())
+            .getType()
+            .getEncoding());
   }
   return true;
 }
@@ -456,8 +458,13 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     DenseSet<BlockArgument> visitedBlockArgs;
     while (!forOp.isDefinedOutsideOfLoop(transitiveOperand)) {
       if (auto *definingOp = transitiveOperand.getDefiningOp()) {
-        if (isa<ttg::ConvertLayoutOp, ttg::MemDescTransOp,
-                ttg::MemDescReshapeOp, ttg::MemDescSubsliceOp>(definingOp)) {
+        if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(definingOp)) {
+          transitiveOperand =
+              cvt.getSrc(cast<OpResult>(transitiveOperand).getResultNumber());
+          continue;
+        }
+        if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
+                ttg::MemDescSubsliceOp>(definingOp)) {
           transitiveOperand = definingOp->getOperand(0);
           continue;
         }

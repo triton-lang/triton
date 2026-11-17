@@ -176,6 +176,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@filecheck_test
+@gluon.jit
+def test_convert_layout_variadic():
+    # CHECK: #blocked = #ttg.blocked
+    # CHECK: #blocked1 = #ttg.blocked
+    # CHECK-LABEL: test_convert_layout_variadic
+    src: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    dst: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+    x = ttgl.arange(0, 128, layout=src)
+    y = x.to(ttgl.float32)
+    # CHECK: %{{.*}}:2 = ttg.convert_layout %{{.*}}, %{{.*}} : tensor<128xi32, #blocked>, tensor<128xf32, #blocked> -> tensor<128xi32, #blocked1>, tensor<128xf32, #blocked1>
+    a, b = ttgl.convert_layout((x, y), dst)
+    # CHECK: %{{.*}}:2 = ttg.convert_layout %{{.*}}, %{{.*}} : tensor<128xi32, #blocked1>, tensor<128xf32, #blocked1> -> tensor<128xi32, #blocked>, tensor<128xf32, #blocked1>
+    _ = ttgl.convert_layout((a, b), (src, dst))
+
+
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
 @pytest.mark.parametrize("container", [list, tuple])
 def test_layout_nested_constexpr_containers(num_ctas, container):

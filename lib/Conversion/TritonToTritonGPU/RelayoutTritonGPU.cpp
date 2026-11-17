@@ -108,9 +108,12 @@ struct ConvertLayoutOpPattern : public OpConversionPattern<ConvertLayoutOp> {
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type resultType = getTypeConverter()->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultType,
-                                                 adaptor.getSrc());
+    SmallVector<Type> resultTypes;
+    if (failed(getTypeConverter()->convertTypes(op->getResultTypes(),
+                                                resultTypes)))
+      return failure();
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(
+        op, resultTypes, adaptor.getSrcs(), op.getForceWarpShuffle());
     return success();
   }
 };

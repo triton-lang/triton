@@ -116,20 +116,56 @@ def TTG_ThreadHandoffOp : TTG_Op<"thread_handoff", [SameOperandsAndResultType]> 
   let hasVerifier = 1;
 }
 
-def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
-                                 [SameOperandsAndResultShape,
-                                  SameOperandsAndResultElementType,
-                                  Pure]> {
-  let summary = "convert layout";
-
-  let arguments = (ins TT_Tensor:$src, UnitAttr:$force_warp_shuffle);
-
-  let results = (outs TT_Tensor:$result);
-
+def TTG_ConvertLayoutOp : TTG_Op<"convert_layout", [Pure]> {
+  let summary = "convert tensor layouts";
+  let description = [{
+    Converts each source tensor to the corresponding result layout, preserving
+    its shape and element type. Sources may have different shapes, element types,
+    and layouts. Shared-memory transfers use disjoint scratch regions and share
+    synchronization between their store and load rounds.
+  }];
+  let arguments = (ins Variadic<TT_Tensor>:$srcs,
+                       UnitAttr:$force_warp_shuffle);
+  let results = (outs Variadic<TT_Tensor>:$dsts);
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins "TypeRange":$dsts, "ValueRange":$srcs,
+                   CArg<"bool", "false">:$forceWarpShuffle), [{
+      $_state.addOperands(srcs);
+      $_state.addTypes(dsts);
+      if (forceWarpShuffle)
+        $_state.getOrAddProperties<Properties>().force_warp_shuffle =
+            $_builder.getUnitAttr();
+    }]>,
+    OpBuilder<(ins "Type":$dst, "Value":$src,
+                   CArg<"bool", "false">:$forceWarpShuffle), [{
+      build($_builder, $_state, TypeRange{dst}, ValueRange{src}, forceWarpShuffle);
+    }]>
+  ];
   let hasVerifier = 1;
   let hasCanonicalizer = 1;
+  let assemblyFormat = "$srcs attr-dict `:` type($srcs) `->` type($dsts)";
 
-  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+  let extraClassDeclaration = [{
+    // Convenience accessors for individual conversions. The implicit Value
+    // conversion is retained for existing single-result builders.
+    TypedValue<RankedTensorType> getSrc(unsigned i = 0) {
+      return cast<TypedValue<RankedTensorType>>(getSrcs()[i]);
+    }
+    OpOperand &getSrcMutable(unsigned i = 0) {
+      return getOperation()->getOpOperand(i);
+    }
+    TypedValue<RankedTensorType> getResult(unsigned i = 0) {
+      return cast<TypedValue<RankedTensorType>>(getDsts()[i]);
+    }
+    RankedTensorType getType(unsigned i = 0) {
+      return getResult(i).getType();
+    }
+    operator TypedValue<RankedTensorType>() {
+      assert(getNumResults() == 1 && "expected a single layout conversion");
+      return getResult();
+    }
+  }];
 }
 
 def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {

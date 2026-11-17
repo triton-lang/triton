@@ -24,7 +24,7 @@ namespace {
 // producer.
 static Value stripConvertLayout(Value v) {
   while (auto cvt = v.getDefiningOp<ttg::ConvertLayoutOp>())
-    v = cvt.getSrc();
+    v = cvt.getSrc(cast<OpResult>(v).getResultNumber());
   return v;
 }
 

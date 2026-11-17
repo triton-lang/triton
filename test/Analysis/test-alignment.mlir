@@ -1634,3 +1634,16 @@ tt.func @negative_constants() {
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+tt.func @convert_layout_variadic_axis_info() {
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 7}}
+  %a = arith.constant dense<7> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [4, 8], constant_value = 8}}
+  %b = arith.constant dense<8> : tensor<4x8xi64>
+  // expected-remark @+2 {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 7}}
+  // expected-remark @+1 {{contiguity = [1, 1], divisibility = [8, 8], constancy = [4, 8], constant_value = 8}}
+  %0:2 = ttg.convert_layout %a, %b : tensor<128xi32>, tensor<4x8xi64> -> tensor<128xi32>, tensor<4x8xi64>
+  tt.return
+}

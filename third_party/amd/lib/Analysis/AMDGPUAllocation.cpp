@@ -14,20 +14,22 @@ namespace mlir::triton::AMD {
 
 unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
                                         TargetInfoBase &targetInfo) {
-  if (!cvtNeedsSharedMemory(op))
-    return 0;
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-  int numBanks = targetInfo.getSharedMemoryBanks();
-  auto srcLayout = gpu::toLinearLayout(srcTy);
-  auto dstLayout = gpu::toLinearLayout(dstTy);
-  auto bitwidth = getBitwidth(srcTy);
-  auto vecBitwidth =
-      triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
-  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth,
-                                                 numBanks, srcTile, dstTile);
-  return elems * bitwidth / 8;
+  return getConvertLayoutScratchOffsets(
+             op,
+             [&](RankedTensorType srcTy, RankedTensorType dstTy) {
+               int numBanks = targetInfo.getSharedMemoryBanks();
+               auto srcLayout = gpu::toLinearLayout(srcTy);
+               auto dstLayout = gpu::toLinearLayout(dstTy);
+               auto bitwidth = getBitwidth(srcTy);
+               auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(
+                   srcLayout, dstLayout, bitwidth);
+               auto [dstTile, srcTile] =
+                   targetInfo.getSharedLdStTiles(vecBitwidth);
+               unsigned elems = getNumScratchElemsSwizzledCvt(
+                   srcLayout, dstLayout, bitwidth, numBanks, srcTile, dstTile);
+               return elems * bitwidth / 8;
+             })
+      .back();
 }
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,

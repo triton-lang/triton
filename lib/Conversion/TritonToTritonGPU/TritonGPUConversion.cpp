@@ -54,8 +54,7 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                               ValueRange inputs, Location loc) {
     auto cast = triton::gpu::ConvertLayoutOp::create(
-        builder, loc, tensorType, inputs,
-        triton::gpu::ConvertLayoutOp::Properties{});
+        builder, loc, TypeRange{tensorType}, inputs);
     return cast.getResult();
   });
 }

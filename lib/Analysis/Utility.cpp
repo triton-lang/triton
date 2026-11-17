@@ -1240,12 +1240,12 @@ static bool cvtNeedsWarpShuffle(const LinearLayout &src,
                   .mixedTranspositions.size() < 2);
 }
 
-bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op, unsigned index) {
   if (!op.getForceWarpShuffle() &&
-      cvtReordersRegisters(op.getSrc().getType(), op.getType()))
+      cvtReordersRegisters(op.getSrc(index).getType(), op.getType(index)))
     return false;
-  return cvtNeedsWarpShuffle(toLinearLayout(op.getSrc().getType()),
-                             toLinearLayout(op.getType()),
+  return cvtNeedsWarpShuffle(toLinearLayout(op.getSrc(index).getType()),
+                             toLinearLayout(op.getType(index)),
                              op.getForceWarpShuffle());
 }
 
@@ -1259,9 +1259,14 @@ bool cvtNeedsSharedMemory(const LinearLayout &src, const LinearLayout &dst) {
   return !cvtNeedsWarpShuffle(src, dst, false);
 }
 
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op, unsigned index) {
+  return !cvtReordersRegisters(op.getSrc(index).getType(), op.getType(index)) &&
+         !cvtNeedsWarpShuffle(op, index);
+}
+
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
-  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
-         !cvtNeedsWarpShuffle(op);
+  return llvm::any_of(llvm::seq<unsigned>(op.getNumOperands()),
+                      [&](unsigned i) { return cvtNeedsSharedMemory(op, i); });
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {

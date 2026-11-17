@@ -293,19 +293,33 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self.splat(scalar, shape, layout)
 
     def convert_layout(self, value, layout, assert_trivial=False):
-        ty = value.type
-        _check(isinstance(ty, ttgl.distributed_type),
-               lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
-        _check(isinstance(layout, ttgl.DistributedLayout),
-               lambda: f"expected 'layout' to be a DistributedLayout but got {layout}")
-        ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
-        ret_ty_ir = ret_ty.to_ir(self.builder)
-        if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
-            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial.\n"
-                            f"The linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n"
-                            f"{self.to_linear_layout(layout, ty.shape)}")
-        handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
-        return ttgl.tensor(handle, ret_ty)
+        is_tuple = isinstance(value, (tuple, list, ttgl.tuple))
+        values = list(value) if is_tuple else [value]
+        _check(bool(values), lambda: "convert_layout requires at least one tensor")
+        if isinstance(layout, (tuple, list, ttgl.tuple)):
+            _check(is_tuple and len(layout) == len(values),
+                   lambda: "convert_layout requires one layout per input tensor")
+            layouts = [ttgl._unwrap_if_constexpr(item) for item in layout]
+        else:
+            layouts = [layout] * len(values)
+        ret_types = []
+        for value, layout in zip(values, layouts):
+            ty = value.type
+            _check(isinstance(ty, ttgl.distributed_type),
+                   lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
+            _check(isinstance(layout, ttgl.DistributedLayout),
+                   lambda: f"expected 'layout' to be a DistributedLayout but got {layout}")
+            ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
+            ret_ty_ir = ret_ty.to_ir(self.builder)
+            if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
+                raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial.\n"
+                                f"The linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n"
+                                f"{self.to_linear_layout(layout, ty.shape)}")
+            ret_types.append(ret_ty)
+        handles = self.builder.create_convert_layouts([ty.to_ir(self.builder) for ty in ret_types],
+                                                      [value.handle for value in values])
+        results = [ttgl.tensor(handle, ty) for handle, ty in zip(handles, ret_types)]
+        return ttgl.tuple(results) if is_tuple else results[0]
 
     def allocate_shared(self, element_ty, shape, layout, value):
         _check(isinstance(element_ty, ttgl.dtype), lambda: f"expected 'element_ty' to be a dtype but got {element_ty}")

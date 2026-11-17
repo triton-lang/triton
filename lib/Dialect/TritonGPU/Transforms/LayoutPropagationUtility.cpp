@@ -25,6 +25,8 @@ inferSourceLoadLayout(LinearEncodingAttr dstLayout, Operation *defOp) {
       break; // Found the load op; we are done here.
 
     if (auto cvtOp = dyn_cast<ConvertLayoutOp>(curOp)) {
+      if (cvtOp.getNumResults() != 1)
+        return std::nullopt;
       // For convert op we keep the current layout to push through further.
       curOp = cvtOp.getSrc().getDefiningOp();
     } else {

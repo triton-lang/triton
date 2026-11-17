@@ -844,6 +844,12 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
              return self.create<ttg::ConvertLayoutOp>(resultTy, value);
            })
+      .def("create_convert_layouts",
+           [](GluonOpBuilder &self, std::vector<Type> resultTypes,
+              std::vector<Value> values) {
+             auto op = self.create<ttg::ConvertLayoutOp>(resultTypes, values);
+             return std::vector<Value>(op->result_begin(), op->result_end());
+           })
       .def("create_local_alloc",
            [](GluonOpBuilder &self, Type resultTy) -> Value {
              return self.create<ttg::LocalAllocOp>(resultTy);
