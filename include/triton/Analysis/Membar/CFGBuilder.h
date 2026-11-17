@@ -3,6 +3,8 @@
 
 #include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Analysis/Membar/TmemModel.h"
+#include "llvm/ADT/SetVector.h"
+#include <map>
 #include <optional>
 
 namespace mlir::triton::membar {
@@ -33,9 +35,8 @@ constexpr unsigned coverage(Action action) {
 
 enum class Boundary {
   None,
-  WaitAll,     // Complete issued TMEM accesses.
-  Publication, // Order peer-visible TMEM effects.
-  Clean,       // Order every outstanding effect at a collective call or return.
+  WaitAll,      // Complete issued TMEM accesses.
+  Publication,  // Order peer-visible TMEM effects.
   KernelReturn, // Complete issued TMEM accesses and order CompletionSync::All.
 };
 
@@ -63,30 +64,39 @@ struct Edge {
 // A fixed internal rendezvous orders paths passing through the operation.
 struct Node {
   Operation *op = nullptr;
-  // Zero at entry and wherever the execution group cannot rendezvous.
+  // Zero wherever the execution group cannot rendezvous.
   unsigned insertionCost = 0;
+  unsigned body = 0;
   OpModel effects;
   SmallVector<Edge, 2> next;
 };
 
 struct MembarCFG {
-  static constexpr unsigned entry = 0;
   SmallVector<Node, 0> nodes;
+
+  // A callee entry or loop backedge can rebind SSA values in its own body.
+  bool invalidatesIteration(Edge edge, unsigned source) const {
+    return edge.invalidatesIteration &&
+           nodes[edge.to].body == nodes[source].body;
+  }
 };
 
 class MembarCFGBuilder {
 public:
-  MembarCFGBuilder(SMemModel &shared, TMemModel *tmem, Boundary returnBoundary)
-      : shared(shared), tmem(tmem), returnBoundary(returnBoundary) {}
+  MembarCFGBuilder(std::map<Operation *, SMemModel> &models, TMemModel *tmem,
+                   const llvm::SetVector<Operation *> &callbacks)
+      : models(models), tmem(tmem), callbacks(callbacks) {}
 
-  MembarCFG build(Region &region);
+  /// Build one execution region and link its reachable noinline callees.
+  MembarCFG build(Region &root);
 
 private:
-  OpModel describe(Operation *op);
+  void addRegion(MembarCFG &cfg, Region &region);
+  OpModel describe(Operation *op, SMemModel &shared);
 
-  SMemModel &shared;
+  std::map<Operation *, SMemModel> &models;
   TMemModel *tmem;
-  Boundary returnBoundary;
+  const llvm::SetVector<Operation *> &callbacks;
 };
 
 } // namespace mlir::triton::membar

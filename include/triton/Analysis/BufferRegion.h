@@ -355,12 +355,18 @@ public:
 
   /// Translate callee-local views into the caller's allocation frame, caching
   /// the complete footprint and preserving views already in other frames.
+  /// TODO: Remove this method and callsiteFootprints once legacy Membar and
+  /// proxy fence insertion both stop importing callee summaries.
   const BufferRegionFootprint *
   translateToCallsite(const BufferRegionFootprint *footprint,
                       CallOpInterface call, FunctionOpInterface callee);
 
   /// Shared-memory offset of the callee frame in the caller's allocation.
   uint32_t getCallOffset(CallOpInterface call) const;
+
+  /// Merge every physical placement of a shared-memory footprint.
+  const BufferRegionFootprint *
+  getKernelFootprint(const BufferRegionFootprint *footprint);
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
@@ -425,6 +431,9 @@ private:
   llvm::DenseMap<std::pair<const BufferRegionFootprint *, Operation *>,
                  std::unique_ptr<BufferRegionFootprint>>
       callsiteFootprints;
+  llvm::DenseMap<const BufferRegionFootprint *,
+                 std::unique_ptr<BufferRegionFootprint>>
+      kernelFootprints;
   llvm::UniqueVector<Operation *> operationInterner;
 };
 

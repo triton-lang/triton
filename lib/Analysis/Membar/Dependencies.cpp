@@ -20,8 +20,7 @@ std::optional<Path> sharedNeed(const BlockInfo &out, const OpModel &in,
     return out.threadSync.completion == CompletionSync::All
                ? std::optional(Path::Any)
                : std::nullopt;
-  if (in.boundary == Boundary::Clean ||
-      BlockInfo::requiresThreadSync(out, in.sharedIn) ||
+  if (BlockInfo::requiresThreadSync(out, in.sharedIn) ||
       out.isIntersected(in.sharedIn, filter, &allocation))
     return Path::Any;
   if (!carried)
@@ -48,8 +47,7 @@ std::optional<Path> tmemNeed(const Node &producer, const Node &consumer,
   auto boundary = consumer.effects.boundary;
   Path ordered = needsWait ? Path::WaitThenOrder : Path::Any;
   // Peer-visible TMEM accesses require a rendezvous before publication.
-  if (boundary == Boundary::Clean ||
-      (boundary == Boundary::Publication && !producer.effects.privateTMem))
+  if (boundary == Boundary::Publication && !producer.effects.privateTMem)
     return ordered;
   // A completion wait orders same-warp RAW, WAR, and WAW dependencies.
   if (tmemConflicts(producer.effects.tmemAccesses,
@@ -71,9 +69,8 @@ SmallVector<Demand> discoverDemands(const MembarCFG &cfg,
   bool needsWarp = llvm::any_of(
       cfg.nodes, [](const Node &node) { return node.effects.needsWarp; });
   bool ordersThreadEffects = llvm::any_of(cfg.nodes, [](const Node &node) {
-    return node.effects.boundary == Boundary::Clean ||
-           node.effects.sharedIn.threadDemands.publicationIssuer !=
-               ThreadIssuer::None;
+    return node.effects.sharedIn.threadDemands.publicationIssuer !=
+           ThreadIssuer::None;
   });
   // The sparse set queues each (consumer, fact) once per producer.
   llvm::SparseSet<unsigned> arrivals;
@@ -103,7 +100,8 @@ SmallVector<Demand> discoverDemands(const MembarCFG &cfg,
       for (Edge edge : node.next) {
         if (cfg.nodes[edge.to].effects.fixedBefore & stop)
           continue;
-        Fact next = fact == Shared && hasSlices && edge.invalidatesIteration
+        Fact next = fact == Shared && hasSlices &&
+                            cfg.invalidatesIteration(edge, source)
                         ? CarriedShared
                         : fact;
         arrivals.insert(NumFacts * edge.to + next);
@@ -115,9 +113,7 @@ SmallVector<Demand> discoverDemands(const MembarCFG &cfg,
       propagate(producer, Shared);
     if (out.tmemProducerNeed)
       propagate(producer, TMem);
-    // An entry or call can require convergence even without effects.
-    if (needsWarp && (source == cfg.entry || out.boundary == Boundary::Clean ||
-                      shared.hasEffects()))
+    if (needsWarp && shared.hasEffects())
       propagate(producer, Warp);
 
     std::optional<BlockInfo> carriedOut;
@@ -143,8 +139,7 @@ SmallVector<Demand> discoverDemands(const MembarCFG &cfg,
         if (isShared)
           continue;
       }
-      if (in.boundary != Boundary::Clean)
-        propagate(consumer, fact, in.fixedInside);
+      propagate(consumer, fact, in.fixedInside);
     }
   }
 

@@ -33,7 +33,7 @@ public:
 private:
   struct Info;
   const Info *getInfo(Operation *op);
-  bool isPrivate(const BufferRegionFootprint *footprint, Region *issuer) const;
+  bool isPrivate(const BufferRegionFootprint *footprint) const;
 
   BufferRegionAnalysis &regions;
   SmallVector<std::pair<const BufferRegionFootprint *, Region *>> allocations;

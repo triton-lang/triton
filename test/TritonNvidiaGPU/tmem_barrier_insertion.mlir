@@ -57,9 +57,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NOT: ttng.tmem_wait store
   // CHECK: ttng.tmem_load
-  // CHECK-NEXT: ttng.tmem_wait load
-  // CHECK-NOT: ttng.tmem_wait
-  // CHECK: tt.return
+  // CHECK-NEXT: tt.return
   tt.func private @existing_store_wait(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
     %tile = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     ttng.tmem_wait store
@@ -215,13 +213,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<128x64xf32, #blocked>
   }
 
+  // WAIT-LABEL: @tmem_opaque_handoff
+  // WAIT: ttng.tmem_wait load
+  // WAIT: ttg.barrier local
+  // WAIT-NEXT: {{.*}}tt.elementwise_inline_asm
   tt.func private @tmem_opaque_handoff() attributes {noinline = true} {
     %opaque = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32
     tt.return
   }
 
   // The load completes before either overwrite. The optional copy needs a
-  // rendezvous with the loading warps, then another before the call.
+  // rendezvous with the loading warps. The callee orders publication.
   // WAIT-LABEL: @wait_same_thread_after_barrier
   // WAIT-NOT: ttng.tmem_wait load
   // WAIT: ttng.tmem_load
@@ -229,7 +231,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-DAG: ttg.barrier local
   // WAIT-DAG: ttng.tmem_store
   // WAIT: ttng.tmem_copy
-  // WAIT: ttg.barrier local
+  // WAIT-NOT: ttg.barrier local
   // WAIT: tt.call @tmem_opaque_handoff
   // WAIT-NEXT: tt.return
   tt.func @wait_same_thread_after_barrier(%condition: i1, %init: tensor<128x128xf32, #blocked>, %data: tensor<128x64xf32, #blocked>, %shared: !ttg.memdesc<128x64xf32, #shared_copy, #ttg.shared_memory>) -> tensor<128x128xf32, #blocked> {
@@ -724,10 +726,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Complete the store before the existing barrier so the callee returns clean.
+  // Complete the caller's load before reusing its TMEM columns.
   // TMEM-LABEL: @tmem_entry_c
-  // TMEM: ttng.tmem_alloc
-  // TMEM-NEXT: ttng.tmem_wait store
+  // TMEM: ttng.tmem_wait load
+  // TMEM-NEXT: {{.*}} = ttng.tmem_alloc
   // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: tt.return
   tt.func private @tmem_entry_c() {
@@ -740,20 +742,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // TMEM-LABEL: @tmem_entry_b
   // TMEM-NOT: {{ttng\.tmem_wait|ttg\.barrier}}
   // TMEM: tt.call @tmem_entry_c
+  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: tt.return
   tt.func private @tmem_entry_b() {
     tt.call @tmem_entry_c() : () -> ()
     tt.return
   }
 
-  // Allocating an empty tile leaves the first call clean. The subsequent load
-  // needs completion and ordering before the second call.
+  // Both calls share the waits in @tmem_entry_b and @tmem_entry_c.
   // TMEM-LABEL: @tmem_entry_a
   // TMEM-NEXT: {{.*}} = ttng.tmem_alloc
   // TMEM-NEXT: tt.call @tmem_entry_b
   // TMEM-NEXT: {{.*}} = ttng.tmem_load
-  // TMEM-NEXT: ttng.tmem_wait load
-  // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: tt.call @tmem_entry_b
   tt.func @tmem_entry_a() {
     %alloc = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
@@ -1098,12 +1098,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Tensor-memory offsets share one physical frame across functions.
-  // Clean entry requires completion and ordering even for a disjoint tile.
+  // The wait in @tmem_entry_c also completes the disjoint load.
   // TMEM-LABEL: @tmem_call_disjoint
   // TMEM: ttng.tmem_load
-  // TMEM-NEXT: ttng.tmem_wait load
-  // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: tt.call @tmem_entry_b
   // TMEM-NEXT: tt.return
   tt.func @tmem_call_disjoint() {
@@ -1138,12 +1135,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 
-  // The callee completes and orders its own load before return.
+  // Complete the caller's initializer before loading its tile.
   // TMEM-LABEL: @tmem_load_argument
   // TMEM: ttg.barrier all
+  // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: {{.*}} = ttng.tmem_load
-  // TMEM-NEXT: ttng.tmem_wait load
-  // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: tt.return
   tt.func private @tmem_load_argument(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
     ttg.barrier all
@@ -1151,12 +1147,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<128x128xf32, #blocked>
   }
 
-  // The first callee returns clean. The intervening global store requires
-  // ordering before the next collective call.
+  // The load stays pending through the global store until the opaque operation.
   // WAIT-LABEL: @tmem_call_load_then_publish
   // WAIT: tt.call @tmem_load_argument
   // WAIT-NEXT: tt.store
-  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: tt.call @tmem_opaque_handoff
   // WAIT-NEXT: tt.return
   tt.func private @tmem_call_load_then_publish(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>, %out: !tt.ptr<f32>, %value: f32) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
@@ -1166,13 +1160,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<128x128xf32, #blocked>
   }
 
-  // The callee's leading barrier cannot satisfy the caller's clean entry.
-  // Its clean return lets the caller store immediately afterwards.
+  // The caller waits for the callee's load before overwriting the tile.
   // TMEM-LABEL: @tmem_call_load_then_store
   // TMEM: ttng.tmem_alloc
-  // TMEM-NEXT: ttng.tmem_wait store
-  // TMEM-NEXT: ttg.barrier local
   // TMEM-NEXT: {{.*}} = tt.call @tmem_load_argument
+  // TMEM-NEXT: ttng.tmem_wait load
   // TMEM-NEXT: ttng.tmem_store
   // TMEM-NEXT: ttng.tmem_wait store
   // TMEM-NEXT: tt.return
@@ -1413,7 +1405,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
   // A distinct worker-visible allocation reuses the pool's first two columns.
   // Only the overlapping store must complete before the release atomic.
-  // The private load still needs a wait and rendezvous before the call.
+  // The two private loads can share a wait across the call to @publish.
   // GUARD-LABEL: @reused_storage
   // GUARD: ttng.tmem_store
   // GUARD-NEXT: ttng.tmem_wait store
@@ -1428,8 +1420,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // GUARD: ^[[JOIN]]:
   // GUARD-NEXT: ttng.tmem_wait store
   // GUARD-NEXT: {{.*}}ttng.tmem_load
-  // GUARD-NEXT: ttng.tmem_wait load
-  // GUARD-NEXT: ttg.barrier local
   // GUARD-NEXT: tt.call @publish
   // GUARD-NEXT: {{.*}}ttng.tmem_load
   tt.func public @reused_storage(%flag: !tt.ptr<i32>, %overlap: i1) {
@@ -1510,6 +1500,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.print "tile" {hex = false, isSigned = array<i32: 1>} : %v : !data
       ttg.warp_return
     } : (!tile, !tt.ptr<i32>) -> ()
+    tt.return
+  }
+
+  tt.func private @swap_tiles(%private: !tile, %worker: !tile) -> (!tile, !tile) attributes {noinline = true} {
+    tt.return %worker, %private : !tile, !tile
+  }
+
+  // The worker captures the first result. Only its store needs a wait before release.
+  // GUARD-LABEL: @publish_returned_tiles
+  // GUARD: ttng.tmem_store
+  // GUARD: ttng.tmem_wait store
+  // GUARD: tt.atomic_rmw add, release
+  // GUARD: ttng.tmem_store
+  // GUARD-NOT: ttng.tmem_wait store
+  // GUARD: tt.atomic_rmw add, release
+  // GUARD: ttng.tmem_wait store
+  // GUARD-NEXT: {{.*}}ttng.tmem_load
+  tt.func public @publish_returned_tiles(%flag: !tt.ptr<i32>) {
+    %true = arith.constant true
+    %one = arith.constant 1 : i32
+    %ones = arith.constant dense<1> : !data
+    %a = ttng.tmem_alloc {tensor_memory_col_offset = 4 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tile
+    %b = ttng.tmem_alloc {tensor_memory_col_offset = 8 : i32, tensor_memory_row_offset = 0 : i32} : () -> !tile
+    %worker, %private = tt.call @swap_tiles(%a, %b) : (!tile, !tile) -> (!tile, !tile)
+    ttng.tmem_store %ones, %worker, %true : !data -> !tile
+    %first = tt.atomic_rmw add, release, cta, %flag, %one : (!tt.ptr<i32>, i32) -> i32
+    ttng.tmem_store %ones, %private, %true : !data -> !tile
+    %second = tt.atomic_rmw add, release, cta, %flag, %one : (!tt.ptr<i32>, i32) -> i32
+    %private_value = ttng.tmem_load %private : !tile -> !data
+    tt.print "private" {hex = false, isSigned = array<i32: 1>} : %private_value : !data
+    ttg.warp_specialize(%worker)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%captured: !tile) num_warps(4) {
+      %v = ttng.tmem_load %captured : !tile -> !data
+      tt.print "worker" {hex = false, isSigned = array<i32: 1>} : %v : !data
+      ttg.warp_return
+    } : (!tile) -> ()
     tt.return
   }
 }

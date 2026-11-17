@@ -1,7 +1,5 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Iterators.h"
-#include "mlir/IR/SymbolTable.h"
-#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -462,28 +460,6 @@ void optimizeBlock(Block *block) {
     next = resume;
     wrapScalarRegion(ops, effects, tail, *outputs, owner);
   }
-}
-
-// Return tensor callback ops and their transitive noinline callees.
-// Map bodies and reduce/scan combiners have per-element scalar values.
-llvm::SetVector<Operation *> getTensorCallbackOps(ModuleOp mod) {
-  llvm::SetVector<Operation *> roots;
-  mod.walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (!isa<MapElementwiseOp, ReduceOp, ScanOp>(op))
-      return WalkResult::advance();
-    roots.insert(op);
-    return WalkResult::skip();
-  });
-  SymbolTableCollection symbolTable;
-  for (unsigned i = 0; i < roots.size(); ++i) {
-    Operation *root = roots[i];
-    root->walk([&](CallOpInterface call) {
-      Operation *callee = call.resolveCallableInTable(&symbolTable);
-      assert(callee && "verified Gluon calls must resolve to a function");
-      roots.insert(callee);
-    });
-  }
-  return roots;
 }
 
 class OptimizeThreadRegions

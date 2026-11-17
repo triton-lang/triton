@@ -94,6 +94,8 @@ public:
 
   // Parameters have no callee buffer ID. Bind this argument's effects to the
   // caller's allocation when importing the function summary.
+  // TODO: Remove this field and Allocation's argumentAliases table with the
+  // legacy cluster call summaries.
   std::optional<unsigned> argumentIndex;
 
 private:
@@ -298,7 +300,7 @@ namespace triton::membar {
 
 struct OpModel;
 
-bool hasRegionLocalUses(Value root);
+bool hasRegionLocalUses(Value root, bool followCalls);
 
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {
@@ -309,18 +311,26 @@ public:
     SynchronizationOnly
   };
 
+  /// Only legacy MembarAnalysis uses followCalls=false.
+  /// TODO: When it retires, remove the flag, follow descriptor uses through
+  /// calls unconditionally, and keep callee footprints in kernel coordinates.
   SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
             AccessMode accessMode = AccessMode::AllSharedAccesses,
-            CompletionScopeFn completionScope = nullptr)
+            CompletionScopeFn completionScope = nullptr,
+            bool followCalls = false)
       : allocation(allocation), regions(regions), accessMode(accessMode),
-        completionScope(completionScope),
+        completionScope(completionScope), followCalls(followCalls),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
   /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
   /// Cluster placement supplies its own stages and tracks only memory slices.
+  /// TODO: Remove clusterStages, AllocatorAliasesOnly and MembarSliceFilterFn
+  /// when the legacy cluster analysis migrates.
   void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses,
                 std::optional<BarrierStages> clusterStages = std::nullopt);
+  /// TODO: Retire this method and AllocationSlice::translateToCallsite with the
+  /// legacy forward-flow summaries.
   MembarInfo translateCallSummary(CallOpInterface call,
                                   FunctionOpInterface callee,
                                   MembarInfo summary);
@@ -343,6 +353,7 @@ private:
   BufferRegionAnalysis &regions;
   AccessMode accessMode;
   CompletionScopeFn completionScope;
+  bool followCalls;
   BufferIndexAnalysis bufferIndexAnalysis;
   DenseMap<Value, bool> regionLocalAllocations;
 };
