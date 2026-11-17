@@ -505,6 +505,41 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.clmul` (triton::ClMulOp)
+
+_Low N bits of the carry-less product of two N-bit integers_
+
+Syntax:
+
+```
+operation ::= `tt.clmul` $x `,` $y attr-dict `:` type($x)
+```
+
+Multiplies the operands as binary polynomials over GF(2), replacing
+addition with XOR, and returns the low N bits. Signed operands are
+interpreted by their bit patterns. Tensor operands operate elementwise.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Commutative`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `x` | integer or ranked tensor of integer values |
+| `y` | integer or ranked tensor of integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | integer or ranked tensor of integer values |
+
+
+
 ### `tt.descriptor_gather` (triton::DescriptorGatherOp)
 
 _Gather multiple rows from a descriptor into a single tensor_

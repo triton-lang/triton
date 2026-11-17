@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.blackwell.gdc.launch\_dependents
+==========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.blackwell
+
+.. autofunction:: gdc.launch_dependents

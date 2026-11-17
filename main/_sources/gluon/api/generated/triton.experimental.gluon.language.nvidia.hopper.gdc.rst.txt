@@ -1,0 +1,22 @@
+﻿triton.experimental.gluon.language.nvidia.hopper.gdc
+====================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.hopper.gdc
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   wait
+   launch_dependents
+
+
+
+
+
+

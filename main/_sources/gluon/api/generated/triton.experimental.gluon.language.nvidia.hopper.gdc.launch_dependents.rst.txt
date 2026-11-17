@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.gdc.launch\_dependents
+=======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.gdc
+
+.. autofunction:: launch_dependents

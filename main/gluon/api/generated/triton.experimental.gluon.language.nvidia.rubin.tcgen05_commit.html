@@ -80,6 +80,7 @@
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.async_copy.html">triton.experimental.gluon.language.nvidia.rubin.async_copy</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.clc.html">triton.experimental.gluon.language.nvidia.rubin.clc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.cluster.html">triton.experimental.gluon.language.nvidia.rubin.cluster</a></li>
+<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.gdc.html">triton.experimental.gluon.language.nvidia.rubin.gdc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.mbarrier.html">triton.experimental.gluon.language.nvidia.rubin.mbarrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.tma.html">triton.experimental.gluon.language.nvidia.rubin.tma</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.add2.html">triton.experimental.gluon.language.nvidia.rubin.add2</a></li>
@@ -156,10 +157,13 @@
 <h1>triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-rubin-tcgen05-commit" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.rubin.</span></span><span class="sig-name descname"><span class="pre">tcgen05_commit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">barrier</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">descs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.rubin.</span></span><span class="sig-name descname"><span class="pre">tcgen05_commit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">barrier</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">descs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">completion</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'all'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit" title="Link to this definition"></a></dt>
 <dd><p>This instruction causes the provided mbarrier to be arrived-on with a count
-of 1 when all async tcgen05 MMA and copy instructions previously issued by
-the thread are complete.</p>
+of 1 when prior async tcgen05 operations issued by the thread are complete.</p>
+<p>By default, this operation tracks completion of all prior asynchronous
+tcgen05 operations. On Rubin, <code class="docutils literal notranslate"><span class="pre">completion=&quot;a_read&quot;</span></code> modifies the operation
+to track only the completion of the A operand read from shared memory for
+a tcgen05 MMA operation.</p>
 <p>If <cite>descs</cite> are provided, the commit will be multicast across the CTA cluster
 based on the shared layouts of those descriptors. This should be used when
 the inputs to the tcgen5 MMA come from TMA descriptors using multicast.</p>
@@ -170,6 +174,7 @@ the inputs to the tcgen5 MMA come from TMA descriptors using multicast.</p>
 <li><p><strong>pred</strong> (<em>bool</em>) – Scalar predicate. Operation is skipped if predicate is False. Defaults to True.</p></li>
 <li><p><strong>descs</strong> (<em>Sequence</em><em>[</em><a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a><em>]</em>) – Shared memory descriptors for
 the preceding multiplication inputs. Defaults to ().</p></li>
+<li><p><strong>completion</strong> (<em>str</em>) – “all” (default) or “a_read” (Rubin only).</p></li>
 </ul>
 </dd>
 </dl>

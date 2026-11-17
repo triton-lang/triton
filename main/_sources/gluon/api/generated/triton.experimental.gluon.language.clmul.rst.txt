@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.clmul
+========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: clmul

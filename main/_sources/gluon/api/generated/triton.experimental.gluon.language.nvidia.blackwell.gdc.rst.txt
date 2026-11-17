@@ -1,0 +1,22 @@
+﻿triton.experimental.gluon.language.nvidia.blackwell.gdc
+=======================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.blackwell.gdc
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   wait
+   launch_dependents
+
+
+
+
+
+

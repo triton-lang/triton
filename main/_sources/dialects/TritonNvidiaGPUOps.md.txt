@@ -794,9 +794,14 @@ operation ::= `ttng.tc_gen5_commit` $barrier (`,` $pred^)? (`descs` $descs^)? at
 ```
 
 The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
-mbarrier object track the completion of all prior asynchronous tcgen5
-operations. Upon completion of all asynchronous operations, the mbarrier
+mbarrier object track the completion of prior asynchronous tcgen5
+operations. Upon completion of the asynchronous operations, the mbarrier
 arrive operation is performed on the mbarrier with a count of 1.
+
+By default, this operation tracks completion of all prior asynchronous
+tcgen5 operations. On Rubin, `early_a_release` modifies the operation
+to track only the completion of the A operand read from shared memory for
+a tcgen5 MMA operation.
 
 If `descs` are provided, the commit will be multicast across the CTA cluster
 based on the shared layouts of those descriptors. This should be used when
@@ -821,6 +826,13 @@ operation on `%barrierB`, even though its commit group is empty.
 Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>early_a_release</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
 
 #### Operands:
 

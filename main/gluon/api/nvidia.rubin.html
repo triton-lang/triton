@@ -80,6 +80,7 @@
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.async_copy.html">triton.experimental.gluon.language.nvidia.rubin.async_copy</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.clc.html">triton.experimental.gluon.language.nvidia.rubin.clc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.cluster.html">triton.experimental.gluon.language.nvidia.rubin.cluster</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.gdc.html">triton.experimental.gluon.language.nvidia.rubin.gdc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.html">triton.experimental.gluon.language.nvidia.rubin.mbarrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.tma.html">triton.experimental.gluon.language.nvidia.rubin.tma</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.add2.html">triton.experimental.gluon.language.nvidia.rubin.add2</a></li>
@@ -164,10 +165,13 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.cluster.html#module-triton.experimental.gluon.language.nvidia.rubin.cluster" title="triton.experimental.gluon.language.nvidia.rubin.cluster"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cluster</span></code></a></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.html#module-triton.experimental.gluon.language.nvidia.rubin.mbarrier" title="triton.experimental.gluon.language.nvidia.rubin.mbarrier"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mbarrier</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.gdc.html#module-triton.experimental.gluon.language.nvidia.rubin.gdc" title="triton.experimental.gluon.language.nvidia.rubin.gdc"><code class="xref py py-obj docutils literal notranslate"><span class="pre">gdc</span></code></a></p></td>
+<td><p>Grid Dependency Control (GDC) for programmatic dependent launch on SM90 and newer.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.mbarrier.html#module-triton.experimental.gluon.language.nvidia.rubin.mbarrier" title="triton.experimental.gluon.language.nvidia.rubin.mbarrier"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mbarrier</span></code></a></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.tma.html#module-triton.experimental.gluon.language.nvidia.rubin.tma" title="triton.experimental.gluon.language.nvidia.rubin.tma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tma</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.tma.html#module-triton.experimental.gluon.language.nvidia.rubin.tma" title="triton.experimental.gluon.language.nvidia.rubin.tma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tma</span></code></a></p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -223,7 +227,7 @@
 <td><p></p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit.html#triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit" title="triton.experimental.gluon.language.nvidia.rubin.tcgen05_commit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tcgen05_commit</span></code></a></p></td>
-<td><p>This instruction causes the provided mbarrier to be arrived-on with a count of 1 when all async tcgen05 MMA and copy instructions previously issued by the thread are complete.</p></td>
+<td><p>This instruction causes the provided mbarrier to be arrived-on with a count of 1 when prior async tcgen05 operations issued by the thread are complete.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy.html#triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy" title="triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tcgen05_copy</span></code></a></p></td>
 <td><p>Start an asynchronous copy from shared memory to tensor memory.</p></td>

@@ -1,0 +1,6 @@
+﻿triton.language.clmul
+=====================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: clmul

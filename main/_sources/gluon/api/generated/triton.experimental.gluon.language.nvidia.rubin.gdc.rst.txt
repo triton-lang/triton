@@ -1,0 +1,22 @@
+﻿triton.experimental.gluon.language.nvidia.rubin.gdc
+===================================================
+
+.. automodule:: triton.experimental.gluon.language.nvidia.rubin.gdc
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   wait
+   launch_dependents
+
+
+
+
+
+

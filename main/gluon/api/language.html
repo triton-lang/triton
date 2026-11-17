@@ -148,6 +148,7 @@
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.cdiv.html">triton.experimental.gluon.language.cdiv</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.ceil.html">triton.experimental.gluon.language.ceil</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.clamp.html">triton.experimental.gluon.language.clamp</a></li>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.clmul.html">triton.experimental.gluon.language.clmul</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.cos.html">triton.experimental.gluon.language.cos</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.div_rn.html">triton.experimental.gluon.language.div_rn</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.language.erf.html">triton.experimental.gluon.language.erf</a></li>
@@ -479,64 +480,67 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.clamp.html#triton.experimental.gluon.language.clamp" title="triton.experimental.gluon.language.clamp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clamp</span></code></a></p></td>
 <td><p>Clamps the input tensor <code class="code docutils literal notranslate"><span class="pre">x</span></code> within the range [min, max].</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.cos.html#triton.experimental.gluon.language.cos" title="triton.experimental.gluon.language.cos"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cos</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.clmul.html#triton.experimental.gluon.language.clmul" title="triton.experimental.gluon.language.clmul"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clmul</span></code></a></p></td>
+<td><p>Computes the element-wise carry-less product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.cos.html#triton.experimental.gluon.language.cos" title="triton.experimental.gluon.language.cos"><code class="xref py py-obj docutils literal notranslate"><span class="pre">cos</span></code></a></p></td>
 <td><p>Computes the element-wise cosine of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.div_rn.html#triton.experimental.gluon.language.div_rn" title="triton.experimental.gluon.language.div_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">div_rn</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.div_rn.html#triton.experimental.gluon.language.div_rn" title="triton.experimental.gluon.language.div_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">div_rn</span></code></a></p></td>
 <td><p>Computes the element-wise precise division (rounding to nearest wrt the IEEE standard) of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.erf.html#triton.experimental.gluon.language.erf" title="triton.experimental.gluon.language.erf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">erf</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.erf.html#triton.experimental.gluon.language.erf" title="triton.experimental.gluon.language.erf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">erf</span></code></a></p></td>
 <td><p>Computes the element-wise error function of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.exp.html#triton.experimental.gluon.language.exp" title="triton.experimental.gluon.language.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.exp.html#triton.experimental.gluon.language.exp" title="triton.experimental.gluon.language.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp</span></code></a></p></td>
 <td><p>Computes the element-wise exponential of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.exp2.html#triton.experimental.gluon.language.exp2" title="triton.experimental.gluon.language.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp2</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.exp2.html#triton.experimental.gluon.language.exp2" title="triton.experimental.gluon.language.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">exp2</span></code></a></p></td>
 <td><p>Computes the element-wise exponential (base 2) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fdiv.html#triton.experimental.gluon.language.fdiv" title="triton.experimental.gluon.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fdiv.html#triton.experimental.gluon.language.fdiv" title="triton.experimental.gluon.language.fdiv"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fdiv</span></code></a></p></td>
 <td><p>Computes the element-wise division of <code class="code docutils literal notranslate"><span class="pre">x</span></code> by <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.floor.html#triton.experimental.gluon.language.floor" title="triton.experimental.gluon.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.floor.html#triton.experimental.gluon.language.floor" title="triton.experimental.gluon.language.floor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">floor</span></code></a></p></td>
 <td><p>Computes the element-wise floor of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fma.html#triton.experimental.gluon.language.fma" title="triton.experimental.gluon.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fma.html#triton.experimental.gluon.language.fma" title="triton.experimental.gluon.language.fma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fma</span></code></a></p></td>
 <td><p>Computes the element-wise fused multiply-add of <code class="code docutils literal notranslate"><span class="pre">x</span></code>, <code class="code docutils literal notranslate"><span class="pre">y</span></code>, and <code class="code docutils literal notranslate"><span class="pre">z</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fp4_to_fp.html#triton.experimental.gluon.language.fp4_to_fp" title="triton.experimental.gluon.language.fp4_to_fp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fp4_to_fp</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.fp4_to_fp.html#triton.experimental.gluon.language.fp4_to_fp" title="triton.experimental.gluon.language.fp4_to_fp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">fp4_to_fp</span></code></a></p></td>
 <td><p>Upcast a tensor from fp4 (e2m1) to another floating point type.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.log.html#triton.experimental.gluon.language.log" title="triton.experimental.gluon.language.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.log.html#triton.experimental.gluon.language.log" title="triton.experimental.gluon.language.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log</span></code></a></p></td>
 <td><p>Computes the element-wise natural logarithm of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.log2.html#triton.experimental.gluon.language.log2" title="triton.experimental.gluon.language.log2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log2</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.log2.html#triton.experimental.gluon.language.log2" title="triton.experimental.gluon.language.log2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">log2</span></code></a></p></td>
 <td><p>Computes the element-wise logarithm (base 2) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.maximum.html#triton.experimental.gluon.language.maximum" title="triton.experimental.gluon.language.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.maximum.html#triton.experimental.gluon.language.maximum" title="triton.experimental.gluon.language.maximum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">maximum</span></code></a></p></td>
 <td><p>Computes the element-wise maximum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.minimum.html#triton.experimental.gluon.language.minimum" title="triton.experimental.gluon.language.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.minimum.html#triton.experimental.gluon.language.minimum" title="triton.experimental.gluon.language.minimum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">minimum</span></code></a></p></td>
 <td><p>Computes the element-wise minimum of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.mul.html#triton.experimental.gluon.language.mul" title="triton.experimental.gluon.language.mul"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mul</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.mul.html#triton.experimental.gluon.language.mul" title="triton.experimental.gluon.language.mul"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mul</span></code></a></p></td>
 <td><p>Computes the element-wise product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.rsqrt.html#triton.experimental.gluon.language.rsqrt" title="triton.experimental.gluon.language.rsqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.rsqrt.html#triton.experimental.gluon.language.rsqrt" title="triton.experimental.gluon.language.rsqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rsqrt</span></code></a></p></td>
 <td><p>Computes the element-wise inverse square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sin.html#triton.experimental.gluon.language.sin" title="triton.experimental.gluon.language.sin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sin.html#triton.experimental.gluon.language.sin" title="triton.experimental.gluon.language.sin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sin</span></code></a></p></td>
 <td><p>Computes the element-wise sine of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sqrt.html#triton.experimental.gluon.language.sqrt" title="triton.experimental.gluon.language.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sqrt.html#triton.experimental.gluon.language.sqrt" title="triton.experimental.gluon.language.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt</span></code></a></p></td>
 <td><p>Computes the element-wise fast square root of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sqrt_rn.html#triton.experimental.gluon.language.sqrt_rn" title="triton.experimental.gluon.language.sqrt_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sqrt_rn.html#triton.experimental.gluon.language.sqrt_rn" title="triton.experimental.gluon.language.sqrt_rn"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sqrt_rn</span></code></a></p></td>
 <td><p>Computes the element-wise precise square root (rounding to nearest wrt the IEEE standard) of <code class="code docutils literal notranslate"><span class="pre">x</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sub.html#triton.experimental.gluon.language.sub" title="triton.experimental.gluon.language.sub"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sub</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.sub.html#triton.experimental.gluon.language.sub" title="triton.experimental.gluon.language.sub"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sub</span></code></a></p></td>
 <td><p>Computes the element-wise difference of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.umulhi.html#triton.experimental.gluon.language.umulhi" title="triton.experimental.gluon.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.umulhi.html#triton.experimental.gluon.language.umulhi" title="triton.experimental.gluon.language.umulhi"><code class="xref py py-obj docutils literal notranslate"><span class="pre">umulhi</span></code></a></p></td>
 <td><p>Computes the element-wise most significant N bits of the 2N-bit product of <code class="code docutils literal notranslate"><span class="pre">x</span></code> and <code class="code docutils literal notranslate"><span class="pre">y</span></code>.</p></td>
 </tr>
 </tbody>
