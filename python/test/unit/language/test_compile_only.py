@@ -94,6 +94,30 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize("arch", ["gfx942", "gfx950"])
+@pytest.mark.parametrize("transpose", [False, True])
+def test_compile_only_amd_static_lds_metadata(arch, transpose):
+
+    @triton.jit
+    def kernel(src, dst, TRANSPOSE: tl.constexpr):
+        if TRANSPOSE:
+            rows = tl.arange(0, 128)[:, None]
+            cols = tl.arange(0, 128)[None, :]
+            values = tl.load(src + rows * 128 + cols)
+            tl.store(dst + cols * 128 + rows, values)
+        else:
+            offsets = tl.arange(0, 128)
+            tl.store(dst + offsets, tl.load(src + offsets))
+
+    source = ASTSource(fn=kernel, signature={"src": "*fp32", "dst": "*fp32", "TRANSPOSE": "constexpr"},
+                       constexprs={"TRANSPOSE": transpose})
+    target = GPUTarget("hip", arch, 64)
+    compiled = triton.compile(source, target=target, options={"num_warps": 8})
+    shared = compiled.metadata.shared
+    assert (shared > 0) == transpose
+    assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
+
+
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
 def test_umulhi_truncated_input(seed_type, dtype):
     from triton._C.libtriton import ir
