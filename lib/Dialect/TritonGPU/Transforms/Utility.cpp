@@ -1620,6 +1620,18 @@ void replaceUsesAndPropagateType(
     op->erase();
 }
 
+bool canForwardToLocalAlloc(ttg::LocalAllocOp userAlloc, Attribute bufferEnc) {
+  auto userAllocTy = userAlloc.getType();
+  if (userAllocTy.getEncoding() == bufferEnc)
+    return true;
+  auto bufferLayout = dyn_cast<ttg::LayoutEncodingTrait>(bufferEnc);
+  auto userAllocLayout =
+      dyn_cast<ttg::LayoutEncodingTrait>(userAllocTy.getEncoding());
+  return bufferLayout && userAllocLayout &&
+         ttg::areLayoutsEquivalent(userAllocTy.getShape(), bufferLayout,
+                                   userAllocLayout);
+}
+
 ttg::LocalLoadOp
 replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
                          TypedValue<ttg::MemDescType> alloc,
@@ -1629,15 +1641,7 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : old.getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      auto userAllocTy = userAlloc.getType();
-
-      auto allocEnc = dyn_cast<ttg::LayoutEncodingTrait>(allocTy.getEncoding());
-      auto userAllocEnc =
-          dyn_cast<ttg::LayoutEncodingTrait>(userAllocTy.getEncoding());
-      if ((allocTy.getEncoding() == userAllocTy.getEncoding()) ||
-          (allocEnc && userAllocEnc &&
-           ttg::areLayoutsEquivalent(allocTy.getShape(), allocEnc,
-                                     userAllocEnc))) {
+      if (canForwardToLocalAlloc(userAlloc, allocTy.getEncoding())) {
         replaceUsesAndPropagateType(builder, userAlloc, alloc);
         allocsToErase.push_back(userAlloc);
       }

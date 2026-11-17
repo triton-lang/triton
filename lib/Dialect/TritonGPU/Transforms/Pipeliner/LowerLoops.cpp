@@ -86,8 +86,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
-  DenseSet<Operation *> allocUsers;
   if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
+    DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
         DenseSet<Operation *> users =
@@ -103,9 +103,9 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
       topLevelWaitUsers.insert(topLevelUser);
     }
   }
-  auto getEffectiveUseStage = [&](Operation *user) {
-    int _useStage = schedule[user].first;
-    CoarseSchedule::Cluster _useCluster = schedule[user].second;
+  for (Operation *topLevelUser : topLevelUsers) {
+    int _useStage = schedule[topLevelUser].first;
+    CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
     // This adds an *extra* buffer, so only bump already-pipelined loads:
     // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
     if (*_useCluster > *defCluster && _useStage > defStage) {
@@ -116,20 +116,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
       // after the global-to-local copy for the next pipeline stage starts.
       _useStage++;
     }
-    return _useStage;
-  };
-  for (Operation *topLevelUser : topLevelUsers) {
-    int _useStage = getEffectiveUseStage(topLevelUser);
     useStage = std::min(_useStage, useStage.value_or(_useStage));
-  }
-  // When the local_alloc is removed, its users read the pipelined buffer
-  // itself, e.g. two MMAv5 ops in different stages that share an operand. The
-  // buffer must stay live until the last of them, not only the first.
-  if (!allocUsers.empty() && !mustLoadToRegisters(op)) {
-    for (Operation *allocUser : allocUsers) {
-      int _useStage = getEffectiveUseStage(allocUser);
-      useStage = std::max(_useStage, useStage.value_or(_useStage));
-    }
   }
   // Waits tells us the buffer is still in use until the wait completes, we
   // can't simply load from the buffer and replace the uses of the buffer with
@@ -443,6 +430,42 @@ void createTMABarrierAndWait(
   }
 }
 
+// Lowering the load forwards its pipelined buffer, whose shared encoding is
+// `bufferEnc`, into every local_alloc user with a matching encoding (see
+// replaceUsesWithLocalLoad), also when the load has other users. The users of
+// such a local_alloc then read the buffer itself, e.g. two MMAv5 ops in
+// different stages that share an operand, so the buffer must stay live until
+// the last of them, not only until the first use of the load. Return the stage
+// distance from the load to the last of them, or 0 if nothing is forwarded.
+int getForwardedUseStageDiff(Operation *loadOp,
+                             ttg::SharedEncodingTrait bufferEnc,
+                             scf::ForOp forOp, CoarseSchedule &schedule) {
+  // A non-zero "other" is applied to a local_load of the buffer, and nothing
+  // is forwarded (see createAsyncCopy).
+  if (auto load = dyn_cast<tt::LoadOp>(loadOp)) {
+    if (load.getOther() && !isZeroFillConst(load.getOther()))
+      return 0;
+  }
+  auto [defStage, defCluster] = schedule[loadOp];
+  int stageDiff = 0;
+  for (Operation *user : loadOp->getUsers()) {
+    auto alloc = dyn_cast<ttg::LocalAllocOp>(user);
+    if (!alloc || !canForwardToLocalAlloc(alloc, bufferEnc))
+      continue;
+    for (Operation *allocUser : triton::getTopLevelUsersInLoop(alloc, forOp)) {
+      // getDefUseStageDiff already keeps the buffer live until the waits.
+      if (isa<ttng::WaitBarrierOp>(allocUser))
+        continue;
+      auto [useStage, useCluster] = schedule[allocUser];
+      // Same adjustment as in getDefUseStageDiff for a use in a later cluster.
+      if (*useCluster > *defCluster && useStage > defStage)
+        useStage++;
+      stageDiff = std::max(stageDiff, useStage - defStage);
+    }
+  }
+  return stageDiff;
+}
+
 // Check if load requires additional buffer for a mma pipelining
 bool loadRequiresAdditionalBuffer(Operation *loadOp) {
   std::function<void(Operation *, SmallVector<Operation *> & out)>
@@ -522,6 +545,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       }
       bool canUseTMA = isTMALoad(&op) && canPipelineTMALoad(&op);
       if (canUseAsyncCp || canUseTMA) {
+        stageDiff =
+            std::max(stageDiff, getForwardedUseStageDiff(&op, sharedEncoding,
+                                                         forOp, schedule));
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
