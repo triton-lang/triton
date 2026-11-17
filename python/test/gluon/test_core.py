@@ -1380,7 +1380,8 @@ def _gsan_tma_local_kernel(ptr, desc, out, FENCE: ttgl.constexpr, ACCESS: ttgl.c
     if FENCE == "before_store":
         hopper.fence_async_global()
     if GENERIC_ATOMIC:
-        ttgl.atomic_xchg(ptr + offsets, offsets + 17, sem="release")
+        # Both atomics commute even without cross-proxy ordering.
+        ttgl.atomic_add(ptr + offsets, offsets + 17, sem="release")
     else:
         ttgl.store(ptr + offsets, offsets + 17)
     if FENCE == "global" or FENCE == "new_store":
@@ -1536,11 +1537,11 @@ def _run_gsan_tma_case(kind, fence, access="load", scope="gpu", granularity=4, w
     if access == "store":
         torch.testing.assert_close(target, expected + 23)
     elif access == "reduce":
-        torch.testing.assert_close(target, 2 * expected + 40)
+        torch.testing.assert_close(target, 2 * expected + (47 if kind == "atomic" else 40))
     else:
-        torch.testing.assert_close(out[0], expected + 17)
-    assert "fence.proxy.async.global" in compiled.asm["ptx"]
-    if kind == "atomic":
+        torch.testing.assert_close(out[0], expected + (24 if kind == "atomic" else 17))
+    assert ("fence.proxy.async.global" in compiled.asm["ptx"]) == (fence != "none")
+    if kind == "atomic" and access == "reduce":
         clock = shadow_cell_from_address(target.data_ptr()).write_clock
         assert clock.is_tma
         assert not clock.is_release
@@ -1679,9 +1680,12 @@ def test_tma_gsan_local_proxy_fence(fence, access):
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
 @pytest.mark.parametrize("fence", ["none", "global"])
-def test_tma_gsan_generic_atomic_proxy_fence(fence):
-    error = None if fence == "global" else "Read after write race detected"
-    _check_gsan_tma_case("atomic", fence, "reduce", error=error)
+@pytest.mark.parametrize("access", ["load", "store", "reduce"])
+def test_tma_gsan_generic_atomic_proxy_fence(fence, access):
+    error = None
+    if fence == "none" and access != "reduce":
+        error = "Write after read race detected" if access == "store" else "Read after write race detected"
+    _check_gsan_tma_case("atomic", fence, access, error=error)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")

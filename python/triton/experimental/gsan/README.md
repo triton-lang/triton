@@ -92,8 +92,6 @@ while accesses within the same CTA's async proxy use the generic clock. Generic
 and TMA readers retain separate shadow entries, so a TMA read cannot hide an
 earlier generic read from a later TMA write. Accesses are stamped with the current
 generic epoch, not the older epoch captured in the async proxy vector clock.
-Atomic compatibility also requires a matching proxy, and TMA reductions do not
-extend generic-proxy release sequences.
 
 This checks proxy visibility within GSan's existing synchronous-CTA model. The
 issue/completion tracking described above is still separate work; this clock
