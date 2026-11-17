@@ -1,11 +1,86 @@
 # End-to-end tests to check the correctness of the pipeliner
 
+import re
+
 import pytest
 import torch
 import triton
 import triton.language as tl
 
 from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_cdna5
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires Hopper")
+def test_wgmma_register_operand_lifetime(device):
+    """Regression for #9433: RS WGMMA inputs stay live until their group completes.
+
+    The uniform conditional forces A through registers loaded by ldmatrix.
+    Track physical A registers through two iterations to check loop-carried
+    lifetimes as well as writes within an iteration. Each m64n128k16 BF16
+    instruction reads four A registers per thread.
+    """
+
+    @triton.jit
+    def kernel(a_ptr, b_ptr, c_ptr, K: tl.constexpr):
+        pid = tl.program_id(0)
+        rows = tl.arange(0, 64)
+        cols = tl.arange(0, 128)
+        reduction = tl.arange(0, 64)
+        a_ptrs = a_ptr + rows[:, None] * K + reduction[None, :]
+        b_ptrs = b_ptr + reduction[:, None] + cols[None, :] * K
+        acc = tl.zeros((64, 128), tl.float32)
+        for iteration in range(K // 64):
+            if pid >= 0:
+                lhs = tl.load(a_ptrs)
+            else:
+                lhs = tl.load(a_ptrs)
+            rhs = tl.load(b_ptrs)
+            acc = tl.dot(lhs, rhs, acc)
+            a_ptrs += 64
+            b_ptrs += 64
+        tl.store(c_ptr + pid * 64 * 128 + rows[:, None] * 128 + cols[None, :], acc)
+
+    torch.manual_seed(0)
+    lhs = torch.randn((64, 4096), device=device, dtype=torch.bfloat16)
+    rhs = torch.randn((128, 4096), device=device, dtype=torch.bfloat16)
+    output = torch.empty((512, 64, 128), device=device, dtype=torch.float32)
+    compiled = kernel[(512, )](lhs, rhs, output, 4096)
+    expected = (lhs.float() @ rhs.float().T).expand_as(output)
+    torch.testing.assert_close(output, expected, atol=1.0, rtol=0)
+
+    sass = compiled.asm["sass"].replace("\\t", "\t")
+    loop = re.search(r"(LBB\d+):\n(.*?BRA \1;)", sass, re.DOTALL)
+    assert loop is not None, sass
+    instructions = [line.split("\t")[-1] for line in loop[2].splitlines()]
+    assert any("LDSM.16.M88.4" in instruction for instruction in instructions), sass
+    assert any("WARPGROUP.DEPBAR.LE gsb0, 0x1" in instruction for instruction in instructions), sass
+    pending_groups = []
+    current_group = set()
+    mma_count = 0
+    for instruction in instructions * 2:
+        wait = re.search(r"WARPGROUP.DEPBAR.LE gsb0, (0x[0-9a-f]+)", instruction)
+        if wait:
+            outstanding = int(wait[1], 16)
+            pending_groups = pending_groups[-outstanding:] if outstanding else []
+            continue
+        mma = re.search(r"HGMMA\.64x128x16\.F32\.BF16 R\d+, R(\d+), gdesc", instruction)
+        if mma:
+            current_group.update(range(int(mma[1]), int(mma[1]) + 4))
+            mma_count += 1
+            if "gsb0" in instruction:
+                pending_groups.append(current_group)
+                current_group = set()
+            continue
+        write = re.match(r"(?:@!?\w+ )?([\w.]+) R(\d+)\b", instruction)
+        if write:
+            opcode, destination = write[1], int(write[2])
+            width = 4 if opcode.startswith("LDSM.16.M88.4") or ".128" in opcode else 2 if ".64" in opcode else 1
+            written = set(range(destination, destination + width))
+            live = current_group.union(*pending_groups)
+            assert not written & live, f"WGMMA input overwritten before wait: {instruction}\n{sass}"
+    assert mma_count >= 8, sass
+    assert mma_count == 2 * sum("HGMMA" in instruction for instruction in instructions), sass
+    assert not current_group, sass
 
 
 def check_capabilities():
