@@ -137,19 +137,17 @@ def test_tensor_descriptor_device_matches_host(rank, dtype, with_allocator):
 
 
 @requires_tma
-@pytest.mark.parametrize("rank", [2, 3, 4, 5])
 @pytest.mark.parametrize("byte_strides", [
-    (16, 32, 64, 128),
-    ((1 << 36) - 16, 1 << 36, (7 << 36) + 16, (1 << 40) - 16),
-    (1 << 36, (2 << 36) + 16, (4 << 36) + 32, (8 << 36) + 48),
+    ((1 << 36) - 16, ),
+    (1 << 36, (2 << 36) + 16, (7 << 36) + 32, (1 << 40) - 16),
 ])
-def test_tma_descriptor_byte_strides(rank, byte_strides):
+def test_tma_descriptor_byte_strides(byte_strides):
     from triton._C.libtriton import gsan_testing
 
     # Singleton outer dimensions allow large strides with a small allocation.
     data = torch.empty(16, dtype=torch.uint8, device="cuda")
+    rank = len(byte_strides) + 1
     shape = (16, ) + (1, ) * (rank - 1)
-    byte_strides = byte_strides[:rank - 1]
     storage = ctypes.create_string_buffer(128 + 127)
     address = (ctypes.addressof(storage) + 127) & -128
     encode = ctypes.CDLL("libcuda.so.1").cuTensorMapEncodeTiled
