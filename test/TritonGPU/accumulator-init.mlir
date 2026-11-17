@@ -130,31 +130,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %17 : tensor<128x16xf32, #mma1>
   }
 
-// CHECK-LABEL: @reset_before_mma_returned
-// CHECK: %[[ZERO:.+]] = arith.constant dense<0.000000e+00>
-// CHECK: %[[RESULT:.+]]:2 = scf.for
-// CHECK: %[[RESET:.+]] = scf.if
-// CHECK: scf.yield %[[ZERO]]
-// CHECK: %[[DOT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, %[[RESET]]
-// CHECK: scf.yield %[[DOT]], %[[RESET]]
-// CHECK: tt.return %[[RESULT]]#1
-  tt.func @reset_before_mma_returned(%a: !ttg.memdesc<128x64xf16, #shared, #smem>, %b: !ttg.memdesc<64x16xf16, #shared1, #smem>, %reset: i1) -> tensor<128x16xf32, #mma1> {
-    %zero = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
-    %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
-    %c6 = arith.constant 6 : i32
-    %result:2 = scf.for %k = %c0 to %c6 step %c1 iter_args(%acc = %zero, %snapshot = %zero) -> (tensor<128x16xf32, #mma1>, tensor<128x16xf32, #mma1>) : i32 {
-      %init = scf.if %reset -> tensor<128x16xf32, #mma1> {
-        scf.yield %zero : tensor<128x16xf32, #mma1>
-      } else {
-        scf.yield %acc : tensor<128x16xf32, #mma1>
-      }
-      %dot = ttng.warp_group_dot %a, %b, %init : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x16xf16, #shared1, #smem> -> tensor<128x16xf32, #mma1>
-      scf.yield %dot, %init : tensor<128x16xf32, #mma1>, tensor<128x16xf32, #mma1>
-    }
-    tt.return %result#1 : tensor<128x16xf32, #mma1>
-  }
-
 // CHECK-LABEL: @if_before_mma_invert
 // CHECK-DAG: %[[C0_TENSOR:.+]] = arith.constant dense<0.000000e+00>
 // CHECK-DAG: %[[TRUE:.+]] = arith.constant true

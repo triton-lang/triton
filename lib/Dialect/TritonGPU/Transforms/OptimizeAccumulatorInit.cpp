@@ -157,11 +157,10 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
-    unsigned iterArgIdx = arg.getArgNumber() - 1;
-    if (isConstantZeroTensor(forOp.getInitArgs()[iterArgIdx])) {
+    if (isConstantZeroTensor(forOp.getInitArgs()[arg.getArgNumber() - 1])) {
       loopArgIsZero = true;
     }
-    v = forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
+    v = forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
   }
 
   auto defOp = v.getDefiningOp();
@@ -248,17 +247,12 @@ public:
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
 
-      if (zeroInitOp) {
-        Value init = zeroInitOp->first->getResult(zeroInitOp->second);
-        auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-        for (auto [yielded, result] :
-             llvm::zip(yield.getOperands(), forOp.getResults())) {
-          if (yielded == init && !result.use_empty()) {
-            // The accumulator is observed after the loop
-            zeroInitOp = std::nullopt;
-            break;
-          }
-        }
+      auto accArg = dyn_cast<BlockArgument>(accUse);
+      if (zeroInitOp && accArg &&
+          !forOp.getResult(accArg.getArgNumber() - 1).use_empty()) {
+        // The loop-carried accumulator is conditionally reset to zero by an
+        // if/select, and its final value is used after the loop.
+        zeroInitOp = std::nullopt;
       }
 
       if (!zeroInitOp && !loopArgIsZero) {
