@@ -255,11 +255,13 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
 @pytest.mark.parametrize("reset_value", [0, 1])
 @pytest.mark.parametrize("snapshot", [False, True])
-def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot):
+@pytest.mark.parametrize("store_after_loop", [False, True])
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot, store_after_loop):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr):
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr,
+               STORE_AFTER_LOOP: tl.constexpr):
         acc = tl.zeros((256, 16), tl.float32)
         for k in range(6):
             a = A.load([0, k * 128])
@@ -277,14 +279,19 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_va
             if RESET_PERIOD:
                 if k % RESET_PERIOD == RESET_PERIOD - 1:
                     acc = tl.full((256, 16), RESET_VALUE, tl.float32)
+        if STORE_AFTER_LOOP:
+            # A reset on the last iteration must also reach post-loop users.
+            C.store([(3 if SNAPSHOT else 1) * 256, 0], acc)
 
     a = torch.ones((256, 768), device=device, dtype=torch.float16)
     b = torch.ones((768, 16), device=device, dtype=torch.float16)
-    c = torch.empty(((3 if snapshot else 1) * 256, 16), device=device, dtype=torch.float32)
+    num_outputs = (3 if snapshot else 1) + store_after_loop
+    c = torch.empty((num_outputs * 256, 16), device=device, dtype=torch.float32)
     a_desc = TensorDescriptor.from_tensor(a, [256, 128])
     b_desc = TensorDescriptor.from_tensor(b, [128, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, num_stages=3, num_warps=4)
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, store_after_loop,
+                             num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
@@ -295,6 +302,8 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_va
         4: [128, 384, 128 + reset_value, 256 + reset_value],
     }[reset_period]
     values = values[:3] if snapshot else values[-1:]
+    if store_after_loop:
+        values.append({0: 768, 2: reset_value, 4: 256 + reset_value}[reset_period])
     expected = torch.tensor(values, device=device, dtype=torch.float32)
     expected = expected[:, None, None].expand(len(values), 256, 16).reshape_as(c)
     torch.testing.assert_close(c, expected, atol=0, rtol=0)
