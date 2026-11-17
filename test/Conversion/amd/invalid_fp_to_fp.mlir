@@ -21,3 +21,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %0 : f8E5M2FNUZ
   }
 }
+
+// -----
+
+// RTZ truncation of the fp16 high byte only yields OCP E5M2; FNUZ E5M2 uses a
+// different exponent bias.
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @f16_to_bf8fnuz_rtz(%arg0: f16) -> f8E5M2FNUZ {
+    // expected-error @+2 {{Unsupported conversion from 'f16' to 'f8E5M2FNUZ' with rounding mode rtz}}
+    // expected-error @+1 {{failed to legalize operation 'tt.fp_to_fp'}}
+    %0 = tt.fp_to_fp %arg0, rounding = rtz : f16 -> f8E5M2FNUZ
+    tt.return %0 : f8E5M2FNUZ
+  }
+}

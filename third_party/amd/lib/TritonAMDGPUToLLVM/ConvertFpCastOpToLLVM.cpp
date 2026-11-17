@@ -1662,7 +1662,10 @@ public:
         return (isaFamily == ISAFamily::CDNA5) ? 8 : 4;
       }
     } else if (roundingMode == RoundingMode::RTZ) {
-      return 4;
+      // Only OCP E5M2 shares the fp16 exponent bias that RTZ truncation
+      // relies on.
+      if (isa<Float8E5M2Type>(dstTy))
+        return 4;
     }
     return 0;
   }
@@ -1689,7 +1692,8 @@ public:
         } else
           return Fp16ToFp8E5M2rtneSW(loc, rewriter, v);
       }
-    } else if (roundingMode == RoundingMode::RTZ) {
+    } else if (roundingMode == RoundingMode::RTZ &&
+               isa<Float8E5M2Type>(dstTy)) {
       return Fp16ToFp8E5M2rtz(loc, rewriter, v);
     }
 
