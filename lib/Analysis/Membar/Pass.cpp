@@ -8,6 +8,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
+#include <map>
+
 #define DEBUG_TYPE "membar-placement"
 
 namespace mlir::triton::membar {
@@ -53,12 +55,20 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   auto sharedMode = mode == PlacementMode::TensorMemory
                         ? SMemModel::AccessMode::SynchronizationOnly
                         : SMemModel::AccessMode::AllSharedAccesses;
-  for (auto function : module.getOps<FunctionOpInterface>()) {
+  // Allocation slices borrow index expressions from the issuing function's
+  // model.
+  std::map<Operation *, SMemModel> models;
+  for (auto function : module.getOps<FunctionOpInterface>())
+    models.try_emplace(function, *moduleAllocation.getFuncData(function),
+                       regions, sharedMode, completionScope,
+                       /*followCalls=*/true);
+
+  auto callbacks = getTensorCallbackOps(module);
+  MembarCFGBuilder builder(models, tmemModel, callbacks);
+  for (auto function : moduleAllocation.getRoots()) {
+    // Callee footprints are in kernel coordinates. Only kernel SSA values
+    // have allocator IDs for target-specific alias checks.
     Allocation &allocation = *moduleAllocation.getFuncData(function);
-    SMemModel shared(allocation, regions, sharedMode, completionScope);
-    MembarCFGBuilder builder(shared, tmemModel,
-                             isKernel(function) ? Boundary::KernelReturn
-                                                : Boundary::Clean);
     SmallVector<Region *> bodies{&function.getFunctionBody()};
     function.walk([&](gpu::WarpSpecializeOp ws) {
       bodies.push_back(&ws.getDefaultRegion());

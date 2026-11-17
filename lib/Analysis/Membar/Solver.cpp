@@ -76,8 +76,8 @@ std::optional<SiteList> CutSolver::shortestCut(const llvm::BitVector &selected,
           covered(from.effects.fixedAfter, advanced))
         continue;
       for (Edge edge : from.next) {
-        bool after = advanced ||
-                     (d.path == Path::LoopCarried && edge.invalidatesIteration);
+        bool after = advanced || (d.path == Path::LoopCarried &&
+                                  cfg.invalidatesIteration(edge, d.source));
         if (covered(credits[edge.to], after) ||
             covered(cfg.nodes[edge.to].effects.fixedBefore, after))
           continue;

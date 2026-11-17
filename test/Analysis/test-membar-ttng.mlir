@@ -651,7 +651,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
   // CHECK-LABEL: @consecutive_waits_argument
   // CHECK: ttng.wait_barrier
   // CHECK-NEXT: ttng.wait_barrier
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.return
   tt.func private @consecutive_waits_argument(%barrier: !barrier, %phase: i32) {
     ttng.wait_barrier %barrier, %phase : !barrier
@@ -675,11 +674,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return %twice : i32
   }
 
-  // Each function orders its own publication at the call boundary.
+  // An ordinary call keeps the same lane issuing all three arrivals.
   // CHECK-LABEL: @callee_thread_publication
   tt.func private @callee_thread_publication(%done: !barrier) attributes {noinline = true} {
     // CHECK: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.return
     ttng.arrive_barrier %done, 1 : !barrier
     tt.return
@@ -688,10 +686,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
   // CHECK-LABEL: @call_thread_publications
   tt.func private @call_thread_publications(%first: !barrier, %second: !barrier, %third: !barrier) {
     // CHECK: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call @callee_thread_publication
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.return
     ttng.arrive_barrier %first, 1 : !barrier
     tt.call @callee_thread_publication(%second) : (!barrier) -> ()
@@ -790,7 +786,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
   }
 
   // Publish an external completion before entering the loop, so its first
-  // load does not acquire a rendezvous on every iteration. Order the final load at return.
+  // load does not acquire a rendezvous on every iteration.
   // CHECK-LABEL: @completion_before_loop
   tt.func private @completion_before_loop(%desc: !tt.ptr<i8>, %src: !tt.ptr<i32>, %count: i32) -> i32 {
     %zero = arith.constant 0 : i32
@@ -802,8 +798,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK: tt.load
     // CHECK-NOT: ttg.barrier
     // CHECK: cf.br
-    // CHECK: ttg.barrier local
-    // CHECK-NEXT: tt.return
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.return
     ttng.tensormap_fenceproxy_acquire %desc : !tt.ptr<i8>
     %sum = scf.for %i = %zero to %count step %one iter_args(%sum = %zero) -> (i32) : i32 {
       %ptr = tt.addptr %src, %i : !tt.ptr<i32>, i32
@@ -827,8 +823,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK-NEXT: {{.*}} = tt.load
     // CHECK-NOT: ttg.barrier
     // CHECK: cf.br
-    // CHECK: ttg.barrier local
-    // CHECK-NEXT: tt.return
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.return
     %sum = scf.for %i = %zero to %count step %one iter_args(%sum = %zero) -> (i32) : i32 {
       %ptr = tt.addptr %src, %i : !tt.ptr<i32>, i32
       ttng.tensormap_fenceproxy_acquire %desc : !tt.ptr<i8>
@@ -992,7 +988,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK: cf.br ^[[JOIN:bb[0-9]+]]
     // CHECK: ^[[JOIN]]:
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.return
     ttng.arrive_barrier %done, 1 : !barrier
     tt.return
@@ -1015,7 +1010,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
   ^join:
     // CHECK: ttg.barrier local
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.return
     ttng.arrive_barrier %done, 1 : !barrier
     tt.return
@@ -1032,13 +1026,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK: cf.br ^[[LOOP:bb[0-9]+]]
     cf.br ^loop(%zero : i32)
     // CHECK: ^[[LOOP]](
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.arrive_barrier
   ^loop(%iteration: i32):
     ttng.arrive_barrier %done, 1 : !barrier
-    // The latch orders the store before either the next arrival or return.
     // CHECK-NEXT: tt.store
-    // CHECK: ttg.barrier local
-    // CHECK-NEXT: cf.cond_br
+    // CHECK-NOT: ttg.barrier
+    // CHECK: cf.cond_br
     tt.store %dst, %value : !ptrs
     %next = arith.addi %iteration, %one : i32
     %again = arith.cmpi slt, %next, %two : i32
@@ -1172,7 +1166,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
     // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
     // CHECK-NEXT: ttng.arrive_barrier
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.return
     ttg.async_wait {num = 0 : i32}
     ttng.cluster_barrier {relaxed = true}
@@ -1184,11 +1177,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
     tt.return %value : i32
   }
 
+  // The first arrival orders the caller's pending async wait.
   // Nonidentity routing has an unknown issuer set and cannot share the
   // surrounding fixed-thread publications' rendezvous.
   // CHECK-LABEL: @different_issuers
   tt.func private @different_issuers(%barrier: !barrier) attributes {noinline = true} {
-    // CHECK: ttng.arrive_barrier
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.arrive_barrier {{.*}} {fromCTA = 0 : i32}
     // CHECK-NEXT: ttg.barrier local
@@ -1199,7 +1194,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
     tt.return
   }
 
-  // The caller orders its async wait before entering the callee.
   // Each local barrier receives three arrivals, including the routed arrival.
   // CHECK-LABEL: @call_publication
   tt.func @call_publication() {
@@ -1207,7 +1201,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
     %barrier = ttg.local_alloc : () -> !barrier
     ttng.init_barrier %barrier, 3 : !barrier
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call @different_issuers
     ttg.async_wait {num = 0 : i32}
     tt.call @different_issuers(%barrier) : (!barrier) -> ()

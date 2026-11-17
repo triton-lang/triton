@@ -379,20 +379,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // CLEANUP-LABEL: @store_before_arrival
   // CLEANUP: tt.store
-  // CLEANUP-NEXT: ttg.barrier local
   // CLEANUP-NEXT: tt.return
   tt.func private @store_before_arrival(%out: !tt.ptr<i32>, %value: i32) attributes {noinline = true} {
     tt.store %out, %value : !tt.ptr<i32>
     tt.return
   }
 
-  // The callee orders its store before returning, so one lane can signal.
+  // The callee returns with a pending store, so the arrival stays distributed.
   // CLEANUP-LABEL: @arrival_after_call
-  // CLEANUP: ttng.init_barrier {{.*}}, 1 :
+  // CLEANUP: ttng.init_barrier {{.*}}, 4 :
   // CLEANUP: ttg.barrier local
   // CLEANUP-NEXT: tt.call @store_before_arrival
   // CLEANUP-NEXT: ttg.barrier warp local
-  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 1 :
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
   tt.func @arrival_after_call(%out: !tt.ptr<i32>, %value: i32) {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -691,16 +690,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %value : i32
   }
 
-  // The pure call clears warp coverage without adding pending memory effects.
+  // The preceding CTA barrier covers the arrival across the pure call.
   // PREP-LABEL: @outlined_arrival_uses_full_count
   // PREP: tt.call @pure_before_arrival
-  // PREP-NEXT: ttg.barrier warp local
   // PREP-NEXT: ttng.arrive_barrier {{.*}}, 1 {per_warp}
   // CLEANUP-LABEL: @outlined_arrival_uses_full_count
   // CLEANUP: ttng.init_barrier {{.*}}, 1 :
   // CLEANUP: ttg.barrier local
   // CLEANUP-NEXT: %[[VALUE:.*]] = tt.call @pure_before_arrival
-  // CLEANUP-NEXT: ttg.barrier warp local
   // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 1 :
   // CLEANUP: tt.return %[[VALUE]]
   tt.func private @outlined_arrival_uses_full_count(%value: i32) -> i32 attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
@@ -999,10 +996,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
+  // CHECK-LABEL: @read_tma_tile
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  tt.func private @read_tma_tile(%tile: !tile) -> !values attributes {noinline = true} {
+    %result = ttg.local_load %tile : !tile -> !values
+    tt.return %result : !values
+  }
+
+  // TMA completion makes the kernel's tile visible to the callee's load.
+  // CHECK-LABEL: @tma_load_read_in_callee
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}tt.call @read_tma_tile
+  tt.func @tma_load_read_in_callee(%desc: !desc) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %tile = ttg.local_alloc : () -> !tile
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %tile, %bar, %true : !desc, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !tile
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = tt.call @read_tma_tile(%tile) : (!tile) -> !values
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.print "tile" {hex = false, isSigned = array<i32: 0>} : %result : !values
+    tt.return
+  }
+
   // The caller refills the shared tile as soon as the outlined store returns.
   // PREP-LABEL: @tma_store_for_refill
   // PREP: ttng.async_tma_store_wait
-  // PREP-NEXT: ttg.barrier local
   // PREP-NEXT: tt.return
   tt.func private @tma_store_for_refill(%desc: !desc, %tile: !tile) attributes {noinline = true} {
     %c0 = arith.constant 0 : i32
@@ -1013,6 +1037,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // PREP-LABEL: @tma_refill_after_call
   // PREP: tt.call @tma_store_for_refill
+  // PREP-NEXT: ttg.barrier local
   // PREP-NEXT: ttg.local_store
   // PREP: ttng.async_tma_store_wait
   // PREP-NEXT: cf.br ^[[EXIT:bb[0-9]+]]

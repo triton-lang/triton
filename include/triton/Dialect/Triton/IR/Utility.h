@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/SetVector.h"
 #include <algorithm>
 #include <numeric>
 
@@ -202,6 +203,10 @@ Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 bool isHostSideDescriptor(Value v);
 
 bool isKernel(FunctionOpInterface funcOp);
+
+/// Return tensor callback ops and their transitive noinline callees.
+/// Map bodies and reduce/scan combiners have per-element scalar values.
+llvm::SetVector<Operation *> getTensorCallbackOps(ModuleOp mod);
 
 unsigned getBitwidth(RankedTensorType ty);
 

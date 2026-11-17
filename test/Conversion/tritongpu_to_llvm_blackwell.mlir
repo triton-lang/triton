@@ -779,6 +779,11 @@ tt.func public @module_constraint_supercedes_local(%desc: !ttg.memdesc<128x64xf3
 
 }
 
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+
 module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 256 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32} {
 
 // CHECK-LABEL: @tmem_message_local_constraint
@@ -828,6 +833,11 @@ tt.func @store_packedb16_2x64xf16(%arg0: !ttg.memdesc<128x128xf16, #packed_b16, 
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#packed_b16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
 module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 4 : i32, ttg.maxnreg = 80 : i32} {
 // CHECK-LABEL: @store_packedb16_4x32xf16
@@ -1530,7 +1540,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-COUNT-4: nvvm.tcgen05.ld.red min {{.*}} shape = shape_32x32b : vector<64xf32>, f32
   // CHECK-NOT: tcgen05.wait <load>
   // CHECK-COUNT-3: llvm.intr.minnum
-  // CHECK: tcgen05.wait <load>
+  // CHECK-NOT: tcgen05.wait <load>
+  // CHECK: llvm.return
   tt.func private @tensor_memory_ld_red_min_128x256_4_warps() -> tensor<128xf32, #blocked_red_256N_4w> {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked_256N_4w>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_256N_4w>) -> !ttg.memdesc<128x256xf32, #tmem_256N, #ttng.tensor_memory, mutable>
@@ -1539,9 +1550,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   }
 
   // CHECK-LABEL: @tensor_memory_ld_red_max_128x256_4_warps
+  // CHECK: tcgen05.wait <load>
   // CHECK-COUNT-4: nvvm.tcgen05.ld.red max {{.*}} shape = shape_32x32b : vector<64xf32>, f32
   // CHECK-COUNT-3: llvm.intr.maxnum
-  // CHECK: tcgen05.wait <load>
+  // CHECK-NOT: tcgen05.wait <load>
+  // CHECK: llvm.return
   tt.func private @tensor_memory_ld_red_max_128x256_4_warps() -> tensor<128xf32, #blocked_red_256N_4w> {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked_256N_4w>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_256N_4w>) -> !ttg.memdesc<128x256xf32, #tmem_256N, #ttng.tensor_memory, mutable>
@@ -1549,6 +1562,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return %red : tensor<128xf32, #blocked_red_256N_4w>
   }
 
+  // CHECK-LABEL: @call_reductions(
+  // CHECK: llvm.call @tensor_memory_ld_red_max_128x256_4_warps(
+  // CHECK-NEXT: nvvm.tcgen05.wait <load>
+  // CHECK-NEXT: llvm.return
   tt.func public @call_reductions() {
     %min = tt.call @tensor_memory_ld_red_min_128x256_4_warps() : () -> tensor<128xf32, #blocked_red_256N_4w>
     %max = tt.call @tensor_memory_ld_red_max_128x256_4_warps() : () -> tensor<128xf32, #blocked_red_256N_4w>
@@ -1567,7 +1584,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tensor_memory_ld_red_min_128x256_4_warps_nan
   // CHECK-COUNT-4: nvvm.tcgen05.ld.red min {{.*}} shape = shape_32x32b nan : vector<64xf32>, f32
   // CHECK-COUNT-3: llvm.intr.minimum
-  // CHECK: tcgen05.wait <load>
+  // CHECK-NOT: tcgen05.wait <load>
+  // CHECK: llvm.return
   tt.func private @tensor_memory_ld_red_min_128x256_4_warps_nan() -> tensor<128xf32, #blocked_red_256N_4w_nan> {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked_256N_4w_nan>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_256N_4w_nan>) -> !ttg.memdesc<128x256xf32, #tmem_256N_nan, #ttng.tensor_memory, mutable>
@@ -1576,9 +1594,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   }
 
   // CHECK-LABEL: @tensor_memory_ld_red_max_128x256_4_warps_nan
+  // CHECK: tcgen05.wait <load>
   // CHECK-COUNT-4: nvvm.tcgen05.ld.red max {{.*}} shape = shape_32x32b nan : vector<64xf32>, f32
   // CHECK-COUNT-3: llvm.intr.maximum
-  // CHECK: tcgen05.wait <load>
+  // CHECK-NOT: tcgen05.wait <load>
+  // CHECK: llvm.return
   tt.func private @tensor_memory_ld_red_max_128x256_4_warps_nan() -> tensor<128xf32, #blocked_red_256N_4w_nan> {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked_256N_4w_nan>
     %0 = ttng.tmem_alloc %cst_0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x256xf32, #blocked_256N_4w_nan>) -> !ttg.memdesc<128x256xf32, #tmem_256N_nan, #ttng.tensor_memory, mutable>
@@ -1586,6 +1606,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return %red : tensor<128xf32, #blocked_red_256N_4w_nan>
   }
 
+  // CHECK-LABEL: @call_nan_reductions(
+  // CHECK: llvm.call @tensor_memory_ld_red_max_128x256_4_warps_nan(
+  // CHECK-NEXT: nvvm.tcgen05.wait <load>
+  // CHECK-NEXT: llvm.return
   tt.func public @call_nan_reductions() {
     %min = tt.call @tensor_memory_ld_red_min_128x256_4_warps_nan() : () -> tensor<128xf32, #blocked_red_256N_4w_nan>
     %max = tt.call @tensor_memory_ld_red_max_128x256_4_warps_nan() : () -> tensor<128xf32, #blocked_red_256N_4w_nan>

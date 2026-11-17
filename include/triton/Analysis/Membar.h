@@ -10,8 +10,8 @@ namespace mlir {
 
 class OpBuilder;
 
-/// Tracks memory and thread-ordering state at the current program point and at
-/// function boundaries.
+/// Legacy forward-flow state at the current program point and at function
+/// boundaries.
 struct MembarInfo {
   /// Effects since the most recent whole-region synchronization.
   BlockInfo pending;
@@ -60,8 +60,7 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
-    // Keep warp coverage local to the current execution region.
-    warpsSynced = false;
+    warpsSynced &= !callee.pending.hasEffects();
   }
 
   template <typename Transform> void transformSlices(Transform transform) {
@@ -76,6 +75,9 @@ struct MembarInfo {
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
+/// TODO: Retire this analysis and MembarInfo after NVIDIA cluster barrier
+/// placement, mbarrier arrival folding and the AMD conditional-barrier fallback
+/// migrate.
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   using AccessMode = triton::membar::SMemModel::AccessMode;
@@ -131,6 +133,8 @@ private:
 /// Inserts shared-memory and operation rendezvous barriers across a module,
 /// before async-completion analyses consume the synchronization points.
 /// Function summaries retain entry-prefix and pending exit states for calls.
+/// TODO: Redirect the Python analysis.membar binding and the AMD test pass
+/// before removing this driver with MembarAnalysis.
 class ModuleMembarAnalysis {
 public:
   ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,

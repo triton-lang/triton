@@ -3,6 +3,7 @@
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -266,11 +267,13 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
 
 } // namespace
 
-// Every observer stays in this region and CTA. Follow views and selects;
-// calls, captures and raw-address escapes reject the proof.
-bool triton::membar::hasRegionLocalUses(Value root) {
-  if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
-    return false;
+// Follow views and selects within this region. For calls, record which results
+// carry each descriptor argument back to the caller.
+// Only the legacy flow passes a null cache.
+// TODO: Make it a reference when followCalls is removed.
+static bool
+usesStayLocal(Value root,
+              DenseMap<Value, SmallVector<unsigned>> *calleeReturns) {
   SmallVector<Value> worklist{root};
   llvm::SmallPtrSet<Value, 8> seen;
   while (!worklist.empty()) {
@@ -286,6 +289,21 @@ bool triton::membar::hasRegionLocalUses(Value root) {
       }
       if (user->getParentRegion() != root.getParentRegion())
         return false;
+      if (auto call = dyn_cast<triton::CallOp>(user); calleeReturns && call) {
+        auto callee = cast<triton::FuncOp>(call.resolveCallable());
+        BlockArgument arg = callee.getArgument(use.getOperandNumber());
+        if (calleeReturns->try_emplace(arg).second &&
+            !usesStayLocal(arg, calleeReturns))
+          return false;
+        for (unsigned index : calleeReturns->at(arg))
+          worklist.push_back(call.getResult(index));
+        continue;
+      }
+      if (calleeReturns && isa<BlockArgument>(root) &&
+          isa<triton::ReturnOp>(user)) {
+        calleeReturns->at(root).push_back(use.getOperandNumber());
+        continue;
+      }
       // TMEM loads and stores only access the issuing CTA's tensor memory.
       if (isa<triton::gpu::LocalDeallocOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp>(
               user))
@@ -316,6 +334,13 @@ bool triton::membar::hasRegionLocalUses(Value root) {
   return true;
 }
 
+bool triton::membar::hasRegionLocalUses(Value root, bool followCalls) {
+  if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
+    return false;
+  DenseMap<Value, SmallVector<unsigned>> calleeReturns;
+  return usesStayLocal(root, followCalls ? &calleeReturns : nullptr);
+}
+
 namespace {
 
 bool hasOnlyGlobalReads(Operation *op) {
@@ -337,7 +362,7 @@ bool SMemModel::isRegionLocal(Value value) {
            auto [it, inserted] =
                regionLocalAllocations.try_emplace(root, false);
            if (inserted)
-             it->second = triton::membar::hasRegionLocalUses(root);
+             it->second = triton::membar::hasRegionLocalUses(root, followCalls);
            return it->second;
          });
 }
@@ -472,8 +497,7 @@ void SMemModel::addThreadDemand(BlockInfo &effects, Operation *op,
 SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
     Value value, std::optional<triton::gpu::SharedKind> sharedKind) {
   auto function = cast<FunctionOpInterface>(allocation.getOperation());
-  // Device-function views use their own frame until imported at a call;
-  // foreign or mixed frames, including returned descriptors, stay unknown.
+  // Only views in the current frame have local allocator IDs.
   auto *footprint = regions.getFootprint(value, function);
   SmallVector<AllocationSlice> slices;
   auto addSlice = [&](Interval<size_t> interval,
@@ -494,19 +518,14 @@ SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
       slice.sharedKind = sharedKind;
       slices.push_back(std::move(slice));
     }
-  } else if (footprint) {
+  } else if (footprint && (!followCalls || isKernel(function))) {
     // Use every lattice origin: function-local alias analysis can miss roots
     // returned through calls or joined with descriptor arguments.
-    for (const auto &view : footprint->regionInfo.views) {
-      auto ids = view.allocation
-                     ? allocation.getBufferIds(view.allocation->getResult(0))
-                     : SmallVector<Allocation::BufferId>{};
-      if (ids.empty()) {
-        bufferIds.clear();
-        break;
-      }
-      bufferIds.insert(ids.begin(), ids.end());
-    }
+    for (const auto &view : footprint->regionInfo.views)
+      for (auto id : allocation.getBufferIds(view.allocation->getResult(0)))
+        bufferIds.insert(id);
+  } else if (followCalls) {
+    footprint = regions.getKernelFootprint(regions.getFootprint(value));
   }
   // Unknown allocations use an unbounded interval. View disjointness and
   // RAW/WAR/WAW checks still determine whether a barrier is needed.
@@ -593,6 +612,8 @@ void SMemModel::describe(Operation *op, OpModel &model,
       if (sync.hasThreadDemand())
         addThreadDemand(effects, op, accesses);
     }
+    // TODO: Retire this legacy return demand with MembarAnalysis. The CFG
+    // models function returns in MembarCFGBuilder::describe().
     if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
       addThreadDemand(effects, op, accesses);
   }
@@ -621,8 +642,15 @@ void SMemModel::describe(Operation *op, OpModel &model,
     // starting from a shared memory write, followed by a series of shared
     // memory read/write operations, and ending with a shared memory read, i.e.,
     // shared memory write -> ... -> shared memory read.
-    AllocationSlice scratch(allocation.getAllocatedInterval(scratchId));
-    scratch.physicalFootprint = regions.getScratchFootprint(op);
+    auto interval = allocation.getAllocatedInterval(scratchId);
+    auto *footprint = regions.getScratchFootprint(op);
+    if (followCalls &&
+        !isKernel(cast<FunctionOpInterface>(allocation.getOperation()))) {
+      interval = {};
+      footprint = regions.getKernelFootprint(footprint);
+    }
+    AllocationSlice scratch(interval);
+    scratch.physicalFootprint = footprint;
     model.sharedIn.syncWriteSlices[scratch].insert(op);
     if (model.fixedInside) {
       // The internal barrier synchronizes all incoming effects. Do not carry
