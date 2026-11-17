@@ -1240,3 +1240,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %0#1 : tensor<64x32xf32, #mma>
   }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A store through result 1 must not be confused with result 0's dot use.
+  // CHECK-LABEL: @batch_noop_iter_arg_store
+  // CHECK-NOCANON-LABEL: @batch_noop_iter_arg_store
+  tt.func @batch_noop_iter_arg_store(%n: i32, %a: !ttg.memdesc<64x32xbf16, #shared, #smem>, %b: !ttg.memdesc<32x32xbf16, #shared1, #smem>, %other: tensor<64x32xf32, #mma>, %ptrs: tensor<64x32x!tt.ptr<f32>, #mma>) -> tensor<64x32xf32, #mma> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<64x32xf32, #mma>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> tensor<64x32xf32, #mma> : i32 {
+      %cvt:2 = ttg.convert_layout %other, %acc : tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma> -> tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma>
+      tt.store %ptrs, %cvt#1 : tensor<64x32x!tt.ptr<f32>, #mma>
+      // CHECK: %[[DOT:.*]] = ttng.warp_group_dot
+      // CHECK-NOCANON: %[[DOT:.*]] = ttng.warp_group_dot
+      // CHECK-NEXT: ttng.warp_group_dot_wait %[[DOT]]{{.*}} {pendings = 0 : i32}
+      // CHECK-NOCANON-NEXT: ttng.warp_group_dot_wait %[[DOT]]{{.*}} {pendings = 0 : i32}
+      // CHECK-NEXT: scf.yield
+      // CHECK-NOCANON-NEXT: scf.yield
+      %dot = ttng.warp_group_dot %a, %b, %cvt#0 : !ttg.memdesc<64x32xbf16, #shared, #smem> * !ttg.memdesc<32x32xbf16, #shared1, #smem> -> tensor<64x32xf32, #mma>
+      scf.yield %dot : tensor<64x32xf32, #mma>
+    } {tt.num_stages = 1 : i32}
+    tt.return %result : tensor<64x32xf32, #mma>
+  }
+
+  // Both traversals must follow result 1, ignoring result 0's unrelated store.
+  // CHECK-LABEL: @batch_noop_accumulator_chain
+  // CHECK-NOCANON-LABEL: @batch_noop_accumulator_chain
+  tt.func @batch_noop_accumulator_chain(%n: i32, %a: !ttg.memdesc<64x32xbf16, #shared, #smem>, %b: !ttg.memdesc<32x32xbf16, #shared1, #smem>, %other: tensor<64x32xf32, #mma>, %ptrs: tensor<64x32x!tt.ptr<f32>, #mma>) -> tensor<64x32xf32, #mma> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<64x32xf32, #mma>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> tensor<64x32xf32, #mma> : i32 {
+      %in:2 = ttg.convert_layout %other, %acc : tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma> -> tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma>
+      tt.store %ptrs, %in#0 : tensor<64x32x!tt.ptr<f32>, #mma>
+      // CHECK: %[[DOT:.*]] = ttng.warp_group_dot
+      // CHECK-NOCANON: %[[DOT:.*]] = ttng.warp_group_dot
+      // CHECK-NEXT: ttng.warp_group_dot_wait %[[DOT]]{{.*}} {pendings = 1 : i32}
+      // CHECK-NOCANON-NEXT: ttng.warp_group_dot_wait %[[DOT]]{{.*}} {pendings = 1 : i32}
+      %dot = ttng.warp_group_dot %a, %b, %in#1 : !ttg.memdesc<64x32xbf16, #shared, #smem> * !ttg.memdesc<32x32xbf16, #shared1, #smem> -> tensor<64x32xf32, #mma>
+      %out:2 = ttg.convert_layout %other, %dot : tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma> -> tensor<64x32xf32, #mma>, tensor<64x32xf32, #mma>
+      tt.store %ptrs, %out#0 : tensor<64x32x!tt.ptr<f32>, #mma>
+      scf.yield %out#1 : tensor<64x32xf32, #mma>
+    } {tt.num_stages = 1 : i32}
+    tt.return %result : tensor<64x32xf32, #mma>
+  }
+}

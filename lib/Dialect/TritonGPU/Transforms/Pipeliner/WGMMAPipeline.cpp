@@ -508,7 +508,8 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     if (user->getParentOp() == forOp) {
       // We support noops in between the dot and the yield
       if (isNoop(user)) {
-        for (auto &use : user->getResult(0).getUses()) {
+        // Noops map each operand to its corresponding result.
+        for (auto &use : user->getResult(argIdx).getUses()) {
           queue.push_back({use.getOwner(), use.getOperandNumber()});
         }
         continue;
@@ -562,7 +563,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
     if (isa<ttng::WarpGroupDotOp>(user))
       return use.getOperandNumber() == 2;
     if (isNoop(user))
-      return llvm::all_of(user->getResult(0).getUses(),
+      return llvm::all_of(user->getResult(use.getOperandNumber()).getUses(),
                           isTransitivelyWarpGroupDot);
     return false;
   };
