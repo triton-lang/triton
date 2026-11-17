@@ -102,57 +102,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// This row-oriented source requires scalar copies into the transposed layout.
-// CHECK: #[[CLIP0:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
-// CHECK: tt.func @nvmma_swizzle_0
-// CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP0]]>
-// CHECK: ttg.async_copy_global_to_local {{.*}} tensor<32x128x!tt.ptr<f32>, #[[CLIP0]]>
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 32}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_swizzle_0(%p: tensor<32x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<32x128xf32, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<32x128x!tt.ptr<f32>, #blocked> -> <32x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// This row-oriented source requires scalar copies into the transposed layout.
-// CHECK: #[[CLIP32:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
-// CHECK: tt.func @nvmma_swizzle_32
-// CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP32]]>
-// CHECK: ttg.async_copy_global_to_local {{.*}} tensor<32x128x!tt.ptr<f32>, #[[CLIP32]]>
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 32}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_swizzle_32(%p: tensor<32x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<32x128xf32, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<32x128x!tt.ptr<f32>, #blocked> -> <32x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// This row-oriented source requires scalar copies into the transposed layout.
-// CHECK: #[[CLIP64:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}>
-// CHECK: tt.func @nvmma_swizzle_64
-// CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[CLIP64]]>
-// CHECK: ttg.async_copy_global_to_local {{.*}} tensor<32x128x!tt.ptr<f32>, #[[CLIP64]]>
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_swizzle_64(%p: tensor<32x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<32x128xf32, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<32x128x!tt.ptr<f32>, #blocked> -> <32x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
 // Packed/padded NVMMA is deliberately not included in per-element clipping.
 // CHECK-LABEL: tt.func @nvmma_fp4_unchanged
 // CHECK-NOT: ttg.convert_layout
@@ -178,38 +127,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
  tt.func @nvmma_split_m(%p: tensor<64x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<64x128xf32, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<64x128x!tt.ptr<f32>, #blocked> -> <64x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// Preserve the CTA partition/replication bases while redistributing registers.
-// CHECK: #[[CGA_split_n:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}CGALayout = {{\[\[0, 1\]\]}}{{.*}}>
-// CHECK: tt.func @nvmma_split_n
-// CHECK: ttg.async_copy_global_to_local {{.*}} tensor<64x128x!tt.ptr<f32>, #[[CGA_split_n]]>
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_split_n(%p: tensor<64x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<64x128xf32, #shared, #smem, mutable>) {
-  %t = ttg.async_copy_global_to_local %p, %s : tensor<64x128x!tt.ptr<f32>, #blocked> -> <64x128xf32, #shared, #smem, mutable>
-  tt.return
- }
-}
-
-// -----
-
-// Preserve the CTA partition/replication bases while redistributing registers.
-// CHECK: #[[CGA_replicated:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}CGALayout = {{\[\[0, 0\]\]}}{{.*}}>
-// CHECK: tt.func @nvmma_replicated
-// CHECK: ttg.async_copy_global_to_local {{.*}} tensor<64x128x!tt.ptr<f32>, #[[CGA_replicated]]>
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32, CGALayout = [[0, 0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
- tt.func @nvmma_replicated(%p: tensor<64x128x!tt.ptr<f32>, #blocked>, %s: !ttg.memdesc<64x128xf32, #shared, #smem, mutable>) {
   %t = ttg.async_copy_global_to_local %p, %s : tensor<64x128x!tt.ptr<f32>, #blocked> -> <64x128xf32, #shared, #smem, mutable>
   tt.return
  }

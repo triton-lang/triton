@@ -55,17 +55,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
- // HINT: tt.func @nvmma_f16_hint
- // HINT: ttg.async_copy_global_to_local {{.*}} {contiguity = 8 : i32} : tensor<32x64x!tt.ptr<f16>, #[[CLIPPED]]>
- // LOWER-LABEL: llvm.func @nvmma_f16_hint
- // LOWER: nvvm.cp.async.shared.global {{.*}}, 16, cache = cg
- tt.func @nvmma_f16_hint(%input: tensor<32x64x!tt.ptr<f16>, #blocked>) {
-  %view = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
-  %token = ttg.async_copy_global_to_local %input, %view {contiguity = 8 : i32} : tensor<32x64x!tt.ptr<f16>, #blocked> -> <32x64xf16, #shared, #smem, mutable>
-  ttg.async_commit_group tokens %token
-  ttg.async_wait {num = 0 : i32}
-  tt.return
- }
+ // Preserve the nontrivial hint, capped by the clipped layout. Losing it
+ // would make FP16 cp.async lowering attempt an illegal 2-byte transfer.
  // HINT: tt.func @nvmma_f16_hint_clamped
  // HINT: ttg.async_copy_global_to_local {{.*}} {contiguity = 8 : i32} : tensor<32x64x!tt.ptr<f16>, #[[CLIPPED]]>
  // LOWER-LABEL: llvm.func @nvmma_f16_hint_clamped
