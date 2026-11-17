@@ -899,8 +899,18 @@ struct BufferLoadToLocalOpConversion
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
     LLVM::AMD::DirectToLdsVecInfo vecInfo;
-    SmallVector<Value> maskElems = getMaskElemsAndDirectToLdsVec(
-        rewriter, loc, llMask, mask, vec, vecInfo);
+    SmallVector<Value> maskElems;
+    // A packed FP6 group is one 16-byte LDS slot filled by a 12-byte transfer,
+    // so the vector is the whole group regardless of offsets and mask.
+    bool fp6Packed = op.getFp6Packed();
+    if (fp6Packed) {
+      vec = vecInfo.fromPtr = vecInfo.fromMask = 16;
+      if (llMask)
+        maskElems = unpackTensorElements(loc, llMask, rewriter, mask.getType());
+    } else {
+      maskElems = getMaskElemsAndDirectToLdsVec(rewriter, loc, llMask, mask,
+                                                vec, vecInfo);
+    }
 
     SmallVector<Value> offsetElems =
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
@@ -972,7 +982,8 @@ struct BufferLoadToLocalOpConversion
                                otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
-      Value vecBytesVal = b.i32_val(vecBits / 8);
+      // 96-bit transfers still advance LDS by 16 bytes per lane.
+      Value vecBytesVal = b.i32_val(fp6Packed ? 12 : vecBits / 8);
 
       Value maybeSwizzledMaskElem = maskElem;
       if (requiresSrcPtrSwizzling)

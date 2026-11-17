@@ -395,6 +395,12 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       `ptr` and `soffset` are described in BufferOpInterface; an
       out-of-bounds element writes zero to `dest`. `scope` makes the loaded
       data visible at that scope.
+
+      With `fp6Packed`, `dest` holds packed FP6: each group of 16 bytes along
+      the contiguous dimension holds 16 codes in 12 bytes followed by 4
+      padding bytes. Each group is one 96-bit transfer of the 12 bytes starting
+      at the group's first offset; the padding bytes of `dest` are not
+      written. The mask of a group is the mask of its first element.
     }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
@@ -406,7 +412,8 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$fp6Packed
     );
     let results = (outs TTG_AsyncToken:$token);
 

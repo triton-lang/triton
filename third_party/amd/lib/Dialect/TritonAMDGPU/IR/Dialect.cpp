@@ -1396,6 +1396,14 @@ LogicalResult BufferLoadToLocalOp::verify() {
                                       getScope(),
                                       triton::CachePolicyOperation::Load)))
     return failure();
+  if (getFp6Packed()) {
+    auto dstTy = getDest().getType();
+    if (!dstTy.getElementType().isInteger(8) || getOther())
+      return emitOpError("fp6Packed requires i8 storage and no other value");
+    if (dstTy.getDimSize(triton::gpu::getOrder(dstTy).front()) % 16 != 0)
+      return emitOpError("fp6Packed requires whole 16-byte groups along the "
+                         "contiguous dimension");
+  }
 
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   if (!mod)

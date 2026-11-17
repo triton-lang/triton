@@ -435,3 +435,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// fp6Packed copies 12 bytes per 16-byte group even though the offsets are not
+// known to be contiguous, and uses one mask bit per group.
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: buffer_load_to_local_fp6_packed
+  tt.func public @buffer_load_to_local_fp6_packed(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: tensor<32x128xi32, #blocked>, %arg2: tensor<32x128xi1, #blocked>, %arg3: !ttg.memdesc<32x128xi8, #shared, #smem, mutable>) {
+    // GFX950: %[[WIDTH:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // GFX950: rocdl.raw.ptr.buffer.load.async.lds %{{[^,]*}}, %{{[^,]*}}, %[[WIDTH]],
+    // GFX950-NOT: rocdl.raw.ptr.buffer.load.async.lds
+
+    // GFX942 has no 96-bit direct-to-LDS copy.
+    // expected-error@+2 {{cannot lower 'amdg.buffer_load_to_local' to a direct-to-LDS copy}}
+    // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
+    %0 = amdg.buffer_load_to_local %arg0[%arg1] mask = %arg2 into %arg3 {fp6Packed} : !tt.ptr<i8>[tensor<32x128xi32, #blocked>] -> <32x128xi8, #shared, #smem, mutable>
+    tt.return
+  }
+}

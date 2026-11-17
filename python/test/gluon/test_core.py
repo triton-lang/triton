@@ -4687,6 +4687,82 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
+@pytest.mark.parametrize("smem", ["unswizzled", "swizzled"])
+def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
+    from triton._internal_testing import fp6_values, pack_fp6
+
+    @gluon.jit
+    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, K, a_type: ttgl.constexpr, b_type: ttgl.constexpr,
+               SMEM: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=32)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=32)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
+        # Each lane copies one 16-value group: 12 global bytes into a 16-byte LDS slot.
+        # Swizzling moves whole 16-byte groups, so it keeps each group intact.
+        PHASE: ttgl.constexpr = 8 if SMEM == "swizzled" else 1
+        a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [1, 0])
+        b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
+        a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
+        b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
+        a_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_M, BLOCK_K], a_shared)
+        b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_K, BLOCK_N], b_shared)
+        row_bytes = K // 4 * 3
+        a_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(a_ptr, (BLOCK_M * row_bytes).to(ttgl.uint32))
+        b_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(b_ptr, (BLOCK_N * row_bytes).to(ttgl.uint32))
+
+        a_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_load_layout))[:, None]
+        a_offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, a_load_layout))[None, :]
+        b_offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, b_load_layout))[:, None]
+        b_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_load_layout))[None, :]
+        a_scale_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None]
+        a_scale_offs_k = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
+        b_scale_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None]
+        b_scale_offs_k = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
+
+        acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
+        for k in range(0, K, BLOCK_K):
+            a_k = k + a_offs_k
+            b_k = k + b_offs_k
+            ttgl.amd.cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs_m * row_bytes + a_k // 16 * 12 + a_k % 16,
+                                                 fp6_packed=True)
+            ttgl.amd.cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs_n * row_bytes + b_k // 16 * 12 + b_k % 16,
+                                                 fp6_packed=True)
+            cdna4_async_copy.commit_group()
+            cdna4_async_copy.wait_group(0)
+            ttgl.barrier()
+            a = a_smem.load(a_layout)
+            b = b_smem.load(b_layout)
+            a_scale = ttgl.amd.cdna4.buffer_load(a_scale_ptr, a_scale_offs_m * (K // 32) + k // 32 + a_scale_offs_k)
+            b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + k // 32 + b_scale_offs_k)
+            acc = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, acc)
+            ttgl.barrier()
+        out_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None]
+        out_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
+        ttgl.amd.cdna4.buffer_store(acc, out_ptr, out_offs_m * BLOCK_N + out_offs_n)
+
+    M, N, K = 64, 64, 512
+    torch.manual_seed(0)
+    a_codes = torch.randint(8, 24, (M, K), dtype=torch.int32, device="cuda")
+    b_codes = torch.randint(8, 24, (N, K), dtype=torch.int32, device="cuda")
+    a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
+    b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device="cuda")
+    out = torch.empty((M, N), dtype=torch.float32, device="cuda")
+    compiled = kernel[(1, )](out, pack_fp6(a_codes), pack_fp6(b_codes), a_scale, b_scale, K, a_type, b_type, smem, M, N,
+                             128, num_warps=4)
+    amdgcn = compiled.asm["amdgcn"]
+    assert re.search(r"buffer_load_dwordx3 .* lds", amdgcn)
+    assert "buffer_load_dword " not in amdgcn
+
+    a_ref = fp6_values(a_type, a_codes).double() * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
+    b_ref = fp6_values(b_type, b_codes).double() * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1)
+    torch.testing.assert_close(out, (a_ref @ b_ref.T).float())
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("vec", [1, 4])
 @pytest.mark.parametrize("bound", ["partial", "full"])
 @pytest.mark.parametrize("soffset", [0, 5])

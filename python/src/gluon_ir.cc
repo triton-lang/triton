@@ -1348,17 +1348,19 @@ void init_gluon_ir(py::module_ &m) {
           "create_buffer_desc_load_to_local",
           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
              Value mask, Value other, Value stride, Attribute cachePolicy,
-             Value soffset, std::optional<tt::MemSyncScope> scope) {
+             Value soffset, std::optional<tt::MemSyncScope> scope,
+             bool fp6Packed) {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             self.create<ttag::BufferLoadToLocalOp>(
                 dest, ptr, offsets, mask, other, stride, cachePolicy,
-                /*contiguity=*/1, soffset, scopeAttr);
+                /*contiguity=*/1, soffset, scopeAttr, fp6Packed);
           },
           py::arg("dest"), py::arg("ptr"), py::arg("offsets"), py::arg("mask"),
           py::arg("other"), py::arg("stride"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
+          py::arg("soffset"), py::arg("scope").none(),
+          py::arg("fp6_packed") = false)
       .def("get_amd_cache_policy_gfx9",
            [](GluonOpBuilder &self, bool nontemporal) -> Attribute {
              return ttag::CachePolicyGfx9Attr::get(self.getContext(),
