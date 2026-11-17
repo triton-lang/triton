@@ -784,3 +784,55 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %dot : tensor<2x256x256xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+  // CHECK-DAG: #[[$SCAN:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\]\]}}}>
+  // PIPELINE-DAG: #[[$PSCAN:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A scan has no cross-CTA lowering, so its axis must not be split across the
+  // CTAs: a 1-D scan runs on a layout that replicates it in every CTA, and layout
+  // propagation must not split it again.
+  // CHECK-LABEL: tt.func @scan_1d_split_ctas
+  // CHECK: %[[X:.*]] = tt.load {{.*}} : tensor<64x!tt.ptr<i32>, #[[$SCAN]]>
+  // CHECK-NEXT: "tt.scan"(%[[X]])
+  // PIPELINE-LABEL: tt.func @scan_1d_split_ctas
+  // PIPELINE: %[[X:.*]] = tt.load {{.*}} : tensor<64x!tt.ptr<i32>, #[[$PSCAN]]>
+  // PIPELINE-NEXT: "tt.scan"(%[[X]])
+  tt.func @scan_1d_split_ctas(%in: tensor<64x!tt.ptr<i32>, #blocked>, %out: tensor<64x!tt.ptr<i32>, #blocked>) {
+    %x = tt.load %in : tensor<64x!tt.ptr<i32>, #blocked>
+    %s = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %v = arith.addi %lhs, %rhs : i32
+      tt.scan.return %v : i32
+    }) : (tensor<64xi32, #blocked>) -> tensor<64xi32, #blocked>
+    tt.store %out, %s : tensor<64x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+
+  // CHECK-DAG: #[[$B:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[0, 0\]\]}}}>
+  // CHECK-DAG: #[[$A:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$D:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$SA:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$SB:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A scaled dot reduces along K within each CTA, like a dot. The default
+  // layout splits B along K across the CTAs; every CTA gets the whole B (and
+  // B scales) instead, while A, its scales and the result stay split along M.
+  // CHECK-LABEL: tt.func @dot_scaled_k_not_split
+  // CHECK: %[[B:.*]] = tt.load %{{.*}} : tensor<128x64x!tt.ptr<f8E5M2>, #[[$B]]>
+  // CHECK: tt.dot_scaled %{{.*}} scale %{{.*}}, %[[B]] scale %{{.*}}, %{{.*}} lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x128xf8E5M2, #[[$A]]>, tensor<128x4xi8, #[[$SA]]> * tensor<128x64xf8E5M2, #[[$B]]>, tensor<64x4xi8, #[[$SB]]> -> tensor<128x64xf32, #[[$D]]>
+  tt.func @dot_scaled_k_not_split(%a: tensor<128x128xf8E5M2, #blocked>, %b_ptrs: tensor<128x64x!tt.ptr<f8E5M2>, #blocked>, %sa: tensor<128x4xi8, #blocked>, %sb: tensor<64x4xi8, #blocked>) -> tensor<128x64xf32, #blocked> {
+    %b = tt.load %b_ptrs : tensor<128x64x!tt.ptr<f8E5M2>, #blocked>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    %d = tt.dot_scaled %a scale %sa, %b scale %sb, %c lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<128x128xf8E5M2, #blocked>, tensor<128x4xi8, #blocked> * tensor<128x64xf8E5M2, #blocked>, tensor<64x4xi8, #blocked> -> tensor<128x64xf32, #blocked>
+    tt.return %d : tensor<128x64xf32, #blocked>
+  }
+}
