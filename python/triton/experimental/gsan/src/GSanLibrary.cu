@@ -599,7 +599,7 @@ GSAN_DEVICE void assertOrderedOrCompatible(ThreadState *state,
                                            bool isTma = false) {
   if (prior.epoch == 0)
     return;
-  if (isTma == prior.isTma && isAtomicScope(currentScope) &&
+  if (isAtomicScope(currentScope) &&
       areAtomicScopesCompatible(currentScope, state->threadId, prior.scope,
                                 prior.threadId, getGlobalState(state))) {
     return;
