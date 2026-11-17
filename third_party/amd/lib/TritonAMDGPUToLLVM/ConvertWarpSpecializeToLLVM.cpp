@@ -94,9 +94,13 @@ public:
   void createBarrier(TritonLLVMIRRewriter &b, unsigned numWarps,
                      Value handle) override {
     Location loc = b.getLoc();
-    ROCDL::BarrierJoinOp::create(b, loc, handle);
-    ROCDL::BarrierSignalVarOp::create(b, loc, handle, numWarps);
-    ROCDL::BarrierWaitOp::create(b, loc, 1);
+    if (numWarps == 1) {
+      ROCDL::WaveBarrierOp::create(b, loc);
+    } else {
+      ROCDL::BarrierJoinOp::create(b, loc, handle);
+      ROCDL::BarrierSignalVarOp::create(b, loc, handle, numWarps);
+      ROCDL::BarrierWaitOp::create(b, loc, 1);
+    }
   }
 
 private:
@@ -129,29 +133,19 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // Attempt to elide captures of trivial computations by hoisting them into the
   // header or rematerializing them into each partition.
   elideTrivialCaptures(func, wsOps);
+  bool direct = canDirectDispatch(wsOps);
 
-  MLIRContext *ctx = func.getContext();
-  TritonLLVMIRRewriter b(func.getLoc(), ctx);
-  Builder rewriter(ctx);
-
-  // Generate the function header.
-  Block *entry = &func.getBody().front();
-  SmallVector<Location> argLocs = llvm::to_vector(llvm::map_range(
-      func.getArguments(), [](BlockArgument arg) { return arg.getLoc(); }));
-  Block *header = b.createBlock(entry, func.getArgumentTypes(), argLocs);
+  TritonLLVMIRRewriter b(func.getLoc(), func.getContext());
+  // Keep the kernel arguments in the header so they dominate every warp group.
+  Block *header = &func.getBody().front();
+  Block *entry = b.splitBlock(header, header->begin());
   Block *switchLoop = b.createBlock(entry);
   b.setInsertionPointToStart(header);
 
   // This is the absolute warp ID.
-  Value wid = ROCDL::WaveId::create(b, b.getLoc(), i32_ty);
+  Value wid = ROCDL::WaveId::create(b, b.getLoc(), b.getI32Type());
   Value isDefault = b.icmp_ult(wid, b.i32_val(defaultNumWarps));
   LLVM::CondBrOp::create(b, b.getLoc(), isDefault, entry, switchLoop);
-
-  // Forward arguments from the header into the old entry block.
-  for (auto [arg, oldArg] :
-       llvm::zip(header->getArguments(), entry->getArguments()))
-    oldArg.replaceAllUsesWith(arg);
-  entry->eraseArguments([](auto) { return true; });
 
   WarpSpecializeCallbacks callbacks;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned) {
@@ -162,9 +156,9 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   callbacks.reallocRegisters = [](TritonLLVMIRRewriter &, WarpSpecializeOp,
                                   RegisterReallocPhase, unsigned) {};
 
-  return lowerWarpSpecializeCommon(
-      func, wsOps, entry, header, switchLoop, wid, ctx, defaultNumWarps,
-      totalNumWarpsAttr.getInt(), targetInfo, callbacks, 0);
+  return lowerWarpSpecializeCommon(func, wsOps, direct, switchLoop, wid,
+                                   defaultNumWarps, totalNumWarpsAttr.getInt(),
+                                   targetInfo, callbacks, 0);
 }
 
 //===----------------------------------------------------------------------===//

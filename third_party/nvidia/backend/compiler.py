@@ -274,8 +274,9 @@ class CUDABackend(BaseBackend):
         capability = int(self._parse_arch(options.arch))
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if capability >= 80 else cuda.convert_custom_float8_sm70, "min_dot_size":
-            min_dot_size(self.target)
+            cuda.convert_custom_float8_sm80 if capability >= 80 else cuda.convert_custom_float8_sm70,
+            "min_dot_size": min_dot_size(self.target),
+            "get_ptx_version": functools.partial(get_ptx_version_from_options, options, self.target.arch),
         }
         return codegen_fns
 

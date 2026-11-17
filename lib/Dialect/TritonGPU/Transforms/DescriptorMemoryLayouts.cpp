@@ -76,7 +76,7 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
     auto newCgaEnc = updateCGALayoutForShape(cgaLayout, tensorType.getShape());
     return NVMMASharedEncodingAttr::get(
         ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCgaEnc);
+        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getPadding(), newCgaEnc);
   }
   if (auto swizEnc = dyn_cast<SwizzledSharedEncodingAttr>(encoding)) {
     auto existingCga = swizEnc.getCGALayout();
@@ -124,15 +124,21 @@ SharedEncodingTrait updateEncodingForShape(Operation *op,
   llvm::report_fatal_error(msg);
 }
 
-// Build shared encoding for a tensor descriptor by applying callback to adjust
-// for block shape of the descriptor
 static TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                                    RankedTensorType existingTy,
+                                                    TensorDescType descTy,
                                                     Attribute encoding) {
-  auto sharedEnc = cast<SharedEncodingTrait>(encoding);
-  encoding = updateEncodingForShape(op, sharedEnc, existingTy);
-  return TensorDescType::get(existingTy.getShape(), existingTy.getElementType(),
-                             encoding);
+  // Preserve packing when layout assignment runs on a byte-typed descriptor.
+  auto previous =
+      dyn_cast_if_present<NVMMASharedEncodingAttr>(descTy.getSharedLayout());
+  if (previous && previous.isPaddedFp6())
+    encoding = previous;
+  auto layout = updateEncodingForShape(op, cast<SharedEncodingTrait>(encoding),
+                                       descTy.getSignlessBlockType());
+  Type elemTy = descTy.getElementType();
+  if (auto mma = dyn_cast<NVMMASharedEncodingAttr>(layout);
+      mma && mma.getPadding() == NVMmaPadding::B6P2x16 && isFP6(elemTy))
+    elemTy = IntegerType::get(descTy.getContext(), 8, IntegerType::Unsigned);
+  return TensorDescType::get(descTy.getShape(), elemTy, layout);
 }
 
 struct UseInfo {
@@ -462,7 +468,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       newEncoding = getFallbackSharedEncoding(existingTy, einfo->cgaLayout,
                                               einfo->shape, numCTAs);
     }
-    desc.setType(getTensorDescTypeWithEncoding(desc.getDefiningOp(), existingTy,
+    desc.setType(getTensorDescTypeWithEncoding(desc.getDefiningOp(), descTy,
                                                newEncoding));
   }
 
@@ -473,8 +479,7 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
       auto existingTy =
           RankedTensorType::get(descTy.getShape(), descTy.getElementType());
       auto encoding = getFallbackSharedEncoding(existingTy, {}, {}, numCTAs);
-      resultTys[i] =
-          getTensorDescTypeWithEncoding(nullptr, existingTy, encoding);
+      resultTys[i] = getTensorDescTypeWithEncoding(nullptr, descTy, encoding);
     }
   }
   func.setFunctionType(FunctionType::get(ctx, argTys, resultTys));

@@ -197,6 +197,7 @@ TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
+TMA_B4X16_P64 = 14
 
 
 def make_tensordesc_arg(arg, metadata, _):
@@ -207,7 +208,6 @@ def make_tensordesc_arg(arg, metadata, _):
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
     block_size = metadata["block_size"]
-    fp4_padded = metadata["fp4_padded"]
     is_im2col = metadata.get("is_im2col", False)
 
     shape = arg.shape
@@ -215,7 +215,8 @@ def make_tensordesc_arg(arg, metadata, _):
     assert strides[-1] == 1
     padding = 1 if arg.padding == "nan" else 0
 
-    if fp4_padded:
+    if elem_type == TMA_B4X16_P64:
+        # CUDA counts FP4 values. The backing tensor stores two per byte.
         expanded_shape = list(shape)
         expanded_shape[-1] *= 2
     else:

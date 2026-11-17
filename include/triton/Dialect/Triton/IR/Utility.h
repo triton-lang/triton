@@ -12,6 +12,10 @@ namespace mlir {
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
 
+inline bool isFP6(Type type) {
+  return isa<Float6E2M3FNType, Float6E3M2FNType>(type);
+}
+
 // Returns the bit width of a type, treating pointer-like types as 64-bit.
 // This handles LLVM dialect pointer types.
 inline int getIntOrFloatOrPtrBitWidth(Type type) {

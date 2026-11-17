@@ -878,7 +878,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @mma_v5_two_ctas_wait_barrier_no_cluster
   // CHECK: ttng.init_barrier
-  // CHECK: ttng.tc_gen5_mma
+  // CHECK: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.tc_gen5_mma
+  // CHECK-NEXT: ttng.tc_gen5_commit
   // CHECK: ttng.wait_barrier
   // CHECK: ttng.cluster_barrier
   // CHECK: ttg.local_store
@@ -891,12 +894,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.tw
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<256x32xf16, #blocked>
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttg.barrier local
     ttng.tc_gen5_mma %a, %b, %acc, %true, %true, %barrier[%true] {is_async, two_ctas} :
        !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
        !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>,
        !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.tc_gen5_commit %barrier : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.wait_barrier %barrier, %c0 deps %a, %b :
       !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>,
       !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
@@ -1108,17 +1113,21 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.clc_try_cancel
+  // CHECK-NEXT: ttng.tc_gen5_commit
   // CHECK: tt.return
   tt.func @cluster_clc_with_per_cta_barrier() {
+    %phase = arith.constant 0 : i32
     %true = arith.constant true
     %result = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     ttng.clc_try_cancel %result, %barrier :
       !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>,
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.tc_gen5_commit %barrier : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true :
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
+    ttng.wait_barrier %barrier, %phase deps %result : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>, !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
     tt.return
   }
 }

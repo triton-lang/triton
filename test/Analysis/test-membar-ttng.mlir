@@ -423,19 +423,30 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
 // CHECK-LABEL: tmem_copy_after_alloc
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
-
-//#ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
+!barrier = !ttg.memdesc<1xi64, #bar, #smem, mutable>
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @tmem_copy_after_alloc(%arg0: tensor<128x16xf8E4M3FN, #blocked>) {
+    %phase = arith.constant 0 : i32
+    %done = ttg.local_alloc : () -> !barrier
+    // CHECK: ttng.init_barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.tc_gen5_commit
+    ttng.init_barrier %done, 2 : !barrier
+    ttng.tc_gen5_commit %done : !barrier
     // CHECK: local_alloc
     %0 = ttg.local_alloc %arg0 {allocation.offset = 53248 : i32} : (tensor<128x16xf8E4M3FN, #blocked>) -> !ttg.memdesc<128x16xf8E4M3FN, #shared, #smem>
     // CHECK: tmem_alloc
     %1 = ttng.tmem_alloc  {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
-    // ttg.barrier local
-    // CHECK: tmem_copy
+    ttng.fence_async_shared {bCluster = false}
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttng.tmem_copy
+    // CHECK-NEXT: ttng.tc_gen5_commit
     ttng.tmem_copy %0, %1 : !ttg.memdesc<128x16xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %done : !barrier
+    ttng.wait_barrier %done, %phase deps %0, %1 : !barrier, !ttg.memdesc<128x16xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

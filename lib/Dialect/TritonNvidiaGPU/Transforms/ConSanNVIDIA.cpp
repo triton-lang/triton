@@ -265,7 +265,12 @@ public:
              it != info->operandEffects.end(); ++it)
           if (auto *buffer = std::get_if<Value>(&it->buffer);
               buffer && *buffer == value) {
-            effects.emplace_back(*it).operandName = name.str();
+            auto &effect = effects.emplace_back(*it);
+            effect.operandName = name.str();
+            effect.isTensorCoreARead =
+                isa<ttng::MMAv5OpInterface>(op) && name == "A" &&
+                isa<ttg::SharedMemorySpaceAttr>(
+                    cast<ttg::MemDescType>(value.getType()).getMemorySpace());
             break;
           }
       info->operandEffects = std::move(effects);

@@ -133,6 +133,42 @@ def test_max_occupancy_preserves_required_shared_memory(device):
     torch.testing.assert_close(out, inp)
 
 
+def test_launch_shared_memory_out_of_resources(device, fresh_triton_cache):
+    # Exceeding the device shared memory limit must raise OutOfResources at
+    # launch. On AMD, LLVM sees the oversized static LDS allocation and reports
+    # an error, but must not exit the process.
+    from triton.compiler import max_shared_mem
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+    from triton.runtime.errors import OutOfResources
+
+    @gluon.jit
+    def kernel(out, NUM_BUFFERS: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+        offsets = gl.arange(0, 1024, layout=layout)
+        shared = gl.allocate_shared_memory(gl.float32, [NUM_BUFFERS, 1024], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+        buffer = shared.index(NUM_BUFFERS - 1)
+        buffer.store(offsets.to(gl.float32))
+        gl.store(out + offsets, buffer.load(layout))
+
+    driver = triton.runtime.driver.active
+    max_shared = max_shared_mem(driver.get_current_device())
+    num_buffers = triton.next_power_of_2(max_shared // 4096 + 1)
+    threads_per_warp = driver.get_current_target().warp_size
+    out = torch.empty(1024, device=device)
+
+    compiled = kernel.warmup(out, num_buffers, threads_per_warp, grid=(1, ))
+    assert compiled.metadata.shared >= num_buffers * 4096
+    if is_hip():
+        assert f".amdhsa_group_segment_fixed_size {compiled.metadata.shared}" in compiled.asm["amdgcn"]
+
+    with pytest.raises(OutOfResources) as exc_info:
+        kernel[(1, )](out, num_buffers, threads_per_warp)
+    assert exc_info.value.name == "shared memory"
+    assert exc_info.value.required >= num_buffers * 4096
+    assert exc_info.value.limit == max_shared
+
+
 def _check_memory_leak(device) -> None:
 
     @triton.jit

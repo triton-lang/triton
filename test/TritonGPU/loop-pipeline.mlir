@@ -27,7 +27,7 @@
 // CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
-// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}}
+// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] {
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
@@ -36,7 +36,7 @@
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_1]]
 // CHECK-DAG: %[[BSUB1:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: %[[T_B1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB1]] mask %[[LOOP_COND_1_SPLAT_B]]
-// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
+// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
@@ -47,14 +47,13 @@
 // CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B0]]
 // CHECK:   %[[arg_b0_dot_op_1:.*]] = arith.mulf %[[arg_b0_dot_op_0]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_1]], {{.*}}
-// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
+// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.andi %[[INS_IDX_2]], %[[CONSTANT_1]]
 // CHECK:   %[[ASUB3:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[ASUB3]]
 // CHECK:   %[[BSUB3:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_B_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[BSUB3]]
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
+// CHECK:   scf.yield {{.*}}, %[[EXT_IDX_3]]
 
 // AMD-LABEL:  tt.func @matmul_loop
 //   AMD-DAG:   %[[CM1:.*]] = arith.constant -1 : index
@@ -184,7 +183,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:   ttg.async_copy_global_to_local
 // CHECK:   ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]{{.*}}
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]{{.*}}
 // CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:     %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
@@ -194,14 +193,13 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:     %[[B:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:     %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:     tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
-// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
+// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.andi %[[INS_IDX_2]], %[[CONSTANT_1]]
 // CHECK:     ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
 // CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
+// CHECK:   scf.yield {{.*}}, %[[EXT_IDX_3]]
 // CHECK:   ttg.async_wait {num = 0 : i32}
 // CHECK    scf.yield
 
@@ -290,7 +288,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: ttg.async_copy_global_to_local
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
 // CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:     %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
@@ -298,12 +296,11 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK:     %[[B0:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:     %[[arg_b0_dot_op:.*]] = ttg.local_load %[[B0]]
 // CHECK:     tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
-// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
+// CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK-DAG: %[[INS_IDX_3:.*]] = arith.andi %[[INS_IDX_2]], %[[CONSTANT_1]]
 // CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
+// CHECK:   scf.yield {{.*}}, %[[EXT_IDX_3]]
 
 // AMD-LABEL:  tt.func @matmul_loop_single_pipeline
 //       AMD:   %[[LOAD_10:.*]] = tt.load %{{.*}}
@@ -311,7 +308,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[LOCAL_ALLOC_12:.*]] = ttg.local_alloc
 //       AMD:   %[[CMPI_13:.*]] = arith.cmpi slt, %{{.*}}, %{{.*}}
 //       AMD:   %[[SPLAT_14:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:   %[[LOAD_15:.*]] = tt.load %{{.*}}, %[[SPLAT_14]], %{{.*}}
+//       AMD:   %[[LOAD_15:.*]] = tt.load %{{[^, ]+}}, %[[SPLAT_14]] {amd.pipeliner_part = "prologue"}
 //       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
@@ -1700,10 +1697,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // Verify that statically dead prologue iterations are properly predicated
 // CHECK-LABEL: @peeled_prologue_statically_dead
-// CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
-// CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
-// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
-// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-COUNT-2: ttg.async_copy_global_to_local %{{[^,]+}}, %{{[^ ,]+}} {
 // CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
 // CHECK: scf.for
 tt.func @peeled_prologue_statically_dead(

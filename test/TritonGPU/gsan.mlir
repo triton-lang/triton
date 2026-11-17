@@ -373,6 +373,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #blockedLocalBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
 #blockedCTABroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: tt.func @atomic_result_barrier_scope
@@ -406,6 +407,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NEXT: ttng.cluster_barrier
     %cluster_relaxed = tt.atomic_rmw add, relaxed, gpu, %cluster_ptrs, %cluster_ones {allocation.offset = 0 : i32} : (tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>, tensor<128xi32, #blockedCTABroadcast>) -> tensor<128xi32, #blockedCTABroadcast>
     tt.store %cluster_ptrs, %cluster_relaxed : tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
+
+    %dst = ttg.local_alloc %cluster_ones : (tensor<128xi32, #blockedCTABroadcast>) -> !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_atomic_scatter_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%cluster_ones], %cluster_ones {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blockedCTABroadcast>, tensor<128xi32, #blockedCTABroadcast>) -> tensor<128xi32, #blockedCTABroadcast>
+    tt.store %cluster_ptrs, %old : tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
     tt.return
   }
 }

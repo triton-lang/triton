@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, cluster, fence_async_shared, mbarrier
+from ..hopper import async_store, cluster, fence_async_shared, gdc, mbarrier
 from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -29,6 +29,7 @@ __all__ = [
     "cluster",
     "fence_async_shared",
     "fma2",
+    "gdc",
     "mbarrier",
     "max2",
     "min2",
@@ -575,7 +576,7 @@ def tcgen05_copy(src, dst, pred=True, _semantic=None):
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                _semantic=None):
+                a_type=None, b_type=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -587,6 +588,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
         b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -609,8 +611,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     multicast = _unwrap_if_constexpr(multicast)
+    a_type = _unwrap_if_constexpr(a_type)
+    b_type = _unwrap_if_constexpr(b_type)
+    a_type = _semantic._str_to_fp_type(a_type) if a_type is not None else None
+    b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast)
+                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type)
 
 
 @builtin
@@ -626,8 +632,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_scale (tensor): Scale factor for operand A.
         b_scale (tensor): Scale factor for operand B.
-        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
-        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -650,7 +656,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}
     assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
     assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
     a_type = _semantic._str_to_fp_type(a_type.value)
@@ -697,11 +703,15 @@ def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
 
 
 @builtin
-def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
+def tcgen05_commit(barrier, pred=True, descs=(), *, completion="all", _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
-    of 1 when all async tcgen05 MMA and copy instructions previously issued by
-    the thread are complete.
+    of 1 when prior async tcgen05 operations issued by the thread are complete.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen05 operations. On Rubin, ``completion="a_read"`` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen05 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -712,8 +722,12 @@ def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
             the preceding multiplication inputs. Defaults to ().
+        completion (str): "all" (default) or "a_read" (Rubin only).
     """
     pred = _semantic.to_tensor(pred)
     descs = _unwrap_if_constexpr(descs)
     descs = [d.handle for d in descs]
-    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs)
+    completion = _unwrap_if_constexpr(completion)
+    if completion not in ("all", "a_read"):
+        raise ValueError("completion must be 'all' or 'a_read'")
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs, completion == "a_read")

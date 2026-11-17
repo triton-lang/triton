@@ -271,8 +271,18 @@ chooseWmmaInstruction(tt::DotOp dot, int wmmaVersion,
         {fp8e5, fp8e5, f32},
     });
   }
-  if (wmmaVersion == 3)
-    candidates.push_back({f32, f32, f32});
+  if (wmmaVersion == 3) {
+    Type fp8e4nv = b.getType<Float8E4M3FNType>();
+    Type fp8e5 = b.getType<Float8E5M2Type>();
+    candidates.append({
+        {f32, f32, f32},
+        {f16, f16, f16},
+        {fp8e4nv, fp8e4nv, f16},
+        {fp8e4nv, fp8e5, f16},
+        {fp8e5, fp8e4nv, f16},
+        {fp8e5, fp8e5, f16},
+    });
+  }
 
   // Use simple costmodel to define optimal set of the dot operands.
   // Most expensive - accuracy loss conversions:

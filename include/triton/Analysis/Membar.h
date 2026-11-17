@@ -422,6 +422,9 @@ protected:
                            bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
+  /// Completion scope, refined by a backend before joining pending state.
+  virtual CompletionSync getCompletionSync(Operation *operation);
+
   /// Whether pending thread effects must rendezvous before upcoming demands.
   virtual bool requiresThreadSync(const BlockInfo &pending,
                                   const BlockInfo &effects);

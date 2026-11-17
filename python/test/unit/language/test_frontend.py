@@ -1,12 +1,13 @@
 import collections
 import functools
+import inspect
 import itertools
 import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton._filecheck import filecheck_test, run_filecheck, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
@@ -18,6 +19,50 @@ from typing import NamedTuple
 # ===-----------------------------------------------------------------------===#
 
 
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dtype", [tl.float16, tl.bfloat16, tl.float32, tl.float64])
+@pytest.mark.parametrize("mode", ["", "consan", "fpsan", "consan, fpsan"])
+@pytest.mark.parametrize("scalar", [False, True])
+def test_fpsan_barrier_instrumentation_mode(frontend, dtype, mode, scalar):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, BARRIER: tl.constexpr, GLUON: tl.constexpr, SCALAR: tl.constexpr):
+        if SCALAR:
+            offsets = 0
+        elif GLUON:
+            offsets = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        else:
+            offsets = tl.arange(0, 128)
+        x = lang.load(X + offsets)
+        if BARRIER:
+            x = lang.fpsan.barrier(x)
+        lang.store(Y + offsets, x)
+
+    args = (MockTensor(dtype), MockTensor(dtype), True, frontend == "gluon", scalar)
+    module = run_parser(kernel, args=args, kwargs={"instrumentation_mode": mode})
+    assert module.verify()
+    ir = module.str_nodebug()
+    assert ("tt.fpsan_barrier" in ir) == ("fpsan" in mode)
+    if "fpsan" not in mode:
+        reference = run_parser(kernel, args=(*args[:2], False, *args[3:]), kwargs={"instrumentation_mode": mode})
+        # Ignore the symbol name, which contains the constexpr specialization.
+        assert ir[ir.index("("):] == reference.str_nodebug()[reference.str_nodebug().index("("):]
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("mode", ["", "fpsan"])
+def test_fpsan_barrier_integer_input(frontend, mode):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X):
+        lang.fpsan.barrier(lang.load(X))
+
+    with pytest.raises(CompilationError, match=r"fpsan\.barrier requires a floating-point input"):
+        run_parser(kernel, args=(MockTensor(tl.int32), ), kwargs={"instrumentation_mode": mode})
+
+
 @pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
 def test_jit_variadic_keyword_arguments(jit):
 
@@ -26,6 +71,67 @@ def test_jit_variadic_keyword_arguments(jit):
 
     with pytest.raises(TypeError, match=r"JIT functions do not support \*\*kwargs"):
         jit(kernel)
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("src, dst, rounding", [
+    (tl.float64, tl.float32, None),
+    (tl.float32, tl.float16, None),
+    (tl.float32, tl.bfloat16, "rtz"),
+    (tl.float32, tl.float8e5, "rtne"),
+    (tl.float16, tl.bfloat16, None),
+    (tl.float32, tl.float32, None),
+])
+@pytest.mark.parametrize("mode", ["", "consan", "fpsan", "consan, fpsan"])
+@pytest.mark.parametrize("scalar", [False, True])
+def test_fpsan_homomorphic_cast_instrumentation_mode(frontend, src, dst, rounding, mode, scalar):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, SPECIAL: tl.constexpr, GLUON: tl.constexpr, SCALAR: tl.constexpr, DTYPE: tl.constexpr,
+               ROUNDING: tl.constexpr):
+        if SCALAR:
+            offsets = 0
+        elif GLUON:
+            offsets = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        else:
+            offsets = tl.arange(0, 128)
+        x = lang.load(X + offsets)
+        if SPECIAL:
+            x = lang.fpsan.homomorphic_cast(x, DTYPE, ROUNDING)
+        else:
+            x = x.to(DTYPE, fp_downcast_rounding=ROUNDING)
+        lang.store(Y + offsets, x)
+
+    args = (MockTensor(src), MockTensor(dst), True, frontend == "gluon", scalar, dst, rounding)
+    module = run_parser(kernel, args=args, kwargs={"instrumentation_mode": mode})
+    assert module.verify()
+    ir = module.str_nodebug()
+    assert ("tt.fpsan_homomorphic_cast" in ir) == ("fpsan" in mode and src != dst)
+    if "fpsan" not in mode:
+        reference = run_parser(kernel, args=(*args[:2], False, *args[3:]), kwargs={"instrumentation_mode": mode})
+        reference_ir = reference.str_nodebug()
+        assert ir[ir.index("("):] == reference_ir[reference_ir.index("("):]
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("mode", ["", "fpsan"])
+@pytest.mark.parametrize("src, dst, rounding, error", [
+    (tl.int32, tl.float16, None, "requires floating-point"),
+    (tl.float32, tl.int16, None, "requires floating-point"),
+    (tl.float16, tl.float32, None, "must not be wider"),
+    (tl.float32, tl.float16, "bad", "Invalid rounding mode"),
+    (tl.float16, tl.bfloat16, "rtne", "only for truncating fp conversions"),
+])
+def test_fpsan_homomorphic_cast_invalid_input(frontend, mode, src, dst, rounding, error):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, DTYPE: tl.constexpr, ROUNDING: tl.constexpr):
+        lang.fpsan.homomorphic_cast(lang.load(X), DTYPE, ROUNDING)
+
+    with pytest.raises(CompilationError, match=error):
+        run_parser(kernel, args=(MockTensor(src), dst, rounding), kwargs={"instrumentation_mode": mode})
 
 
 def doesnt_compile(kernel):
@@ -41,6 +147,54 @@ def doesnt_compile(kernel):
 @triton.jit
 def anchor(v):
     pass
+
+
+def test_function_argument_hints_scalar_and_pointer():
+
+    @triton.jit(do_not_specialize=["stride"], do_not_specialize_on_alignment=["output"])
+    def kernel(output, stride):
+        # CHECK-DAG: [[PTR:%.*]] = tt.annotate %arg0 {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<i32>
+        # CHECK-DAG: [[STRIDE:%.*]] = tt.annotate %arg1 {tt.divisibility = dense<8> : tensor<1xi32>} : i32
+        # CHECK: [[BEFORE:%.*]] = arith.addi [[STRIDE]],
+        before = stride + 1
+        tl.multiple_of(stride, 4)
+        tl.multiple_of(stride, 8)
+        tl.multiple_of(output, 16)
+        # CHECK: [[AFTER:%.*]] = arith.addi [[STRIDE]],
+        after = stride + 2
+        # CHECK: tt.call @{{.*}}anchor{{.*}}([[BEFORE]])
+        anchor(before)
+        # CHECK: tt.store [[PTR]], [[AFTER]]
+        tl.store(output, after)
+
+    module = run_parser(kernel, args=(MockTensor(tl.int32), 40))
+    assert module.verify()
+    assert module.str_nodebug().count("tt.annotate") == 2
+    run_filecheck("kernel", module.str_nodebug(), inspect.getsource(kernel.fn))
+
+
+def test_function_argument_hints_tensor():
+
+    @triton.jit
+    def helper(offsets, repeated):
+        # CHECK-LABEL: tt.func private @{{.*}}helper
+        # CHECK-DAG: [[OFFSETS:%.*]] = tt.annotate %arg0 {tt.contiguity = dense<8> : tensor<1xi32>, tt.divisibility = dense<8> : tensor<1xi32>} : tensor<128xi32>
+        # CHECK-DAG: [[REPEATED:%.*]] = tt.annotate %arg1 {tt.constancy = dense<8> : tensor<1xi32>} : tensor<128xi32>
+        tl.max_contiguous(tl.multiple_of(offsets, 8), 8)
+        tl.max_constancy(repeated, 8)
+        # CHECK: [[RESULT:%.*]] = arith.addi [[OFFSETS]], [[REPEATED]]
+        # CHECK: tt.return [[RESULT]]
+        return offsets + repeated
+
+    @triton.jit
+    def kernel(output):
+        offsets = tl.arange(0, 128)
+        values = helper(offsets, tl.full((128, ), 4, tl.int32))
+        tl.store(output + offsets, values)
+
+    module = run_parser(kernel, args=(MockTensor(tl.int32), ))
+    assert module.verify()
+    run_filecheck("helper", module.str_nodebug(), inspect.getsource(helper.fn))
 
 
 @pytest.mark.parametrize("op", ["min", "max"])
@@ -155,6 +309,20 @@ def test_scalar_constant_preserves_signed_zero(dtype):
     run_filecheck_test(kernel, args=(dtype, ))
 
 
+def test_16bit_float_constant_rounded_once():
+
+    @triton.jit
+    def kernel():
+        # Just above a tie between two 16-bit values: rounding to fp32 first
+        # drops the 2**-30 that breaks the tie, and the tie rounds down.
+        # CHECK: arith.constant 1.000980e+00 : f16
+        anchor(tl.full((), 1 + 2**-11 + 2**-30, tl.float16))
+        # CHECK: arith.constant 1.007810e+00 : bf16
+        anchor(tl.full((), 1 + 2**-8 + 2**-30, tl.bfloat16))
+
+    run_filecheck_test(kernel)
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.int1, tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64],
                          ids=str)
@@ -194,20 +362,29 @@ def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
     run_parser(kernel, args=(op, dtype, value, expected_dtype))
 
 
-@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
-@pytest.mark.parametrize("other_dtype, expected_dtype", [(tl.float32, tl.float32), (tl.bfloat16, tl.float16)])
-def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
+@pytest.mark.parametrize("op, lhs_dtype, rhs_dtype, expected_dtype", [
+    (tl.minimum, tl.float16, tl.float32, tl.float32),
+    (tl.minimum, tl.float16, tl.bfloat16, tl.float16),
+    (tl.maximum, tl.float16, tl.float32, tl.float32),
+    (tl.maximum, tl.float16, tl.bfloat16, tl.float16),
+    (tl.clmul, tl.int8, tl.uint8, tl.uint8),
+    (tl.clmul, tl.int16, tl.int32, tl.int32),
+    (tl.clmul, tl.uint32, tl.int64, tl.int64),
+    (tl.clmul, tl.int64, tl.uint64, tl.uint64),
+    (tl.clmul, tl.int1, tl.int1, tl.int1),
+])
+def test_binary_math_tensor_promotion(op, lhs_dtype, rhs_dtype, expected_dtype):
 
     @triton.jit
-    def kernel(op: tl.constexpr, other_dtype: tl.constexpr, expected_dtype: tl.constexpr):
-        x = tl.full((8, ), 1, tl.float16)
-        y = tl.full((), 0.0, other_dtype)
+    def kernel(op: tl.constexpr, lhs_dtype: tl.constexpr, rhs_dtype: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, lhs_dtype)
+        y = tl.full((), 0, rhs_dtype)
         lhs = op(x, y)
         rhs = op(y, x)
         tl.static_assert(lhs.dtype == expected_dtype)
         tl.static_assert(rhs.dtype == expected_dtype)
 
-    run_parser(kernel, args=(op, other_dtype, expected_dtype))
+    run_parser(kernel, args=(op, lhs_dtype, rhs_dtype, expected_dtype))
 
 
 @pytest.mark.parametrize("scalar", [False, True])
@@ -359,6 +536,10 @@ def test_comparison_scalar_out_of_range(op, reverse, dtype, value):
     (tl.fdiv, tl.float16, 2.0, tl.float32),
     (tl.fdiv, tl.bfloat16, 2.0, tl.float32),
     (tl.fdiv, tl.float64, 2.0, tl.float64),
+    (tl.clmul, tl.int8, 3, tl.int8),
+    (tl.clmul, tl.uint16, 3, tl.uint16),
+    (tl.clmul, tl.int32, 3, tl.int32),
+    (tl.clmul, tl.uint64, 3, tl.uint64),
 ])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_binary_math_scalar_promotion(op, dtype, value, expected_dtype, reverse):
@@ -405,6 +586,22 @@ def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, i
             run_parser(kernel, args=args)
     else:
         run_parser(kernel, args=args)
+
+
+@pytest.mark.parametrize("dtype, value", [(tl.float16, 1), (tl.float32, 1), (tl.float64, 1), (tl.int32, 0.5)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_clmul_invalid_dtype(dtype, value, reverse):
+
+    @triton.jit
+    def kernel(X, VALUE: tl.constexpr, REVERSE: tl.constexpr):
+        x = tl.load(X)
+        if REVERSE:
+            tl.clmul(VALUE, x)
+        else:
+            tl.clmul(x, VALUE)
+
+    with pytest.raises(CompilationError, match="clmul requires integer operands"):
+        run_parser(kernel, args=(MockTensor(dtype), value, reverse))
 
 
 def test_umulhi_scalar_out_of_range():
@@ -1933,6 +2130,18 @@ def test_dot_fp16_accumulator():
         tl.dot(a, b, c)
 
     run_parser(fp16_acc_kernel)
+
+
+def test_dot_acc_dtype_mismatch():
+
+    @triton.jit
+    def kernel():
+        c = tl.zeros([32, 32], dtype=tl.float32)
+        a = tl.full([32, 32], 1, dtype=tl.int8)
+        tl.dot(a, a, c)
+
+    with pytest.raises(CompilationError, match="expected accumulator dtype int32"):
+        run_parser(kernel)
 
 
 # ===-----------------------------------------------------------------------===#

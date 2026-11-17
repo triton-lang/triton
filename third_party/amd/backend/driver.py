@@ -344,10 +344,19 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        import ctypes
+
         try:
-            import torch
-            return torch.cuda.is_available() and (torch.version.hip is not None)
-        except ImportError:
+            libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
+            # AMD's reference for querying compute-capable devices:
+            # https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___device.html
+            get_device_count = libhip.hipGetDeviceCount
+            get_device_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
+            get_device_count.restype = ctypes.c_int
+            count = ctypes.c_int()
+            status = get_device_count(ctypes.byref(count))
+            return status == 0 and count.value > 0
+        except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
             return False
 
     def map_python_to_cpp_type(self, ty: str) -> str:

@@ -17,6 +17,26 @@ namespace mlir::triton {
 namespace mlir::triton {
 namespace {
 
+class AMDMembarAnalysis : public MembarAnalysis {
+public:
+  using MembarAnalysis::MembarAnalysis;
+
+protected:
+  // Consume the earlier wait-count pass's scope proof before merging state.
+  CompletionSync getCompletionSync(Operation *op) override {
+    if (isa<gpu::AsyncWaitOp, amdgpu::AsyncWaitOp, amdgpu::AsyncTDMWait,
+            amdgpu::AsyncTDMIntrinsicWait>(op)) {
+      if (auto scope = op->getAttrOfType<StringAttr>(
+              amdgpu::kAsyncCompletionScopeAttrName))
+        return scope.getValue() == "shared" ? CompletionSync::Shared
+                                            : CompletionSync::All;
+    }
+    // Preserve the default classification for IR that has not gone through
+    // UpdateAsyncWaitCount, including standalone Membar analysis tests.
+    return MembarAnalysis::getCompletionSync(op);
+  }
+};
+
 struct TritonAMDGPUMembar
     : public impl::TritonAMDGPUMembarBase<TritonAMDGPUMembar> {
   using TritonAMDGPUMembarBase::TritonAMDGPUMembarBase;
@@ -40,7 +60,7 @@ struct TritonAMDGPUMembar
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
 
     ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter);
-    membarPass.run();
+    membarPass.run<AMDMembarAnalysis>();
     // Reschedule local rendezvous while waits and memory effects are explicit,
     // before ConSan and LLVM lowering.
     AMD::scheduleMembarBarriers(mod);

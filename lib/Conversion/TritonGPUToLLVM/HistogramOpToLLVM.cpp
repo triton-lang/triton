@@ -114,17 +114,20 @@ static void accumulateSharedHistogram(
     int numThreadPerWarp, Value threadId, Value threadPred, int numWarps,
     const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Initialize the shared memory with zeros.
-  int64_t numElementPerThread =
-      ceil<int64_t>(numBins, numThreadPerWarp * numWarps);
-  for (int i = 0; i < numElementPerThread; ++i) {
-    Value offset =
-        b.add(threadId, b.i32_val((i * numWarps * numThreadPerWarp)));
-    offset = b.urem(offset, b.i32_val(numBins));
+  int numThreads = numThreadPerWarp * numWarps;
+  int binsPerThread = ceil<int>(numBins, numThreads);
+  int vec = std::min(4, binsPerThread);
+  // Histogram scratch is at least 16-byte aligned. Give each thread consecutive
+  // bins so one shared store can clear up to four counters.
+  Value zeros = vec == 1 ? b.i32_val(0) : Value(b.null(vec_ty(i32_ty, vec)));
+  Value firstBin = b.mul(threadId, b.i32_val(vec));
+  for (int i = 0; i < binsPerThread; i += vec) {
+    Value offset = b.add(firstBin, b.i32_val(i * numThreads));
+    if (numBins < numThreads)
+      offset = b.urem(offset, b.i32_val(numBins));
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, offset);
-    targetInfo.storeShared(rewriter, loc, sharedMemPtr, b.i32_val(0),
-                           b.true_val());
+    targetInfo.storeShared(rewriter, loc, sharedMemPtr, zeros, b.true_val());
   }
   b.barrier(triton::gpu::AddrSpace::Local);
 

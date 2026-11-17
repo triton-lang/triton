@@ -31,6 +31,7 @@
 #include "mlir/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h.inc"
 #include "nvidia/include/Dialect/NVGPU/IR/OpsEnums.h.inc"
+#include "triton/Dialect/Triton/IR/Traits.h"
 
 #define GET_ATTRDEF_CLASSES
 #include "nvidia/include/Dialect/NVGPU/IR/NVGPUAttrDefs.h.inc"

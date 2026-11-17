@@ -59,6 +59,17 @@ def test_bf16_to_fp16_rounding_and_overflow():
     np.testing.assert_array_equal(result.data.view(np.uint16), expected)
 
 
+@pytest.mark.parametrize("method, value, expected", [
+    # Just above a tie between two 16-bit values: rounding to fp32 first drops
+    # the 2**-30 that breaks the tie, and the tie rounds down.
+    ("get_fp16", 1 + 2**-11 + 2**-30, 0x3C01),
+    ("get_bf16", 1 + 2**-8 + 2**-30, 0x3F81),
+])
+def test_16bit_float_constant_rounded_once(method, value, expected):
+    result = getattr(interpreter.InterpreterBuilder(), method)(value)
+    assert result.data.view(np.uint16)[0] == expected
+
+
 def test_fp16_to_bf16_exact_values():
     bits = np.array([0x0000, 0x8000, 0x3C00, 0xBC00, 0x3C08, 0x0001, 0x7C00, 0xFC00, 0x7E00], dtype=np.uint16)
     expected = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x3F81, 0x3380, 0x7F80, 0xFF80, 0x7FC0], dtype=np.uint16)
@@ -206,3 +217,59 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("shape", [(), (4, )])
+def test_fpsan_namespace_normal_execution(shape):
+
+    def kernel(shape: tl.constexpr):
+        x = tl.full(shape, 1.0001, tl.float32)
+        return tl.fpsan.barrier(x), tl.fpsan.homomorphic_cast(x, tl.float16)
+
+    barrier = tl.fpsan.barrier
+    cast = tl.fpsan.homomorphic_cast
+    unchanged, narrowed = interpreter.InterpretedFunction(kernel)(shape)
+    expected = np.full(shape, 1.0001, dtype=np.float32)
+    np.testing.assert_array_equal(unchanged.handle.data, expected)
+    np.testing.assert_array_equal(narrowed.handle.data, expected.astype(np.float16))
+    assert unchanged.dtype == tl.float32
+    assert narrowed.dtype == tl.float16
+    assert tl.fpsan.barrier is barrier
+    assert tl.fpsan.homomorphic_cast is cast
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nested_helper_restores_language(tmp_path, monkeypatch, fail):
+    import importlib.util
+    import torch
+
+    source = tmp_path / "core_helper.py"
+    source.write_text("import triton.language.core as core\n"
+                      "def helper(out, fail):\n"
+                      "    core.store(out, core.full((), 7, core.int32))\n"
+                      "    if fail:\n"
+                      "        raise ValueError('helper failed')\n")
+    spec = importlib.util.spec_from_file_location("core_helper", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    helper = interpreter.InterpretedFunction(module.helper)
+
+    def caller(out, helper: tl.constexpr, fail: tl.constexpr):
+        helper(out, fail)
+        tl.store(out, tl.load(out) + 1)
+
+    original = tl.core.full
+    # Restore module attributes even if the regression assertion fails.
+    for name, value in vars(tl.core).copy().items():
+        monkeypatch.setattr(tl.core, name, value)
+    output = torch.zeros((), dtype=torch.int32)
+    kernel = interpreter.InterpretedFunction(caller)
+    if fail:
+        with pytest.raises(interpreter.InterpreterError, match="helper failed"):
+            kernel[(1, )](output, helper, fail)
+    else:
+        kernel[(1, )](output, helper, fail)
+    assert output.item() == (7 if fail else 8)
+    assert tl.core.full is original
+    with pytest.raises(ValueError, match="_semantic"):
+        tl.core.full((), 7, tl.int32)

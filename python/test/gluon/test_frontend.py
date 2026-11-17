@@ -46,6 +46,24 @@ def test_chained_comparison_range():
 
 @filecheck_test
 @gluon.jit
+def test_gdc_arch_exports():
+    # CHECK-LABEL: test_gdc_arch_exports
+    # CHECK: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    hopper.gdc.wait()
+    hopper.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    blackwell.gdc.wait()
+    blackwell.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    rubin.gdc.wait()
+    rubin.gdc.launch_dependents()
+
+
+@filecheck_test
+@gluon.jit
 def test_atomic_poll_tensor():
     # CHECK-LABEL: test_atomic_poll_tensor
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
@@ -2289,6 +2307,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("kind", ["reduce", "scan", "map_elementwise"])
+def test_callback_rejects_indirect_load(kind, capfd):
+
+    @gluon.jit(noinline=True)
+    def enabled(ptr):
+        return ttgl.load(ptr) != 0
+
+    @gluon.jit
+    def choose(lhs, rhs):
+        return ttgl.where(enabled(lhs), lhs, rhs)
+
+    @gluon.jit
+    def kernel(ptr, KIND: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if KIND == "reduce":
+            ttgl.reduce(ptr + offsets, 0, choose)
+        elif KIND == "scan":
+            ttgl.associative_scan(ptr + offsets, 0, choose)
+        else:
+            ttgl.map_elementwise(choose, ptr + offsets, ptr + offsets + 1)
+
+    with pytest.raises(CompilationError):
+        run_parser(kernel, *make_args(MockTensor(ttgl.int32), kind))
+    assert f"'tt.load' op is not allowed in a tt.{kind} callback" in capfd.readouterr().err
+
+
 @gluon.jit
 def pair_add(a0, a1, b0, b1):
     return a0 + b0, a1 + b1
@@ -2465,6 +2509,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def generic_linear_layout_kernel():
+    # Warp basis 17 = 16 ^ 1 requires a generic linear layout.
+    ll: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=[[2], [1], [8], [32], [64]],
+                                                      warp_bases=[[17], [4]], block_bases=[], shape=[128])
+    ttgl.arange(0, 128, layout=ll)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_generic_linear_layout(target, capfd):
+    if target.backend != "hip":
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            run_parser(generic_linear_layout_kernel, target=target)
+        assert "should be permutation matrices with zero columns" in "".join(capfd.readouterr())
+    else:
+        mod = run_parser(generic_linear_layout_kernel, target=target)
+        assert "#ttg.generic_linear" in mod.str_nodebug()
+
+
 @filecheck_test
 @gluon.jit
 def test_dot_operand_layout():
@@ -2622,6 +2685,59 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
         ttgl.static_assert(conflicts == ref_conflicts)
 
     run_parser(kernel, args=args, target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
+    # swizzled layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 3),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 4, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 8, order=[1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 7),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 8, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 16, order=[1, 0]), [256, 64], 16, 0),
+    # padded layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8], [512, 16]], [256, 64], [1, 0]), [256, 64], 16, 2),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout([[512, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0],
+                                           [1, 0], [2, 0], [4, 0], [8, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout(
+         [[64, 8]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [2, 0], [1, 0], [8, 0], [4, 0], [16, 0], [32, 0],
+                     [64, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(1, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [64, 256], [0, 1]), [64, 256], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [32, 32, 16], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 4]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 0),
+])
+def test_bank_conflicts_amd(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
+    dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
+    args = (ttgl.distributed_type(dtype, shape,
+                                  reg_layout), ttgl.shared_memory_descriptor_type(dtype, shape, shared_layout,
+                                                                                  shape), ref_conflicts)
+
+    @gluon.jit
+    def kernel(reg_type: ttgl.constexpr, shared_type: ttgl.constexpr, ref_conflicts: ttgl.constexpr):
+        conflicts: ttgl.constexpr = ttgl.bank_conflicts(reg_type, shared_type)
+        ttgl.static_assert(conflicts == ref_conflicts)
+
+    run_parser(kernel, args=args, target=HIP_TARGET_CDNA4)
 
 
 @pytest.mark.parametrize(

@@ -31,8 +31,8 @@ TMAMessageLayouts getTMAMessageLayouts(ttg::MemDescType type,
     auto lastDim = StringAttr::get(ctx, "dim" + Twine(type.getRank() - 1));
     unpacked = LinearLayout::zeros1D(1, message, lastDim, 2) * packed;
   }
-  auto shared =
-      invertAndComposeLocal(ttg::toLinearLayout(type), packed, {block});
+  auto shared = invertAndComposeLocal(ttg::toLinearLayoutIgnoringPadding(type),
+                                      packed, {block});
   return {std::move(packed), std::move(unpacked), std::move(shared)};
 }
 

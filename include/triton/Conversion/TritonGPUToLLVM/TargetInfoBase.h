@@ -6,6 +6,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -48,6 +49,13 @@ public:
   virtual void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
                             Value value, Value pred,
                             MemSyncScope scope) const = 0;
+  // Release in every thread/warp before the CTA or cluster barrier that
+  // precedes a release atomic at `scope`; the atomic itself may run in a single
+  // thread after that barrier. Targets whose release by one thread does not
+  // cover global writes made earlier by other warps must release this thread's
+  // writes at `scope` here.
+  virtual void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                          MemSyncScope scope) const {}
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
@@ -86,8 +94,13 @@ public:
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
-  virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                          int i) const = 0;
+  // Return the shuffled value and whether the source lane is in bounds.
+  virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
+                                            Location loc, Value val,
+                                            int delta) const = 0;
+  virtual std::pair<Value, Value> shuffleDown(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -145,6 +158,7 @@ public:
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
+  virtual bool supportNativeBF16AtomicAdd() const { return false; }
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
@@ -160,6 +174,8 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
+  // Whether to use three interleaved register chains for a Boolean reduction.
+  virtual bool preferThreePredicateChains() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means

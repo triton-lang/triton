@@ -1131,7 +1131,10 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
     ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
@@ -1163,7 +1166,10 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ^bb3:
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
@@ -1301,7 +1307,10 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
     ttg.barrier local
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  partition0() num_warps(4) {
+    ttg.warp_return
+  // CHECK: () -> ()
   } : () -> ()
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
@@ -1749,6 +1758,37 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   // CHECK-NOT: ttg.barrier local
   // CHECK: ttg.local_load
   %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
+// CHECK-LABEL: masked_buffer_indices
+tt.func @masked_buffer_indices(%value: tensor<128x128xf16>, %cursor: i32) {
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable>
+  %next = arith.addi %cursor, %c1 : i32
+
+  %a = arith.andi %cursor, %c3 : i32
+  %b = arith.andi %c3, %next : i32
+  %dst = ttg.memdesc_index %ring[%a] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src = ttg.memdesc_index %ring[%b] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %value, %dst : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %read = ttg.local_load %src : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+
+  // Masking out bit zero lets cursor 0 and its successor both select slot 0.
+  %c = arith.andi %cursor, %c2 : i32
+  %d = arith.andi %next, %c2 : i32
+  %dst2 = ttg.memdesc_index %ring[%c] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src2 = ttg.memdesc_index %ring[%d] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %read, %dst2 : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %read2 = ttg.local_load %src2 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
   tt.return
 }
 

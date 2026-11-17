@@ -71,8 +71,10 @@ public:
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
-  Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                  int i) const override;
+  std::pair<Value, Value> shuffleUp(RewriterBase &rewriter, Location loc,
+                                    Value val, int delta) const override;
+  std::pair<Value, Value> shuffleDown(RewriterBase &rewriter, Location loc,
+                                      Value val, int delta) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -88,6 +90,11 @@ public:
                   triton::ReduceOp op, unsigned reduceLaneIdMask,
                   unsigned broadcastLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
+  bool preferThreePredicateChains() const override {
+    // ptxas can fuse comparisons into each chain and merge the three
+    // partial predicates with one PLOP3.
+    return true;
+  }
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -107,6 +114,9 @@ public:
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;
+  bool supportNativeBF16AtomicAdd() const override {
+    return getComputeCapability() >= 90;
+  }
 
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {

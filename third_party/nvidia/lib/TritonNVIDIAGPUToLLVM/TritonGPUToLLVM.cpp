@@ -216,8 +216,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
       typeConverter, targetInfo, patterns, benefit);
   mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
       typeConverter, patterns, patternBenefitNvidiaTensorCoreSubviewPattern);
-  mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
-                                                  patterns, benefit);
+  mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
+      typeConverter, targetInfo, axisInfoAnalysis, patterns, benefit);
   populateDotOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                               benefit);
   populateElementwiseOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,

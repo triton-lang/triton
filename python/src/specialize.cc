@@ -230,6 +230,15 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!dtype_str)
     return {};
 
+  if (!has_layout) {
+    auto format = from_new_ref(PyObject_GetAttrString(arg, "fp6_format"));
+    if (!format)
+      return {};
+    if (format.ptr() != Py_None) {
+      desc_cstr += "fp6";
+      dtype_str = std::move(format);
+    }
+  }
   const char *dtype_cstr = unicode_as_utf8(dtype_str.ptr());
   if (!dtype_cstr)
     return {};

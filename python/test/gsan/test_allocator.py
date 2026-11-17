@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 
 import pytest
 import torch
 import triton
+from triton._C.libtriton import gsan_testing
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton._internal_testing import is_cuda, run_in_process
 from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator, has_live_allocations, reset
 from triton.experimental.gsan import _stream_sync
-from triton._C.libtriton.gsan_testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
+from triton.experimental.gsan._testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
@@ -35,6 +37,30 @@ from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
 # This tests cases where AllocNode.size != AllocNode.allocSize
 _ODD_LARGE_ALLOCATION_SIZE = 4 * 1024 * 1024 + 1
+
+
+@pytest.mark.parametrize("reserve_base", [0x200000, 0x1234560000, (1 << 44) - 0x200000])
+@pytest.mark.parametrize("granularity", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("write_once", [False, True])
+def test_shadow_addressing_unaligned_reservation(reserve_base, granularity, write_once):
+    pool_size = gsan_testing.POOL_RESERVE_SIZE_BYTES
+    pool_index = 2 * (granularity.bit_length() - 1) + write_once
+    shadow_base = reserve_base + pool_index * pool_size
+    data_base = shadow_base + pool_size // 2
+    cell_size = 4 if write_once else 24
+    # The buddy root is bounded by the available data and shadow space.
+    capacity = min(pool_size // 2, pool_size // 2 // cell_size * granularity)
+    capacity = 1 << (capacity.bit_length() - 1)
+    for offset in [0, 1, granularity - 1, granularity, 0x200000, capacity - 1]:
+        address = data_base + offset
+        assert gsan_testing.is_gsan_managed(address, reserve_base)
+        assert gsan_testing.shadow_granularity(address, reserve_base) == granularity
+        assert gsan_testing.is_write_once_address(address, reserve_base) == write_once
+        assert gsan_testing.shadow_cell_size(address, reserve_base) == cell_size
+        assert gsan_testing.shadow_cell_address(address,
+                                                reserve_base) == shadow_base + offset // granularity * cell_size
+    for address in [0, reserve_base - 1, shadow_base, data_base - 1, reserve_base + 10 * pool_size, (1 << 64) - 1]:
+        assert not gsan_testing.is_gsan_managed(address, reserve_base)
 
 
 def _run_configure_check(device_ranks: dict[int, int], num_devices: int) -> None:
@@ -65,6 +91,17 @@ def _run_freeze_config_check() -> None:
         assert "configuration is already frozen" in str(exc)
     else:
         raise AssertionError("expected freeze_config() to reject later config changes")
+
+
+def _run_export_before_initialization_check() -> None:
+    with pytest.raises(RuntimeError, match="gsanExportAllocationHandles failed"):
+        export_allocation_handles(0, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_export_allocation_handles_before_initialization():
+    result = run_in_process(_run_export_before_initialization_check)
+    assert result.exc is None
 
 
 def _run_allocator_freezes_config_check(shadow_granularity: int) -> None:
@@ -437,7 +474,7 @@ def test_default_topology_uses_cuda_device_indices():
 def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     pool_index = 2 * (1, 2, 4, 8, 16).index(shadow_granularity)
-    real_base = reserve_ptr + (2 * pool_index + 1) * reserve_size // 32
+    real_base = reserve_ptr + (2 * pool_index + 1) * gsan_testing.POOL_RESERVE_SIZE_BYTES // 2
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)
@@ -654,6 +691,50 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
         if imported_ptr != 0:
             free_allocation(imported_ptr, device)
         free(real_ptr)
+
+
+def _run_byte_pool_import_capacity_check():
+    device = torch.cuda.current_device()
+    block_size = 128 * 1024**2
+    capacity = 128 * 1024**3
+    handle_type = ShareableHandleType.POSIX_FILE_DESCRIPTOR
+    with ExitStack() as cleanup:
+        real_ptr = gsan_malloc(block_size, device, shadow_granularity=1)
+        assert real_ptr != 0
+        cleanup.callback(gsan_free, real_ptr, device)
+        real_fd, shadow_fd, alloc_size, granularity = export_allocation_handles(real_ptr, handle_type,
+                                                                                include_granularity=True)
+        cleanup.callback(os.close, real_fd)
+        cleanup.callback(os.close, shadow_fd)
+        assert alloc_size == block_size
+        assert granularity == 1
+
+        # Reuse one physical allocation to fill the pool with peer mappings.
+        # Only 128 MiB of data and 3 GiB of shadow storage are physically backed.
+        pointers = {real_ptr}
+        for _ in range(capacity // block_size - 1):
+            imported_ptr = import_allocation_handles(real_fd, shadow_fd, alloc_size, device, handle_type,
+                                                     shadow_granularity=granularity)
+            assert imported_ptr != 0
+            cleanup.callback(free_allocation, imported_ptr, device)
+            assert imported_ptr not in pointers
+            pointers.add(imported_ptr)
+
+        assert max(pointers) - min(pointers) == capacity - block_size
+        assert gsan_malloc(8, device, shadow_granularity=1) == 0
+
+        # Exercise both mappings at the far end of the enlarged address range.
+        last_ptr = max(pointers)
+        uint8_cuda_tensor_from_ptr(last_ptr, 1, device).fill_(17)
+        assert uint8_cuda_tensor_from_ptr(real_ptr, 1, device).item() == 17
+        uint8_cuda_tensor_from_ptr(shadow_cell_address(last_ptr), 1, device).fill_(23)
+        assert uint8_cuda_tensor_from_ptr(shadow_cell_address(real_ptr), 1, device).item() == 23
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_byte_pool_import_capacity():
+    result = run_in_process(_run_byte_pool_import_capacity_check)
+    assert result.exc is None
 
 
 @pytest.mark.parametrize("granularity", [0, 3, 32, -1, True, 1.0, "1"])

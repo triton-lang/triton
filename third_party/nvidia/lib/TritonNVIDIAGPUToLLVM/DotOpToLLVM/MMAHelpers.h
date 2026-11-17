@@ -64,7 +64,7 @@ public:
     auto ctx = memTy.getContext();
     auto kOffset = str_attr("offset");
     // Keep the allocation layout so descriptor tiling can handle subviews.
-    auto ll = toLinearLayout(memTy);
+    auto ll = toLinearLayoutIgnoringPadding(memTy);
     unsigned bitwidth = memTy.getElementTypeBitWidth();
     if (isFp4) {
       auto dims = to_vector(ll.getOutDimNames());

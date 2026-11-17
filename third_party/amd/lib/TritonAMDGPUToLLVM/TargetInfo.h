@@ -64,6 +64,8 @@ public:
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
+  void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                  MemSyncScope scope) const override;
   void clusterBarrier(Location loc, RewriterBase &rewriter,
                       Operation *sourceOp) const override;
 
@@ -85,8 +87,10 @@ public:
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
-  Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                  int i) const override;
+  std::pair<Value, Value> shuffleUp(RewriterBase &rewriter, Location loc,
+                                    Value val, int delta) const override;
+  std::pair<Value, Value> shuffleDown(RewriterBase &rewriter, Location loc,
+                                      Value val, int delta) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,

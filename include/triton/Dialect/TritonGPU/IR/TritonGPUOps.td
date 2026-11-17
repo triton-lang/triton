@@ -176,6 +176,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 }
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
+  FoldTruePredicate,
   GlobalToLocalCopyTrait,
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -550,6 +551,7 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
 }
 
 def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
+  FoldTruePredicate,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
   OptionalTypesMatchWith<"mask type matches values type",
@@ -700,7 +702,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
     The "default" region of the op represents the code executed by the currently
     executing warp group. This region is allowed to implicitly capture. The op
-    contains a number of "partition" regions that are isolated from above. They
+    contains one or more "partition" regions that are isolated from above. They
     must be isolated because these regions represent different layout domains,
     as the number of warps is different.
 

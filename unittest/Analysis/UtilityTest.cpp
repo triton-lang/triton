@@ -154,8 +154,8 @@ TEST(Analysis, ReduceCommutativity) {
         tt.reduce.return %r0, %r1 : f32, f32
       )mlir",
        false},
-      {"side effects are unsupported", R"mlir(
-        tt.store %ptr, %a0 : !tt.ptr<f32>
+      {"printing one operand is order-dependent", R"mlir(
+        tt.print "lhs" {hex = false, isSigned = array<i32: 0>} : %a0 : f32
         %r0 = arith.addf %a0, %b0 : f32
         %r1 = arith.addf %a1, %b1 : f32
         tt.reduce.return %r0, %r1 : f32, f32
@@ -177,7 +177,7 @@ TEST(Analysis, ReduceCommutativity) {
     std::string source = R"mlir(
       module {
         tt.func @test(%x: tensor<2xf32>, %y: tensor<2xf32>,
-                      %c: f32, %d: f32, %ptr: !tt.ptr<f32>) {
+                      %c: f32, %d: f32) {
           %r:2 = "tt.reduce"(%x, %y) <{axis = 0 : i32}> ({
           ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
     )mlir";

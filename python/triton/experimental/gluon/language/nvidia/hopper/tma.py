@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
+from triton._utils import validate_fp6_box
 from triton.language.core import base_type, base_value, _CachePolicy
 from ..ampere import CachePolicy
 import triton.experimental.gluon.language._core as ttgl
@@ -49,11 +50,12 @@ class _tensor_descriptor_type_base(base_type):
 
     @property
     def nbytes_per_cta(self) -> int:
+        nbytes = self.block_type.nbytes
+        if self.layout.padding in ("b6x16_p32", "b6p2x16"):
+            nbytes = nbytes // 4 * 3
         cga_layout = self.layout.cga_layout
-        if len(cga_layout) == 0:
-            return self.block_type.nbytes
         num_cta_splits = 2**sum(any(x != 0 for x in basis) for basis in cga_layout)
-        return self.block_type.nbytes // num_cta_splits
+        return nbytes // num_cta_splits
 
     def _to_ir(self, builder: ir.builder) -> ir.type:
         raise NotImplementedError
@@ -169,6 +171,9 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     align_bytes = 16
     if desc.layout.fp4_padded:
         align_bytes = 64
+    if desc.layout.padding in ("b6x16_p32", "b6p2x16"):
+        # FP6 tensor coordinates count logical values.
+        align_bytes = min(desc.block_shape[-1], 128)
     dtype = desc.dtype
     assert dtype.primitive_bitwidth % 8 == 0, f"unexpected sub-byte dtype {dtype}"
     elem_bytes = dtype.primitive_bitwidth // 8
@@ -454,6 +459,12 @@ def make_tensor_descriptor(
 ) -> tensor_descriptor:
     padding_option = _unwrap_if_constexpr(padding_option)
     block_shape = _unwrap_if_constexpr(block_shape)
+    layout = _unwrap_if_constexpr(layout)
+    if layout.padding in ("b6x16_p32", "b6p2x16"):
+        if base.dtype.element_ty != ttgl.uint8:
+            raise ValueError("FP6 tensor maps require uint8 storage")
+        validate_fp6_box(block_shape[-1], _unwrap_if_constexpr(shape[-1]), map(_unwrap_if_constexpr, strides[:-1]),
+                         padding_option)
 
     ndim = len(shape)
     if not (1 <= ndim <= 5):

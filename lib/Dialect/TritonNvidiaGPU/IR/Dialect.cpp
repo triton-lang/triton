@@ -537,6 +537,8 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   auto bType = itf.getB().getType();
   auto dType = itf.getAccumulator().getType();
   auto barriers = itf.getCompletionBarriers();
+  if (barriers.size() != itf.getCompletionBarrierPreds().size())
+    return op->emitOpError("expected one predicate per completion barrier");
   if (!itf.isAsync() && !barriers.empty())
     return op->emitOpError("The op is synchronous but a barrier is present.");
   auto encoding = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());

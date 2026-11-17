@@ -104,6 +104,11 @@ bool isTensorCoreOp(Operation *op) {
       op);
 }
 
+bool isEarlyARelease(Operation *op) {
+  auto commit = dyn_cast<ttng::TCGen5CommitOp>(op);
+  return commit && commit.getEarlyARelease();
+}
+
 std::optional<int> maybeGetPartitionIdx(Operation *op) {
   Operation *parent = op->getParentOp();
   if (!parent)
@@ -126,13 +131,21 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
   if (isTensorCoreOp(op)) {
     assert(threadLayout.hasTCThreads() &&
            "TC thread class must exist when instrumenting a tensor-core op");
-    thread += threadLayout.tcThreadOffset;
+    thread += isEarlyARelease(op) ? threadLayout.tcAReadThreadOffset
+                                  : threadLayout.tcThreadOffset;
     return thread;
   }
   if (hooks.isCLCOp(op)) {
     assert(threadLayout.hasCLCThreads() &&
            "CLC thread class must exist when instrumenting a CLC op");
     thread += threadLayout.clcThreadOffset;
+    return thread;
+  }
+  if (hooks.usesAsyncCopyMbarrierArriveThread(op)) {
+    assert(threadLayout.hasAsyncCopyMbarrierArriveThreads() &&
+           "AsyncCopyMbarrierArrive thread class must exist when "
+           "instrumenting an async-copy mbarrier arrive op");
+    thread += threadLayout.asyncCopyMbarrierArriveThreadOffset;
     return thread;
   }
   return thread;
@@ -142,10 +155,10 @@ int getBaseThread(int thread, const AuxDataMap::ThreadLayout &threadLayout) {
   return thread % threadLayout.numBaseThreads;
 }
 
-// Peer threads are the equivalent threads in the TMA, TC, CLC and normal
-// thread classes.
-// If a thread is a base thread, return the mask with the peers, otherwise
-// return the mask with the thread itself.
+// Peer threads are the equivalent threads in the TMA, TC, TC A-read, CLC,
+// AsyncCopyMbarrierArrive and normal thread classes. If a thread is a base
+// thread, return the mask with the peers, otherwise return the mask with the
+// thread itself.
 uint64_t getThreadPeersMask(int thread,
                             const AuxDataMap::ThreadLayout &threadLayout) {
   uint64_t mask = 1ULL << thread;
@@ -154,8 +167,13 @@ uint64_t getThreadPeersMask(int thread,
       mask |= 1ULL << (thread + threadLayout.tmaThreadOffset);
     if (threadLayout.hasTCThreads())
       mask |= 1ULL << (thread + threadLayout.tcThreadOffset);
+    if (threadLayout.hasTCAReadThreads())
+      mask |= 1ULL << (thread + threadLayout.tcAReadThreadOffset);
     if (threadLayout.hasCLCThreads())
       mask |= 1ULL << (thread + threadLayout.clcThreadOffset);
+    if (threadLayout.hasAsyncCopyMbarrierArriveThreads())
+      mask |=
+          1ULL << (thread + threadLayout.asyncCopyMbarrierArriveThreadOffset);
   }
   return mask;
 }
@@ -430,10 +448,12 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc,
   }
   if (isTensorMemory)
     ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
-  // Conservatively finish poisoning across all CTAs before first use, which
-  // may access a peer's allocation.
+  // Finish poisoning across CTAs before a peer can access the allocation.
+  // Shared memory without cross-CTA access only needs local synchronization.
   bool multipleCTAs = ttg::lookupNumCTAs(b) > 1;
-  if (multipleCTAs)
+  bool needsClusterSync =
+      multipleCTAs && (isTensorMemory || hooks.supportsCrossCTASharedMemory());
+  if (needsClusterSync)
     hooks.createInitClusterBarrier(b);
   else
     ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
@@ -860,6 +880,7 @@ public:
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     if (failed(instrumentMemoryOperations(b, funcBuilder)))
       return failure();
+    auxData.createStartupClusterBarrier(hooks);
     initializeAllocations();
     return success();
   }
@@ -1189,9 +1210,10 @@ private:
                               tti::FunctionBuilder &funcBuilder) {
     b.setLoc(scatter.getLoc());
     b.setInsertionPointAfter(scatter);
-    bool isMultiCTA = ttg::lookupNumCTAs(scatter) > 1;
+    bool crossCTA =
+        ttg::lookupNumCTAs(scatter) > 1 && hooks.supportsCrossCTASharedMemory();
     auto synchronize = [&] {
-      if (isMultiCTA) {
+      if (crossCTA) {
         SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
         llvm::append_range(auxData.internalClusterBarriers, barriers);
       } else {
@@ -1202,7 +1224,7 @@ private:
     funcBuilder.createVerifyLocalScatterDestinationsCall(
         b, scatter.getDst(), scatter.getIndices(), scatter.getValues(),
         scatter.getAxis());
-    if (isMultiCTA)
+    if (crossCTA)
       synchronize();
   }
 
@@ -1455,6 +1477,9 @@ private:
     };
 
     for (const auto &effect : opInfo->operandEffects) {
+      int effectThread = thread;
+      if (effect.isTensorCoreARead && auxData.threadLayout.hasTCAReadThreads())
+        effectThread = baseThread + auxData.threadLayout.tcAReadThreadOffset;
       const auto *buf = std::get_if<Value>(&effect.buffer);
       bool isSharedMemory =
           !buf || isa<ttg::SharedMemorySpaceAttr>(
@@ -1487,10 +1512,12 @@ private:
         MemType memType = materialized.memType;
         bool invalidatedBarrier = false;
         auto verifyWrite = [&] {
-          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                         effect.operandName, readCTAs, opInfo->commitKind);
-          addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                        effect.operandName, effectCTAs, opInfo->commitKind);
+          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType,
+                         effectThread, effect.operandName, readCTAs,
+                         opInfo->commitKind);
+          addReadChecks(b, funcBuilder, op, bufferMask, pred, memType,
+                        effectThread, effect.operandName, effectCTAs,
+                        opInfo->commitKind);
         };
 
         if (materialized.barrierCTAs) {
@@ -1519,13 +1546,14 @@ private:
         if (effect.rw == RW::Read) {
           // For op that is reading, we only need to check if anything else
           // is writing to the same buffer.
-          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                         effect.operandName, effectCTAs, opInfo->commitKind);
+          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType,
+                         effectThread, effect.operandName, effectCTAs,
+                         opInfo->commitKind);
           if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
             funcBuilder.createSetReadVisibilityCall(
-                b, bufferMask, thread,
-                getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
-                op, effectCTAs, materialized.bufferIndex);
+                b, bufferMask, effectThread,
+                getThreadPeersMask(effectThread, auxData.threadLayout), pred,
+                memType, op, effectCTAs, materialized.bufferIndex);
           }
         } else {
           materializedWrites.push_back(materialized);
@@ -1586,9 +1614,18 @@ private:
         // If the op has barriers, we treat it as a commit emitted for each
         // barrier.
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          // Early A release does not establish TMEM completion.
+          if (isEarlyARelease(op) && memType == MemType::TENSOR_MEM)
+            continue;
           funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, memType, op, recipientCTAs);
         }
+        // Full completion also covers separately tracked A reads.
+        if (isTensorCoreOp(op) && !isEarlyARelease(op) &&
+            auxData.threadLayout.hasTCAReadThreads())
+          funcBuilder.createTrackVisibleAccessesCall(
+              b, barrier, baseThread + auxData.threadLayout.tcAReadThreadOffset,
+              combinedPred, MemType::SHARED_MEM, op, recipientCTAs);
         funcBuilder.createTrackProxyAccessesCall(
             b, barrier, baseThread, combinedPred, op, recipientCTAs);
       } else if (barrierInfo.trackingMode ==

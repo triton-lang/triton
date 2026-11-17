@@ -363,7 +363,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
 
 def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
   let hasCanonicalizeMethod = 1;
 
@@ -411,7 +411,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
@@ -627,7 +627,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let hasVerifier = 1;
 }
 
-def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface]> {
+def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [AtomicOpInterface, TMAStoreLikeOpInterface]> {
   let summary = "reduce result in gmem based on a TMA descriptor";
 
   let description = [{
@@ -649,6 +649,10 @@ def TTNG_AsyncTMAReduceOp : TTNG_Op<"async_tma_reduce", [TMAStoreLikeOpInterface
     attr-dict `:` qualified(type($desc)) `,` qualified(type($src))
   }];
   let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
     static bool isSupportedReduceKind(::mlir::triton::DescriptorReduceKind kind,
                                       ::mlir::Type elementType);
   }];
@@ -787,7 +791,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     UnitAttr:$is_async,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_unsigned
+    UnitAttr:$is_unsigned,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$a_type,
+    OptionalAttr<TT_ScaleDotElemTypeAttr>:$b_type
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -799,7 +805,9 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
       CArg<"ValueRange", "{}">:$barriers,
       CArg<"ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$is_unsigned)>
+      CArg<"bool", "false">:$is_unsigned,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$a_type,
+      CArg<"::mlir::triton::ScaleDotElemTypeAttr", "{}">:$b_type)>
   ];
 
   let assemblyFormat = [{
@@ -809,6 +817,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     qualified(type($d)) (`,` qualified(type($barriers))^)?
   }];
 
+  let extraClassDeclaration = [{
+    Type getAElementType();
+    Type getBElementType();
+  }];
   let hasVerifier = 1;
 }
 
@@ -892,15 +904,20 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
   let hasCanonicalizeMethod = 1;
 
   let description = [{
     The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
-    mbarrier object track the completion of all prior asynchronous tcgen5
-    operations. Upon completion of all asynchronous operations, the mbarrier
+    mbarrier object track the completion of prior asynchronous tcgen5
+    operations. Upon completion of the asynchronous operations, the mbarrier
     arrive operation is performed on the mbarrier with a count of 1.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen5 operations. On Rubin, `early_a_release` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen5 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -926,7 +943,8 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   let arguments = (ins
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Optional<I1>:$pred,
-    Variadic<TTG_MemDescType>:$descs
+    Variadic<TTG_MemDescType>:$descs,
+    UnitAttr:$early_a_release
   );
 
   let assemblyFormat = [{
@@ -1141,7 +1159,7 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
 }
 
 def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    FoldTruePredicate, DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{

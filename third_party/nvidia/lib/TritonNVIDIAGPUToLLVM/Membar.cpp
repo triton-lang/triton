@@ -83,6 +83,12 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             Allocation * /*allocation*/,
                             const AllocationSlice &beforeSlice,
                             const AllocationSlice &afterSlice) {
+  // Init and inval execute synchronously on the same lane within a region.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(before) &&
+      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after) &&
+      before->getParentRegion() == after->getParentRegion())
+    return true;
+
   auto completesTransactions = [](Operation *op) {
     return isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
                ttng::AsyncSharedStoreOp>(op);
