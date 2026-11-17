@@ -750,11 +750,11 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   llvm::SmallDenseSet<Operation *> syncCandidates;
 
   for (auto user : alloc.getUsers()) {
-    if (user->getBlock() != mma->getBlock())
-      continue;
-    // Single-buffer resets must also wait for the outstanding MMA.
-    if (isa<ttng::TMEMLoadOp>(user) ||
-        (!multibufferAccumulator && isa<ttng::TMEMStoreOp>(user)))
+    // A multibuffered reset switches to another buffer. A single-buffer reset
+    // must wait for the outstanding MMA, just like a read of its result.
+    if ((isa<ttng::TMEMLoadOp>(user) ||
+         (!multibufferAccumulator && isa<ttng::TMEMStoreOp>(user))) &&
+        user->getBlock() == mma->getBlock())
       syncCandidates.insert(user);
   }
 
