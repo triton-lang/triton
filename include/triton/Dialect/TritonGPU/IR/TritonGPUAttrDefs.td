@@ -1288,6 +1288,10 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
                      "CGAEncodingAttr":$CGALayout,
                      "ArrayRef<unsigned>":$instrShape,
                      CArg<"ArrayRef<unsigned>", "{}">:$kWarp), [{
+      // All-zero kWarp is the same layout as no kWarp; store it as empty so
+      // both spellings are one attribute.
+      if (llvm::all_of(kWarp, [](unsigned x) { return x == 0; }))
+        kWarp = {};
       return $_get($_ctxt, version, std::move(ctaLayout), isTransposed, CGALayout, instrShape, kWarp);
     }]>
   ];

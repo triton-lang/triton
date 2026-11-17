@@ -499,8 +499,14 @@ void init_gluon_ir(py::module_ &m) {
              auto linearLayout = ttg::toLinearLayout(shape, layout);
 
              if (isa<ttg::DistributedEncodingTrait>(layout)) {
-               auto attr =
-                   ttg::LinearEncodingAttr::get(ctx, std::move(linearLayout));
+               // Swizzled warp bases (e.g. a WMMA dot operand with kWarp) are
+               // only representable as GenericLinearEncodingAttr.
+               Attribute attr =
+                   ttg::isPermutationMatrixLayout(linearLayout)
+                       ? Attribute(ttg::LinearEncodingAttr::get(
+                             ctx, std::move(linearLayout)))
+                       : Attribute(ttg::GenericLinearEncodingAttr::get(
+                             ctx, std::move(linearLayout)));
                return layoutToGluon(attr, self.isRubin());
              }
              if (isa<ttg::SharedEncodingTrait>(layout)) {

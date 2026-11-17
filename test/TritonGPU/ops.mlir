@@ -537,3 +537,38 @@ module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.
     tt.return
   }
 }
+
+// -----
+
+// kWarp on the WMMA layout: printed only when non-zero; the dot operands keep it
+// through their parent.
+#mma_kw = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 64], kWarp = [4, 0]}>
+
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$MMA_KW:.*]] = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = {{\[\[}}1, 0], [2, 0]]}, instrShape = [16, 16, 64], kWarp = [4, 0]}>
+  // CHECK-LABEL: @wmma_k_warp_dot
+  tt.func @wmma_k_warp_dot(%a: tensor<128x512xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma_kw, kWidth = 32}>>,
+                           %b: tensor<512x64xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma_kw, kWidth = 32}>>,
+                           %c: tensor<128x64xf32, #mma_kw>) -> tensor<128x64xf32, #mma_kw> {
+    // CHECK: tt.dot %{{.+}}, %{{.+}}, %{{.+}} : tensor<128x512xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA_KW]], kWidth = 32}>> * tensor<512x64xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA_KW]], kWidth = 32}>> -> tensor<128x64xf32, #[[$MMA_KW]]>
+    %d = tt.dot %a, %b, %c : tensor<128x512xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma_kw, kWidth = 32}>> * tensor<512x64xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma_kw, kWidth = 32}>> -> tensor<128x64xf32, #mma_kw>
+    tt.return %d : tensor<128x64xf32, #mma_kw>
+  }
+}
+
+// -----
+
+// An all-zero kWarp is stored as no kWarp: both spellings are one layout.
+#mma_plain = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 64]}>
+#mma_zero = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 64], kWarp = [0, 0]}>
+
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$MMA_PLAIN:.*]] = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = {{\[\[}}1, 0], [2, 0]]}, instrShape = [16, 16, 64]}>
+  // CHECK-NOT: #ttg.amd_wmma
+  // CHECK-LABEL: @wmma_k_warp_zero
+  tt.func @wmma_k_warp_zero(%a: tensor<128x64xf32, #mma_plain>, %b: tensor<128x64xf32, #mma_zero>) -> tensor<128x64xf32, #mma_plain> {
+    // CHECK: arith.addf %{{.+}}, %{{.+}} : tensor<128x64xf32, #[[$MMA_PLAIN]]>
+    %c = arith.addf %a, %b : tensor<128x64xf32, #mma_plain>
+    tt.return %c : tensor<128x64xf32, #mma_plain>
+  }
+}

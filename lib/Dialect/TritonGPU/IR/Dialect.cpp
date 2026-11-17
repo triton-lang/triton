@@ -1777,9 +1777,10 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CGALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                std::move(ctaLL), isTransposed,
-                                                *CGALayout, instrShape, kWarp);
+  // ArrayRef arguments select the custom builder, which drops an all-zero kWarp.
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, std::move(ctaLL), isTransposed, *CGALayout,
+      ArrayRef<unsigned>(instrShape), ArrayRef<unsigned>(kWarp));
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
