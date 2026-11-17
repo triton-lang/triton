@@ -314,3 +314,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Fp8 upcasts are exact, so an explicit rounding mode does not change the
+// lowering.
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // COMMON-LABEL: @f8_upcast_with_rounding
+  // GFX942: rocdl.cvt.pk.f32.fp8
+  // GFX950: rocdl.cvt.scalef32.pk.f16.fp8
+  tt.func private @f8_upcast_with_rounding(%arg0: f8E4M3FNUZ, %arg1: f8E4M3FN) -> (f16, f16) {
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : f8E4M3FNUZ -> f16
+    %1 = tt.fp_to_fp %arg1, rounding = rtz : f8E4M3FN -> f16
+    tt.return %0, %1 : f16, f16
+  }
+}
