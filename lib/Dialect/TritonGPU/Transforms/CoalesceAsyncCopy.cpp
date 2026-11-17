@@ -28,17 +28,25 @@ static void retargetCopyOperandsToEncoding(
   Value mask = copyOp.getMask();
   Value other = copyOp.getOther();
 
+  // Query the original values: axis analysis does not contain newly created
+  // convert_layout results. Preserve the existing hint within the new layout.
+  unsigned contiguity = axisInfoAnalysis.getContiguity(src);
+  if (mask)
+    contiguity =
+        std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
+  contiguity = std::max<unsigned>(contiguity, copyOp.getContiguity());
+  auto newSrcTy = cast<RankedTensorType>(src.getType())
+                      .cloneWithEncoding(newEncoding);
+  auto order = getOrder(newSrcTy);
+  contiguity = std::min<unsigned>(
+      contiguity, getContigPerThread(newSrcTy)[order[0]]);
+
   // insert cvt's after src, mask, and other
   src = convertValueLayout(src, newEncoding, rewriter);
   if (mask)
     mask = convertValueLayout(mask, newEncoding, rewriter);
   if (other)
     other = convertValueLayout(other, newEncoding, rewriter);
-
-  unsigned contiguity = axisInfoAnalysis.getContiguity(src);
-  if (mask)
-    contiguity =
-        std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
 
   rewriter.modifyOpInPlace(copyOp, [&]() {
     copyOp.getSrcMutable().assign(src);
