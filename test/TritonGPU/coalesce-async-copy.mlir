@@ -61,8 +61,8 @@ tt.func @async_copy_i32_small(%input: tensor<64x!tt.ptr<i32>, #blocked_small>,
 // -----
 
 // The source owns four contiguous FP32 elements, but the transposed NVMMA
-// destination permits only scalar copies. Redistribute the copy source rather
-// than issuing strided scalar copies with the original per-thread ownership.
+// destination permits only scalar copies. With the original thread ownership,
+// these copies are strided across lanes.
 // CHECK: #[[COPY:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 // CHECK: tt.func @async_copy_nvmma_f32_transposed
 // CHECK: ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f32>, #[[COPY]]>
@@ -102,7 +102,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// Packed/padded NVMMA is deliberately not included in per-element clipping.
+// Padded NVMMA layouts are outside the clipping rule.
 // CHECK-LABEL: tt.func @nvmma_fp4_unchanged
 // CHECK-NOT: ttg.convert_layout
 // CHECK: ttg.async_copy_global_to_local %{{.*}}, %{{.*}} : tensor<128x128x!tt.ptr<i8>, #{{.*}}>
@@ -118,7 +118,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-// Preserve the CTA partition/replication bases while redistributing registers.
+// Clipping changes register ownership, not CTA partitioning.
 // CHECK: #[[CGA_split_m:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 1]{{.*}}CGALayout = {{\[\[1, 0\]\]}}{{.*}}>
 // CHECK: tt.func @nvmma_split_m
 // CHECK: ttg.async_copy_global_to_local {{.*}} tensor<64x128x!tt.ptr<f32>, #[[CGA_split_m]]>

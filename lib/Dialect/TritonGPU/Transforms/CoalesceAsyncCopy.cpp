@@ -28,8 +28,7 @@ static void retargetCopyOperandsToEncoding(
   Value mask = copyOp.getMask();
   Value other = copyOp.getOther();
 
-  // Query the original values: axis analysis does not contain newly created
-  // convert_layout results. Preserve the existing hint within the new layout.
+  // Axis analysis has no entries for newly created convert_layout results.
   unsigned contiguity = axisInfoAnalysis.getContiguity(src);
   if (mask)
     contiguity =
