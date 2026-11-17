@@ -50,6 +50,11 @@ void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
     OpBuilder builder(before);
     auto loc = before->getLoc();
     switch (action) {
+    case Action::ProxyCTA:
+    case Action::ProxyCluster:
+      nvidia_gpu::FenceAsyncSharedOp::create(builder, loc,
+                                             action == Action::ProxyCluster);
+      break;
     case Action::WaitLoad:
     case Action::WaitStore:
       nvidia_gpu::TMEMWaitOp::create(builder, loc,

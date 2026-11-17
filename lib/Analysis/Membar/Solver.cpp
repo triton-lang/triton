@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar/Solver.h"
+#include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SparseSet.h"
 #include <limits>
@@ -61,9 +62,15 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
       queue.assign(1, root);
       next = 0;
     }
+    // Only a cluster-scoped fence covers a peer access before its owner
+    // acquires it. The insertion gap at the acquire still precedes it.
+    auto needAtGap = [&](bool advanced) {
+      return d.path == Path::ClusterThenProxy && !advanced ? Need::ProxyCluster
+                                                           : d.first;
+    };
     auto covered = [&](unsigned mask, bool &advanced) {
       if (d.path != Path::WaitThenOrder)
-        return bool(mask & bit(d.first));
+        return bool(mask & bit(needAtGap(advanced)));
       advanced |= bool(mask & bit(d.first));
       return advanced && (mask & bit(Need::RegionOrder));
     };
@@ -88,6 +95,9 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
       if ((state != root && covered(from.fixed.inside, advanced)) ||
           covered(from.fixed.after, advanced))
         continue;
+      if (d.path == Path::ClusterThenProxy &&
+          (from.fixed.after & bit(Need::ClusterAcquire)))
+        advanced = true;
       for (Edge edge : from.next) {
         bool mayExitWorker = workerSource && (state == root || (state & 2));
         if (!edge.follow(mayExitWorker))
@@ -122,7 +132,7 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
       needsBarrier &= !(mask & bit(Need::RegionOrder));
       if (!node.insertionCost)
         continue;
-      Need need = needsBarrier ? Need::RegionOrder : d.first;
+      Need need = needsBarrier ? Need::RegionOrder : needAtGap(state & 1);
       for (unsigned i = actions.size(); i-- > 0;)
         if (coverage(actions[i]) & bit(need))
           labels.insert(node.gap * actions.size() + i);
@@ -219,5 +229,8 @@ std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
 
 template std::optional<CutSolution>
 solveMembarCut(const MembarCFG<OpModel> &, ArrayRef<Demand>, ArrayRef<Action>);
+template std::optional<CutSolution>
+solveMembarCut(const MembarCFG<AsyncFenceFacts> &, ArrayRef<Demand>,
+               ArrayRef<Action>);
 
 } // namespace mlir::triton::membar
