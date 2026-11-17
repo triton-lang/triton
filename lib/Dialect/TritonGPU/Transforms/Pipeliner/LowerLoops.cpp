@@ -16,6 +16,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -458,7 +459,8 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
 }
 
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
-                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+                      triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                      SmallVectorImpl<LoadRing> &rings) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
   llvm::SmallVector<Operation *> scalarLoads;
@@ -558,10 +560,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   IRRewriter builder(forOp);
   builder.setInsertionPoint(forOp);
   Location loc = forOp.getLoc();
-  // Create a counter to index into the allocations per loop iteration.
-  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
-  // pipeliner will re-materialize the value in later stages of the pipeline
-  // instead of carrying it as a dependency across multiple iterations.
+  // Separate insert and extract cursors let the pipeliner schedule each
+  // increment in the stage that uses it. Both start at -1 so the first
+  // increment selects slot 0.
   Value minusOne = arith::ConstantIntOp::create(builder, loc, -1, 32);
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
   Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
@@ -601,8 +602,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       argIdx++;
     }
 
-    // Create two counters for the insert and extract indices to avoid creating
-    // long liverange.
     builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
 
     Value numBuffersVal =
@@ -613,6 +612,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
     loadGroup.extractIdx = createIncrementModulo(
         builder, loc, extractIdx, numBuffersVal, zero, one, &cndExt);
     if (phase) {
+      // The TMA barrier phase toggles when the extract cursor wraps.
       Value nextPhase = arith::XOrIOp::create(builder, loc, phase, one);
       phase = arith::SelectOp::create(builder, loc, cndExt, nextPhase, phase);
       loadGroup.phase = phase;
@@ -637,19 +637,26 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            schedule);
     }
   }
+
+  // Automatically discover dependencies and schedule new insert/extract ops to
+  // correct stages.
+  scheduleDependencies(forOp, schedule);
+
   // Patch the yield with the updated counters. Subtract to account for the loop
   // counter.
   argIdx = newOperandIndex - 1;
   for (auto &[numBuffers, loadGroup] : loadGroups) {
+    int insertStage = schedule[loadGroup.insertIdx.getDefiningOp()].first;
+    int extractStage = schedule[loadGroup.extractIdx.getDefiningOp()].first;
+    // The incoming cursor is the previous read slot and can initially be -1.
+    // Advance it once for this read, then by the refill's stage lead.
+    int refillOffset = 1 + llvm::mod(extractStage - insertStage, numBuffers);
+    rings.push_back({argIdx, numBuffers, refillOffset});
     forYield.setOperand(argIdx++, loadGroup.insertIdx);
     forYield.setOperand(argIdx++, loadGroup.extractIdx);
     if (loadGroup.phase)
       forYield.setOperand(argIdx++, loadGroup.phase);
   }
-
-  // Automatically discover dependencies and schedule new insert/extract ops to
-  // correct stages.
-  scheduleDependencies(forOp, schedule);
 
   if (hasAsyncLoads) {
     // Insert sync point for any possibly outstanding loads after the loop. This
@@ -734,8 +741,8 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
-                             Value alloc, int phaseArgIdx,
-                             int barrierIdxArgIdx) {
+                             Value alloc, int phaseArgIdx, int barrierIdxArgIdx,
+                             bool multibufferAccumulator) {
   auto isLoadToBePipelined = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
@@ -743,12 +750,12 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   llvm::SmallDenseSet<Operation *> syncCandidates;
 
   for (auto user : alloc.getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getBlock() != mma->getBlock()) {
-        continue;
-      }
-      syncCandidates.insert(load);
-    }
+    // A multibuffered reset switches to another buffer. A single-buffer reset
+    // must wait for the outstanding MMA, just like a read of its result.
+    if ((isa<ttng::TMEMLoadOp>(user) ||
+         (!multibufferAccumulator && isa<ttng::TMEMStoreOp>(user))) &&
+        user->getBlock() == mma->getBlock())
+      syncCandidates.insert(user);
   }
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
@@ -838,7 +845,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
-  ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  auto mainWait =
+      ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
@@ -851,7 +859,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         continue;
       }
       auto [loadStage, loadCluster] = schedule[topLevelUser];
-      if (loadStage < mainWaitStage) {
+      if (schedule.isOpBefore(topLevelUser, mainWait)) {
         builder.setStageCluster({loadStage, loadCluster});
         builder.setInsertionPoint(load);
         ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
@@ -1174,7 +1182,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
       .append(newYieldOperands);
 
   createBarrierAndWaitOps(forOp, schedule, mma, mmaSelfLatency, alloc,
-                          phaseArgIdx, barrierIdxArgIdx);
+                          phaseArgIdx, barrierIdxArgIdx,
+                          /*multibufferAccumulator=*/tmemUseNumStages > 1);
 
   if (mma.getTwoCtas())
     forOp = protectTwoCTAAccumulatorReuse(forOp, schedule, mma, alloc,
@@ -1203,28 +1212,34 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
 /////////////////////////////
 
 void lowerLoop(scf::ForOp forOp,
-               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+               triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+               LoadRings &rings) {
   CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp))) {
     return;
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
-  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis);
+  SmallVector<LoadRing> loadRings;
+  newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis, loadRings);
   newForOp = cast<scf::ForOp>(lowerTMADescriptors(newForOp, schedule));
   schedule.serialize(newForOp);
+  if (!loadRings.empty())
+    rings.try_emplace(newForOp, std::move(loadRings));
 }
 
 } // namespace
 
-void lowerLoops(ModuleOp moduleOp) {
+LoadRings lowerLoops(ModuleOp moduleOp) {
   triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
-    return;
+    return {};
+  LoadRings rings;
   for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis);
+    lowerLoop(forOp, axisInfoAnalysis, rings);
   }
+  return rings;
 }
 
 } // namespace gpu

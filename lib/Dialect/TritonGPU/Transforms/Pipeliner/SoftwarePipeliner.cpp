@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/Dump.h"
+#include "llvm/Support/MathExtras.h"
 //===----------------------------------------------------------------------===//
 // This file will create a schedule that will be handed over to the pipeline
 // expander.
@@ -61,7 +62,7 @@ static bool hasMMAv5WaitsInLastStage(scf::ForOp forOp,
   return hasMMAv5 && hasWaitInLastStage;
 }
 
-static void expandLoops(ModuleOp moduleOp) {
+static void expandLoops(ModuleOp moduleOp, const LoadRings &rings) {
   DenseSet<MaskOp> peeledMaskOps;
   auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
                                      bool isEpilogue) -> Operation * {
@@ -132,6 +133,7 @@ static void expandLoops(ModuleOp moduleOp) {
           };
     }
     IRRewriter rewriter(forOp);
+    auto loadRings = rings.lookup(forOp);
     FailureOr<scf::ForOp> newForOp =
         triton::pipelineForLoop(rewriter, forOp, options);
 
@@ -139,6 +141,34 @@ static void expandLoops(ModuleOp moduleOp) {
       continue;
     }
     forOp = *newForOp;
+    // Derive the refill from the read cursor so Membar can compare their slots.
+    llvm::BitVector unusedArgs(forOp.getNumRegionIterArgs());
+    for (const LoadRing &ring : loadRings) {
+      Value insert = forOp.getYieldedValues()[ring.insertArg];
+      rewriter.setInsertionPoint(insert.getDefiningOp());
+      Location loc = insert.getLoc();
+      Value readCursor = forOp.getRegionIterArg(ring.insertArg + 1);
+      Value advance =
+          arith::ConstantIntOp::create(rewriter, loc, ring.refillOffset, 32);
+      Value shifted = arith::AddIOp::create(rewriter, loc, readCursor, advance);
+      Value slot;
+      if (llvm::isPowerOf2_32(ring.numBuffers)) {
+        // A mask avoids the sign correction for signed remainder in GPU code.
+        Value mask = arith::ConstantIntOp::create(rewriter, loc,
+                                                  ring.numBuffers - 1, 32);
+        slot = arith::AndIOp::create(rewriter, loc, shifted, mask);
+      } else {
+        Value size =
+            arith::ConstantIntOp::create(rewriter, loc, ring.numBuffers, 32);
+        slot = arith::RemSIOp::create(rewriter, loc, shifted, size);
+      }
+      insert.replaceAllUsesWith(slot);
+      // Only the dead insert increment still uses this argument.
+      forOp.getRegionIterArg(ring.insertArg).replaceAllUsesWith(readCursor);
+      unusedArgs.set(ring.insertArg);
+    }
+    if (unusedArgs.any())
+      eraseLoopCarriedValues(forOp, unusedArgs);
     if (customEpiloguePeeling) {
       mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
     }
@@ -176,7 +206,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     ModuleOp moduleOp = getOperation();
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
-    lowerLoops(moduleOp);
+    auto loadRings = lowerLoops(moduleOp);
     if (dumpIntermediateSteps) {
       ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// SoftwarePipeliner internal IR Dump After: LowerLoops\n"
@@ -184,7 +214,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     }
 
     // Apply the pipeline expansion.
-    expandLoops(moduleOp);
+    expandLoops(moduleOp, loadRings);
     if (dumpIntermediateSteps) {
       ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// SoftwarePipeliner internal IR Dump After: "

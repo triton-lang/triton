@@ -2330,3 +2330,14 @@ module attributes {ttg.target = "cuda:103"} {
     tt.return
   }
 }
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @early_a_release_requires_rubin(%bar: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>) {
+    // expected-error @below {{Early A release requires Rubin}}
+    ttng.tc_gen5_commit %bar {early_a_release} : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}

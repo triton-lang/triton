@@ -243,18 +243,21 @@ private:
     OpBuilder b(mod.getBodyRegion());
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-    // Set array size 0 and external linkage indicates that we use dynamic
-    // shared allocation to allow a larger shared memory size for each kernel.
-    //
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
-    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    LLVM::GlobalOp::create(
-        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    auto sharedSize = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    auto arrayTy =
+        LLVM::LLVMArrayType::get(elemTy, sharedSize ? sharedSize.getInt() : 0);
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::Internal,
         "global_smem",
         /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
+    Block *initBlock = b.createBlock(&global.getInitializerRegion());
+    b.setInsertionPointToStart(initBlock);
+    Value undef = LLVM::UndefOp::create(b, loc, arrayTy);
+    LLVM::ReturnOp::create(b, loc, undef);
   }
 };
 
