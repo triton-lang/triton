@@ -2,6 +2,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
@@ -10,6 +11,7 @@ namespace {
 
 using ClusterNode = Node<ClusterBarrierFacts>;
 using ClusterCFG = MembarCFG<ClusterBarrierFacts>;
+using instrument::ExperimentalGSanMBarrierArriveOp;
 constexpr unsigned cluster = coverage(Action::ClusterBarrier);
 constexpr unsigned live = 1, reallocated = 2, carried = 4;
 
@@ -133,15 +135,20 @@ ClusterBarrierModel::describe(Operation *op, FixedSync &fixed, Block *) {
   // Physical guards keep their distributed scratch handoffs outside the arms.
   fixed = FixedSync::fromStages(getClusterBarrierStages(op), cluster);
   Facts facts;
-  facts.initDeadline = isa<gpu::WarpSpecializeOp, ClusterBarrierOp>(op) ||
-                       hasEffect<MemoryEffects::Write>(op, Value{});
+  if (isa<gpu::WarpSpecializeOp, ClusterBarrierOp>(op) || hasOpaqueSync(op))
+    facts.initDeadline = Need::ClusterInit;
+  // Peer arrivals need the owner's shadow counter published in global memory.
+  if (auto arrive = dyn_cast<ExperimentalGSanMBarrierArriveOp>(op);
+      arrive &&
+      (arrive.getMulticast() || hasCGABroadcast(arrive.getBarrier().getType())))
+    facts.initDeadline = Need::ClusterAcquire;
   for (const MemoryAccess &access : getMemoryAccesses(op)) {
     if (!access.isShared())
       continue;
     facts.accesses.push_back(getSharedAccess(op, access));
     // A signal on one counter can let a sibling use another.
     if (access.isShared(gpu::SharedKind::Barrier))
-      facts.initDeadline = true;
+      facts.initDeadline = Need::ClusterInit;
     else if (access.isWrite)
       facts.payloadWrite = access.value;
     facts.async |= access.isShared(gpu::SharedKind::Async);
@@ -197,10 +204,17 @@ ClusterBarrierModel::discoverDemands(MembarCFG<Facts> &cfg) {
             for (const auto &other : node.effects.accesses)
               if (conflicts(access, other, state & reallocated))
                 return {Need::ClusterAcquire, path, true};
-            if (init && node.effects.initDeadline)
-              return {producer.body == 0 ? Need::ClusterInit
+            if (init && node.effects.initDeadline) {
+              if (auto arrive =
+                      dyn_cast<ExperimentalGSanMBarrierArriveOp>(node.op);
+                  arrive && !mayOverlap(access.footprint,
+                                        getFootprint(arrive.getBarrier()),
+                                        AllocationOrigin::Same))
+                return {};
+              return {producer.body == 0 ? *node.effects.initDeadline
                                          : Need::ClusterAcquire,
                       path};
+            }
             return {};
           },
           [&](Edge edge, unsigned state) {
