@@ -174,6 +174,31 @@ TEST(MembarCut, WeightedSharedSite) {
   EXPECT_TRUE(solution->sites.test(site(2, SyncKind::RegionBarrier)));
 }
 
+TEST(MembarCut, EqualCostPrefersLowerRegionBarrierWeight) {
+  // Producers 1 and 3 feed consumer 5. Each arm costs half as much as the join.
+  auto cfg = linearCFG({0, 1, 1, 1, 1, 2});
+  cfg.nodes[0].next.push_back({3});
+  cfg.nodes[2].next = {{5}};
+  const Demand demands[] = {{1, 5, SyncKind::RegionBarrier},
+                            {3, 5, SyncKind::WarpBarrier}};
+
+  // Forward reaches the lower bound with a region barrier at the join.
+  // Reverse synchronizes the whole region only on the left path.
+  auto cut = solveMembarCut(cfg, demands);
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->cost, 2u);
+  EXPECT_EQ(cut->lowerBound, 2u);
+  EXPECT_TRUE(cut->sites.test(site(2, SyncKind::RegionBarrier)));
+  EXPECT_TRUE(cut->sites.test(site(4, SyncKind::WarpBarrier)));
+
+  // For one warp, both scores tie. Keep the later barrier at the join.
+  cfg.multiWarp = false;
+  cut = solveMembarCut(cfg, demands);
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->sites.count(), 1u);
+  EXPECT_TRUE(cut->sites.test(site(5, SyncKind::RegionBarrier)));
+}
+
 // Give each original node a separate predecessor for its insertion gap. This
 // preserves the order of gap actions relative to the node's fixed.before.
 void checkPlacements(const MembarCFG<OpModel> &cfg, Demand demand,

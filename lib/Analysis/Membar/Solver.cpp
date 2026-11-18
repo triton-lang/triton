@@ -26,6 +26,17 @@ public:
 
   std::optional<CutSolution> choose(bool reverseTies) const;
 
+  auto score(const CutSolution &cut) const {
+    uint64_t multiWarpCost = 0;
+    // Both cluster actions synchronize multiple warps. Only region placement
+    // can vary the cross-warp share of a fixed total cost.
+    if (cfg.multiWarp && llvm::is_contained(actions, SyncKind::RegionBarrier))
+      for (unsigned site : cut.sites.set_bits())
+        if (actions[site % actions.size()] == SyncKind::RegionBarrier)
+          multiWarpCost += cfg.nodes[site / actions.size()].insertionCost;
+    return std::pair(cut.cost, multiWarpCost);
+  }
+
 private:
   std::optional<SiteList> shortestCut(const llvm::BitVector &selected,
                                       size_t &first) const;
@@ -221,11 +232,14 @@ std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
                                           ArrayRef<SyncKind> actions) {
   CutSolver solver(cfg, demands, actions);
   auto best = solver.choose(false);
-  if (!best || best->cost == best->lowerBound)
+  if (!best)
+    return best;
+  auto bestScore = solver.score(*best);
+  if (best->cost == best->lowerBound && bestScore.second == 0)
     return best;
   auto other = solver.choose(true);
   assert(other && "changing ties cannot change feasibility");
-  if (other->cost < best->cost)
+  if (solver.score(*other) < bestScore)
     best.swap(other);
   best->lowerBound = std::max(best->lowerBound, other->lowerBound);
   return best;
