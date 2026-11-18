@@ -59,6 +59,24 @@ def test_reduce_mxfp_scale_boundaries(dtype, k, scale, scale_dtype, device):
     torch.testing.assert_close(x.grad.float(), expected_grad.float(), rtol=0, atol=0, equal_nan=True)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("dim", [0, 1, -2])
+@pytest.mark.parametrize("transpose_scales", [False, True])
+def test_reduce_mxfp_backward_strides(dtype, dim, transpose_scales, device):
+    x = torch.ones((2, 2, 64), dtype=dtype, device=device, requires_grad=True)
+    scales = torch.arange(124, 132, dtype=torch.uint8, device=device).reshape(2, 2, 2)
+    if transpose_scales:
+        scales = scales.transpose(0, 1)
+
+    # Distinct scales across both leading axes expose a swapped reduction stride.
+    decoded = torch.exp2(scales.float() - 127).repeat_interleave(32, dim=-1)
+    y, _ = reduce(x, dim=dim, x_mxscale=scales, y_has_mx=False, y_dtype=torch.float32)
+    torch.testing.assert_close(y, decoded.sum(dim=dim), rtol=0, atol=0)
+
+    y.backward(torch.ones_like(y))
+    torch.testing.assert_close(x.grad.float(), decoded, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("B, M, N, postprocess_fn", [
     (311, 384, 384, None),
     (384, 311, 384, None),
