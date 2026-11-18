@@ -286,11 +286,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 13.9 TB/s
-# tdm gather: 19.5 TB/s
+# global load: 12.5 TB/s
+# tdm gather: 18.3 TB/s
 # ```
 #
-# The TDM gather is 40% faster than the global load kernel.
+# The TDM gather is 46% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -493,6 +493,6 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# mlp1: 6484 TFLOPS
-# mlp2: 6040 TFLOPS
+# mlp1: 6082 TFLOPS
+# mlp2: 5552 TFLOPS
 # ```

@@ -322,9 +322,9 @@ def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws
     w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
     ws_desc = tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128], pred=pred,
                                            clamp_bounds=True)
-    # Only group0 copies. tdm.async_wait only waits for the copies of the current
-    # warp, and group1 runs one stage behind, so group0 could read a part copied
-    # by group1 before the copy completes.
+    # Only warps 0-3 copy. tdm.async_wait only waits for the copies of the current
+    # warp, and warps 4-7 run one stage behind, so warps 0-3 could read a part
+    # copied by warps 4-7 before the copy completes.
     tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
     tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
     tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
@@ -368,11 +368,11 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                         layouts.ws_smem_layout)
 
     num_k: gl.constexpr = K // BLOCK_K
-    TAIL: gl.constexpr = num_k % NUM_BUFFERS
+    num_tail_k: gl.constexpr = num_k % NUM_BUFFERS
     for i in gl.static_range(NUM_BUFFERS - 1):
         matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(0, num_k - TAIL, NUM_BUFFERS):
+    for k in range(0, num_k - num_tail_k, NUM_BUFFERS):
         for i in gl.static_range(NUM_BUFFERS):
             # A wait can't be inside a stage, so we wait before the first stage.
             tdm.async_wait((NUM_BUFFERS - 2) * 3)
@@ -387,8 +387,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                 a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
                 acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-    for i in gl.static_range(TAIL):
-        tdm.async_wait((TAIL - 1 - i) * 3)
+    for i in gl.static_range(num_tail_k):
+        tdm.async_wait((num_tail_k - 1 - i) * 3)
         for half in gl.static_range(2):
             with gl.amd.warp_pipeline_stage("lds", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, half, a_smem, w_smem, ws_smem, layouts)
@@ -432,7 +432,7 @@ def test_matmul(M, N, K):
 if __name__ == "__main__":
     print("Benchmarking matmul")
     print("===================")
-    M, N, K = 2048, 2048, 16384
+    M, N, K = 8192, 8192, 8192
     A = t5.random_fp8(M, K)
     W, W_scale, _ = t5.random_mxfp4(N, K)
     W_scale = t5.preshuffle_scales_cdna5(W_scale)
@@ -446,6 +446,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# 4 warp: 2750 TFLOPS
-# 8 warp: 3101 TFLOPS
+# 4 warp: 7344 TFLOPS
+# 8 warp: 7292 TFLOPS
 # ```
+#
+# At this size, all WGPs run a CTA, and the copies from global memory set the
+# pace of the K loop. Warp pipeline overlaps the shared memory reads with the
+# WMMAs, but both kernels still wait for the same copies. In the next tutorial,
+# we will use multicast to reduce these copies.

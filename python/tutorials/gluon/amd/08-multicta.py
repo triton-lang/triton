@@ -340,11 +340,11 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                         layouts.ws_smem_layout)
 
     num_k: gl.constexpr = K // BLOCK_K
-    TAIL: gl.constexpr = num_k % NUM_BUFFERS
+    num_tail_k: gl.constexpr = num_k % NUM_BUFFERS
     for i in gl.static_range(NUM_BUFFERS - 1):
         matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(0, num_k - TAIL, NUM_BUFFERS):
+    for k in range(0, num_k - num_tail_k, NUM_BUFFERS):
         for i in gl.static_range(NUM_BUFFERS):
             tdm.async_wait((NUM_BUFFERS - 2) * 3)
             with gl.amd.warp_pipeline_stage("lds_low", priority=1):
@@ -358,8 +358,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                 a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
                 acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-    for i in gl.static_range(TAIL):
-        tdm.async_wait((TAIL - 1 - i) * 3)
+    for i in gl.static_range(num_tail_k):
+        tdm.async_wait((num_tail_k - 1 - i) * 3)
         for half in gl.static_range(2):
             with gl.amd.warp_pipeline_stage("lds", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, half, a_smem, w_smem, ws_smem, layouts)
@@ -419,9 +419,9 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# no cluster: 7717 TFLOPS
-# 2x1 cluster: 8380 TFLOPS
-# 1x2 cluster: 8588 TFLOPS
-# 2x2 cluster: 8538 TFLOPS
-# 2x4 cluster: 8731 TFLOPS
+# no cluster: 7198 TFLOPS
+# 2x1 cluster: 7704 TFLOPS
+# 1x2 cluster: 7943 TFLOPS
+# 2x2 cluster: 8037 TFLOPS
+# 2x4 cluster: 8133 TFLOPS
 # ```

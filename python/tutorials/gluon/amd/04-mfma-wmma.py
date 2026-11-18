@@ -774,8 +774,8 @@ if __name__ == "__main__" and is_cdna4():
 
 # %%
 # ```
-# matmul: 1153 TFLOPS
-# matmul_subtile: 1198 TFLOPS
+# matmul: 1056 TFLOPS
+# matmul_subtile: 1142 TFLOPS
 # ```
 
 # %%
@@ -1164,6 +1164,6 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# padded: 2237 TFLOPS
-# partitioned: 2320 TFLOPS
+# padded: 2106 TFLOPS
+# partitioned: 2128 TFLOPS
 # ```
