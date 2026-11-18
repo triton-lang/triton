@@ -3,7 +3,7 @@
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
 #include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"

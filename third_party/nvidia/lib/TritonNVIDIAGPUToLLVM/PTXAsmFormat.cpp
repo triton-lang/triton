@@ -2,12 +2,21 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/raw_ostream.h"
 // TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
 
 namespace mlir {
 namespace triton {
+
+PTXCpAsyncLoadInstr::PTXCpAsyncLoadInstr(PTXBuilder *builder,
+                                         CacheModifier modifier)
+    : PTXInstrBase(builder, "cp.async") {
+  o(stringifyCacheModifier(modifier).str());
+  o("shared");
+  o("global");
+}
 
 PTXInstr::Operand *
 PTXBuilder::newOperand(mlir::Value value, StringRef constraint,
