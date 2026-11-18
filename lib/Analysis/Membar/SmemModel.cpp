@@ -130,8 +130,6 @@ void AllocationSlice::print(raw_ostream &os) const {
 
   if (bufferId != Allocation::InvalidBufferId)
     os << " buffer=" << bufferId;
-  if (argumentIndex)
-    os << " argument=" << *argumentIndex;
 
   os << " offsets=[";
   if (!subsliceOffsets.empty()) {
@@ -153,14 +151,13 @@ void AllocationSlice::print(raw_ostream &os) const {
 void BlockInfo::invalidateIterationInfo() {
   transformSlices([](AllocationSlice slice) {
     slice.invalidateIterationInfo();
-    return SmallVector<AllocationSlice>{std::move(slice)};
+    return slice;
   });
 }
 
 AllocationSlice AllocationSlice::translateToCallsite(
     CallOpInterface call, FunctionOpInterface callee,
     triton::BufferRegionAnalysis &regions) const {
-  assert(!argumentIndex && "argument effects must be bound to call operands");
   AllocationSlice shifted = *this;
   // Unknown accesses span the whole frame; shifting their endpoint overflows.
   if (allocationInterval != Interval<size_t>{}) {
@@ -549,17 +546,7 @@ SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
     slices.push_back(std::move(slice));
   };
   Allocation::BufferIdSetT bufferIds;
-  if (accessMode == AccessMode::AllocatorAliasesOnly) {
-    // Allocation identity survives unknown geometry. Argument effects
-    // have no local IDs; retain them until a caller binds their allocation.
-    bufferIds = allocation.getAllBufferIdsWithAliases(value);
-    for (unsigned argument : allocation.getAliasedArgumentIndices(value)) {
-      AllocationSlice slice(Interval<size_t>{});
-      slice.argumentIndex = argument;
-      slice.sharedKind = sharedKind;
-      slices.push_back(std::move(slice));
-    }
-  } else if (footprint && (!followCalls || isKernel(function))) {
+  if (footprint && (!followCalls || isKernel(function))) {
     // Use every lattice origin: function-local alias analysis can miss roots
     // returned through calls or joined with descriptor arguments.
     for (const auto &view : footprint->regionInfo.views)
@@ -570,7 +557,7 @@ SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
   }
   // Unknown allocations use an unbounded interval. View disjointness and
   // RAW/WAR/WAW checks still determine whether a barrier is needed.
-  if (accessMode == AccessMode::AllSharedAccesses && bufferIds.empty())
+  if (bufferIds.empty())
     addSlice(Interval<size_t>{}, Allocation::InvalidBufferId);
   for (auto bufferId : bufferIds)
     addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
@@ -581,82 +568,63 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
                                            FunctionOpInterface callee,
                                            MembarInfo summary) {
   summary.transformSlices([&](const AllocationSlice &slice) {
-    if (!slice.argumentIndex)
-      return SmallVector<AllocationSlice>{
-          slice.translateToCallsite(call, callee, regions)};
-    Value actual = call.getArgOperands()[*slice.argumentIndex];
-    auto slices = getAllocationSlices(actual, slice.sharedKind);
-    // A callee can reinterpret the argument's view. Retain the caller's
-    // allocation IDs, but cover each whole allocation without shifting.
-    for (AllocationSlice &bound : slices) {
-      bound.physicalFootprint = nullptr;
-      bound.invalidateIterationInfo();
-    }
-    return slices;
+    return slice.translateToCallsite(call, callee, regions);
   });
   return summary;
 }
 
 void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
-                         ArrayRef<MemoryAccess> accesses,
-                         std::optional<BarrierStages> clusterStages) {
+                         ArrayRef<MemoryAccess> accesses) {
   bool includeShared = accessMode != AccessMode::SynchronizationOnly;
-  if (!clusterStages) {
-    // A verified callback has no scratch or payload accesses to publish.
-    if (isa<triton::MapElementwiseOp>(op))
-      return;
-    // The local-memory mask guarantees ordering of local memory accesses.
-    if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-      fixed.after = barrier.hasLocal()
-                        ? (barrier.isWarp() ? warpBarrier : fullBarrier)
-                        : bit(Need::WarpConvergence);
-      return;
-    }
-    if (isa<ttng::TMEMWaitOp>(op)) {
-      // A scalar notification must observe completion in every issuing warp.
-      // The wait itself converges each warp and adds no memory-order demand.
-      if (includeShared)
-        model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
-      fixed.after = bit(Need::WarpConvergence);
-      return;
-    }
+  // A verified callback has no scratch or payload accesses to publish.
+  if (isa<triton::MapElementwiseOp>(op))
+    return;
+  // The local-memory mask guarantees ordering of local memory accesses.
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
+    fixed.after = barrier.hasLocal()
+                      ? (barrier.isWarp() ? warpBarrier : fullBarrier)
+                      : bit(Need::WarpConvergence);
+    return;
+  }
+  if (isa<ttng::TMEMWaitOp>(op)) {
+    // A scalar notification must observe completion in every issuing warp.
+    // The wait itself converges each warp and adds no memory-order demand.
+    if (includeShared)
+      model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
+    fixed.after = bit(Need::WarpConvergence);
+    return;
   }
 
   auto scratchId = allocation.getBufferId(op);
   bool hasScratch = scratchId != Allocation::InvalidBufferId;
-  auto barriers =
-      clusterStages ? *clusterStages : getLocalBarrierStages(op, hasScratch);
-  fixed.before = barriers.beforeMemoryEffects ? fullBarrier : 0;
-  fixed.inside = hasScratch && barriers.betweenMemoryEffects ? fullBarrier : 0;
-  fixed.after = barriers.afterMemoryEffects ? fullBarrier : 0;
+  fixed =
+      FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
   if (!includeShared)
     return;
-  if (!clusterStages) {
-    auto sync = getThreadSyncInfo(op);
-    // Region control flow is visited by the dataflow engine. Its children
-    // contribute their own effects; implicit scratch belongs to this op.
-    bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,
-                           RegionBranchTerminatorOpInterface>(op);
-    bool isReturn = op->hasTrait<OpTrait::ReturnLike>();
-    // Cluster barriers contribute synchronization stages, not payload effects.
-    bool hasEffects =
-        sync.requiresBefore() ||
-        sync.getCompletionSync() != CompletionSync::None || hasScratch ||
-        (!controlFlow && !isReturn && !isa<ttng::ClusterBarrierOp>(op) &&
-         hasThreadEffects(op));
+  auto sync = getThreadSyncInfo(op);
+  // Region control flow is visited by the dataflow engine. Its children
+  // contribute their own effects; implicit scratch belongs to this op.
+  bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,
+                         RegionBranchTerminatorOpInterface>(op);
+  bool isReturn = op->hasTrait<OpTrait::ReturnLike>();
+  // Cluster barriers contribute synchronization stages, not payload effects.
+  bool hasEffects = sync.requiresBefore() ||
+                    sync.getCompletionSync() != CompletionSync::None ||
+                    hasScratch ||
+                    (!controlFlow && !isReturn &&
+                     !isa<ttng::ClusterBarrierOp>(op) && hasThreadEffects(op));
 
-    model.needsWarp = sync.requiresWarpBefore();
-    BlockInfo &effects = model.sharedIn;
-    if (hasEffects) {
-      effects = getThreadEffects(op);
-      if (sync.hasThreadDemand())
-        addThreadDemand(effects, op, accesses);
-    }
-    // TODO: Retire this legacy return demand with MembarAnalysis. The CFG
-    // models function returns in MembarModel::describe().
-    if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
+  model.needsWarp = sync.requiresWarpBefore();
+  BlockInfo &effects = model.sharedIn;
+  if (hasEffects) {
+    effects = getThreadEffects(op);
+    if (sync.hasThreadDemand())
       addThreadDemand(effects, op, accesses);
   }
+  // TODO: Retire this legacy return demand with MembarAnalysis. The CFG
+  // models function returns in MembarModel::describe().
+  if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
+    addThreadDemand(effects, op, accesses);
   // Intra-function dependencies
   // Explicit buffer
   for (const auto &access : accesses) {

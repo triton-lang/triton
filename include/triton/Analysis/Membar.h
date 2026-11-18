@@ -3,7 +3,6 @@
 
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/Membar/SmemModel.h"
-#include <optional>
 #include <utility>
 
 namespace mlir {
@@ -75,13 +74,10 @@ struct MembarInfo {
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-/// TODO: Retire this analysis and MembarInfo after NVIDIA cluster barrier
-/// placement, mbarrier arrival folding and the AMD conditional-barrier fallback
-/// migrate.
+/// TODO: Retire this analysis and MembarInfo after mbarrier arrival folding
+/// and the AMD conditional-barrier fallback migrate.
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
-  using AccessMode = triton::membar::SMemModel::AccessMode;
-
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -94,12 +90,11 @@ public:
   /// scratch write and an outgoing scratch read.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                  triton::BufferRegionAnalysis &regions,
-                 MembarSliceFilterFn sliceFilter = nullptr,
-                 AccessMode accessMode = AccessMode::AllSharedAccesses,
                  CompletionScopeFn completionScope = nullptr)
       : allocation(allocation), filter(std::move(filter)),
-        shared(allocation, regions, accessMode, completionScope),
-        sliceFilter(std::move(sliceFilter)) {}
+        shared(allocation, regions,
+               triton::membar::SMemModel::AccessMode::AllSharedAccesses,
+               completionScope) {}
 
 private:
   void updateSuccessor(Operation *terminator, Block *successor,
@@ -112,22 +107,14 @@ protected:
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
-  void updateMemoryEffects(
-      Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
-      OpBuilder *builder,
-      std::optional<triton::BarrierStages> clusterStages = std::nullopt);
-  void insertBarrier(Operation *operation, OpBuilder *builder,
-                     bool cluster = false);
-
   Allocation &allocation;
-  MembarFilterFn filter;
 
 private:
   void syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                    MembarInfo *membarInfo, OpBuilder *builder, bool cluster);
+                    MembarInfo *membarInfo, OpBuilder *builder);
 
+  MembarFilterFn filter;
   triton::membar::SMemModel shared;
-  MembarSliceFilterFn sliceFilter;
 };
 
 /// Inserts shared-memory and operation rendezvous barriers across a module,

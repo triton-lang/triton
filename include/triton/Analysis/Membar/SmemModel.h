@@ -27,11 +27,6 @@ using MembarFilterFn = std::function<bool(
     Operation *, Operation *, bool /*lhsIsRead*/, bool /*rhsIsRead*/,
     Allocation *, const AllocationSlice &, const AllocationSlice &)>;
 
-/// Slice-level filter to allow backends to ignore specific aliasing cases.
-using MembarSliceFilterFn =
-    std::function<bool(const AllocationSlice &, const AllocationSlice &,
-                       bool /*lhsIsRead*/, bool /*rhsIsRead*/, Allocation *)>;
-
 // Represents the access to a slice of an allocation
 // It contains information both on physical memory (the interval) and a
 // logical view on it (layout, subslice offsets and shape for the access)
@@ -92,17 +87,10 @@ public:
   // BlockInfo::invalidateIterationInfo does.
   const BufferIndexExpr *bufferIndexExpr = nullptr;
 
-  // Parameters have no callee buffer ID. Bind this argument's effects to the
-  // caller's allocation when importing the function summary.
-  // TODO: Remove this field and Allocation's argumentAliases table with the
-  // legacy cluster call summaries.
-  std::optional<unsigned> argumentIndex;
-
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
              llvm::ArrayRef<int32_t>, const BufferIndexExpr *, const void *,
-             const void *, std::optional<unsigned>,
-             std::optional<triton::gpu::SharedKind>>
+             const void *, std::optional<triton::gpu::SharedKind>>
   asTuple() const {
     return {allocationInterval,
             bufferId,
@@ -111,7 +99,6 @@ private:
             bufferIndexExpr,
             subsliceSource.getAsOpaquePointer(),
             physicalFootprint,
-            argumentIndex,
             sharedKind};
   }
   // Offsets from subslice, borrowed from its immutable context-owned attribute.
@@ -205,10 +192,7 @@ struct BlockInfo {
     for (auto *slices : {&syncReadSlices, &syncWriteSlices}) {
       SliceMapT transformed;
       for (const auto &[slice, ops] : *slices)
-        for (const AllocationSlice &mapped : transform(slice)) {
-          auto &dst = transformed[mapped];
-          dst.insert(ops.begin(), ops.end());
-        }
+        transformed[transform(slice)].insert(ops.begin(), ops.end());
       *slices = std::move(transformed);
     }
   }
@@ -244,19 +228,18 @@ struct BlockInfo {
 
   /// Returns true if Slices in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, const MembarFilterFn &filter,
-                     Allocation *allocation,
-                     const MembarSliceFilterFn &sliceFilter = nullptr) const {
+                     Allocation *allocation) const {
     return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
                                  /*lhsIsRead=*/false, /*rhsIsRead=*/true,
-                                 filter, sliceFilter, allocation) ||
+                                 filter, allocation) ||
            /*WAR*/
            isIntersected(syncReadSlices, other.syncWriteSlices,
                          /*lhsIsRead=*/true, /*rhsIsRead=*/false, filter,
-                         sliceFilter, allocation) ||
+                         allocation) ||
            /*WAW*/
            isIntersected(syncWriteSlices, other.syncWriteSlices,
                          /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
-                         sliceFilter, allocation);
+                         allocation);
   }
 
   /// Whether pending thread effects must rendezvous before upcoming demands.
@@ -273,22 +256,19 @@ struct BlockInfo {
 
   bool operator==(const BlockInfo &) const = default;
 
-  /// Checks one pair of access maps with the same alias and operation filters.
+  /// Checks one pair of access maps with the operation filter.
   static bool isIntersected(const SliceMapT &lhsSlices,
                             const SliceMapT &rhsSlices, bool lhsIsRead,
                             bool rhsIsRead, const MembarFilterFn &filter,
-                            const MembarSliceFilterFn &sliceFilter,
                             Allocation *allocation) {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
-          if (!sliceFilter || !sliceFilter(lhs.first, rhs.first, lhsIsRead,
-                                           rhsIsRead, allocation))
-            for (auto lhsOp : lhs.second)
-              for (auto rhsOp : rhs.second)
-                if (!filter || !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead,
-                                       allocation, lhs.first, rhs.first))
-                  return true;
+          for (auto lhsOp : lhs.second)
+            for (auto rhsOp : rhs.second)
+              if (!filter || !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead,
+                                     allocation, lhs.first, rhs.first))
+                return true;
     return false;
   }
 
@@ -331,11 +311,7 @@ bool hasRegionLocalUses(Value root, bool followCalls);
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {
 public:
-  enum class AccessMode {
-    AllSharedAccesses,
-    AllocatorAliasesOnly,
-    SynchronizationOnly
-  };
+  enum class AccessMode { AllSharedAccesses, SynchronizationOnly };
 
   /// Only legacy MembarAnalysis uses followCalls=false.
   /// TODO: When it retires, remove the flag, follow descriptor uses through
@@ -350,12 +326,8 @@ public:
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
   /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
-  /// Cluster placement supplies its own stages and tracks only memory slices.
-  /// TODO: Remove clusterStages, AllocatorAliasesOnly and MembarSliceFilterFn
-  /// when the legacy cluster analysis migrates.
   void describe(Operation *op, OpModel &model, FixedSync &fixed,
-                ArrayRef<MemoryAccess> accesses,
-                std::optional<BarrierStages> clusterStages = std::nullopt);
+                ArrayRef<MemoryAccess> accesses);
   /// TODO: Retire this method and AllocationSlice::translateToCallsite with the
   /// legacy forward-flow summaries.
   MembarInfo translateCallSummary(CallOpInterface call,
