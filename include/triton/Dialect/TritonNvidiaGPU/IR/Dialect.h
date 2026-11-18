@@ -24,8 +24,6 @@
 #ifndef TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"

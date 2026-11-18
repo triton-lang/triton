@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Module.h"
 #include <dlfcn.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
