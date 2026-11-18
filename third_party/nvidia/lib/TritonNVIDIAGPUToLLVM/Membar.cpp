@@ -11,7 +11,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
@@ -43,12 +42,8 @@ struct TritonNvidiaGPUMembar
     }
 
     // Synchronization insertion and arrival attributes preserve this geometry.
-    ttng::runClusterBarrierInsertion(allocation, computeCapability, *regions);
-    if (failed(ttng::runCrossCTAMBarrierInitSyncInsertion(allocation,
-                                                          computeCapability))) {
-      signalPassFailure();
-      return;
-    }
+    if (failed(membar::placeClusterBarriers(allocation, *regions)))
+      return signalPassFailure();
     ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
 
     auto mode = membar::usesTensorMemory(mod)

@@ -9,7 +9,6 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 
 using namespace mlir;
 
@@ -49,10 +48,8 @@ struct TestMembarPass
     if (failed(solver->initializeAndRun(moduleOp)))
       llvm::report_fatal_error("failed to analyze allocated buffer regions");
 
-    triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
-                                                   computeCapability, *regions);
-    if (failed(triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
-            allocation, computeCapability)))
+    if (computeCapability >= 90 &&
+        failed(triton::membar::placeClusterBarriers(allocation, *regions)))
       return signalPassFailure();
     if (failed(triton::membar::placeBarriers(
             allocation, *regions, triton::NVIDIA::canSkipBarSync,
