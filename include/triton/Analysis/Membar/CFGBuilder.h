@@ -115,6 +115,10 @@ template <typename Facts> struct Node {
 
 template <typename Facts> struct MembarCFG {
   SmallVector<Node<Facts>, 0> nodes;
+  // Use the warp count of the region being analyzed for every barrier site,
+  // including sites in functions called from that region.
+  // Assume multiple warps unless the count is known to be one.
+  bool multiWarp = true;
 
   // A callee entry or loop backedge can rebind SSA values in its own body.
   bool invalidatesIteration(Edge edge, unsigned source) const {

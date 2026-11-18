@@ -17,7 +17,7 @@ inline constexpr std::array ACTIONS{SyncKind::WaitLoad, SyncKind::WaitStore,
 struct CutSolution {
   llvm::BitVector sites;
   uint64_t cost = 0;
-  // A matching placement cost certifies optimality.
+  // Lower bound on total cost, independent of rendezvous scope.
   uint64_t lowerBound = 0;
 };
 
