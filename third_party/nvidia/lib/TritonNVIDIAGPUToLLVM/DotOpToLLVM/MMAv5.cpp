@@ -421,7 +421,7 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   Value mask;
   for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
     Value descMask =
-        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        LLVM::NVIDIA::createMulticastMask(loc, rewriter, broadcastBits);
     mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
