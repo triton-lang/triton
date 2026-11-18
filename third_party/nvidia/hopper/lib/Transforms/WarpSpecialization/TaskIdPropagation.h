@@ -9,6 +9,10 @@
 
 using namespace mlir::dataflow;
 
+namespace mlir::scf {
+class YieldOp;
+} // namespace mlir::scf
+
 namespace mlir::triton::gpu {
 
 //===----------------------------------------------------------------------===//

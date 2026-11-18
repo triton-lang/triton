@@ -23,8 +23,6 @@
 #ifndef DIALECT_NVWS_IR_DIALECT_H_
 #define DIALECT_NVWS_IR_DIALECT_H_
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"

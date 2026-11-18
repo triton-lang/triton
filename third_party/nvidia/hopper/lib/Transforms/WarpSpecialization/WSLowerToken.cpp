@@ -1,4 +1,5 @@
 #include "CodePartitionUtility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 

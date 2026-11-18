@@ -12,6 +12,7 @@
 // they can be combined by the canonicalizer.
 //===----------------------------------------------------------------------===//
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
