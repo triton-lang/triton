@@ -77,7 +77,24 @@ std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
 // if result is defined by descriptor_load followed by alloc, return the alloc
 // and the load ops as a pair.
 template <typename AllocOp> auto isDescLoadAndAlloc(Value result) {
-  return isLoadAndAlloc<AllocOp, triton::DescriptorOpInterface>(result);
+  auto match = isLoadAndAlloc<AllocOp, triton::DescriptorOpInterface>(result);
+  if (!match)
+    return match;
+  // The load is fused into the alloc's aref and erased. Its uses in other
+  // partitions are rewired to the aref, but another use in the load's own
+  // partitions (e.g. a second alloc) would be left dangling. Leave such allocs
+  // to the generic local_alloc path, which keeps the load.
+  auto [alloc, load] = *match;
+  SetVector<int> loadPartitions = getPartitionIds(load);
+  for (OpOperand &use : load->getResult(0).getUses()) {
+    Operation *user = use.getOwner();
+    if (user == alloc.getOperation() || !hasPartition(user))
+      continue;
+    if (llvm::all_of(getPartitionIds(&use),
+                     [&](int id) { return loadPartitions.contains(id); }))
+      return decltype(match)();
+  }
+  return match;
 }
 
 template <typename AllocOp> auto isGlobalLoadAndAlloc(Value result) {
