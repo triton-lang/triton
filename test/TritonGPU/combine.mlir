@@ -4992,3 +4992,81 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// A cached conversion in the then branch must not replace the conversion
+// inserted on the else edge when both edges yield the same outer value.
+#src = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @remat_if_shared_source_dominance(
+  // CHECK-SAME: %[[X:[^:]+]]: tensor<16x16xf32,
+  // CHECK: %[[IF:[^: ]+]]:2 = scf.if {{.*}} -> (tensor<16x16xf32, #[[DST:[^>]+]]>, tensor<16x16xf32, #[[DST]]>) {
+  // CHECK: %[[THEN:[^ ]+]] = ttg.convert_layout %[[X]]
+  // CHECK: scf.yield %[[THEN]], %[[THEN]] : tensor<16x16xf32, #[[DST]]>, tensor<16x16xf32, #[[DST]]>
+  // CHECK: } else {
+  // CHECK: %[[ELSE:[^ ]+]] = ttg.convert_layout %[[X]]
+  // CHECK: scf.yield {{%[^ ,]+}}, %[[ELSE]] : tensor<16x16xf32, #[[DST]]>, tensor<16x16xf32, #[[DST]]>
+  // CHECK: arith.addf %[[IF]]#1, %[[IF]]#0 : tensor<16x16xf32, #[[DST]]>
+  tt.func @remat_if_shared_source_dominance(
+      %x: tensor<16x16xf32, #src>,
+      %dst_ptrs: tensor<16x16x!tt.ptr<f32>, #dst>,
+      %cond: i1, %upper: i32) -> tensor<16x16xf32, #dst> {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %fallback = tt.load %dst_ptrs : tensor<16x16x!tt.ptr<f32>, #dst>
+    %loop = scf.for %iv = %zero to %upper step %one
+        iter_args(%acc = %fallback) -> tensor<16x16xf32, #dst> : i32 {
+      %selected:2 = scf.if %cond -> (tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>) {
+        %cached = ttg.convert_layout %x : tensor<16x16xf32, #src> -> tensor<16x16xf32, #dst>
+        scf.yield %x, %cached : tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>
+      } else {
+        scf.yield %x, %acc : tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>
+      }
+      %converted = ttg.convert_layout %selected#0 : tensor<16x16xf32, #src> -> tensor<16x16xf32, #dst>
+      %next = arith.addf %converted, %selected#1 : tensor<16x16xf32, #dst>
+      scf.yield %next : tensor<16x16xf32, #dst>
+    }
+    tt.return %loop : tensor<16x16xf32, #dst>
+  }
+}
+
+// -----
+
+// Mirror case: the cached conversion is in the else branch, so the then
+// yield needs its own conversion of the shared outer value.
+#src = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @remat_if_shared_source_dominance_mirror(
+  // CHECK-SAME: %[[MIRROR_X:[^:]+]]: tensor<16x16xf32,
+  // CHECK: %[[MIRROR_IF:[^: ]+]]:2 = scf.if {{.*}} -> (tensor<16x16xf32, #[[MIRROR_DST:[^>]+]]>, tensor<16x16xf32, #[[MIRROR_DST]]>) {
+  // CHECK: %[[MIRROR_THEN:[^ ]+]] = ttg.convert_layout %[[MIRROR_X]]
+  // CHECK: scf.yield {{%[^ ,]+}}, %[[MIRROR_THEN]] : tensor<16x16xf32, #[[MIRROR_DST]]>, tensor<16x16xf32, #[[MIRROR_DST]]>
+  // CHECK: } else {
+  // CHECK: %[[MIRROR_ELSE:[^ ]+]] = ttg.convert_layout %[[MIRROR_X]]
+  // CHECK: scf.yield %[[MIRROR_ELSE]], %[[MIRROR_ELSE]] : tensor<16x16xf32, #[[MIRROR_DST]]>, tensor<16x16xf32, #[[MIRROR_DST]]>
+  // CHECK: arith.addf %[[MIRROR_IF]]#1, %[[MIRROR_IF]]#0 : tensor<16x16xf32, #[[MIRROR_DST]]>
+  tt.func @remat_if_shared_source_dominance_mirror(
+      %x: tensor<16x16xf32, #src>,
+      %dst_ptrs: tensor<16x16x!tt.ptr<f32>, #dst>,
+      %cond: i1, %upper: i32) -> tensor<16x16xf32, #dst> {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %fallback = tt.load %dst_ptrs : tensor<16x16x!tt.ptr<f32>, #dst>
+    %loop = scf.for %iv = %zero to %upper step %one
+        iter_args(%acc = %fallback) -> tensor<16x16xf32, #dst> : i32 {
+      %selected:2 = scf.if %cond -> (tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>) {
+        scf.yield %x, %acc : tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>
+      } else {
+        %cached = ttg.convert_layout %x : tensor<16x16xf32, #src> -> tensor<16x16xf32, #dst>
+        scf.yield %x, %cached : tensor<16x16xf32, #src>, tensor<16x16xf32, #dst>
+      }
+      %converted = ttg.convert_layout %selected#0 : tensor<16x16xf32, #src> -> tensor<16x16xf32, #dst>
+      %next = arith.addf %converted, %selected#1 : tensor<16x16xf32, #dst>
+      scf.yield %next : tensor<16x16xf32, #dst>
+    }
+    tt.return %loop : tensor<16x16xf32, #dst>
+  }
+}
