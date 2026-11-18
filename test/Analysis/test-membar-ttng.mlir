@@ -410,11 +410,12 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
   } else {
     //  CHECK-NOT: ttg.barrier local
     //      CHECK: ttg.local_store
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: cf.br
     ttg.local_store %arg2, %alloc : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   }
-  //      CHECK: ttg.barrier local
-  // CHECK-NEXT: ttg.local_load
+  //  CHECK-NOT: ttg.barrier local
+  //      CHECK: ttg.local_load
   %t = ttg.local_load %alloc : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #blocked>
   tt.return %t : tensor<256x64xf16, #blocked>
 }
@@ -956,20 +957,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return %converted : !col_tile
   }
 
-  // A completion on just one incoming path is still a demand at the join.
+  // Only the path with a pending completion needs to rendezvous.
   // CHECK-LABEL: @completion_through_cfg_join
   tt.func private @completion_through_cfg_join(%pred: i1, %dst: !ptrs, %value: !values) {
     cf.cond_br %pred, ^wait, ^skip
   ^wait:
     // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: cf.br
     ttg.async_wait {num = 0 : i32}
     cf.br ^join
   ^skip:
     cf.br ^join
   ^join:
-    // CHECK: ttg.barrier local
-    // CHECK-NEXT: tt.store
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: tt.store
     tt.store %dst, %value : !ptrs
     tt.return
   }
@@ -993,12 +995,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
-  // The load remains pending when joined with a fixed-thread publication.
+  // Only the load needs ordering before the common fixed-thread publication.
   // CHECK-LABEL: @mixed_issuers_through_cfg_join
   tt.func private @mixed_issuers_through_cfg_join(%pred: i1, %src: !tt.ptr<i32>, %first: !barrier, %done: !barrier) {
     cf.cond_br %pred, ^read, ^publish
   ^read:
     // CHECK: tt.load
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: cf.br
     %value = tt.load %src : !tt.ptr<i32>
     cf.br ^join
@@ -1008,8 +1011,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     ttng.arrive_barrier %first, 1 : !barrier
     cf.br ^join
   ^join:
-    // CHECK: ttg.barrier local
-    // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: ttng.arrive_barrier
     // CHECK-NEXT: tt.return
     ttng.arrive_barrier %done, 1 : !barrier
     tt.return

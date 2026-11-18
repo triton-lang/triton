@@ -5,42 +5,16 @@
 #include "triton/Analysis/Membar/Dependencies.h"
 #include "triton/Analysis/Membar/Solver.h"
 #include "triton/Analysis/Membar/TmemModel.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/MathExtras.h"
 
-#include <cassert>
 #include <map>
 
 #define DEBUG_TYPE "membar-placement"
 
 namespace mlir::triton::membar {
 namespace {
-
-template <typename T, typename Model>
-DenseMap<Operation *, unsigned> getCalleeWeights(CallGraph<T> &calls,
-                                                 Model &model) {
-  DenseMap<Operation *, unsigned> calleeWeights;
-  // Each root gets a postorder visit without an incoming call.
-  SmallVector<unsigned> pathWeights(calls.getRoots().size(), 1);
-  // walk visits each call path. Propagate just this path's contribution.
-  calls.template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-      [&](CallOpInterface call, FunctionOpInterface callee) {
-        auto caller = call->getParentOfType<FunctionOpInterface>();
-        const auto &indices = model.getIndices(caller);
-        unsigned weight =
-            getBlockWeight(call->getBlock(), indices, pathWeights.back());
-        pathWeights.push_back(weight);
-        unsigned &total = calleeWeights[callee];
-        bool overflow;
-        total = llvm::SaturatingAdd(total, weight, &overflow);
-        assert(!overflow && "Membar callee weight overflow");
-      },
-      [&](FunctionOpInterface) { pathWeights.pop_back(); });
-  return calleeWeights;
-}
 
 template <typename Facts>
 void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
@@ -106,11 +80,9 @@ LogicalResult placeRegions(FunctionOpInterface function,
 
 LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions) {
   const Action actions[] = {Action::ProxyCluster, Action::ProxyCTA};
-  auto callbacks = getTensorCallbackOps(module);
   CallGraph<int> calls(module);
   AsyncFenceModel model(regions, gpu::TritonGPUDialect::getNumCTAs(module));
-  const auto calleeWeights = getCalleeWeights(calls, model);
-  MembarCFGBuilder builder(model, callbacks, calleeWeights);
+  MembarCFGBuilder builder(model, module);
   for (auto function : calls.getRoots()) {
     auto discover = [&](auto &cfg) { return model.discoverDemands(cfg); };
     if (failed(placeRegions(function, builder, actions, discover,
@@ -142,9 +114,7 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                        /*followCalls=*/true);
 
   MembarModel model(models, tmemModel);
-  auto callbacks = getTensorCallbackOps(module);
-  const auto calleeWeights = getCalleeWeights(moduleAllocation, model);
-  MembarCFGBuilder builder(model, callbacks, calleeWeights);
+  MembarCFGBuilder builder(model, module);
   for (auto function : moduleAllocation.getRoots()) {
     // Callee footprints are in kernel coordinates.
     Allocation &allocation = *moduleAllocation.getFuncData(function);
