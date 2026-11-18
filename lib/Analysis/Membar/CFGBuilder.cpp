@@ -5,12 +5,14 @@
 
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
 #include <limits>
@@ -26,8 +28,13 @@ template <typename Model>
 MembarCFGBuilder<Model>::MembarCFGBuilder(Model &model, ModuleOp module)
     : model(model), callbacks(getTensorCallbackOps(module)) {
   SymbolTableCollection symbols;
-  module.walk([&](CallOpInterface call) {
-    callers[call.resolveCallableInTable(&symbols)].push_back(call->getBlock());
+  module.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (isa_and_nonnull<scf::SCFDialect>(op->getDialect()))
+      llvm::report_fatal_error("unexpected " + op->getName().getStringRef() +
+                               " in Membar graph placement. Run "
+                               "--convert-scf-to-cf first.");
+    if (auto call = dyn_cast<CallOpInterface>(op))
+      callers[call.resolveCallableInTable(&symbols)].push_back(op->getBlock());
   });
 }
 

@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s
+// RUN: not --crash triton-opt %s -split-input-file -test-print-membar 2>&1 | FileCheck %s --check-prefix=SCF-ERROR
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -28,6 +29,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>,
   %a_off = arith.constant dense<4> : tensor<128x32xi32, #AL>
   %b_off = arith.constant dense<4> : tensor<32x128xi32, #BL>
 
+  // SCF-ERROR: LLVM ERROR: unexpected scf.for in Membar graph placement. Run --convert-scf-to-cf first.
   scf.for %iv = %lb to %ub step %step iter_args(%a_ptr = %a_ptr_init, %b_ptr = %b_ptr_init, %prev_c = %c_init) -> (tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>) {
     %a_ = tt.load %a_ptr, %a_mask, %a_other : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A_DOT>
