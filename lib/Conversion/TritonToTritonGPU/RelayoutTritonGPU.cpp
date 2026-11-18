@@ -152,6 +152,16 @@ public:
              (!op.getSrc() || isTMEMOperandDynamicallyLegal(
                                   op, op.getSrc().getType(), op.getType()));
     });
+    // The x offsets may already have a new default layout, e.g. when their
+    // producer was relaid out in place, so check for the required index layout.
+    auto isGatherScatterLegal = [&](auto op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter) &&
+             mlir::impl::hasGatherScatterIndicesLayout(op, op.getXOffsets());
+    };
+    target.addDynamicallyLegalOp<ttng::AsyncTMAGatherOp>(
+        [&](ttng::AsyncTMAGatherOp op) { return isGatherScatterLegal(op); });
+    target.addDynamicallyLegalOp<ttng::AsyncTMAScatterOp>(
+        [&](ttng::AsyncTMAScatterOp op) { return isGatherScatterLegal(op); });
     target.addDynamicallyLegalOp<LocalLoadOp>([&](Operation *op) {
       return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter);
     });
