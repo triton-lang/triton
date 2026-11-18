@@ -416,6 +416,7 @@ class CompiledKernel:
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)
+        self.backend = backend
         self.packed_metadata = backend.pack_metadata(self.metadata)
         self.src = src
         self.hash = hash
@@ -483,7 +484,7 @@ class CompiledKernel:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, shared, device)
+            *self.backend.get_load_binary_args(self.name, self.kernel, shared, device, self.metadata))
         self._module_pid = os.getpid()
         warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
