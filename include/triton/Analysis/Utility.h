@@ -4,7 +4,6 @@
 #include <array>
 
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"

@@ -2,9 +2,12 @@
 #define PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
 
 #include "mlir/IR/Attributes.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "llvm/ADT/SmallVector.h"
+#include "triton/Dialect/Triton/IR/Types.h"
+
+namespace mlir {
+class ConversionPatternRewriter;
+}
 
 namespace mlir::triton::proton::gpu {
 

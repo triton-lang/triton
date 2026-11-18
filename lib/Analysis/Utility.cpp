@@ -9,7 +9,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
