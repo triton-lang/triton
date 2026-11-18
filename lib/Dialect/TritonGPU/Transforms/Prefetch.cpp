@@ -37,12 +37,14 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritongpu-prefetch"
@@ -114,8 +116,7 @@ class Prefetcher {
                                scf::ForOp newForOp, IRMapping &mapping,
                                const CarriedArgs &carriedArgs);
   Value getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
-                            OpBuilder &builder, IRMapping &mapping,
-                            DenseMap<Value, Value> &cache);
+                            OpBuilder &builder, IRMapping &mapping);
   SmallVector<Value> createLoopArgs(OpBuilder &builder,
                                     CarriedArgs &carriedArgs);
   void cloneLoopBody(scf::ForOp newForOp, OpBuilder &builder,
@@ -135,6 +136,8 @@ public:
   }
 
   LogicalResult initialize();
+
+  bool handleNvidiaFp4Dot();
 
   void emitPrologue();
 
@@ -367,14 +370,14 @@ Value Prefetcher::getCurrentTrackedValue(triton::DotOp dot, bool isA,
 }
 
 Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
-                                      OpBuilder &builder, IRMapping &mapping,
-                                      DenseMap<Value, Value> &cache) {
+                                      OpBuilder &builder, IRMapping &mapping) {
   Value value = getTrackedValue(dot, isA, isToken);
   if (!value)
     return Value();
   if (isLoopCarriedValue(value))
     return mapping.lookupOrDefault(getYieldValue(value));
 
+  DenseMap<Value, Value> yieldCache;
   return cloneLoopValue(
       value, builder,
       [this, &builder, &mapping](BlockArgument arg) -> Value {
@@ -386,7 +389,7 @@ Value Prefetcher::getNextTrackedValue(triton::DotOp dot, bool isA, bool isToken,
                                        forOp.getStep());
         return mapping.lookupOrDefault(getYieldValue(arg));
       },
-      cache);
+      yieldCache);
 }
 
 LogicalResult Prefetcher::initialize() {
@@ -532,6 +535,73 @@ LogicalResult Prefetcher::initialize() {
   return success();
 }
 
+// Keep packed shared reads at their original load sites. For large fragments,
+// unpack each K slice immediately before the dot that consumes it.
+bool Prefetcher::handleNvidiaFp4Dot() {
+  auto dot = dots.front();
+  auto &aVals = dot2aVals[dot];
+  auto &bVals = dot2bVals[dot];
+  auto hasFp4 = [](ArrayRef<Value> chain) {
+    return llvm::any_of(chain.drop_front(2), [](Value v) {
+      return isa<Fp4ToFpOp>(v.getDefiningOp());
+    });
+  };
+  if (!isa<NvidiaMmaEncodingAttr>(dot.getType().getEncoding()) ||
+      (!hasFp4(aVals) && !hasFp4(bVals)))
+    return false;
+
+  // Estimate the footprint of the unsplit MMA fragments in 32-bit registers.
+  // A split can shorten the live ranges of the expanded operands.
+  auto registers = [](RankedTensorType type) -> uint64_t {
+    return llvm::divideCeil(uint64_t(getUniqueElemsPerThread(type)) *
+                                type.getElementTypeBitWidth(),
+                            uint64_t(32));
+  };
+  int64_t k = dot.getA().getType().getShape().back();
+  unsigned budget = std::min(255, nvidia_gpu::getContextualMaxNReg(dot));
+  if (k <= prefetchWidth || k % prefetchWidth ||
+      registers(dot.getA().getType()) + registers(dot.getB().getType()) +
+              registers(dot.getC().getType()) <=
+          budget)
+    return true;
+
+  auto canSplit = [&](ArrayRef<Value> chain, unsigned kAxis) {
+    return llvm::all_of(chain.drop_front(2), [&](Value v) {
+      Operation *op = v.getDefiningOp();
+      if (auto fp4 = dyn_cast<Fp4ToFpOp>(op))
+        return fp4.getAxis() == kAxis;
+      return op->getNumResults() == 1 && isPure(op) &&
+             op->hasTrait<OpTrait::Elementwise>();
+    });
+  };
+  unsigned rank = dot.getA().getType().getRank();
+  if (!canSplit(aVals, rank - 1) || !canSplit(bVals, rank - 2))
+    return true;
+  auto load = [&](const SmallVector<Value> &vals, unsigned operand,
+                  int64_t offset) {
+    auto ld = vals[1].getDefiningOp<LocalLoadOp>();
+    OpBuilder builder(ld);
+    return generatePrefetch(ld.getSrc(), operand, false, dot, builder,
+                            ld.getToken(), offset, prefetchWidth);
+  };
+  OpBuilder builder(dot);
+  Value acc = dot.getC();
+  for (int64_t offset = 0; offset < k; offset += prefetchWidth) {
+    Value a = load(aVals, 0, offset);
+    Value b = load(bVals, 1, offset);
+    cloneElementwiseOps(a, aVals, builder);
+    cloneElementwiseOps(b, bVals, builder);
+    IRMapping mapping;
+    mapping.map(dot.getA(), a);
+    mapping.map(dot.getB(), b);
+    mapping.map(dot.getC(), acc);
+    acc = builder.clone(*dot, mapping)->getResult(0);
+  }
+  dot.replaceAllUsesWith(acc);
+  dot.erase();
+  return true;
+}
+
 void Prefetcher::emitPrologue() {
   OpBuilder builder(forOp);
 
@@ -674,18 +744,17 @@ SmallVector<Value>
 Prefetcher::createYieldValues(OpBuilder &builder, IRMapping &mapping,
                               const CarriedArgs &carriedArgs) {
   SmallVector<Value> yieldValues;
-  DenseMap<Value, Value> yieldCache;
   for (Value v : forOp.getBody()->getTerminator()->getOperands())
     yieldValues.push_back(mapping.lookupOrDefault(v));
   for (triton::DotOp dot : dots) {
     Value nextASource = getNextTrackedValue(
-        dot, /*isA=*/true, /*isToken=*/false, builder, mapping, yieldCache);
+        dot, /*isA=*/true, /*isToken=*/false, builder, mapping);
     Value nextBSource = getNextTrackedValue(
-        dot, /*isA=*/false, /*isToken=*/false, builder, mapping, yieldCache);
+        dot, /*isA=*/false, /*isToken=*/false, builder, mapping);
     Value nextAToken = getNextTrackedValue(dot, /*isA=*/true, /*isToken=*/true,
-                                           builder, mapping, yieldCache);
+                                           builder, mapping);
     Value nextBToken = getNextTrackedValue(dot, /*isA=*/false, /*isToken=*/true,
-                                           builder, mapping, yieldCache);
+                                           builder, mapping);
 
     if (carriedArgs.aSource.contains(dot))
       yieldValues.push_back(nextASource);
@@ -757,6 +826,9 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       Prefetcher prefetcher(forOp, computeCapability);
 
       if (prefetcher.initialize().failed())
+        return;
+
+      if (prefetcher.handleNvidiaFp4Dot())
         return;
 
       prefetcher.emitPrologue();
