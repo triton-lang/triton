@@ -1303,7 +1303,9 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
         b_scale_ref = 1.0
 
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    is_restricted = get_current_target().arch == "gfx1250-strict"
+    # represents restricted fp4 wmma instructions unsupported on A0 hardware
+    is_restricted = (get_current_target().arch == "gfx1250-strict" and instr_m == 32 and a_type == "e2m1"
+                     and b_type == "e2m1")
     with pytest.raises(RuntimeError, match="PassManager::run failed") if is_restricted else contextlib.nullcontext():
         pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n,
                             transposed, num_warps=4)
