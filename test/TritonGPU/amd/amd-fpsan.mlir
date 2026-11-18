@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -symbol-dce -tritonamdgpu-fp-sanitizer | FileCheck %s
+// RUN: triton-opt %s -split-input-file -symbol-dce -tritonamdgpu-fp-sanitizer=homomorphic-casts=true | FileCheck %s --check-prefix=TRUNC
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
@@ -72,5 +73,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK: arith.mulf
     %0 = amdg.scaled_upcast_fp4 %src scale %scale {axis = 0 : i32} : tensor<256x8xi8, #packed_axis0>, tensor<8x8xi8, #scale_axis0> -> tensor<512x8xf16, #unpacked_axis0>
     tt.return %0 : tensor<512x8xf16, #unpacked_axis0>
+  }
+}
+
+// -----
+
+#input_axis1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale_axis1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#input_axis0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#packed_axis0 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#scale_axis0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @scaled_downcast_fp8_axis1
+  tt.func public @scaled_downcast_fp8_axis1(%src: tensor<4x512xf16, #input_axis1>, %scale: tensor<4x64xi8, #scale_axis1>) -> tensor<4x512xf8E4M3FN, #input_axis1> {
+    // CHECK: arith.truncf
+    // CHECK: tt.reshape {{.*}} -> tensor<4x64x1xf16,
+    // CHECK: tt.broadcast {{.*}} -> tensor<4x64x8xf16,
+    // CHECK: tt.reshape {{.*}} -> tensor<4x512xf16,
+    // CHECK: %[[DIV8:.*]] = arith.divf %arg0,
+    // CHECK: tt.fp_to_fp %[[DIV8]]
+    // CHECK: tt.return
+    %0 = amdg.scaled_downcast_fp8 %src scale %scale {axis = 1 : i32} : tensor<4x512xf16, #input_axis1>, tensor<4x64xi8, #scale_axis1> -> tensor<4x512xf8E4M3FN, #input_axis1>
+    tt.return %0 : tensor<4x512xf8E4M3FN, #input_axis1>
+  }
+
+  // CHECK-LABEL: @scaled_downcast_fp4_axis0
+  tt.func public @scaled_downcast_fp4_axis0(%src: tensor<512x4xf32, #input_axis0>, %scale: tensor<16x4xi8, #scale_axis0>) -> tensor<256x4xi8, #packed_axis0> {
+    // CHECK: tt.broadcast {{.*}} -> tensor<16x32x4xf32,
+    // CHECK: %[[DIV4:.*]] = arith.divf %arg0,
+    // CHECK: %[[INPUT:.*]] = tti.experimental_fpsan_embed %[[DIV4]]
+    // CHECK: %[[RETAINED:.*]] = arith.trunci %[[INPUT]] {{.*}} to tensor<512x4xi4,
+    // CHECK: %[[EXTENDED:.*]] = arith.extui %[[RETAINED]] {{.*}} to tensor<512x4xi32,
+    // CHECK: arith.xori %[[INPUT]], %[[EXTENDED]]
+    // CHECK: arith.muli
+    // CHECK: arith.extui {{.*}} to tensor<512x4xi8,
+    // CHECK: tt.reshape {{.*}} -> tensor<256x2x4xi8,
+    // CHECK: tt.trans {{.*}} {order = array<i32: 0, 2, 1>}
+    // CHECK: tt.split
+    // CHECK: arith.shli
+    // CHECK: arith.ori
+    // CHECK: tt.return
+    // TRUNC: %[[RETAINED:.*]] = arith.trunci {{.*}} to tensor<512x4xi4,
+    // TRUNC-NEXT: arith.extui %[[RETAINED]] {{.*}} to tensor<512x4xi8,
+    %0 = amdg.scaled_downcast_fp4 %src scale %scale {axis = 0 : i32} : tensor<512x4xf32, #input_axis0>, tensor<16x4xi8, #scale_axis0> -> tensor<256x4xi8, #packed_axis0>
+    tt.return %0 : tensor<256x4xi8, #packed_axis0>
   }
 }
