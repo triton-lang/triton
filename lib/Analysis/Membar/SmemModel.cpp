@@ -27,6 +27,47 @@ namespace mlir {
 
 using triton::membar::SMemModel;
 
+namespace triton::membar {
+
+static bool mayCrossCTA(Operation *op, const MemoryAccess &access) {
+  using namespace nvidia_gpu;
+  // Init, inval and wait execute on the CTA that owns the mbarrier.
+  if (gpu::lookupNumCTAs(op) == 1 ||
+      isa<InitBarrierOp, InvalBarrierOp, WaitBarrierOp, CLCLoadResultOp,
+          gpu::AsyncCopyGlobalToLocalOp>(op))
+    return false;
+  if (access.isShared(gpu::SharedKind::Barrier))
+    return hasCrossCTAMBarrierUse(cast<gpu::MBarrierOpInterface>(op)) ||
+           hasCGABroadcast(cast<gpu::MemDescType>(access.value.getType()));
+  if (access.isShared(gpu::SharedKind::Async))
+    return hasCrossCTAAsyncSharedAccess(op);
+  if (auto store = dyn_cast<AsyncSharedStoreOp>(op))
+    return isCrossCTALoadStore(store.getDst().getType(),
+                               store.getSrc().getType());
+  return hasCrossCTASharedAccess(op).value_or(true);
+}
+
+const BufferIndexAnalysis &
+SharedAccessModel::getIndices(FunctionOpInterface function) {
+  return indices.try_emplace(function, function).first->second;
+}
+
+const BufferRegionFootprint *SharedAccessModel::getFootprint(Value value) {
+  return regions.getKernelFootprint(regions.getFootprint(value));
+}
+
+const BufferRegionFootprint *
+SharedAccessModel::getScratchFootprint(Operation *op) {
+  return regions.getKernelFootprint(regions.getScratchFootprint(op));
+}
+
+SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
+                                                const MemoryAccess &access) {
+  return {getFootprint(access.value), access.isWrite, mayCrossCTA(op, access)};
+}
+
+} // namespace triton::membar
+
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval,
                                  Allocation::BufferId bufferId)

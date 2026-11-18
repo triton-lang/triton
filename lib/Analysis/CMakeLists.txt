@@ -6,6 +6,7 @@ add_triton_library(TritonAnalysis
   Membar.cpp
   Membar/AsyncFenceModel.cpp
   Membar/CFGBuilder.cpp
+  Membar/ClusterBarrierModel.cpp
   Membar/Solver.cpp
   Membar/Dependencies.cpp
   Membar/Pass.cpp

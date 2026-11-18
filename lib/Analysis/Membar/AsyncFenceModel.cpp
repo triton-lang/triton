@@ -1,10 +1,8 @@
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -12,18 +10,6 @@ namespace mlir::triton::membar {
 namespace {
 
 constexpr unsigned proxyScopes = bit(Need::ProxyCTA) | bit(Need::ProxyCluster);
-
-bool genericAccessMayCrossCTA(Operation *op) {
-  using namespace nvidia_gpu;
-  if (gpu::lookupNumCTAs(op) == 1 ||
-      isa<InitBarrierOp, InvalBarrierOp, CLCLoadResultOp,
-          gpu::AsyncCopyGlobalToLocalOp>(op))
-    return false;
-  if (auto store = dyn_cast<AsyncSharedStoreOp>(op))
-    return isCrossCTALoadStore(store.getDst().getType(),
-                               store.getSrc().getType());
-  return hasCrossCTASharedAccess(op).value_or(true);
-}
 
 using FenceCFG = MembarCFG<AsyncFenceFacts>;
 
@@ -50,15 +36,6 @@ unsigned applyFixed(unsigned state, unsigned sync) {
 
 } // namespace
 
-const BufferIndexAnalysis &
-AsyncFenceModel::getIndices(FunctionOpInterface function) {
-  return indices.try_emplace(function, function).first->second;
-}
-
-const BufferRegionFootprint *AsyncFenceModel::getFootprint(Value value) {
-  return regions.getKernelFootprint(regions.getFootprint(value));
-}
-
 std::optional<AsyncFenceFacts>
 AsyncFenceModel::describe(Operation *op, FixedSync &fixed, Block *active) {
   Facts facts;
@@ -75,8 +52,6 @@ AsyncFenceModel::describe(Operation *op, FixedSync &fixed, Block *active) {
     });
     return facts;
   }
-  if (isa<CallOpInterface>(op))
-    return std::nullopt; // The CFG links the callee's payload accesses.
   if (auto fence = dyn_cast<nvidia_gpu::FenceAsyncSharedOp>(op)) {
     fixed.after =
         coverage(fence.getBCluster() ? Action::ProxyCluster : Action::ProxyCTA);
@@ -100,24 +75,19 @@ AsyncFenceModel::describe(Operation *op, FixedSync &fixed, Block *active) {
     assert((facts.accesses.empty() || facts.proxy == *access.sharedKind) &&
            "mixed shared payload proxies");
     facts.proxy = *access.sharedKind;
-    bool crossCTA = facts.proxy == gpu::SharedKind::Async
-                        ? nvidia_gpu::hasCrossCTAAsyncSharedAccess(op)
-                        : genericAccessMayCrossCTA(op);
-    facts.accesses.push_back(
-        {getFootprint(access.value), access.isWrite, crossCTA});
+    facts.accesses.push_back(getSharedAccess(op, access));
   }
   if (op->hasAttr("allocation.size")) {
     assert(facts.proxy == gpu::SharedKind::Generic &&
            "async proxy operation with generic scratch");
-    auto *scratch = regions.getKernelFootprint(regions.getScratchFootprint(op));
+    auto *scratch = getScratchFootprint(op);
     // Each CTA writes its own scratch. A distributed layout can read a peer's.
     facts.accesses.push_back({scratch, /*isWrite=*/true});
     if (hasCrossCTAScratch(op))
       facts.accesses.push_back({scratch, /*isWrite=*/false, /*crossCTA=*/true});
   }
   if (facts.accesses.empty() && !usesCompletionBarrier &&
-      !isa<gpu::AsyncCommitGroupOp, gpu::AsyncWaitOp, gpu::WarpSpecializeOp>(
-          op))
+      !isa<gpu::AsyncCommitGroupOp, gpu::AsyncWaitOp>(op))
     return std::nullopt;
   return facts;
 }
@@ -136,7 +106,7 @@ static void recordCompletedWrites(FenceCFG &cfg) {
     // st.async names its barrier. A cp.async may signal any copy barrier.
     auto barriers = copy ? copyBarriers.getArrayRef()
                          : ArrayRef(producer.effects.completionBarrier);
-    const ProxyAccess &write = producer.effects.accesses.front();
+    const SharedAccess &write = producer.effects.accesses.front();
     walkEdges(
         cfg, producer, /*committed=*/false,
         [&](unsigned point, bool committed,
@@ -168,14 +138,14 @@ SmallVector<Demand> AsyncFenceModel::discoverDemands(FenceCFG &cfg) {
   for (auto [source, producer] : llvm::enumerate(cfg.nodes)) {
     if (producer.effects.proxy != gpu::SharedKind::Generic)
       continue;
-    for (const ProxyAccess &access : producer.effects.accesses) {
+    for (const SharedAccess &access : producer.effects.accesses) {
       unsigned state =
           scopes | (access.crossCTA ? bit(Need::ClusterAcquire) : 0);
       membar::discoverDemands(
           cfg, demands, source, state, applyFixed,
           [&](const auto &sink, unsigned live) -> Conflict {
             if (sink.effects.proxy == gpu::SharedKind::Async)
-              for (const ProxyAccess &other : sink.effects.accesses) {
+              for (const SharedAccess &other : sink.effects.accesses) {
                 Need need =
                     other.crossCTA ? Need::ProxyCluster : Need::ProxyCTA;
                 if ((live & bit(need)) && (access.isWrite || other.isWrite) &&

@@ -1,5 +1,6 @@
 #include "triton/Analysis/Membar/Solver.h"
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
+#include "triton/Analysis/Membar/ClusterBarrierModel.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SparseSet.h"
 #include <limits>
@@ -232,6 +233,9 @@ template std::optional<CutSolution>
 solveMembarCut(const MembarCFG<OpModel> &, ArrayRef<Demand>, ArrayRef<Action>);
 template std::optional<CutSolution>
 solveMembarCut(const MembarCFG<AsyncFenceFacts> &, ArrayRef<Demand>,
+               ArrayRef<Action>);
+template std::optional<CutSolution>
+solveMembarCut(const MembarCFG<ClusterBarrierModel::Facts> &, ArrayRef<Demand>,
                ArrayRef<Action>);
 
 } // namespace mlir::triton::membar

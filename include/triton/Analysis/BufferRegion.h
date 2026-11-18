@@ -277,10 +277,13 @@ struct BufferRegionFootprint {
   RegionInfo regionInfo;
 };
 
+enum class AllocationOrigin { Any, Same, Different };
+
 /// Prove disjointness only if every candidate pair is disjoint. Missing views
 /// and unnormalized allocation frames may overlap, never denote empty storage.
 bool mayOverlap(const BufferRegionFootprint *lhs,
-                const BufferRegionFootprint *rhs);
+                const BufferRegionFootprint *rhs,
+                AllocationOrigin origin = AllocationOrigin::Any);
 
 enum class RW { Read, Write };
 
