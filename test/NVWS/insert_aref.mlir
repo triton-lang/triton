@@ -916,6 +916,167 @@ tt.func @aref_result_outside_scheduled_loop(%lb: i32, %ub: i32, %step: i32) {
 
 // -----
 
+// A used-result atomic whose only in-loop consumer is the loop yield. The
+// result escapes the loop (ttg.partition.outputs says partition 0 must observe
+// it), so it is put in partition 1 and fetched in partition 0 before the
+// yield. There is no scheduled consumer op to anchor the get's stage cluster
+// to; fall back to the producer's cluster instead of asserting.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @yield_only_consumer
+  tt.func @yield_only_consumer(%lb: i32, %ub: i32, %step: i32, %cnt: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %c0_i32) -> i32 : i32 {
+      // CHECK: [[OLD:%.*]] = tt.atomic_rmw {{.*}}ttg.partition = array<i32: 1>
+      %old = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 1>} : (!tt.ptr<i32>, i32, i1) -> i32
+      // CHECK: nvws.aref.put.enter [[AREF]] {{.*}}ttg.partition = array<i32: 1>
+      // CHECK: nvws.aref.put.exit [[AREF]]
+      // CHECK: nvws.aref.get.enter [[AREF]] {{.*}}ttg.partition = array<i32: 0>
+      // CHECK: ttg.local_load {{.*}}ttg.partition = array<i32: 0>
+      // CHECK: nvws.aref.get.exit [[AREF]]
+      // CHECK: tt.unsplat {{.*}}ttg.partition = array<i32: 0>
+      // CHECK: nvws.aref.phi [[OLD]], {{.*}}ttg.partition = array<i32: 0, 1>
+      scf.yield {ttg.partition = array<i32: 0, 1>} %old : i32
+    } {tt.scheduled_max_stage = 0 : i32, tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>], ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: tt.store {{.*}}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+// The produced value has an in-loop consumer in the default partition and is
+// also yielded to the default partition. Both consumer groups fetch into
+// partition 0, so they must share a single get (and a single stage/phase
+// counter) instead of creating two gets in the same partition.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @yield_and_in_loop_consumer_share_get
+  tt.func @yield_and_in_loop_consumer_share_get(%lb: i32, %ub: i32, %step: i32, %cnt: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %c0_i32) -> i32 : i32 {
+      // CHECK: [[OLD:%.*]] = tt.atomic_rmw {{.*}}ttg.partition = array<i32: 1>
+      %old = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true {loop.cluster = 0 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 1>} : (!tt.ptr<i32>, i32, i1) -> i32
+      // CHECK: nvws.aref.put.enter [[AREF]] {{.*}}ttg.partition = array<i32: 1>
+      // CHECK-COUNT-1: nvws.aref.get.enter [[AREF]] {{.*}}ttg.partition = array<i32: 0>
+      // CHECK: nvws.aref.get.exit
+      // CHECK: [[PHI:%.*]] = nvws.aref.phi [[OLD]], {{.*}}ttg.partition = array<i32: 0, 1>
+      // CHECK: arith.cmpi sgt, [[PHI]], {{.*}} {ttg.partition = array<i32: 0>}
+      %cmp = arith.cmpi sgt, %old, %c0_i32 {ttg.partition = array<i32: 0>} : i32
+      scf.yield {ttg.partition = array<i32: 0, 1>} %old : i32
+    } {tt.scheduled_max_stage = 0 : i32, tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>], ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: tt.store {{.*}}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+// Consumer groups with overlapping but unequal remote sets. The default
+// in-loop consumer fetches {0}, the loop yield fetches {0, 2}. They must share
+// one get into {0, 2}; otherwise partition 0 would have two get enters for the
+// same producer slot and AssignStagePhase would advance two counters.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @overlapping_remote_sets_share_get
+  tt.func @overlapping_remote_sets_share_get(%lb: i32, %ub: i32, %step: i32, %init: i32, %out: !tt.ptr<i32>) {
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %init) -> i32 : i32 {
+      // CHECK: [[VAL:%.*]] = arith.muli {{.*}} {ttg.partition = array<i32: 1>}
+      %v = arith.muli %lb, %step {ttg.partition = array<i32: 1>} : i32
+      // CHECK: nvws.aref.put.enter [[AREF]] {{.*}}ttg.partition = array<i32: 1>
+      // CHECK-COUNT-1: nvws.aref.get.enter [[AREF]] {{.*}}ttg.partition = array<i32: 0, 2>
+      // CHECK: nvws.aref.get.exit
+      // CHECK: [[PHI:%.*]] = nvws.aref.phi [[VAL]], {{.*}}ttg.partition = array<i32: 0, 1, 2>
+      // CHECK: arith.addi [[PHI]], [[PHI]] {{.*}}ttg.partition = array<i32: 0>}
+      %u = arith.addi %v, %v {ttg.partition = array<i32: 0>} : i32
+      scf.yield {ttg.partition = array<i32: 0, 1, 2>} %v : i32
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 0, 1, 2>], ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: tt.store {{.*}}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+// A conditionally executed effect. The put and the get are both inside the
+// same scf.if branch, so a skipped branch does not leave the consumer waiting
+// on an arrive that never happened. The if result is available in both
+// partitions (then: fetched ticket, else: carried value), so consumers outside
+// the if need no second aref.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @conditional_effect
+  tt.func @conditional_effect(%lb: i32, %ub: i32, %step: i32, %cnt: !tt.ptr<i32>, %init: i32, %out: !tt.ptr<i32>) {
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %init) -> i32 : i32 {
+      %cond = arith.cmpi slt, %i, %ub : i32
+      // CHECK: scf.if
+      // CHECK: [[T:%.*]] = tt.atomic_rmw {{.*}}ttg.partition = array<i32: 1>
+      // CHECK: nvws.aref.put.enter [[AREF]] {{.*}}ttg.partition = array<i32: 1>
+      // CHECK: nvws.aref.get.enter [[AREF]] {{.*}}ttg.partition = array<i32: 0>
+      // CHECK: nvws.aref.get.exit
+      // CHECK: [[PHI:%.*]] = nvws.aref.phi [[T]], {{.*}}ttg.partition = array<i32: 0, 1>
+      %v = scf.if %cond -> i32 {
+        %t = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true {ttg.partition = array<i32: 1>} : (!tt.ptr<i32>, i32, i1) -> i32
+        scf.yield {ttg.partition = array<i32: 0, 1>} %t : i32
+      } else {
+        scf.yield {ttg.partition = array<i32: 0, 1>} %carried : i32
+      } {ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>]}
+      // CHECK: arith.addi {{.*}} {ttg.partition = array<i32: 0>}
+      %u = arith.addi %v, %v {ttg.partition = array<i32: 0>} : i32
+      scf.yield {ttg.partition = array<i32: 0, 1>} %v : i32
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>], ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: tt.store {{.*}}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+#memdesc_overlap_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#memdesc_overlap_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#memdesc_overlap_smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // Two MemDesc consumer groups with overlapping but unequal partition sets
+  // ({0,1} and {1,2}), both fully remote from the producer (partition 3). They
+  // share one get covering the union; otherwise partition 1 would contain two
+  // get enters for one producer slot and AssignStagePhase would advance two
+  // counters.
+  // CHECK-LABEL: @memdesc_overlapping_remote_sets_share_get
+  tt.func @memdesc_overlapping_remote_sets_share_get(%desc: !tt.tensordesc<128x64xf16, #memdesc_overlap_shared>, %lb: i32, %ub: i32, %step: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    scf.for %i = %lb to %ub step %c1_i32 : i32 {
+      %0 = tt.descriptor_load %desc[%i, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 3>} : !tt.tensordesc<128x64xf16, #memdesc_overlap_shared> -> tensor<128x64xf16, #memdesc_overlap_blocked>
+      %alloc = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 3>} : (tensor<128x64xf16, #memdesc_overlap_blocked>) -> !ttg.memdesc<128x64xf16, #memdesc_overlap_shared, #memdesc_overlap_smem>
+      // CHECK: nvws.aref.put.enter [[AREF]] {{.*}}ttg.partition = array<i32: 3>}
+      // CHECK-COUNT-1: [[GET_BUF:%.*]], [[GET_TOK:%.*]] = nvws.aref.get.enter [[AREF]] {{.*}}ttg.partition = array<i32: 0, 1, 2>}
+      // CHECK: [[REG_A:%.*]] = ttg.local_load [[GET_BUF]] {{.*}}ttg.partition = array<i32: 0, 1>}
+      // CHECK: arith.addf [[REG_A]], [[REG_A]] {{.*}}ttg.partition = array<i32: 0, 1>}
+      // CHECK: [[REG_B:%.*]] = ttg.local_load [[GET_BUF]] {{.*}}ttg.partition = array<i32: 1, 2>}
+      // CHECK: nvws.aref.get.exit {{.*}}ttg.partition = array<i32: 0, 1, 2>}
+      // CHECK: arith.addf [[REG_B]], [[REG_B]] {{.*}}ttg.partition = array<i32: 1, 2>}
+      %la = ttg.local_load %alloc {ttg.partition = array<i32: 0, 1>} : !ttg.memdesc<128x64xf16, #memdesc_overlap_shared, #memdesc_overlap_smem> -> tensor<128x64xf16, #memdesc_overlap_blocked>
+      %sa = arith.addf %la, %la {ttg.partition = array<i32: 0, 1>} : tensor<128x64xf16, #memdesc_overlap_blocked>
+      %lb2 = ttg.local_load %alloc {ttg.partition = array<i32: 1, 2>} : !ttg.memdesc<128x64xf16, #memdesc_overlap_shared, #memdesc_overlap_smem> -> tensor<128x64xf16, #memdesc_overlap_blocked>
+      %sb = arith.addf %lb2, %lb2 {ttg.partition = array<i32: 1, 2>} : tensor<128x64xf16, #memdesc_overlap_blocked>
+    } {ttg.partition = array<i32: 0, 1, 2, 3>, tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #aref_phi_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @overlapping_collective_consumer

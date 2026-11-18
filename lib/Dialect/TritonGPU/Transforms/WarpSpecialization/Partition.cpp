@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -156,6 +157,21 @@ LogicalResult verifyPartitionAttrs(Operation *op) {
 }
 
 } // namespace
+
+bool triton::gpu::isUserVisibleSideEffect(Operation *op) {
+  // Source-level effects that must execute exactly once. Lowering ops (arefs,
+  // barriers, tmem, fences), descriptor setup, and idempotent waits
+  // (grid_dependency_wait, atomic_poll) may be replicated across partitions
+  // and are excluded here.
+  if (isa<triton::AtomicRMWOp, triton::AtomicCASOp, triton::AtomicStoreOp,
+          triton::StoreOp, triton::DescriptorStoreLikeOpInterface,
+          triton::AssertOp, triton::PrintOp, triton::CallOp,
+          triton::GridDependencyLaunchDependentsOp>(op))
+    return true;
+  if (auto asmOp = dyn_cast<triton::ElementwiseInlineAsmOp>(op))
+    return !asmOp.getPure();
+  return false;
+}
 
 //===----------------------------------------------------------------------===//
 // Partition
@@ -400,6 +416,14 @@ LogicalResult verifyPartitionedLoop(LoopLikeOpInterface loop) {
       result = failure();
       return WalkResult::interrupt();
     }
+    // PartitionLoops clones an op once per partition, so a side-effecting op
+    // on several partitions would run its effect several times.
+    if (op->getNumRegions() == 0 && hasPartition(op) &&
+        isUserVisibleSideEffect(op) && getPartitionIds(op).size() > 1) {
+      op->emitOpError("side-effecting op must have exactly one partition");
+      result = failure();
+      return WalkResult::interrupt();
+    }
     return WalkResult::advance();
   });
   return result;
@@ -457,6 +481,156 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
 void setWarpSpecializeTag(Operation *op, int tag) {
   Builder b(op->getContext());
   op->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(tag));
+}
+
+namespace {
+
+bool isInLoopRegions(LoopLikeOpInterface loop, Operation *op) {
+  if (!op)
+    return false;
+  for (Region *region : loop.getLoopRegions())
+    if (region->isAncestor(op->getParentRegion()))
+      return true;
+  return false;
+}
+
+void addDefaultPartition(Operation *op, int resultIdx) {
+  if (!hasPartition(op))
+    return;
+  auto ids = getPartitionIds(op);
+  ids.insert(0);
+  setPartition(op, ids);
+  if (resultIdx < 0 || op->getNumResults() == 0)
+    return;
+  SmallVector<SetVector<int>, 4> outputs;
+  if (op->hasAttr(kPartitionOutputsAttrName))
+    outputs = getPartitionOutputs(op);
+  else
+    outputs.resize(op->getNumResults());
+  outputs[resultIdx].insert(0);
+  setPartitionOutputs(op, outputs);
+}
+
+} // namespace
+
+void assignDefaultPartitionToEscapingValues(LoopLikeOpInterface loop) {
+  // Walk the backward slice of each result that must be materialized in the
+  // default partition: pure ops are replicated there, structured ops get
+  // partition 0 added to their result. The walk stops at arefs (already
+  // communicated) and at user-visible effects (must not be recomputed;
+  // InsertAref communicates their result).
+  DenseSet<Value> visited;
+  std::function<void(Value)> visit = [&](Value value) {
+    if (!visited.insert(value).second)
+      return;
+
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = blockArg.getOwner()->getParentOp();
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+        if (forOp->hasAttr(kWarpSpecializeAttrName))
+          return;
+        // The induction variable is uniform across partitions.
+        if (blockArg.getArgNumber() == 0)
+          return;
+        visit(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+        if (whileOp->hasAttr(kWarpSpecializeAttrName))
+          return;
+        if (blockArg.getParentRegion() == &whileOp.getBefore()) {
+          // A before-region argument is the previous iteration's after-yield.
+          auto yield =
+              cast<scf::YieldOp>(whileOp.getAfter().front().getTerminator());
+          visit(yield.getOperand(blockArg.getArgNumber()));
+        } else {
+          // An after-region argument comes from the condition operands.
+          auto condition = cast<scf::ConditionOp>(
+              whileOp.getBefore().front().getTerminator());
+          visit(condition.getArgs()[blockArg.getArgNumber()]);
+        }
+      }
+      return;
+    }
+
+    Operation *defOp = value.getDefiningOp();
+    if (!defOp)
+      return;
+
+    // Already communicated through an aref.
+    if (defOp->getName().getStringRef().starts_with("nvws.aref"))
+      return;
+    // Executes once; InsertAref communicates its result.
+    if (isUserVisibleSideEffect(defOp))
+      return;
+    // Do not duplicate another warp-specialized loop.
+    if (defOp->hasAttr(kWarpSpecializeAttrName))
+      return;
+    if (!isInLoopRegions(loop, defOp))
+      return;
+
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      auto pos = cast<OpResult>(value).getResultNumber();
+      addDefaultPartition(ifOp, pos);
+      visit(ifOp.thenYield()->getOperand(pos));
+      if (ifOp.elseBlock())
+        visit(ifOp.elseYield()->getOperand(pos));
+      visit(ifOp.getCondition());
+      return;
+    }
+    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      auto pos = cast<OpResult>(value).getResultNumber();
+      addDefaultPartition(forOp, pos);
+      visit(forOp.getBody()->getTerminator()->getOperand(pos));
+      for (int idx = 0; idx < forOp.getNumControlOperands(); ++idx)
+        visit(forOp.getOperand(idx));
+      return;
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+      auto pos = cast<OpResult>(value).getResultNumber();
+      addDefaultPartition(whileOp, pos);
+      visit(whileOp.getYieldedValues()[pos]);
+      auto condition =
+          cast<scf::ConditionOp>(whileOp.getBefore().front().getTerminator());
+      visit(condition.getCondition());
+      return;
+    }
+    if (auto reduce = dyn_cast<triton::ReduceOp>(defOp)) {
+      auto pos = cast<OpResult>(value).getResultNumber();
+      addDefaultPartition(reduce, pos);
+      for (Value src : reduce.getSrcs())
+        visit(src);
+      for (Operation &op : *reduce.getBody())
+        addDefaultPartition(&op, -1);
+      return;
+    }
+    if (auto scan = dyn_cast<triton::ScanOp>(defOp)) {
+      auto pos = cast<OpResult>(value).getResultNumber();
+      addDefaultPartition(scan, pos);
+      for (Value src : scan.getSrcs())
+        visit(src);
+      for (Operation &op : scan.getRegion().front())
+        addDefaultPartition(&op, -1);
+      return;
+    }
+
+    addDefaultPartition(defOp, -1);
+    for (Value operand : defOp->getOperands())
+      visit(operand);
+  };
+
+  for (auto [idx, result] : llvm::enumerate(loop->getResults())) {
+    if (!isa<IntegerType, FloatType>(result.getType()) || result.use_empty())
+      continue;
+    // The default partition must observe results used outside the loop or by
+    // another warp-specialized loop.
+    bool escapes = llvm::any_of(result.getUsers(), [](Operation *user) {
+      return !hasPartition(user) || (isa<scf::ForOp, scf::WhileOp>(user) &&
+                                     hasWarpSpecializeTag(user));
+    });
+    if (!escapes)
+      continue;
+    addDefaultPartition(loop.getOperation(), idx);
+    visit(loop.getYieldedValues()[idx]);
+  }
 }
 
 } // namespace mlir::triton::gpu
