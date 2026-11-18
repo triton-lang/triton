@@ -45,6 +45,30 @@ public:
         else
           it = map.erase(it);
   }
+  /// Drop `scopes` from accesses in this frontier that conflict with an access
+  /// in `other`. Uses the same conflict rule as hasHazard: overlapping bytes
+  /// where at least one side is a write.
+  void eraseConflicts(const ScopedMemoryFrontier &other, ScopeMaskT scopes) {
+    for (unsigned lhsWrite = 0; lhsWrite < 2; ++lhsWrite) {
+      AccessMap &map = accesses[lhsWrite];
+      for (auto it = map.begin(); it != map.end();) {
+        bool conflict = false;
+        for (unsigned rhsWrite = 0; rhsWrite < 2 && !conflict; ++rhsWrite) {
+          if (!lhsWrite && !rhsWrite)
+            continue;
+          for (const auto &[right, rightScopes] : other.accesses[rhsWrite])
+            if ((rightScopes & scopes) && mayOverlap(it->first, right)) {
+              conflict = true;
+              break;
+            }
+        }
+        if (conflict && !(it->second &= ~scopes))
+          it = map.erase(it);
+        else
+          ++it;
+      }
+    }
+  }
 
   bool hasHazard(const ScopedMemoryFrontier &other, ScopeMaskT scope) const {
     return intersects(other, /*lhsWrite=*/true, /*rhsWrite=*/false, scope) ||
