@@ -12,7 +12,7 @@ struct ClusterBarrierFacts {
   SmallVector<std::pair<SharedAccess, unsigned>, 1> sources;
   Value payloadWrite;
   bool async = false;
-  bool initDeadline = false;
+  std::optional<Need> initDeadline;
 };
 
 /// Order peer accesses before shared storage is reused or a CTA exits.
