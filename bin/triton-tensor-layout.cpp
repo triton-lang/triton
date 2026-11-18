@@ -82,25 +82,39 @@ static cl::opt<std::string> TensorStr(
 // Helper functions
 //===--------------------------------------------------------------------===//
 
-static LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
-  // DistributedEncodingTrait and SharedEncodingTrait implements the
-  // toLinearLayout interface.
-  mlir::Attribute layout = tensorType.getEncoding();
+static mlir::Type withLayout(mlir::Type type, mlir::Attribute layout) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    return RankedTensorType::get(tensorType.getShape(),
+                                 tensorType.getElementType(), layout);
+  }
+
+  auto memDescType = cast<triton::gpu::MemDescType>(type);
+  return triton::gpu::MemDescType::get(
+      memDescType.getShape(), memDescType.getElementType(), layout,
+      memDescType.getMemorySpace(), memDescType.getMutableMemory(),
+      memDescType.getAllocShape());
+}
+
+static LogicalResult layoutPrint(mlir::Type type, raw_ostream &os) {
+  auto tensorOrMemDesc = cast<triton::gpu::TensorOrMemDesc>(type);
+  mlir::Attribute layout = tensorOrMemDesc.getEncoding();
   if (isa<mlir::triton::gpu::DistributedEncodingTrait,
-          mlir::triton::gpu::SharedEncodingTrait>(layout)) {
-    os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
+          mlir::triton::gpu::SharedEncodingTrait,
+          mlir::triton::nvidia_gpu::TensorMemoryEncodingAttr,
+          mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    os << triton::gpu::getLayoutStr(tensorOrMemDesc, UseHWPointOfView);
     return success();
   }
 
   llvm::errs() << "Unsupported tensor layout attribute: "
-               << tensorType.getEncoding() << "\n";
+               << tensorOrMemDesc.getEncoding() << "\n";
   return failure();
 }
 
 static LogicalResult printLayoutFromFile(MLIRContext *context,
                                          StringRef filename,
                                          ArrayRef<std::string> names,
-                                         TensorType tensorTy,
+                                         mlir::Type tensorTy,
                                          raw_string_ostream &ss) {
   if (filename.empty())
     return success();
@@ -126,10 +140,7 @@ static LogicalResult printLayoutFromFile(MLIRContext *context,
   auto printLambda = [&](StringRef name, mlir::Attribute attr) {
     ss << "Print layout attribute: #" << name << " = " << attr << "\n";
 
-    auto rankedTensorTy = RankedTensorType::get(
-        tensorTy.getShape(), tensorTy.getElementType(), attr);
-
-    return layoutPrint(rankedTensorTy, ss);
+    return layoutPrint(withLayout(tensorTy, attr), ss);
   };
 
   if (names.empty())
@@ -159,7 +170,7 @@ static LogicalResult printLayoutFromFile(MLIRContext *context,
 
 static LogicalResult printLayoutFromString(MLIRContext *context,
                                            StringRef layoutAttrStr,
-                                           TensorType tensorTy,
+                                           mlir::Type tensorTy,
                                            raw_string_ostream &ss) {
   if (layoutAttrStr.empty())
     return success();
@@ -170,12 +181,9 @@ static LogicalResult printLayoutFromString(MLIRContext *context,
     return failure();
   }
 
-  auto rankedTensorTy = RankedTensorType::get(
-      tensorTy.getShape(), tensorTy.getElementType(), layout);
-
   ss << "Print layout attribute: " << layout << "\n";
 
-  return layoutPrint(rankedTensorTy, ss);
+  return layoutPrint(withLayout(tensorTy, layout), ss);
 }
 
 //===--------------------------------------------------------------------===//
@@ -204,19 +212,19 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  TensorType tensorType = dyn_cast<TensorType>(parsedTy);
-  if (!tensorType) {
-    llvm::errs() << "Invalid tensor type argument: " << TensorStr << "\n";
+  if (!isa<RankedTensorType, triton::gpu::MemDescType>(parsedTy)) {
+    llvm::errs() << "Invalid tensor or memdesc type argument: " << TensorStr
+                 << "\n";
     return 1;
   }
 
   std::string storage;
   raw_string_ostream ss(storage);
 
-  if (failed(printLayoutFromFile(&ctx, InputFile, AliasName, tensorType, ss)))
+  if (failed(printLayoutFromFile(&ctx, InputFile, AliasName, parsedTy, ss)))
     return 1;
 
-  if (failed(printLayoutFromString(&ctx, DataLayoutStr, tensorType, ss)))
+  if (failed(printLayoutFromString(&ctx, DataLayoutStr, parsedTy, ss)))
     return 1;
 
   if (OutputFile.empty()) {
