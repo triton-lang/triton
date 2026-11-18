@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -76,6 +77,21 @@ bool ttng::isOperandPipelineableBase(
   foundDef = localAllocSrc;
   if (!isLoadToBePipelined(localAllocSrc)) {
     return false;
+  }
+  // A descriptor load whose shared encoding differs from the alloc's is lowered
+  // through registers into a single-buffered local_alloc (see
+  // mustLoadToRegisters in LowerLoops.cpp). The MMA reads that buffer
+  // asynchronously, so the next iteration's copy must wait for the MMA.
+  if (auto descLoad =
+          dyn_cast<tt::DescriptorLoadLikeOpInterface>(localAllocSrc)) {
+    auto tensorType =
+        cast<RankedTensorType>(localAllocSrc->getResult(0).getType());
+    Attribute loadEncoding = ttng::getEncodingFromDescriptor(
+        localAllocSrc, tensorType, descLoad.getDesc());
+    if (loadEncoding && loadEncoding != localAlloc.getType().getEncoding()) {
+      foundDef = localAlloc;
+      return false;
+    }
   }
   if (canBeAsyncLoad(localAllocSrc)) {
     return true;
