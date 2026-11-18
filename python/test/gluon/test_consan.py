@@ -11,6 +11,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
+from triton.runtime import _allocation
 from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
@@ -2311,6 +2312,14 @@ def test_ws_join_write_visibility(device, monkeypatch, num_ctas):
 
         offsets = ttgl.arange(0, block_x, layout)
         ttgl.store(output + offsets, smem.load(layout))
+
+    if num_ctas == 1:
+        # ConSan must initialize its lock before the worker first acquires it,
+        # including when a user-supplied allocator returns nonzero storage.
+        def allocate(size, alignment, stream):
+            return torch.full((size, ), 1, dtype=torch.int8, device=device)
+
+        monkeypatch.setattr(_allocation._profile_allocator, "_allocator", allocate)
 
     output = torch.empty((XBLOCK.value * num_ctas, ), device=device, dtype=torch.int32)
     kernel[(1, )](output, num_warps=4, num_ctas=num_ctas)

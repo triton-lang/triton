@@ -436,8 +436,12 @@ def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
@@ -449,8 +453,12 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
