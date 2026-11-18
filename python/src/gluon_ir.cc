@@ -593,9 +593,9 @@ void init_gluon_ir(py::module_ &m) {
                  tt::LinearLayout({{kReg, regBases}, {kWarp, warpBases}},
                                   tt::standardOutDimNames(ctx, rank));
              auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
-             return ttg::AMDWmmaEncodingAttr::get(
-                 ctx, version, ctaLayout, transposed, cgaLayout, instrShape,
-                 kWarpXor);
+             return ttg::AMDWmmaEncodingAttr::get(ctx, version, ctaLayout,
+                                                  transposed, cgaLayout,
+                                                  instrShape, kWarpXor);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,

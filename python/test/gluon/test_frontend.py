@@ -3497,7 +3497,7 @@ def amd_wmma_k_warp_bases_kernel(PLAIN: ttgl.constexpr, K_SWAP: ttgl.constexpr):
     ttgl.static_assert(b_plain.warp_bases == [[0, 0], [0, 0]])
     ttgl.static_assert(b_swap.warp_bases == [[128, 0], [0, 0]])
     ttgl.static_assert(b_swap.reg_bases == b_plain.reg_bases and b_swap.lane_bases == b_plain.lane_bases)
-    a =ttgl.full([128, 512], 1.0, ttgl.float16, ttgl.DotOperandLayout(0, K_SWAP, 8))
+    a = ttgl.full([128, 512], 1.0, ttgl.float16, ttgl.DotOperandLayout(0, K_SWAP, 8))
     b = ttgl.full([512, 64], 1.0, ttgl.float16, ttgl.DotOperandLayout(1, K_SWAP, 8))
     acc = ttgl.zeros([128, 64], ttgl.float32, K_SWAP)
     ttgl.amd.cdna5.wmma(a, b, acc)
@@ -3507,7 +3507,8 @@ def test_amd_wmma_k_warp_bases_ir():
     plain = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 32])
     k_swap = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 32], k_warp_bases=[4, 0])
     module = run_parser(amd_wmma_k_warp_bases_kernel, *make_args(plain, k_swap, num_warps=4), target=HIP_TARGET_CDNA5)
-    expecttest.assert_expected_inline(anonymize_ir(module.str_nodebug()), """\
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 32], kWarp = [4, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @amd_wmma_k_warp_bases_kernel() attributes {noinline = false} {

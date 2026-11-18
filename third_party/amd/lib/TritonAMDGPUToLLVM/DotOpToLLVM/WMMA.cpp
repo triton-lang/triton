@@ -211,9 +211,9 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
     int kOut = (opIdx == 0) ? rank - 1 : rank - 2;
     for (auto &basis : bases[kWarpDim])
       basis[kOut] = 0;
-    invLayout = LinearLayout(std::move(bases),
-                             llvm::to_vector(dotLayout.getOutDims()),
-                             /*requireSurjective=*/false);
+    invLayout =
+        LinearLayout(std::move(bases), llvm::to_vector(dotLayout.getOutDims()),
+                     /*requireSurjective=*/false);
   }
   auto inDims = invLayout.pseudoinvert().apply(outCoords);
 

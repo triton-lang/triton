@@ -1777,7 +1777,8 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CGALayout.has_value())
     return {};
 
-  // ArrayRef arguments select the custom builder, which drops an all-zero kWarp.
+  // ArrayRef arguments select the custom builder, which drops an all-zero
+  // kWarp.
   return parser.getChecked<AMDWmmaEncodingAttr>(
       parser.getContext(), version, std::move(ctaLL), isTransposed, *CGALayout,
       ArrayRef<unsigned>(instrShape), ArrayRef<unsigned>(kWarp));
@@ -1802,19 +1803,16 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "}>";
 }
 
-LogicalResult
-AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned version, LinearLayout ctaLayout,
-                            bool isTransposed, CGAEncodingAttr cgaLayout,
-                            llvm::ArrayRef<unsigned> instrShape,
-                            llvm::ArrayRef<unsigned> kWarp) {
+LogicalResult AMDWmmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
+    LinearLayout ctaLayout, bool isTransposed, CGAEncodingAttr cgaLayout,
+    llvm::ArrayRef<unsigned> instrShape, llvm::ArrayRef<unsigned> kWarp) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
   if (!kWarp.empty()) {
     auto kWarpDim = StringAttr::get(cgaLayout.getContext(), "warp");
-    unsigned numWarpBits = ctaLayout.hasInDim(kWarpDim)
-                               ? ctaLayout.getInDimSizeLog2(kWarpDim)
-                               : 0;
+    unsigned numWarpBits =
+        ctaLayout.hasInDim(kWarpDim) ? ctaLayout.getInDimSizeLog2(kWarpDim) : 0;
     if (kWarp.size() != numWarpBits)
       return emitError() << "kWarp must have one entry per warp basis";
   }
