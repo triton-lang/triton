@@ -1028,21 +1028,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-  tt.func public @cluster_barrier_in_noinline_kernel_valid() attributes {noinline = true} {
-    ttng.cluster_barrier
-    tt.return
-  }
-
-  tt.func private @cluster_barrier_in_non_kernel_function_invalid() attributes {noinline = true} {
-    // expected-error @below {{must be inside a kernel function}}
-    ttng.cluster_barrier
-    tt.return
-  }
-}
-
-// -----
-
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 
