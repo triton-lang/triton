@@ -885,6 +885,22 @@ def test_gsan_profile_thread_guard(fresh_knobs):
                 future.result()
 
 
+def test_profile_arena_uses_base_relative_metadata():
+    from contextlib import ExitStack
+    from triton.experimental.gsan import _profile_allocator as allocator
+
+    device = torch.cuda.current_device()
+    base = allocator.get_reserve_pointer()
+    with ExitStack() as cleanup:
+        ptr = allocator.malloc(4096, device)
+        cleanup.callback(allocator.free_allocation, ptr, device)
+        address, size, metadata = allocator.get_allocation_profile_layout(ptr)
+        data_offset = address - base - (8 << 40)
+        assert 0 <= data_offset < (8 << 40)
+        assert size >= 4096
+        assert metadata == base + data_offset // 16 * 4
+
+
 @pytest.mark.skipif("torch.cuda.device_count() < 2", reason="requires two CUDA devices")
 def test_gsan_profile_multiple_devices(fresh_knobs):
     with AllocationProfile(devices=[0, 1]) as profile:
