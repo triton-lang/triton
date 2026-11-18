@@ -1,4 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+
+#include "mlir/IR/BuiltinOps.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/StringMap.h"
 
 namespace mlir::triton {

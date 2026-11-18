@@ -12,7 +12,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
