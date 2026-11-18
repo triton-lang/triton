@@ -357,6 +357,41 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "scf.for" in ttgir
 
 
+@pytest.mark.parametrize("then_pure, else_pure", [(True, False), (False, True), (False, False)])
+def test_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
+
+    @triton.jit(do_not_specialize=["N"])
+    def kernel(A, B, C, marker, N, THEN_PURE: tl.constexpr, ELSE_PURE: tl.constexpr):
+        rows = tl.arange(0, 64)
+        cols = tl.arange(0, 32)
+        ks = tl.arange(0, 32)
+        acc = tl.zeros((64, 32), tl.float32)
+        for k in tl.range(N, num_stages=3):
+            a = tl.load(A + rows[:, None] * 64 + k * 32 + ks[None, :])
+            b = tl.load(B + (k * 32 + ks[:, None]) * 32 + cols[None, :])
+            acc = tl.dot(a, b, acc)
+            if k % 2 == 0:
+                if not THEN_PURE:
+                    tl.store(marker, 7)
+                value = k + 1
+            else:
+                if not ELSE_PURE:
+                    tl.store(marker + 1, 9)
+                value = k + 2
+            tl.store(marker + 2, value)
+        tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
+
+    a = torch.ones((64, 64), device=device, dtype=torch.float16)
+    b = torch.ones((64, 32), device=device, dtype=torch.float16)
+    c = torch.full((64, 32), -1.0, device=device)
+    marker = torch.full((3, ), -1, device=device, dtype=torch.int32)
+    kernel[(1, )](a, b, c, marker, 0, then_pure, else_pure, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert marker.tolist() == [-1, -1, -1]
+    assert torch.all(c == 0)
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")

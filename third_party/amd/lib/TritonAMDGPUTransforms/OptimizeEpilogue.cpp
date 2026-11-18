@@ -142,12 +142,16 @@ static bool isProfitableBypassSource(RankedTensorType srcType,
   if (triton::gpu::getThreadOrder(srcType)[0] != contigDim)
     return false;
 
-  // Make sure that using the src layout would not increase the store count.
-  // A store is at most 128 bits wide, so we cap the dst run at the number of
-  // elements that fit in it (4 for f32, 8 for f16): a src run of 8 f16 against
-  // a dst run of 16 needs no more stores, since neither can write more than 8
-  // elements at a time, and rejecting it would keep the LDS round trip for a
-  // penalty the hardware does not have.
+  // Bypassing the relayout makes the store use the src layout, so compare
+  // each thread's contiguous run, which bounds the store width. Both runs are
+  // capped at what a 128-bit store holds (4 for f32, 8 for f16), since no
+  // store can write more than that, and rejecting it would keep the LDS round
+  // trip for a penalty the hardware does not have.
+  //
+  // We must check for equality. dstContig is already the widest store the
+  // pointer alignment allows, so a longer src run would not widen the stores;
+  // it would only spread neighbouring lanes apart and hurt coalescing (e.g.
+  // 16 bytes apart instead of 2 for an unaligned bf16 row).
   Type elemType = dstType.getElementType();
   if (!elemType.isIntOrFloat())
     return false;
@@ -158,7 +162,7 @@ static bool isProfitableBypassSource(RankedTensorType srcType,
       triton::gpu::getContigPerThread(srcType)[contigDim];
   const unsigned dstContig =
       triton::gpu::getContigPerThread(dstType)[contigDim];
-  return srcContig >= std::min(dstContig, maxElems);
+  return std::min(srcContig, maxElems) == std::min(dstContig, maxElems);
 }
 
 // convert(val) : xmma -> blocked
