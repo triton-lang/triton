@@ -508,6 +508,10 @@ public:
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
+          .Case([&](ttng::FenceAsyncGlobalOp op) {
+            b.setInsertionPointAfter(op);
+            ExperimentalGSanFenceAsyncGlobalOp::create(b, op.getLoc());
+          })
           .Case([&](tt::LoadOp op) {
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);

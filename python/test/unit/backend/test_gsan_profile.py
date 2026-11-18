@@ -410,6 +410,19 @@ def test_gsan_profile_tma_observes_whole_rows(num_ctas, fresh_knobs, with_alloca
         assert row["bytes_written"] == source.numel() * source.element_size()
 
 
+@pytest.mark.skipif("not is_hopper_or_newer()", reason="Async proxy fences require Hopper or newer")
+def test_gsan_profile_global_proxy_fence(fresh_knobs):
+    from triton.experimental.gluon.language.nvidia.hopper import fence_async_global
+
+    @gluon.jit
+    def kernel():
+        fence_async_global()
+
+    with AllocationProfile():
+        compiled = kernel[(1, )]()
+    assert "fence.proxy.async.global" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("replays", [1, 2])
 def test_gsan_profile_cuda_graph_replay_detects_overwrite(replays, fresh_knobs):
     with AllocationProfile() as profile:

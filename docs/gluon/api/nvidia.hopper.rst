@@ -19,6 +19,7 @@ NVIDIA Hopper
     :toctree: generated
     :nosignatures:
 
+    fence_async_global
     fence_async_shared
     mma_v2
     warpgroup_mma

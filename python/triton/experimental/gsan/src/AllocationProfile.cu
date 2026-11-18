@@ -193,6 +193,10 @@ extern "C" GSAN_DEVICE void __triton_gsan_init(void *, const void *,
                                                gsan::uint64_t, unsigned,
                                                unsigned, unsigned, const char *,
                                                unsigned) {}
+extern "C" GSAN_DEVICE void __triton_gsan_fence_async_global(void *, unsigned,
+                                                             unsigned, unsigned,
+                                                             const char *,
+                                                             unsigned) {}
 extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(void *, const void *,
                                                       gsan::uint64_t, unsigned,
                                                       unsigned, unsigned,

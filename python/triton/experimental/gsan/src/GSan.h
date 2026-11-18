@@ -43,6 +43,7 @@ struct alignas(4) ScalarClock {
   // For a release write, the epoch is actually an index into the thread's
   // circular clock buffer where the full vector clock is stored.
   bool isRelease : 1;
+  bool isTma : 1;
 };
 static constexpr int kMaxThreads = 1 << 12;
 static_assert(sizeof(ScalarClock) == 4);
@@ -113,8 +114,10 @@ struct ThreadState {
 
   thread_id_t threadId;
 
-  // Local vector clock, shape [numThreads]
-  // Followed by the clock buffer, shape [clockBufferSize, numThreads]
+  static constexpr unsigned kNumLocalClocks = 2;
+
+  // Generic and async proxy vector clocks, each [numThreads].
+  // Followed by generic release snapshots, [clockBufferSize, numThreads].
   epoch_t vectorClock[];
 };
 
