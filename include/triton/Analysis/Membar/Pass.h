@@ -24,6 +24,8 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
 /// insertion sites. Propagate producer effects through the CFG to find demands
 /// for ordering or completion. A cross-warp handoff from a native TMEM load or
 /// store needs its completion wait followed by a rendezvous.
+/// At eligible mbarrier notifications, each warp can publish its own effects
+/// when the selected synchronization is insufficient for a scalar issuer.
 ///
 /// The solver selects sites on uncovered paths until it covers every demand.
 /// A site can cover several demands. Each enclosing loop multiplies its cost
@@ -34,7 +36,8 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
 LogicalResult placeBarriers(ModuleAllocation &allocation,
                             BufferRegionAnalysis &regions,
                             MembarFilterFn sharedFilter, PlacementMode mode,
-                            CompletionScopeFn completionScope = nullptr);
+                            CompletionScopeFn completionScope = nullptr,
+                            DenseSet<Operation *> distributable = {});
 
 } // namespace mlir::triton::membar
 

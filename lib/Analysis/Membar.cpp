@@ -18,8 +18,6 @@ static void insertBarrier(Operation *op, OpBuilder &builder, MembarInfo &info) {
 
 void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                   MembarInfo *membarInfo, OpBuilder *builder) {
-  if (!builder)
-    return;
   auto &pending = membarInfo->pending;
   if (!BlockInfo::requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, filter, &allocation))
@@ -49,7 +47,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   // Finish completions that block every memory demand once before a loop.
   // Shared-copy completions can still overlap independent global reads.
-  if (builder && shared.getBufferIndexAnalysis().entersLoop(op) &&
+  if (shared.getBufferIndexAnalysis().entersLoop(op) &&
       membarInfo->pending.threadSync.completion == CompletionSync::All)
     insertBarrier(op, *builder, *membarInfo);
 
@@ -64,12 +62,6 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 
   namespace mb = triton::membar;
-  auto applyFixed = [&](unsigned mask) {
-    if (mask & mb::bit(mb::SyncKind::RegionBarrier))
-      membarInfo->sync();
-    else if (mask & mb::bit(mb::SyncKind::WarpBarrier))
-      membarInfo->syncWarps();
-  };
   mb::OpModel model;
   mb::FixedSync fixed;
   shared.describe(op, model, fixed, triton::getMemoryAccesses(op));
@@ -81,25 +73,20 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
     model.sharedIn.threadDemands.mayNotifyPeer = true;
   }
   // Model a leading barrier before handling the operation's effects.
-  applyFixed(fixed.before);
+  if (fixed.before == mb::fullBarrier)
+    membarInfo->sync();
   syncIfNeeded(op, model.sharedIn, membarInfo, builder);
-  if (builder && model.needsWarp && !membarInfo->warpsSynced) {
-    builder->setInsertionPoint(op);
-    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                   triton::gpu::AddrSpace::Local,
-                                   triton::gpu::BarrierScope::Warp);
-    membarInfo->syncWarps();
-  }
-  if (fixed.inside) {
+  if (fixed.inside == mb::fullBarrier) {
     // Preserve effects reachable from entry before the scratch rendezvous.
     if (!membarInfo->allPathsFromEntrySynced)
       membarInfo->entryBlockInfo.join(model.sharedIn);
-    applyFixed(fixed.inside);
+    membarInfo->sync();
   }
   // Even if a barrier was inserted, retain the operation's outgoing effects.
   membarInfo->addBlockInfo(model.sharedOut);
   // Model a trailing barrier after handling the operation's effects.
-  applyFixed(fixed.after);
+  if (fixed.after == mb::fullBarrier)
+    membarInfo->sync();
 }
 
 void ModuleMembarAnalysis::run() { run<MembarAnalysis>(); }

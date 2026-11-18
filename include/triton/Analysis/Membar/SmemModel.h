@@ -123,6 +123,8 @@ enum class ThreadIssuer : uint8_t {
   Unknown,
   // Thread zero of the current execution partition.
   Thread0,
+  // Lane zero of each warp in the partition.
+  WarpLeaders,
   // A fixed leader of partition-relative warp zero.
   // The leader's lane may be nonzero.
   Warp0Leader
@@ -169,11 +171,6 @@ struct BlockInfo {
   } threadDemands;
 
   BlockInfo() = default;
-
-  bool hasEffects() const {
-    return threadSync.effectIssuer != ThreadIssuer::None ||
-           !syncReadSlices.empty() || !syncWriteSlices.empty();
-  }
 
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
@@ -325,7 +322,8 @@ public:
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
-  /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
+  /// SynchronizationOnly records fixed barriers, including scratch rendezvous,
+  /// and the mode of existing per-warp notifications.
   void describe(Operation *op, OpModel &model, FixedSync &fixed,
                 ArrayRef<MemoryAccess> accesses);
   /// TODO: Retire this method and AllocationSlice::translateToCallsite with the

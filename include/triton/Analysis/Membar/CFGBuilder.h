@@ -19,7 +19,6 @@ enum class SyncKind {
   WaitStore,
   RegionBarrier,
   WarpBarrier,
-  WarpConvergence, // Demand only.
   CTAProxyFence,
   ClusterProxyFence,
   ClusterBarrier,
@@ -30,12 +29,8 @@ constexpr unsigned bit(SyncKind kind) { return 1u << unsigned(kind); }
 
 constexpr unsigned coverage(SyncKind action) {
   switch (action) {
-  case SyncKind::WaitLoad:
-  case SyncKind::WaitStore:
-  case SyncKind::WarpBarrier:
-    return bit(action) | bit(SyncKind::WarpConvergence);
   case SyncKind::RegionBarrier:
-    return bit(action) | coverage(SyncKind::WarpBarrier);
+    return bit(action) | bit(SyncKind::WarpBarrier);
   case SyncKind::ClusterProxyFence:
     return bit(action) | bit(SyncKind::CTAProxyFence);
   case SyncKind::ClusterBarrier:
@@ -55,6 +50,8 @@ enum class Boundary {
   KernelReturn, // Complete issued TMEM accesses and order CompletionSync::All.
 };
 
+enum class ArrivalMode { Scalar, PerWarp, Either };
+
 // Observe the input before the operation and start new producers at its output.
 // A scratch rendezvous lies between those two sets of effects.
 struct OpModel {
@@ -64,7 +61,7 @@ struct OpModel {
   std::optional<SyncKind> tmemProducerNeed;
   Boundary boundary = Boundary::None;
   bool privateTMem = false;
-  bool needsWarp = false;
+  ArrivalMode arrivalMode = ArrivalMode::Scalar;
 
   bool operator==(const OpModel &) const = default;
 };

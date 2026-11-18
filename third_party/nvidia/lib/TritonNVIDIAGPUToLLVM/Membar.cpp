@@ -7,11 +7,10 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar/Pass.h"
-#include "triton/Analysis/Membar/TmemModel.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/OptimizeMBarrierArrivals.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 namespace mlir::triton {
@@ -44,13 +43,8 @@ struct TritonNvidiaGPUMembar
     // Synchronization insertion and arrival attributes preserve this geometry.
     if (failed(membar::placeClusterBarriers(allocation, *regions)))
       return signalPassFailure();
-    ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
-
-    auto mode = membar::usesTensorMemory(mod)
-                    ? membar::PlacementMode::SharedAndTensorMemory
-                    : membar::PlacementMode::Shared;
-    if (failed(membar::placeBarriers(allocation, *regions,
-                                     NVIDIA::canSkipBarSync, mode)))
+    if (failed(ttng::placeBarriersAndArrivals(
+            allocation, *regions, NVIDIA::canSkipBarSync, computeCapability)))
       signalPassFailure();
   }
 };
@@ -130,10 +124,11 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
 
     auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
     auto contribution = cast<gpu::MBarrierOpInterface>(after);
-    // Each CTA must wait and contribute before the next phase can complete.
-    // Broadcast waits and nonidentity fromCTA routing omit participating CTAs.
-    if (wait && contribution.isPerWarp() &&
-        wait.getAlloc() == contribution.getBarrier() &&
+    // Thread ordering covers direct contributions to the same counter. A
+    // scalar issuer needs a CTA rendezvous. With per-warp issuers, each warp
+    // finishes its wait before contributing to the next phase. Broadcast
+    // waits and nonidentity fromCTA routing omit participating CTAs.
+    if (wait && wait.getAlloc() == contribution.getBarrier() &&
         !ttng::hasCGABroadcast(wait.getAlloc().getType())) {
       auto expect = dyn_cast<ttng::BarrierExpectOp>(after);
       auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);

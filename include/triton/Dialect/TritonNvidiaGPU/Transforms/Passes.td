@@ -154,13 +154,11 @@ def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mb
 }
 
 def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimize-mbarrier-arrivals", "mlir::ModuleOp"> {
-  let summary = "Finalize distributed mbarrier arrivals after synchronization";
+  let summary = "Clean up redundant explicit warp barriers";
 
   let description = [{
-    Analyze the completed shared-memory and tensor-memory synchronization to
-    remove redundant warp barriers and clear unnecessary per-warp flags, then
-    scale closed barrier groups once.
-    Run after both synchronization passes and before sanitizer insertion.
+    Fold redundant warp barriers in standalone pipelines. Input `per_warp`
+    flags have finalized counts, as produced by NVIDIA Membar.
   }];
 
   let dependentDialects = [

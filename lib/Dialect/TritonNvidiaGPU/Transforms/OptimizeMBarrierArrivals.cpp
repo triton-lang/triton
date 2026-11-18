@@ -1,13 +1,12 @@
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/OptimizeMBarrierArrivals.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Membar.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Analysis/Membar/Pass.h"
+#include "triton/Analysis/Membar/TmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 #include <numeric>
 
@@ -104,11 +103,14 @@ static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
         uses.hasTMA = true;
         continue;
       }
+      // A group with a per-warp contribution already has finalized counts.
       if (auto init = dyn_cast<InitBarrierOp>(user)) {
         uses.inits.push_back(init);
-      } else if (auto arrive = dyn_cast<ArriveBarrierOp>(user)) {
+      } else if (auto arrive = dyn_cast<ArriveBarrierOp>(user);
+                 arrive && !arrive.getPerWarp()) {
         uses.arrivals.push_back(arrive);
-      } else if (auto expect = dyn_cast<BarrierExpectOp>(user)) {
+      } else if (auto expect = dyn_cast<BarrierExpectOp>(user);
+                 expect && !expect.getPerWarp()) {
         uses.expects.push_back(expect);
       } else if (!isa<InvalBarrierOp, gpu::LocalDeallocOp>(user)) {
         return failure();
@@ -119,9 +121,9 @@ static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
 }
 
 // Validate the full group before Membar; later subsets need no larger scale.
-static uint64_t
-getDistributionScale(const BarrierUses &uses,
-                     llvm::function_ref<bool(Operation *)> usePerWarp) {
+static uint64_t getDistributionScale(const BarrierUses &uses,
+                                     bool distributeAll) {
+  auto usePerWarp = [=](auto op) { return distributeAll || op.getPerWarp(); };
   if (uses.inits.empty() || (!llvm::any_of(uses.arrivals, usePerWarp) &&
                              !llvm::any_of(uses.expects, usePerWarp)))
     return 0;
@@ -167,165 +169,109 @@ getDistributionScale(const BarrierUses &uses,
   return scale;
 }
 
-static bool isSynchronizationCandidate(Operation *op) {
-  auto barrier = dyn_cast<gpu::BarrierOp>(op);
-  return barrier && barrier.isWarp();
-}
-
-static bool isPerWarp(Operation *op) {
-  auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op);
-  return barrier && barrier.isPerWarp();
-}
-
-// Find scalar arrivals and redundant warp barriers using Membar's state.
-//   ttg.barrier local; ttg.barrier warp local -> ttg.barrier local
-//   ttg.barrier warp local; ttg.barrier local -> ttg.barrier local
-class SynchronizationAnalysis : public MembarAnalysis {
-public:
-  SynchronizationAnalysis(Allocation &allocation, BufferRegionAnalysis &regions,
-                          llvm::SmallPtrSetImpl<Operation *> &scalarOps)
-      : MembarAnalysis(allocation, nullptr, regions), scalarOps(scalarOps) {}
-
-  void run(FunctionOpInterface function, FuncMapT &funcMap) {
-    MembarAnalysis::run(function, funcMap);
-    // Rewrite only after all predecessors and backedges have been analyzed.
-    for (Operation *op : foldableOps) {
-      if (auto barrier = dyn_cast<gpu::BarrierOp>(op))
-        barrier.erase();
-      else
-        scalarOps.insert(op);
-    }
-  }
-
-private:
-  void update(Operation *op, MembarInfo *info, FuncMapT *funcMap,
-              OpBuilder *) override {
-    bool candidate = isPerWarp(op);
-    if (isSynchronizationCandidate(op) || candidate) {
-      bool canFold = info->warpsSynced;
-      if (candidate)
-        canFold &= info->allPathsFromEntrySynced && !info->pending.hasEffects();
-      // A later predecessor or backedge can invalidate an earlier decision.
-      if (canFold)
-        foldableOps.insert(op);
-      else
-        foldableOps.erase(op);
-    }
-
-    if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
-      if (barrier.isWarp()) {
-        if (!firstWarpBarrier)
-          firstWarpBarrier = op;
-      } else {
-        if (barrier.hasLocal() && firstWarpBarrier)
-          foldableOps.insert(firstWarpBarrier);
-        firstWarpBarrier = nullptr;
-      }
-    } else if (op->getNumRegions() || op->hasTrait<OpTrait::IsTerminator>() ||
-               membar::SMemModel::hasThreadEffects(op) ||
-               allocation.getBufferId(op) != Allocation::InvalidBufferId) {
-      firstWarpBarrier = nullptr;
-    }
-    MembarAnalysis::update(op, info, funcMap, /*builder=*/nullptr);
-  }
-
-  // First warp barrier that a later CTA barrier can make redundant.
-  Operation *firstWarpBarrier = nullptr;
-  llvm::SmallPtrSet<Operation *, 16> foldableOps;
-  llvm::SmallPtrSetImpl<Operation *> &scalarOps;
-};
-
 struct OptimizeMBarrierArrivalsPass
     : impl::TritonNvidiaGPUOptimizeMBarrierArrivalsPassBase<
           OptimizeMBarrierArrivalsPass> {
   using Base::Base;
 
+  // Standalone pipelines can supply explicit warp barriers. Membar prunes
+  // its own barriers and finalizes arrivals during placement.
   void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (!mod.walk([](Operation *op) {
-              return isPerWarp(op) || isSynchronizationCandidate(op)
-                         ? WalkResult::interrupt()
-                         : WalkResult::advance();
-            })
-             .wasInterrupted())
-      return;
-    ModuleAllocation allocation(mod);
-    auto solver = createDataFlowSolver();
-    auto *regions = solver->load<BufferRegionAnalysis>(
-        BufferRegionAnalysis::Mode::AllMemory, &allocation);
-    if (failed(solver->initializeAndRun(mod)))
-      return signalPassFailure();
-
-    // Keep the provisional flags fixed through every function and backedge.
-    llvm::SmallPtrSet<Operation *, 16> scalarOps;
-    MembarAnalysis::runModule(mod, [&](FunctionOpInterface function) {
-      return SynchronizationAnalysis(*allocation.getFuncData(function),
-                                     *regions, scalarOps);
-    });
-
-    auto forwarding = collectDescriptorForwarding(mod);
-    mod.walk([&](gpu::LocalAllocOp alloc) {
-      BarrierUses uses;
-      if (failed(collectBarrierUses(alloc, forwarding, *regions, uses)) ||
-          uses.inits.empty())
-        return;
-      for (ArriveBarrierOp arrive : uses.arrivals)
-        if (scalarOps.contains(arrive))
-          arrive.setPerWarp(false);
-      for (BarrierExpectOp expect : uses.expects)
-        if (scalarOps.contains(expect))
-          expect.setPerWarp(false);
-
-      uint64_t scale = getDistributionScale(uses, isPerWarp);
-      if (!scale)
-        return;
-      // Scale every contribution, including bootstrap and conditional arrivals.
-      OpBuilder builder(alloc.getContext());
-      for (InitBarrierOp init : uses.inits)
-        init.setCountAttr(builder.getI32IntegerAttr(init.getCount() * scale));
-      for (ArriveBarrierOp arrive : uses.arrivals)
-        arrive.setCountAttr(
-            builder.getI32IntegerAttr(arrive.getCount() * scale));
-      for (BarrierExpectOp expect : uses.expects) {
-        if (expect.getPerWarp())
+    getOperation().walk([](Block *block) {
+      gpu::BarrierOp previous;
+      for (Operation &op : llvm::make_early_inc_range(*block)) {
+        auto barrier = dyn_cast<gpu::BarrierOp>(op);
+        if (!barrier || !barrier.hasLocal()) {
+          if (previous &&
+              (op.getNumRegions() || membar::SMemModel::hasThreadEffects(&op) ||
+               defaultAllocationAnalysisScratchSizeFn(&op)))
+            previous = {};
           continue;
-        builder.setInsertionPointAfter(expect);
-        // Register all bytes before supplying the remaining arrivals.
-        auto arrive =
-            ArriveBarrierOp::create(builder, expect.getLoc(), expect.getAlloc(),
-                                    scale - 1, expect.getPred());
-        arrive.setFromCTAAttr(expect.getFromCTAAttr());
+        }
+        if (previous && barrier.isWarp()) {
+          barrier.erase();
+          continue;
+        }
+        if (previous && previous.isWarp())
+          previous.erase();
+        previous = barrier;
       }
     });
   }
 };
 
-} // namespace
-
-void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
-                             int computeCapability) {
+static SmallVector<BarrierUses> collectGroups(ModuleOp mod,
+                                              BufferRegionAnalysis &regions,
+                                              int computeCapability) {
   // Completing arrivals with an explicit count requires SM90.
   if (computeCapability < 90)
-    return;
+    return {};
   if (!mod.walk([](Operation *op) {
             return isa<ArriveBarrierOp, BarrierExpectOp>(op)
                        ? WalkResult::interrupt()
                        : WalkResult::advance();
           })
            .wasInterrupted())
-    return;
+    return {};
   auto forwarding = collectDescriptorForwarding(mod);
+  SmallVector<BarrierUses> groups;
   mod.walk([&](gpu::LocalAllocOp alloc) {
     BarrierUses uses;
-    if (failed(collectBarrierUses(alloc, forwarding, regions, uses)) ||
-        !getDistributionScale(uses, [](Operation *) { return true; }))
-      return;
+    if (succeeded(collectBarrierUses(alloc, forwarding, regions, uses)) &&
+        getDistributionScale(uses, /*distributeAll=*/true))
+      groups.push_back(std::move(uses));
+  });
+  return groups;
+}
+
+static void finalizeGroup(const BarrierUses &uses) {
+  uint64_t scale = getDistributionScale(uses, /*distributeAll=*/false);
+  if (scale <= 1)
+    return;
+  // Scale every contribution, including bootstrap and conditional arrivals.
+  OpBuilder builder(uses.inits.front());
+  for (InitBarrierOp init : uses.inits)
+    init.setCountAttr(builder.getI32IntegerAttr(init.getCount() * scale));
+  for (ArriveBarrierOp arrive : uses.arrivals)
+    arrive.setCountAttr(builder.getI32IntegerAttr(arrive.getCount() * scale));
+  for (BarrierExpectOp expect : uses.expects) {
+    if (expect.getPerWarp())
+      continue;
+    builder.setInsertionPointAfter(expect);
+    // Register all bytes before supplying the remaining arrivals.
+    auto arrive =
+        ArriveBarrierOp::create(builder, expect.getLoc(), expect.getAlloc(),
+                                scale - 1, expect.getPred());
+    arrive.setFromCTAAttr(expect.getFromCTAAttr());
+  }
+}
+
+} // namespace
+
+LogicalResult placeBarriersAndArrivals(ModuleAllocation &allocation,
+                                       BufferRegionAnalysis &regions,
+                                       MembarFilterFn filter,
+                                       int computeCapability) {
+  ModuleOp mod = allocation.getModuleOp();
+  auto groups = collectGroups(mod, regions, computeCapability);
+  DenseSet<Operation *> distributable;
+  for (const BarrierUses &uses : groups) {
     for (BarrierExpectOp expect : uses.expects)
-      expect.setPerWarp(true);
+      distributable.insert(expect);
     for (ArriveBarrierOp arrive : uses.arrivals)
       if (gpu::lookupNumWarps(arrive) > 1)
-        arrive.setPerWarp(true);
-  });
+        distributable.insert(arrive);
+  }
+  auto mode = membar::usesTensorMemory(mod)
+                  ? membar::PlacementMode::SharedAndTensorMemory
+                  : membar::PlacementMode::Shared;
+  if (failed(membar::placeBarriers(allocation, regions, std::move(filter), mode,
+                                   /*completionScope=*/nullptr,
+                                   std::move(distributable))))
+    return failure();
+  for (const BarrierUses &uses : groups)
+    finalizeGroup(uses);
+  return success();
 }
 
 } // namespace mlir::triton::nvidia_gpu

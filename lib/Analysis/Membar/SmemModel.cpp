@@ -219,8 +219,6 @@ namespace {
 enum class ThreadSyncKind {
   Ordinary,
   Publication,
-  // Each warp publishes its completed effects without a CTA rendezvous.
-  WarpPublication,
   // Completions only establish completion or acquire state; they do
   // not access payload or consume another completion's unpublished effects.
   Completion,
@@ -238,10 +236,6 @@ struct ThreadSyncInfo {
 
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
-  bool requiresWarpBefore() const {
-    return kind == ThreadSyncKind::WarpPublication;
-  }
-
   CompletionSync getCompletionSync() const {
     if (kind == ThreadSyncKind::CompletionNeedsSync)
       return CompletionSync::All;
@@ -255,6 +249,13 @@ struct ThreadSyncInfo {
            kind == ThreadSyncKind::Publication;
   }
 };
+
+template <typename Op> ThreadIssuer getNotificationIssuer(Op op) {
+  // Nonidentity routing may use several lanes to signal the peer CTAs.
+  if (op.getFromCTA())
+    return ThreadIssuer::Unknown;
+  return op.getPerWarp() ? ThreadIssuer::WarpLeaders : ThreadIssuer::Thread0;
+}
 
 ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   // Acquires and proxy fences do not consume payload. Wait deps only keep
@@ -283,17 +284,10 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
     // Init and inval use thread zero before SM90.
     return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
   }
-  if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
-      barrier && barrier.isPerWarp())
-    return {ThreadSyncKind::WarpPublication};
-  if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
-    auto fromCTA = isa<ttng::ArriveBarrierOp>(op)
-                       ? cast<ttng::ArriveBarrierOp>(op).getFromCTA()
-                       : cast<ttng::BarrierExpectOp>(op).getFromCTA();
-    // Nonidentity routing may use several lanes to signal the peer CTAs.
-    return {ThreadSyncKind::Publication,
-            !fromCTA ? ThreadIssuer::Thread0 : ThreadIssuer::Unknown};
-  }
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return {ThreadSyncKind::Publication, getNotificationIssuer(arrive)};
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
+    return {ThreadSyncKind::Publication, getNotificationIssuer(expect)};
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
                                                 : ThreadSyncKind::Publication,
@@ -575,23 +569,14 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
 
 void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
                          ArrayRef<MemoryAccess> accesses) {
-  bool includeShared = accessMode != AccessMode::SynchronizationOnly;
   // A verified callback has no scratch or payload accesses to publish.
-  if (isa<triton::MapElementwiseOp>(op))
+  // TMEM waits order the transfers described by the TMEM model.
+  if (isa<triton::MapElementwiseOp, ttng::TMEMWaitOp>(op))
     return;
   // The local-memory mask guarantees ordering of local memory accesses.
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-    fixed.after = barrier.hasLocal()
-                      ? (barrier.isWarp() ? warpBarrier : fullBarrier)
-                      : bit(SyncKind::WarpConvergence);
-    return;
-  }
-  if (isa<ttng::TMEMWaitOp>(op)) {
-    // A scalar notification must observe completion in every issuing warp.
-    // The wait itself converges each warp and adds no memory-order demand.
-    if (includeShared)
-      model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
-    fixed.after = bit(SyncKind::WarpConvergence);
+    if (barrier.hasLocal())
+      fixed.after = barrier.isWarp() ? warpBarrier : fullBarrier;
     return;
   }
 
@@ -599,10 +584,12 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
   bool hasScratch = scratchId != Allocation::InvalidBufferId;
   fixed =
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
-  auto sync = getThreadSyncInfo(op);
-  model.needsWarp = sync.requiresWarpBefore();
-  if (!includeShared)
+  if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
+      barrier && barrier.isPerWarp())
+    model.arrivalMode = ArrivalMode::PerWarp;
+  if (accessMode == AccessMode::SynchronizationOnly)
     return;
+  auto sync = getThreadSyncInfo(op);
   // Region control flow is visited by the dataflow engine. Its children
   // contribute their own effects; implicit scratch belongs to this op.
   bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,

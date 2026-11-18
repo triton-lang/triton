@@ -18,10 +18,17 @@ struct Demand {
   Path path = Path::Any;
 };
 
+struct MembarDemands {
+  SmallVector<Demand> required;
+  // An uncovered scalar publication requires a per-warp notification.
+  SmallVector<Demand> optional;
+};
+
 using EdgeTransfer = llvm::function_ref<unsigned(Edge, unsigned)>;
 using SyncTransfer = llvm::function_ref<unsigned(unsigned, unsigned)>;
 
-// Visit each (point, state) once, observing the consumer before internal sync.
+// Start after the producer and visit each (point, state) once before internal
+// sync. The visitor returns the next state or std::nullopt to stop the path.
 // A sync transfer returns zero when it covers the producer. Completion walks
 // omit the transfer so zero can represent an uncommitted copy.
 template <typename Facts, typename Visit>
@@ -56,40 +63,12 @@ void walkEdges(const MembarCFG<Facts> &cfg, const Node<Facts> &producer,
   }
 }
 
-// A model returns the ordering required at a reachable consumer. The first
-// SMEM conflict also orders subsequent consumers on that path.
-struct Conflict {
-  SyncKind need{};
-  std::optional<Path> path;
-  bool stopOnMatch = false;
-};
-
-// Start after the producer. Observe each consumer before its internal sync.
-template <typename Facts, typename Rule>
-void discoverDemands(const MembarCFG<Facts> &cfg,
-                     SmallVectorImpl<Demand> &demands, unsigned source,
-                     unsigned state, SyncTransfer apply, Rule rule,
-                     EdgeTransfer onEdge = {}) {
-  walkEdges(
-      cfg, cfg.nodes[source], state,
-      [&](unsigned sink, unsigned live, bool) {
-        auto conflict = rule(cfg.nodes[sink], live);
-        if (conflict.path) {
-          demands.push_back({source, sink, conflict.need, *conflict.path});
-          if (conflict.stopOnMatch)
-            return std::optional<unsigned>{};
-        }
-        return std::optional(live);
-      },
-      apply, onEdge);
-}
-
 void coalesceDemands(SmallVectorImpl<Demand> &demands);
 
-SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
-                                    Allocation &allocation,
-                                    const MembarFilterFn &sharedFilter,
-                                    TMemModel *tmem);
+MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
+                              Allocation &allocation,
+                              const MembarFilterFn &sharedFilter,
+                              TMemModel *tmem);
 
 } // namespace mlir::triton::membar
 

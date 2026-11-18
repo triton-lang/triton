@@ -25,15 +25,10 @@ struct MembarInfo {
   /// point has synchronized the whole execution region.
   bool allPathsFromEntrySynced = false;
 
-  /// Every warp has synchronized since the last memory or thread effect.
-  /// This does not discharge dependencies between different warps.
-  bool warpsSynced = false;
-
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
     entryBlockInfo.join(other.entryBlockInfo);
     allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
-    warpsSynced &= other.warpsSynced;
     return *this;
   }
 
@@ -41,16 +36,11 @@ struct MembarInfo {
     if (!allPathsFromEntrySynced)
       entryBlockInfo.join(blockInfo);
     pending.join(blockInfo);
-    if (blockInfo.hasEffects())
-      warpsSynced = false;
   }
-
-  void syncWarps() { warpsSynced = true; }
 
   void sync() {
     pending.sync();
     allPathsFromEntrySynced = true;
-    syncWarps();
   }
 
   void applyCallSummary(const MembarInfo &callee) {
@@ -59,7 +49,6 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
-    warpsSynced &= !callee.pending.hasEffects();
   }
 
   template <typename Transform> void transformSlices(Transform transform) {
@@ -74,8 +63,8 @@ struct MembarInfo {
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-/// TODO: Retire this analysis and MembarInfo after mbarrier arrival folding
-/// and the AMD conditional-barrier fallback migrate.
+/// TODO: Retire this analysis and MembarInfo after the AMD conditional-barrier
+/// fallback migrates.
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
@@ -102,17 +91,13 @@ private:
 
   void updateExitState(MembarInfo *membarInfo) override;
 
-protected:
-  /// A null builder analyzes existing synchronization without inserting any.
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
-  Allocation &allocation;
-
-private:
   void syncIfNeeded(Operation *operation, const BlockInfo &effects,
                     MembarInfo *membarInfo, OpBuilder *builder);
 
+  Allocation &allocation;
   MembarFilterFn filter;
   triton::membar::SMemModel shared;
 };

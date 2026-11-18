@@ -54,17 +54,6 @@ TEST(MembarCut, SiteIndexesUseTheAvailableActions) {
   EXPECT_FALSE(solveMembarCut(cfg, {{0, 1, SyncKind::WaitStore}}, actions));
 }
 
-TEST(MembarCut, CompletionAlsoConvergesTheWarp) {
-  auto cfg = linearCFG({0, 1, 1});
-  auto solution = solveMembarCut(
-      cfg, {{1, 2, SyncKind::WarpConvergence}, {1, 2, SyncKind::WaitStore}});
-  ASSERT_TRUE(solution);
-  EXPECT_EQ(solution->sites.count(), 1u);
-  EXPECT_TRUE(solution->sites.test(site(2, SyncKind::WaitStore)));
-  EXPECT_EQ(solution->cost, 1u);
-  EXPECT_EQ(solution->lowerBound, 1u);
-}
-
 TEST(MembarCut, TwoActionsAtOneGapPayTwice) {
   constexpr unsigned cost = std::numeric_limits<unsigned>::max();
   auto cfg = linearCFG({0, cost});
@@ -144,15 +133,15 @@ TEST(MembarCut, OrderedHandoffUsesFirstBFSArrival) {
   }
 }
 
-TEST(MembarCut, ReverseGapTiesKeepWarpBarrierForConvergence) {
+TEST(MembarCut, ReverseGapTiesKeepWarpBarrier) {
   // Six shared store/read pairs need three barriers with forward ties and two
-  // with reverse ties. The independent convergence demand has no TMEM issuer.
+  // with reverse ties. The independent demand only needs warp ordering.
   auto cfg = linearCFG({0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1});
   const Demand demands[] = {
       {1, 5, SyncKind::RegionBarrier},  {2, 8, SyncKind::RegionBarrier},
       {3, 9, SyncKind::RegionBarrier},  {4, 7, SyncKind::RegionBarrier},
       {6, 11, SyncKind::RegionBarrier}, {10, 12, SyncKind::RegionBarrier},
-      {0, 1, SyncKind::WarpConvergence}};
+      {0, 1, SyncKind::WarpBarrier}};
   auto solution = solveMembarCut(cfg, demands);
   ASSERT_TRUE(solution);
   EXPECT_EQ(solution->sites.count(), 3u);
