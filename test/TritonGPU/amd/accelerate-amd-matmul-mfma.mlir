@@ -4,6 +4,8 @@
 // RUN: cat %t/common.mlir %t/mfma16.mlir > %t/run-mfma16.mlir
 // RUN: triton-opt %t/run-mfma16.mlir -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942 matrix-instruction-size=16" --verify-diagnostics | FileCheck %t/run-mfma16.mlir --check-prefixes=MFMA16,CHECK
 
+// RUN: triton-opt %t/bmm.mlir -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx942" | FileCheck %t/bmm.mlir
+
 //--- common.mlir
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
@@ -122,5 +124,39 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %zero_f32 = arith.constant dense<0.000000e+00> : tensor<1x128xf32, #blocked>
     %result = tt.dot %a, %b, %zero_f32 : tensor<1x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<1x128xf32, #blocked>
     tt.return %result : tensor<1x128xf32, #blocked>
+  }
+}
+
+//--- bmm.mlir
+
+// CHECK: #[[$MMA:.+]] = #ttg.amd_mfma<{{.*}}warpsPerCTA = [2, 2, 2],
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 16], warpsPerCTA = [8, 1, 1], order = [2, 1, 0]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // Eight warps split over batch, M and N.
+  // CHECK-LABEL: @bmm_b2_128x128_w8(
+  tt.func @bmm_b2_128x128_w8(%a: tensor<2x128x32xf16, #dot0>, %b: tensor<2x32x128xf16, #dot1>) -> tensor<2x128x128xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<2x128x128xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<2x128x128xf32, #[[$MMA]]>
+    %result = tt.dot %a, %b, %zero : tensor<2x128x32xf16, #dot0> * tensor<2x32x128xf16, #dot1> -> tensor<2x128x128xf32, #blocked>
+    tt.return %result : tensor<2x128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// CHECK: #[[$MMA:.+]] = #ttg.amd_mfma<{{.*}}warpsPerCTA = [4, 1, 1],
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 16], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // A batch larger than the warp count must not allocate extra warps.
+  // CHECK-LABEL: @bmm_b8_64x64_w4(
+  tt.func @bmm_b8_64x64_w4(%a: tensor<8x64x32xf16, #dot0>, %b: tensor<8x32x64xf16, #dot1>) -> tensor<8x64x64xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<8x64x64xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<8x64x64xf32, #[[$MMA]]>
+    %result = tt.dot %a, %b, %zero : tensor<8x64x32xf16, #dot0> * tensor<8x32x64xf16, #dot1> -> tensor<8x64x64xf32, #blocked>
+    tt.return %result : tensor<8x64x64xf32, #blocked>
   }
 }
