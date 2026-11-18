@@ -348,6 +348,7 @@ class CMakeBuild(build_ext):
 
         # environment variables we will pass through to cmake
         passthrough_args = [
+            "TRITON_BUILD_TESTS",
             "TRITON_BUILD_PROTON",
             "TRITON_BUILD_NVIDIA_GSAN_RUNTIME",
             "TRITON_BUILD_WITH_CCACHE",
