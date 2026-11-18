@@ -2842,6 +2842,9 @@ SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
     ArrayRef<unsigned> sharedOrder, unsigned kWidth, unsigned elemBitWidth,
     bool needTrans) const {
   int kDimIndex = operandIdx == 0 ? 1 : 0;
+  // operandShape / sharedOrder are those of the operand before a transpose.
+  if (needTrans && operandIdx < 2)
+    kDimIndex = 1 - kDimIndex;
   bool isKContig = sharedOrder[0] == kDimIndex;
 
   if (!isKContig) {
