@@ -98,9 +98,9 @@ jobs:
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
-          # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
+          # Try four build jobs on the 3-vCPU, 7 GB runner.
           # https://docs.github.com/en/actions/reference/github-hosted-runners-reference#standard-github-hosted-runners-for-public-repositories
-          MAX_JOBS: 3
+          MAX_JOBS: 4
           # Add elapsed time in seconds to ninja status to monitor where build stalls
           NINJA_STATUS: "[%f/%t, %es elapsed] "
         run: |
