@@ -65,6 +65,19 @@ class TestMXFP4Tensor(MXBaseTest):
         tensor = MXFP4Tensor(test_values)
         torch.testing.assert_close(tensor.to(torch.float32), expected_values)
 
+    def test_batched_tie_breaking_isolation(self, device):
+        # Value slightly above midpoint (1.25): 1.5 is closer than 1.0 (no tie).
+        val = torch.tensor([1.2500005], device=device)
+        single_res = MXFP4Tensor(val).to(torch.float32)
+        assert single_res.item() == 1.5
+
+        # When batched with other values (with or without ties), the non-tied element
+        # must produce the exact same result as the single element conversion.
+        batched_val = torch.tensor([1.2500005, 3.0, 1.25], device=device)
+        batched_res = MXFP4Tensor(batched_val).to(torch.float32)
+        expected_batched = torch.tensor([1.5, 3.0, 1.0], device=device)
+        torch.testing.assert_close(batched_res, expected_batched)
+
     def test_negative_values(self, device):
         test_values = torch.tensor([-0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0], device=device)
         tensor = MXFP4Tensor(test_values)
