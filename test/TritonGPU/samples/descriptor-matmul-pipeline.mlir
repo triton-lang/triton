@@ -78,7 +78,7 @@
 // CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_13]]] %[[VAL_55]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_56:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_13]]] %[[VAL_56]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           %[[VAL_57:.*]]:4 = scf.for %[[VAL_58:.*]] = %[[VAL_12]] to %[[VAL_42]] step %[[VAL_15]] iter_args(%[[VAL_59:.*]] = %[[VAL_19]], %[[VAL_60:.*]] = %[[VAL_13]], %[[VAL_62:.*]] = %[[VAL_8]], %[[VAL_63:.*]] = %[[VAL_12]]) -> (tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32)  : i32 {
+// CHECK:           %[[VAL_57:.*]]:5 = scf.for %[[VAL_58:.*]] = %[[VAL_12]] to %[[VAL_42]] step %[[VAL_15]] iter_args(%[[VAL_59:.*]] = %[[VAL_19]], %[[VAL_60:.*]] = %[[VAL_13]], %[[VAL_61:.*]] = %[[VAL_15]], %[[VAL_62:.*]] = %[[VAL_8]], %[[VAL_63:.*]] = %[[VAL_12]]) -> (tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32, i32)  : i32 {
 // CHECK:             %[[VAL_64:.*]] = arith.subi %[[VAL_42]], %[[VAL_7]] : i32
 // CHECK:             %[[VAL_65:.*]] = arith.cmpi slt, %[[VAL_58]], %[[VAL_64]] : i32
 // CHECK:             %[[VAL_66:.*]] = arith.addi %[[VAL_62]], %[[VAL_15]] : i32
@@ -94,15 +94,16 @@
 // CHECK:             %[[VAL_75:.*]] = ttng.warp_group_dot %[[VAL_73]], %[[VAL_74]], %[[VAL_59]] {inputPrecision = 0 : i32, isAsync = true} : !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> * !ttg.memdesc<64x256xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable> -> tensor<128x256xf32, #[[$ATTR_1]]>
 // CHECK:             %[[VAL_76:.*]]:3 = ttng.warp_group_dot_wait %[[VAL_75]], %[[VAL_73]], %[[VAL_74]] {pendings = 1 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>, !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>, !ttg.memdesc<64x256xf16, #[[$ATTR_4]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_77:.*]] = arith.addi %[[VAL_60]], %[[VAL_13]] : i32
-// CHECK:             %[[VAL_78:.*]] = arith.addi %[[VAL_62]], %[[VAL_6]] : i32
-// CHECK:             %[[VAL_80:.*]] = arith.remsi %[[VAL_78]], %[[VAL_6]] : i32
+// CHECK:             %[[VAL_78:.*]] = arith.addi %[[VAL_61]], %[[VAL_15]] : i32
+// CHECK:             %[[VAL_79:.*]] = arith.cmpi sge, %[[VAL_78]], %[[VAL_6]] : i32
+// CHECK:             %[[VAL_80:.*]] = arith.select %[[VAL_79]], %[[VAL_12]], %[[VAL_78]] : i32
 // CHECK:             %[[VAL_81:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             ttng.barrier_expect %[[VAL_81]], 49152, %[[VAL_65]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_82:.*]] = ttg.memdesc_index %[[VAL_43]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_35]]{{\[}}%[[VAL_39]], %[[VAL_77]]] %[[VAL_82]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<128x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:             %[[VAL_83:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_80]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_77]]] %[[VAL_83]], %[[VAL_81]], %[[VAL_65]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:             scf.yield %[[VAL_76]]#0, %[[VAL_77]], %[[VAL_68]], %[[VAL_70]] : tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32
+// CHECK:             scf.yield %[[VAL_76]]#0, %[[VAL_77]], %[[VAL_80]], %[[VAL_68]], %[[VAL_70]] : tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32, i32
 // CHECK:           }
 // CHECK:           %[[VAL_84:.*]] = ttng.warp_group_dot_wait %[[VAL_85:.*]]#0 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_86:.*]] = ttg.memdesc_index %[[VAL_45]]{{\[}}%[[VAL_12]]{{\]}} : !ttg.memdesc<3x1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
