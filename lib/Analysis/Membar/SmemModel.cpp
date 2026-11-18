@@ -599,9 +599,10 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
   bool hasScratch = scratchId != Allocation::InvalidBufferId;
   fixed =
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
+  auto sync = getThreadSyncInfo(op);
+  model.needsWarp = sync.requiresWarpBefore();
   if (!includeShared)
     return;
-  auto sync = getThreadSyncInfo(op);
   // Region control flow is visited by the dataflow engine. Its children
   // contribute their own effects; implicit scratch belongs to this op.
   bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,
@@ -614,7 +615,6 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
                     (!controlFlow && !isReturn &&
                      !isa<ttng::ClusterBarrierOp>(op) && hasThreadEffects(op));
 
-  model.needsWarp = sync.requiresWarpBefore();
   BlockInfo &effects = model.sharedIn;
   if (hasEffects) {
     effects = getThreadEffects(op);

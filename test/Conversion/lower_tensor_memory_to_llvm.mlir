@@ -151,8 +151,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
-  // One store wait completes both disjoint stores and converges the lanes
-  // before the per-warp arrival.
+  // The private stores complete after the arrival, before overwriting %b.
   // The load from %b needs a store wait; the disjoint store to %c needs no
   // load wait. Both accesses complete after the acquire, before invalidation.
   // CHECK-LABEL: @tmem_store_wait_publication
@@ -160,10 +159,11 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK-NEXT: nvvm.barrier
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: tcgen05.st.sync.aligned
-  // CHECK-NEXT: nvvm.tcgen05.wait <store>
+  // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK-NOT: nvvm.bar.warp.sync
   // CHECK-NOT: nvvm.barrier
   // CHECK: mbarrier.arrive.shared::cta
+  // CHECK-NEXT: nvvm.tcgen05.wait <store>
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
   // CHECK: nvvm.tcgen05.ld

@@ -50,15 +50,17 @@ std::optional<Path> tmemNeed(const Node<OpModel> &producer,
                              bool needsWait) {
   auto boundary = consumer.effects.boundary;
   Path ordered = needsWait ? Path::WaitThenOrder : Path::Any;
-  // Peer-visible TMEM accesses require a rendezvous before publication.
-  if (boundary == Boundary::Publication && !producer.effects.privateTMem)
+  bool publishes =
+      boundary == Boundary::Publication && !producer.effects.privateTMem;
+  // A scalar publication must observe all issuing warps' completions.
+  if (publishes && !consumer.effects.needsWarp)
     return ordered;
   // A completion wait orders same-warp RAW, WAR, and WAW dependencies.
   if (tmemConflicts(producer.effects.tmemAccesses,
                     consumer.effects.tmemAccesses))
     return tmem.isSameWarp(producer.op, consumer.op) ? Path::Any : ordered;
-  if (needsWait &&
-      (boundary == Boundary::WaitAll || boundary == Boundary::KernelReturn))
+  if (needsWait && (publishes || boundary == Boundary::WaitAll ||
+                    boundary == Boundary::KernelReturn))
     return Path::Any;
   return std::nullopt;
 }
