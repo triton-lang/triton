@@ -1,10 +1,10 @@
 #include "lib/Target/LLVMIR/LLVMDIUtils.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Types.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 
 namespace mlir {

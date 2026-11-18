@@ -5,10 +5,11 @@
 #include <utility>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/LLVMIntrinsicOps.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"

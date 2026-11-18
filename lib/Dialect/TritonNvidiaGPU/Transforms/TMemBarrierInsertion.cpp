@@ -6,8 +6,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "triton/Conversion/LLVMIntrinsicOps.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "llvm/ADT/DenseMap.h"
 
 #include <memory>

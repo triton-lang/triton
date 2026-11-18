@@ -24,11 +24,11 @@
 #ifndef TRITON_DIALECT_NVGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_NVGPU_IR_DIALECT_H_
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h.inc"
 #include "nvidia/include/Dialect/NVGPU/IR/OpsEnums.h.inc"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Dialect/Triton/IR/Traits.h"
 
 #define GET_ATTRDEF_CLASSES

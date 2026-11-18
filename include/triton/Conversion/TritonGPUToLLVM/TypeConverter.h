@@ -2,7 +2,7 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TYPECONVERTER_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 

@@ -2,8 +2,8 @@
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_UTILITY_H
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -149,30 +149,16 @@ struct TritonLLVMOpBuilder {
   template <typename... Args> LLVM::FMulOp fmul(Args &&...args) {
     return LLVM::FMulOp::create(*builder, loc, std::forward<Args>(args)...);
   }
-  template <typename... Args> LLVM::FMAOp fma(Args &&...args) {
-    return LLVM::FMAOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
+  Value fma(Value lhs, Value rhs, Value addend);
   template <typename... Args> LLVM::FNegOp neg(Args &&...args) {
     return LLVM::FNegOp::create(*builder, loc, std::forward<Args>(args)...);
   }
-  template <typename... Args> LLVM::SMaxOp smax(Args &&...args) {
-    return LLVM::SMaxOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
-  template <typename... Args> LLVM::UMaxOp umax(Args &&...args) {
-    return LLVM::UMaxOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
-  template <typename... Args> LLVM::MaxNumOp fmax(Args &&...args) {
-    return LLVM::MaxNumOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
-  template <typename... Args> LLVM::SMinOp smin(Args &&...args) {
-    return LLVM::SMinOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
-  template <typename... Args> LLVM::UMinOp umin(Args &&...args) {
-    return LLVM::UMinOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
-  template <typename... Args> LLVM::MinNumOp fmin(Args &&...args) {
-    return LLVM::MinNumOp::create(*builder, loc, std::forward<Args>(args)...);
-  }
+  Value smax(Value lhs, Value rhs);
+  Value umax(Value lhs, Value rhs);
+  Value fmax(Value lhs, Value rhs);
+  Value smin(Value lhs, Value rhs);
+  Value umin(Value lhs, Value rhs);
+  Value fmin(Value lhs, Value rhs);
   template <typename... Args> LLVM::ShlOp shl(Args &&...args) {
     return LLVM::ShlOp::create(*builder, loc, std::forward<Args>(args)...);
   }

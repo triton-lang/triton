@@ -1,13 +1,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/LLVMIntrinsicOps.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -42,6 +43,34 @@ static int __builtin_ctz(unsigned x) {
 #endif
 
 namespace mlir {
+
+Value triton::TritonLLVMOpBuilder::fma(Value lhs, Value rhs, Value addend) {
+  return LLVM::FMAOp::create(*builder, loc, lhs, rhs, addend).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::smax(Value lhs, Value rhs) {
+  return LLVM::SMaxOp::create(*builder, loc, lhs, rhs).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::umax(Value lhs, Value rhs) {
+  return LLVM::UMaxOp::create(*builder, loc, lhs, rhs).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::smin(Value lhs, Value rhs) {
+  return LLVM::SMinOp::create(*builder, loc, lhs, rhs).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::umin(Value lhs, Value rhs) {
+  return LLVM::UMinOp::create(*builder, loc, lhs, rhs).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::fmax(Value lhs, Value rhs) {
+  return LLVM::MaxNumOp::create(*builder, loc, lhs, rhs).getResult();
+}
+
+Value triton::TritonLLVMOpBuilder::fmin(Value lhs, Value rhs) {
+  return LLVM::MinNumOp::create(*builder, loc, lhs, rhs).getResult();
+}
 
 Value triton::getMemDescAddress(RewriterBase &rewriter, Location loc,
                                 const LLVMTypeConverter *typeConverter,

@@ -1,3 +1,4 @@
+#include "triton/Conversion/LLVMIntrinsicOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"

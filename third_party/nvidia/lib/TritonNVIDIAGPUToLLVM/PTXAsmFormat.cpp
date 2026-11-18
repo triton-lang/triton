@@ -1,6 +1,6 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/raw_ostream.h"

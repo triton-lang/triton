@@ -1,7 +1,7 @@
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;

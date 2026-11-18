@@ -5,8 +5,8 @@
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Tools/GenericSwizzling.h"
 
 //

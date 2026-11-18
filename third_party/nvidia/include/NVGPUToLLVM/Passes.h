@@ -1,9 +1,9 @@
 #ifndef NVGPU_CONVERSION_PASSES_H
 #define NVGPU_CONVERSION_PASSES_H
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "nvidia/include/NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "triton/Conversion/LLVMOps.h"
 
 namespace mlir {
 namespace triton {

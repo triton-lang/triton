@@ -1,8 +1,8 @@
 #ifndef TRITON_DIALECT_TRITONINSTRUMENT_TRANSFORMS_PASSES_H_
 #define TRITON_DIALECT_TRITONINSTRUMENT_TRANSFORMS_PASSES_H_
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Conversion/LLVMOps.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 
 namespace mlir {
