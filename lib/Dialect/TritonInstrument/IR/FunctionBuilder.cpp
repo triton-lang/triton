@@ -989,6 +989,9 @@ Value FunctionBuilder::createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b,
   SmallVector<Value> args = {pred, waitingVal, barrierStatesVal,
                              activeMasksVal};
   AssertInfo resultInfo{"", b.getI1Type()};
+  // One lane writes each waiting flag or active mask. Its replicas must
+  // see the update before participating in the deadlock check.
+  ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalWrite);
   return createCallToCachedFunction(
       b, "check_all_active_waiting", args, resultInfo,
       {waitingGlobalType, barrierStatesGlobalType, activeMasksGlobalType},
