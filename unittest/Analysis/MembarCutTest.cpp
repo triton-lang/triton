@@ -199,6 +199,44 @@ TEST(MembarCut, EqualCostPrefersLowerRegionBarrierWeight) {
   EXPECT_TRUE(cut->sites.test(site(5, SyncKind::RegionBarrier)));
 }
 
+TEST(MembarCut, ReportEachUncoveredOptionalSinkOnce) {
+  auto cfg = linearCFG({0, 0, 0});
+  cfg.nodes[2].next.push_back({1, true});
+  // Two producers reach 2. Only the backedge carries 1's effect to itself.
+  const Demand demands[] = {{0, 2, SyncKind::RegionBarrier},
+                            {1, 2, SyncKind::RegionBarrier},
+                            {1, 1, SyncKind::RegionBarrier, Path::LoopCarried}};
+  auto sinks = findUncoveredSinks(cfg, demands, {}, {});
+  llvm::sort(sinks);
+  EXPECT_EQ(sinks, (llvm::SmallVector<unsigned>{1, 2}));
+}
+
+TEST(MembarCut, OptionalHandoffStillRequiresCompletion) {
+  auto cfg = linearCFG({0, 0, 1});
+  cfg.nodes[1].fixed.after = fullBarrier;
+  auto cut = solveMembarCut(cfg, {{0, 2, SyncKind::WaitLoad}});
+  ASSERT_TRUE(cut);
+  EXPECT_TRUE(cut->sites.test(site(2, SyncKind::WaitLoad)));
+  EXPECT_EQ(cut->cost, 1u);
+  auto sinks =
+      findUncoveredSinks(cfg, {{0, 2, SyncKind::WaitLoad, Path::WaitThenOrder}},
+                         ACTIONS, cut->sites);
+  EXPECT_EQ(sinks, llvm::SmallVector<unsigned>{2});
+}
+
+TEST(MembarCut, RequiredCutCoversOptionalDemandAtLowerBound) {
+  // The region barrier for the longer path also covers the shorter one.
+  auto cfg = linearCFG({0, 1, 1, 1});
+  auto cut = solveMembarCut(cfg, {{0, 3, SyncKind::RegionBarrier}});
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->cost, cut->lowerBound);
+  EXPECT_EQ(cut->sites.count(), 1u);
+  EXPECT_TRUE(cut->sites.test(site(3, SyncKind::RegionBarrier)));
+  auto sinks = findUncoveredSinks(cfg, {{2, 3, SyncKind::RegionBarrier}},
+                                  ACTIONS, cut->sites);
+  EXPECT_TRUE(sinks.empty());
+}
+
 // Give each original node a separate predecessor for its insertion gap. This
 // preserves the order of gap actions relative to the node's fixed.before.
 void checkPlacements(const MembarCFG<OpModel> &cfg, Demand demand,

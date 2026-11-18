@@ -27,6 +27,12 @@ std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
                                           ArrayRef<Demand> demands,
                                           ArrayRef<SyncKind> actions = ACTIONS);
 
+// Report each sink reachable from a producer under the given placement once.
+SmallVector<unsigned> findUncoveredSinks(const MembarCFG<OpModel> &cfg,
+                                         ArrayRef<Demand> demands,
+                                         ArrayRef<SyncKind> actions,
+                                         const llvm::BitVector &selected);
+
 } // namespace mlir::triton::membar
 
 #endif // TRITON_ANALYSIS_MEMBAR_SOLVER_H
