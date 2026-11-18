@@ -17,11 +17,6 @@ from triton.experimental.gluon.language.amd.cdna5 import get_wmma_scale_layout, 
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 
-def skip_if_gfx1250_strict_wmma():
-    if get_current_target().arch == "gfx1250-strict":
-        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
-
-
 @gluon.jit
 def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
                 M, N, K,  #
@@ -104,8 +99,6 @@ def get_test_gemm_shapes():
 def test_compile_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
-    if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
-        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
     a_dtype = str_to_triton_dtype(a_dtype).name
     b_dtype = str_to_triton_dtype(b_dtype).name
@@ -467,8 +460,8 @@ def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
 def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
-    if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
-        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
+    if get_current_target().arch == "gfx1250-strict" and k_dim == 128:
+        pytest.skip("16x16x128 fp8 wmma is not supported on gfx1250-strict")
 
     k_width = 2 if a_dtype == "float32" else 8
     run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
@@ -485,9 +478,6 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64), (64, 64, 128)])
 @pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
 def test_runtime_gemm_wide_k_width(a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
-    if get_current_target().arch == "gfx1250-strict" and a_dtype != "float32":
-        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
-
     run_gemm(a_dtype, a_dtype, k_dim, "float32", k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
 
 
@@ -608,7 +598,6 @@ def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
 def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K):
-    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -642,8 +631,6 @@ def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLO
 @pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
 @pytest.mark.parametrize("B,M,N,K", [(16, 256, 256, 256), (16, 250, 250, 250)])
 def test_runtime_gemm_3d(k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K, B, M, N, K):
-    if get_current_target().arch == "gfx1250-strict":
-        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
     assert BLOCK_K >= k_dim
     assert B % BLOCK_B == 0
 
@@ -860,7 +847,6 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, ASYNC_LOAD_TYPE, B_K_CONTIG,
                                       RESOLVE_PARTITION_CONFLICTS):
-    skip_if_gfx1250_strict_wmma()
     if RESOLVE_PARTITION_CONFLICTS:
         if ASYNC_LOAD_TYPE == "ASYNC_COPY":
             pytest.skip("AsyncCopy is not supported with partition shared layouts")
@@ -937,7 +923,6 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
 @pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M, N, K, ASYNC_LOAD_TYPE, B_K_CONTIG,
                                       RESOLVE_PARTITION_CONFLICTS):
-    skip_if_gfx1250_strict_wmma()
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -1068,7 +1053,6 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
 def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, ASYNC_LOAD_TYPE):
-    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -1114,7 +1098,6 @@ def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, 
 ])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
 def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, ASYNC_LOAD_TYPE):
-    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
     if ASYNC_LOAD_TYPE == "ASYNC_COPY" and any([x % 16 != 0 for x in [M, N, K]]):
@@ -1336,7 +1319,6 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("ctas_per_cga", [(2, 1), (1, 2), (2, 2), (4, 1), (2, 4)])
 def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, ctas_per_cga):
-    skip_if_gfx1250_strict_wmma()
 
     @gluon.constexpr_function
     def _get_wmma_layout(cga_layout, packed=False):
@@ -1427,7 +1409,6 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
 @pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
-    skip_if_gfx1250_strict_wmma()
 
     @gluon.constexpr_function
     def _slice_layout(layout, indices):
@@ -1517,7 +1498,6 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_sca
 @pytest.mark.parametrize("hasScale", [True, False])
 @pytest.mark.parametrize("scale_dtype, scale_factor", [("e8m0", 32), ("e4m3", 16)])
 def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale, scale_dtype, scale_factor):
-    skip_if_gfx1250_strict_wmma()
 
     @triton.jit
     def scaled_wmma_tdm_triton_kernel(a_base, stride_am, stride_ak, a_scale, b_base, stride_bk, stride_bn, b_scale, out,
@@ -2843,7 +2823,6 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
 @pytest.mark.parametrize("DTYPE_A", ["float8_e5m2", "float8_e4m3", "float4"])
 @pytest.mark.parametrize("DTYPE_B", ["float8_e5m2", "float8_e4m3", "float4"])
 def test_compile_mxgemm(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
-    skip_if_gfx1250_strict_wmma()
     scale_block = 32
 
     triton_dtype_converter = {'float8_e5m2': "fp8e5", "float8_e4m3": "fp8e4nv", "float4": "u8"}
@@ -2884,7 +2863,6 @@ def init_mxfp_data(dtype, d0: int, d1: int):
 @pytest.mark.parametrize("DTYPE_A", ["e5m2", "e4m3", "e2m1"])
 @pytest.mark.parametrize("DTYPE_B", ["e5m2", "e4m3", "e2m1"])
 def test_runtime_mxgemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
-    skip_if_gfx1250_strict_wmma()
     scale_block = 32
 
     torch.manual_seed(0)
@@ -3198,7 +3176,6 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("TRANSPOSED_WMMA", [True, False])
 def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA):
-    skip_if_gfx1250_strict_wmma()
     dtype_converter = {'e5m2': "fp8e5", "e4m3": "fp8e4nv", "e2m1": "u8"}
 
     signature = {
@@ -3230,7 +3207,6 @@ def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA)
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("TRANSPOSED_WMMA", [True, False])
 def test_runtime_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA):
-    skip_if_gfx1250_strict_wmma()
 
     def pack_scale(x):
         PRESHUFFLE_FACTOR = 64
@@ -5908,7 +5884,6 @@ def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_runtime_gemm_3d_multi_cta(num_ctas):
-    skip_if_gfx1250_strict_wmma()
     BLOCK_M = BLOCK_N = 32
     BLOCK_K = 64
     num_warps = 4
