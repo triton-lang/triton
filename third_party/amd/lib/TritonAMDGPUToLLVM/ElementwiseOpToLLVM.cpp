@@ -205,10 +205,10 @@ struct TruncFOpConversion
 
   explicit TruncFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              ISAFamily isaFamily,
+                              const AMD::TargetInfo &targetInfo,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        isaFamily(isaFamily) {}
+        targetFeatures(targetInfo.getArch()) {}
 
   SmallVector<Value> createDestOps(arith::TruncFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -218,13 +218,13 @@ struct TruncFOpConversion
     auto inElemTy = getElementTypeOrSelf(op.getIn());
     if (inElemTy.isF32() && (outElemTy.isBF16() || outElemTy.isF16())) {
       return AMD::convertFp32ToF16rtne(loc, rewriter, inElemTy, outElemTy,
-                                       operands, isaFamily);
+                                       operands, targetFeatures);
     }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 
 private:
-  ISAFamily isaFamily;
+  triton::amdgpu::TargetFeatures targetFeatures;
 };
 
 struct ExpOpConversionApprox
@@ -501,8 +501,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,
-                                   targetInfo.getISAFamily(), benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                   benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::UIToFPOp, LLVM::UIToFPOp>>(

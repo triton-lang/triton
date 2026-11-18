@@ -345,6 +345,19 @@ bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
   return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
 
+bool TargetFeatures::supportsCvtFp8Fnuz() const { return isCDNA3(); }
+
+bool TargetFeatures::supportsCvtFp8Ocp() const {
+  return getISAFamily() == ISAFamily::RDNA4m ||
+         getISAFamily() == ISAFamily::RDNA4;
+}
+
+bool TargetFeatures::supportsCvtScaleF32Pk() const { return isCDNA4(); }
+
+bool TargetFeatures::supportsCvtPkFp32ToFp16Bf16() const {
+  return isCDNA4() || isCDNA5();
+}
+
 ArrayRef<StringRef> TargetFeatures::getUnsupportedWmmaFeatures() const {
   static const StringRef kGFX1250Strict[] = {kWmmaRestrictedInstsFeature};
   if (isGFX1250Strict())
@@ -353,11 +366,11 @@ ArrayRef<StringRef> TargetFeatures::getUnsupportedWmmaFeatures() const {
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8Upcast();
+  return supportsCvtScaleF32Pk() || supportsCvtPkScalePk8Upcast();
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {
-  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
+  return supportsCvtScaleF32Pk() || supportsCvtPkScalePk8();
 }
 
 bool TargetFeatures::supportBitwidth16Elementwise() const { return true; }

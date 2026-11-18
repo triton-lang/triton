@@ -151,7 +151,7 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 // to a wider type: BF16 or FP16 for target before CDNA4.
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::amdgpu::ISAFamily isaFamily);
+                                    const triton::AMD::TargetInfo &targetInfo);
 
 } // namespace mlir::LLVM::AMD
 
