@@ -880,12 +880,44 @@ public:
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     if (failed(instrumentMemoryOperations(b, funcBuilder)))
       return failure();
+    markSingleCTALocks();
     auxData.createStartupClusterBarrier(hooks);
     initializeAllocations();
     return success();
   }
 
 private:
+  void markSingleCTALocks() {
+    if (ttg::lookupNumCTAs(module) != 1)
+      return;
+
+    // The shadow lock is allocated per program. With one CTA, each captured
+    // pointer still refers to that CTA's lock. Worker partitions can contend
+    // with each other, while async engines never acquire the shadow lock.
+    auto markLock = [&](auto lock) {
+      Operation *op = lock.getOperation();
+      // Warp groups join at the end of warp_specialize. In the entry function
+      // only the default group runs outside those regions. A private helper
+      // may still run on a worker. Preserve the explicit initialization store
+      // whenever a subsequent worker can acquire the lock.
+      bool defaultGroupOnly = op->getParentOfType<tt::FuncOp>() == entryPoint &&
+                              !op->getParentOfType<ttg::WarpSpecializeOp>() &&
+                              op != auxData.lockInitialization;
+      if (auxData.threadLayout.numBaseThreads == 1 || defaultGroupOnly)
+        lock.setUncontended(true);
+      else
+        lock.setCtaLocal(true);
+    };
+    for (const auto &entry : auxData.lock.values) {
+      for (Operation *user : entry.second.value.getUsers()) {
+        if (auto acquire = dyn_cast<tti::ExperimentalLockAcquireOp>(user))
+          markLock(acquire);
+        else if (auto release = dyn_cast<tti::ExperimentalLockReleaseOp>(user))
+          markLock(release);
+      }
+    }
+  }
+
   bool isCTALocalScratch(Operation *op) const {
     if (!op->hasAttr("allocation.size"))
       return true;

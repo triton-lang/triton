@@ -294,6 +294,8 @@ struct AuxDataMap {
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
+  // The initial release stores zero before any warp group can acquire the lock.
+  Operation *lockInitialization = nullptr;
 
   // Cluster barriers that ConSan inserts for its own checks during
   // instrumentation. They do not synchronize the program, so do not instrument
