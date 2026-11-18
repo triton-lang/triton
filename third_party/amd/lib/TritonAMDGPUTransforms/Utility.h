@@ -78,8 +78,14 @@ Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
+// If |needTrans| is given, it is set to whether the chain to the dot transposes
+// |inputValue| (an odd number of 2-D tt.trans), i.e. whether |inputValue|'s
+// shape and order are those of the dot operand transposed. It is left false
+// when the chain reshapes or permutes dims in any other way, and is only
+// meaningful when the result is non-null.
 template <class T>
-T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
+T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
+                 bool *needTrans = nullptr) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -94,10 +100,31 @@ T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
     auto operandType = cast<RankedTensorType>(inputValue.getType());
     *vecSize =
         triton::gpu::toLinearLayout(operandType).getNumConsecutiveInOut();
+    // The count above is along the operand's dim 0, which is not K for
+    // operand A. Through a transpose, A's K is the loaded value's contiguous
+    // dim, so take the vector size along K from the operand's kWidth.
+    if (needTrans && *needTrans && *opIdx == 0)
+      if (auto dotOpEnc = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+              operandType.getEncoding()))
+        *vecSize = dotOpEnc.getKWidth();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<T>(dotType.getEncoding());
   }
-  return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
+  if (needTrans) {
+    auto trans = dyn_cast<triton::TransOp>(user);
+    auto srcType = dyn_cast<RankedTensorType>(inputValue.getType());
+    auto dstType = dyn_cast<RankedTensorType>(user->getResult(0).getType());
+    if (trans && trans.getOrder() == ArrayRef<int32_t>{1, 0}) {
+      *needTrans = !*needTrans;
+    } else if (trans || !srcType || !dstType ||
+               srcType.getShape() != dstType.getShape()) {
+      // Dims are permuted or reshaped beyond a 2-D transpose: keep walking as
+      // before, but stop tracking the transpose.
+      *needTrans = false;
+      needTrans = nullptr;
+    }
+  }
+  return getDotEncoding<T>(user->getResult(0), opIdx, vecSize, needTrans);
 }
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_
