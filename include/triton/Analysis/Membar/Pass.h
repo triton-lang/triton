@@ -10,6 +10,10 @@ enum class PlacementMode { Shared, TensorMemory, SharedAndTensorMemory };
 /// Place shared-memory proxy fences on the allocated, SCF-lowered CFG.
 LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions);
 
+/// Order peer mbarrier initialization, shared-memory reuse and kernel exit.
+LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
+                                   BufferRegionAnalysis &regions);
+
 /// Place region-local synchronization after physical allocation and compulsory
 /// cluster rendezvous insertion. Run --convert-scf-to-cf before Membar so
 /// compiler-generated thread guards are visible as CFG branches.

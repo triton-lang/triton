@@ -1,5 +1,6 @@
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
+#include "triton/Analysis/Membar/ClusterBarrierModel.h"
 #include "triton/Analysis/Membar/TmemModel.h"
 
 #include "mlir/Analysis/CFGLoopInfo.h"
@@ -122,8 +123,6 @@ std::optional<OpModel> MembarModel::describe(Operation *op, FixedSync &fixed,
     });
     return effects;
   }
-  if (isa<CallOpInterface>(op))
-    return std::nullopt;
   auto function = op->getParentOfType<FunctionOpInterface>();
   if (isa<triton::ReturnOp>(op)) {
     if (isKernel(function))
@@ -172,9 +171,13 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
     Block *active = getGuardArm(term);
     for (Operation &op : block) {
       FixedSync fixed;
-      auto effects = model.describe(&op, fixed, &op == term ? active : nullptr);
+      // A call links to the callee's effects, including its scratch.
+      auto effects =
+          isa<CallOpInterface>(&op)
+              ? Facts{}
+              : model.describe(&op, fixed, &op == term ? active : nullptr);
       if (&op != term && !effects && fixed == FixedSync{} &&
-          !isa<CallOpInterface>(&op))
+          !isa<ttg::WarpSpecializeOp>(&op))
         continue;
       unsigned id = cfg.nodes.size();
       cfg.nodes.push_back({&op,
@@ -273,3 +276,4 @@ auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
 
 template class mlir::triton::membar::MembarCFGBuilder<MembarModel>;
 template class mlir::triton::membar::MembarCFGBuilder<AsyncFenceModel>;
+template class mlir::triton::membar::MembarCFGBuilder<ClusterBarrierModel>;

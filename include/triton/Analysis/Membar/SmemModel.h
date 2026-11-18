@@ -301,6 +301,31 @@ namespace triton::membar {
 struct FixedSync;
 struct OpModel;
 
+struct SharedAccess {
+  const BufferRegionFootprint *footprint;
+  bool isWrite;
+  bool crossCTA = false;
+
+  bool operator==(const SharedAccess &) const = default;
+};
+
+/// Physical shared accesses in kernel coordinates for whole-function placement.
+class SharedAccessModel {
+public:
+  explicit SharedAccessModel(BufferRegionAnalysis &regions)
+      : regions(regions) {}
+  const BufferIndexAnalysis &getIndices(FunctionOpInterface function);
+
+protected:
+  SharedAccess getSharedAccess(Operation *op, const MemoryAccess &access);
+  const BufferRegionFootprint *getFootprint(Value value);
+  const BufferRegionFootprint *getScratchFootprint(Operation *op);
+
+private:
+  BufferRegionAnalysis &regions;
+  std::map<Operation *, BufferIndexAnalysis> indices;
+};
+
 bool hasRegionLocalUses(Value root, bool followCalls);
 
 /// Describes shared-memory accesses and synchronization for one operation.

@@ -19,7 +19,9 @@ enum class Action {
   RegionBarrier,
   WarpBarrier,
   ProxyCluster,
-  ProxyCTA
+  ProxyCTA,
+  ClusterBarrier,
+  ClusterInit
 };
 
 enum class Need {
@@ -30,7 +32,8 @@ enum class Need {
   WarpConvergence,
   ProxyCTA,
   ProxyCluster,
-  ClusterAcquire
+  ClusterAcquire,
+  ClusterInit
 };
 
 constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
@@ -52,6 +55,10 @@ constexpr unsigned coverage(Action action) {
     return bit(Need::ProxyCluster) | bit(Need::ProxyCTA);
   case Action::ProxyCTA:
     return bit(Need::ProxyCTA);
+  case Action::ClusterBarrier:
+    return bit(Need::ClusterAcquire) | bit(Need::ClusterInit);
+  case Action::ClusterInit:
+    return bit(Need::ClusterInit);
   }
   llvm_unreachable("unknown synchronization action");
 }
@@ -96,6 +103,11 @@ struct Edge {
 struct FixedSync {
   unsigned before = 0, inside = 0, after = 0;
 
+  static FixedSync fromStages(BarrierStages stages, unsigned mask) {
+    return {stages.beforeMemoryEffects ? mask : 0,
+            stages.betweenMemoryEffects ? mask : 0,
+            stages.afterMemoryEffects ? mask : 0};
+  }
   bool operator==(const FixedSync &) const = default;
 };
 
@@ -106,6 +118,7 @@ template <typename Facts> struct Node {
   // Zero wherever the execution group cannot rendezvous.
   unsigned insertionCost = 0;
   unsigned loopDepth = 0;
+  // First point in this function or warp role. Zero identifies the root body.
   unsigned body = 0;
   FixedSync fixed;
   Facts effects;
