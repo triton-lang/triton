@@ -36,8 +36,8 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/InitAllPasses.h"
 
@@ -161,16 +161,19 @@ void registerTritonDialects(mlir::DialectRegistry &registry) {
     plugin.registerDialects(registry);
   }
 
-  registry.insert<
-      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-      mlir::triton::gpu::TritonGPUDialect,
-      mlir::triton::instrument::TritonInstrumentDialect,
-      mlir::math::MathDialect, mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-      mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
-      mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
-      mlir::triton::amdgpu::TritonAMDGPUDialect,
-      mlir::triton::proton::ProtonDialect,
-      mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
-      mlir::triton::gluon::GluonDialect>();
+  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                  mlir::triton::gpu::TritonGPUDialect,
+                  mlir::triton::instrument::TritonInstrumentDialect,
+                  mlir::math::MathDialect, mlir::arith::ArithDialect,
+                  mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+                  mlir::LLVM::LLVMDialect>();
+  mlir::triton::NVIDIA::registerNVVMDialect(registry);
+  registry.insert<mlir::triton::nvgpu::NVGPUDialect,
+                  mlir::triton::nvws::NVWSDialect,
+                  mlir::triton::amdgpu::TritonAMDGPUDialect,
+                  mlir::triton::proton::ProtonDialect,
+                  mlir::triton::proton::gpu::ProtonGPUDialect>();
+  mlir::triton::AMD::registerROCDLDialect(registry);
+  registry.insert<mlir::triton::gluon::GluonDialect>();
 }
