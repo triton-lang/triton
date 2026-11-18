@@ -470,8 +470,8 @@ def test_matmul_scatter(E, R, N, K):
 # work of mlp2. All row indices fit into int16.
 
 if __name__ == "__main__":
-    print("Benchmarking grouped matmul")
-    print("===========================")
+    print("Benchmarking matmul")
+    print("===================")
     E, T, TOPK, H = 128, 8192, 8, 7168
     R = T * TOPK // E
     M = E * R
