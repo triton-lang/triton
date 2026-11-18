@@ -365,13 +365,17 @@ void init_gsan_testing(py::module_ &m) {
 
   m.def(
       "shadow_cell_address", gsan::getShadowAddress, py::arg("real_address"),
+      py::arg("reserve_base"),
       "Return the address of the ShadowCell corresponding to a real address.");
   m.def("shadow_granularity", gsan::getShadowGranularity,
-        py::arg("real_address"), "Return the pointer's shadow granularity.");
+        py::arg("real_address"), py::arg("reserve_base"),
+        "Return the pointer's shadow granularity.");
 
   m.def("is_write_once_address", gsan::isWriteOnceAddress);
-  m.def("shadow_cell_size",
-        [](uintptr_t addr) { return gsan::getShadowCellSize(addr); });
+  m.def("is_gsan_managed", gsan::isGsanManaged);
+  m.def("shadow_cell_size", [](uintptr_t addr, uintptr_t reserveBase) {
+    return gsan::getShadowCellSize(addr, reserveBase);
+  });
   m.def("decode_write_once_clock", [](py::bytes data) {
     if (data.size() < sizeof(gsan::WriteOnceShadowCell))
       throw py::value_error(
@@ -382,6 +386,7 @@ void init_gsan_testing(py::module_ &m) {
   });
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);
+  m.attr("POOL_RESERVE_SIZE_BYTES") = gsan::kPoolReserveSize;
   m.attr("GLOBAL_STATE_SIZE_BYTES") = sizeof(gsan::GlobalState);
   m.attr("THREAD_STATE_HEADER_SIZE_BYTES") = kThreadStateHeaderSize;
   m.attr("PER_DEVICE_STATE_STRIDE_BYTES") = gsan::kPerDeviceStateStride;

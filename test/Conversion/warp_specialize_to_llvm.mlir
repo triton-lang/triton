@@ -218,7 +218,7 @@ llvm.func @generate_switch_loop(%again: i1) attributes {allocation.offset = 32 :
   // COMMON-DAG: [[C0_i8:%.*]] = llvm.mlir.constant(0 : i8)
   // COMMON-DAG: [[C1_i8:%.*]] = llvm.mlir.constant(1 : i8)
   // COMMON-DAG: [[C2_i8:%.*]] = llvm.mlir.constant(2 : i8)
-  // AMD-DAG: [[C3_i8:%.*]] = llvm.mlir.constant(3 : i8)
+  // COMMON-DAG: [[C3_i8:%.*]] = llvm.mlir.constant(3 : i8)
 
   // COMMON-DAG: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
 
@@ -231,25 +231,18 @@ llvm.func @generate_switch_loop(%again: i1) attributes {allocation.offset = 32 :
   // CHECK: [[SWITCH_LOOP]]:
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][32] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i8
-  // CHECK-NEXT: [[GROUP:%.*]] = llvm.udiv [[WARP_ID]], [[C4]]
-  // CHECK-NEXT: [[SLOT:%.*]] = llvm.sub [[GROUP]], [[C1]]
+  // CHECK-NEXT: [[REL_WID:%.*]] = llvm.sub [[WARP_ID]], [[C4]]
 
-  // CHECK-NEXT: [[STATE_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][[[SLOT]]]
+  // CHECK-NEXT: [[STATE_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][[[REL_WID]]]
   // CHECK-NEXT: [[STATE:%.*]] = llvm.load [[STATE_PTR]]
   // CHECK-NEXT: llvm.switch [[STATE]] : i8, [[EXIT:\^.*]] [
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
-  // CHECK-NEXT: 1: [[SPLIT:\^bb[0-9]+]]
+  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
   // CHECK-NEXT: ]
 
   // CHECK: [[EXIT]]:
   // CHECK-NEXT: llvm.return
-  // CHECK: [[SPLIT]]:
-  // CHECK-NEXT: llvm.switch [[WARP_ID]] : i32, [[PARTITION1:\^bb[0-9]+]] [
-  // CHECK-NEXT: 10: [[PARTITION2:\^bb[0-9]+]]
-  // CHECK-NEXT: ]
-  // CHECK: [[JOIN:\^bb[0-9]+]]:
-  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
-  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] loop_annotation = <licm = <disable = true>>
 
   // CHECK: [[PARTITION0]]:
   // CHECK: nvvm.barrier id = [[C1]] aligned = false
@@ -260,12 +253,14 @@ llvm.func @generate_switch_loop(%again: i1) attributes {allocation.offset = 32 :
   // CHECK: [[PARTITION1]]:
   // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "partition1"
-  // CHECK-NEXT: llvm.br [[JOIN]]
+  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] loop_annotation = <licm = <disable = true>>
 
   // CHECK: [[PARTITION2]]:
   // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "partition2"
-  // CHECK-NEXT: llvm.br [[JOIN]]
+  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]] loop_annotation = <licm = <disable = true>>
 
   // CHECK: [[BODY]]:
   // CHECK-NEXT: "before"
@@ -273,8 +268,21 @@ llvm.func @generate_switch_loop(%again: i1) attributes {allocation.offset = 32 :
 
   // CHECK-NEXT: llvm.store [[C0_i8]], [[SMEM_BASE]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][2]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][3]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][4]
   // CHECK-NEXT: llvm.store [[C1_i8]], [[PTR]]
-  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][5]
+  // CHECK-NEXT: llvm.store [[C1_i8]], [[PTR]]
+
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
+  // CHECK-NEXT: llvm.store [[C2_i8]], [[PTR]]
+
+  // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "default"
   // CHECK-NEXT: llvm.br [[AFTER:\^.*]]
@@ -369,9 +377,19 @@ llvm.func @generate_switch_loop(%again: i1) attributes {allocation.offset = 32 :
 
   // CHECK: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][32]
 
-  // CHECK-NEXT: llvm.store [[C2_i8]], [[SMEM_BASE]]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[SMEM_BASE]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
-  // CHECK-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][2]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][3]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][4]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][5]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: llvm.return
 
@@ -493,26 +511,15 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 llvm.func @partition_warpid_order(%enabled: i1) attributes {allocation.offset = 32 : i32} {
   // COMMON-DAG: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // COMMON-DAG: [[C0_i8:%.*]] = llvm.mlir.constant(0 : i8)
-  // AMD-DAG: [[C1_i8:%.*]] = llvm.mlir.constant(1 : i8)
-  // AMD-DAG: [[C2_i8:%.*]] = llvm.mlir.constant(2 : i8)
-  // CHECK-DAG: [[EXIT_STATE:%.*]] = llvm.mlir.constant(1 : i8)
-  // AMD-DAG: [[EXIT_STATE:%.*]] = llvm.mlir.constant(3 : i8)
+  // COMMON-DAG: [[C1_i8:%.*]] = llvm.mlir.constant(1 : i8)
+  // COMMON-DAG: [[C2_i8:%.*]] = llvm.mlir.constant(2 : i8)
+  // COMMON-DAG: [[EXIT_STATE:%.*]] = llvm.mlir.constant(3 : i8)
 
   // COMMON: [[STATE:%.*]] = llvm.load {{.*}} : !llvm.ptr<3> -> i8
   // COMMON-NEXT: llvm.switch [[STATE]] : i8
-  // CHECK-NEXT: 0: [[GROUP:\^bb[0-9]+]]
-  // CHECK-NEXT: ]
-  // Partitions crossing a quartet boundary share the same command.
-  // CHECK: [[GROUP]]:
-  // CHECK-NEXT: llvm.switch {{.*}} : i32, [[PARTITION1:\^bb[0-9]+]] [
-  // CHECK-NEXT: 6: [[PARTITION0:\^bb[0-9]+]],
-  // CHECK-COUNT-3: {{[7-9]}}: [[PARTITION0]]
-  // CHECK-NEXT: 10: [[PARTITION2:\^bb[0-9]+]],
-  // CHECK-COUNT-7: 1{{[1-7]}}: [[PARTITION2]]
-  // CHECK-NEXT: ]
-  // AMD-NEXT: 0: [[PARTITION0:\^.*]],
-  // AMD-NEXT: 1: [[PARTITION1:\^.*]],
-  // AMD-NEXT: 2: [[PARTITION2:\^.*]]
+  // COMMON-NEXT: 0: [[PARTITION0:\^.*]],
+  // COMMON-NEXT: 1: [[PARTITION1:\^.*]],
+  // COMMON-NEXT: 2: [[PARTITION2:\^.*]]
 
   // COMMON: [[PARTITION0]]:
   // COMMON: "ws0_partition0"
@@ -523,22 +530,35 @@ llvm.func @partition_warpid_order(%enabled: i1) attributes {allocation.offset = 
 
   // COMMON: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]]
 
-  // CHECK-NEXT: llvm.store [[C0_i8]], [[SMEM_BASE]]
-  // AMD-NEXT: llvm.store [[C1_i8]], [[SMEM_BASE]]
+  // COMMON-NEXT: llvm.store [[C1_i8]], [[SMEM_BASE]]
   // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[1]
-  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
-  // AMD-NEXT: llvm.store [[C1_i8]], [[PTR]]
+  // COMMON-NEXT: llvm.store [[C1_i8]], [[PTR]]
 
   // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
   // COMMON-NEXT: llvm.store [[C0_i8]], [[PTR]]
   // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
   // COMMON-NEXT: llvm.store [[C0_i8]], [[PTR]]
-  // CHECK-NEXT: nvvm.barrier
-  // AMD-COUNT-2: llvm.store [[C0_i8]],
-  // AMD-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
-  // AMD-NEXT: llvm.store [[C2_i8]], [[PTR]]
-  // AMD-COUNT-7: llvm.store [[C2_i8]],
-  // AMD-NEXT: rocdl.barrier
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
+  // COMMON-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
+  // COMMON-NEXT: llvm.store [[C0_i8]], [[PTR]]
+
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[8]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[9]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[10]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[11]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[12]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // COMMON-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[13]
+  // COMMON-NEXT: llvm.store [[C2_i8]], [[PTR]]
   llvm.cond_br %enabled, ^specialize, ^done
 ^specialize:
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 6, 4, 10>}
@@ -628,7 +648,7 @@ llvm.func @warpid_warp_specialize(%setup: i1) attributes {allocation.offset = 32
 
 // -----
 
-module attributes {ttg.maxnreg = 80 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32} {
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
@@ -642,19 +662,16 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   // COMMON-DAG: [[C3_i8:%.*]] = llvm.mlir.constant(3 : i8)
   // COMMON-DAG: [[C4_i8:%.*]] = llvm.mlir.constant(4 : i8)
   // COMMON-DAG: [[C5_i8:%.*]] = llvm.mlir.constant(5 : i8)
-  // AMD-DAG: [[C6_i8:%.*]] = llvm.mlir.constant(6 : i8)
+  // COMMON-DAG: [[C6_i8:%.*]] = llvm.mlir.constant(6 : i8)
 
-  // CHECK: llvm.switch [[COMMAND:%[0-9]+]] : i8
+  // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[WS0_PARTITION0:\^.*]],
-  // CHECK-NEXT: 1: [[SPLIT:\^bb[0-9]+]],
-  // CHECK-NEXT: 2: [[ACQUIRE:\^bb[0-9]+]],
-  // CHECK-NEXT: 3: [[ACQUIRE]],
-  // CHECK-NEXT: 4: [[WS3_PARTITION0:\^bb[0-9]+]]
+  // CHECK-NEXT: 1: [[WS0_PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[WS0_PARTITION2:\^.*]],
+  // CHECK-NEXT: 3: [[WS1_PARTITION0:\^.*]],
+  // CHECK-NEXT: 4: [[WS1_PARTITION1:\^.*]],
+  // CHECK-NEXT: 5: [[WS3_PARTITION0:\^.*]]
   // CHECK-NEXT: ]
-  // CHECK: [[SPLIT]]:
-  // CHECK-NEXT: llvm.switch {{.*}} : i32, [[WS0_PARTITION1:\^bb[0-9]+]] [
-  // CHECK-NEXT: 10: [[WS0_PARTITION2:\^bb[0-9]+]],
-  // CHECK-NEXT: 11: [[WS0_PARTITION2]]
 
   // CHECK: [[WS0_PARTITION0]]:
   // CHECK: "ws0_partition0"
@@ -662,11 +679,6 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   // CHECK: "ws0_partition1"
   // CHECK: [[WS0_PARTITION2]]:
   // CHECK: "ws0_partition2"
-  // The complete groups acquire their common cap before dispatching to the bodies.
-  // CHECK: [[ACQUIRE]]:
-  // CHECK-NEXT: nvvm.setmaxregister increase 80
-  // CHECK-NEXT: llvm.switch [[COMMAND]] : i8, [[WS1_PARTITION0:\^bb[0-9]+]] [
-  // CHECK-NEXT: 2: [[WS1_PARTITION1:\^bb[0-9]+]]
   // CHECK: [[WS1_PARTITION0]]:
   // CHECK: "ws1_partition0"
   // CHECK: [[WS1_PARTITION1]]:
@@ -677,8 +689,20 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   // CHECK: getelementptr
   // CHECK-NEXT: llvm.store [[C0_i8]], [[SMEM_BASE:%[0-9]+]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
+  // CHECK-NEXT: llvm.store [[C0_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
   // CHECK-NEXT: llvm.store [[C1_i8]], [[PTR]]
-  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
+  // CHECK-NEXT: llvm.store [[C1_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
+  // CHECK-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
+  // CHECK-NEXT: llvm.store [[C2_i8]], [[PTR]]
+  // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: "ws0_default"
 
   // AMD: llvm.switch
@@ -741,10 +765,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   } : () -> ()
 
   // CHECK: getelementptr
-  // CHECK-NEXT: llvm.store [[C2_i8]], [[SMEM_BASE:%[0-9]+]]
+  // CHECK-NEXT: llvm.store [[C4_i8]], [[SMEM_BASE:%[0-9]+]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
+  // CHECK-NEXT: llvm.store [[C4_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
+  // CHECK-NEXT: llvm.store [[C4_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
+  // CHECK-NEXT: llvm.store [[C4_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
   // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
-  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
+  // CHECK-NEXT: llvm.store [[C3_i8]], [[PTR]]
+  // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: "ws1_default"
 
   // AMD: getelementptr
@@ -766,7 +802,7 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   // AMD: rocdl.barrier
   // AMD: "ws1_default"
 
-  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 8, 4>, actualRegisters = array<i32: 80, 80, 80>}
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 8, 4>}
   default {
     "ws1_default"() : () -> ()
     ttg.warp_yield
@@ -785,10 +821,22 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   "ws2_default"() : () -> ()
 
   // CHECK: getelementptr
-  // CHECK-NEXT: llvm.store [[C4_i8]], [[SMEM_BASE:%[0-9]+]]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[SMEM_BASE:%[0-9]+]]
   // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
-  // CHECK-NEXT: llvm.store [[C4_i8]], [[PTR]]
-  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[2]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[3]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[4]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[5]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[6]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr %{{[0-9]+}}[7]
+  // CHECK-NEXT: llvm.store [[C5_i8]], [[PTR]]
+  // CHECK: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: "ws3_default"
 
   // AMD: getelementptr
@@ -819,8 +867,7 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
     "ws3_partition0"() : () -> ()
     ttg.warp_return
   }: () -> ()
-  // CHECK: llvm.store [[C5_i8]],
-  // AMD: llvm.store [[C6_i8]],
+  // COMMON: llvm.store [[C6_i8]],
   // COMMON: llvm.return
   llvm.return
 }
@@ -1065,12 +1112,10 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 llvm.func @dynamic_register_reallocation(%run: i1) attributes {allocation.offset = 0 : i32} {
   // CHECK-DAG: [[C1:%.*]] = llvm.mlir.constant(1 : i32)
 
-  // CHECK: cond_br %{{.*}}, [[ENTRY:\^.*]], [[WORKERS:\^.*]]
+  // CHECK: cond_br %{{.*}}, [[ENTRY:\^.*]], [[SWITCH_LOOP:\^.*]]
 
-  // CHECK: [[WORKERS]]:
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
-  // CHECK-NEXT: llvm.br [[SWITCH_LOOP:\^bb[0-9]+]]
   // CHECK: [[SWITCH_LOOP]]:
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
@@ -1078,31 +1123,32 @@ llvm.func @dynamic_register_reallocation(%run: i1) attributes {allocation.offset
   // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
   // CHECK-NEXT: ]
 
-  // CHECK: nvvm.barrier id = [[C1]] aligned = false
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
-  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
-  // CHECK-COUNT-2: nvvm.setmaxregister decrease 24
-
   // CHECK: [[PARTITION0]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 80
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "partition0"()
+  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[PARTITION1]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 48
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "partition1"()
+  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[PARTITION2]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 128
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK-NEXT: "partition2"()
+  // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
 
   // CHECK: [[ENTRY]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 248
 
   // CHECK: nvvm.barrier id = [[C1]] aligned = false
-  // CHECK-NEXT: setmaxregister decrease 64
+  // CHECK-NEXT: setmaxregister decrease 152
   // CHECK-NEXT: nvvm.barrier id = [[C1]] aligned = false
   // CHECK: "default"
   // CHECK: nvvm.barrier id = [[C1]] aligned = false
@@ -1110,7 +1156,7 @@ llvm.func @dynamic_register_reallocation(%run: i1) attributes {allocation.offset
 
   llvm.cond_br %run, ^launch, ^exit
 ^launch:
-  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 64, 80, 48, 128>}
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 12>, actualRegisters = array<i32: 152, 80, 48, 128>}
   default {
     "default"() : () -> ()
     ttg.warp_yield

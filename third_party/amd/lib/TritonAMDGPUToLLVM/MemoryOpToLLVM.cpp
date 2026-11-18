@@ -214,6 +214,115 @@ lowerDsReadTr(Operation *op,
   assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
          addrToOffset.getInDimSizeLog2(kAddr) <= 6);
 
+  if (isPartitioned) {
+    // A transposing load reads one contiguous chunk per issuing lane and
+    // shuffles the elements across lanes, so the lane that provides an address
+    // is generally not the lane that receives the data. `fullTile` maps
+    // destination (register, lane) to source (contiguous offset, issuing lane),
+    // the latter named `addr`. Its inverse therefore tells which destination
+    // elements each issuing lane reads, and composing it with `partitionLayout`
+    // gives their partitions.
+    //
+    // Example: ds_load_tr8_b64 on CDNA5 (gfx1250), from the test
+    // `ds_transpose_partitioned_remaps_lane` in ds_transpose_cdna5.mlir.
+    //
+    //   fullTile:
+    //     - lane=1 -> (1, 0)
+    //       lane=2 -> (2, 0)
+    //       lane=4 -> (4, 0)
+    //       lane=8 -> (0, 4)
+    //       lane=16 -> (0, 16)
+    //     - register=1 -> (0, 1)
+    //       register=2 -> (0, 2)
+    //       register=4 -> (0, 8)
+    //     where out dims are: [offset (size 8), addr (size 32)]
+    //
+    // `addr` identifies the issuing lane, and `offset` counts the contiguous
+    // 8-bit elements it reads. The full inverse gives the destination lane,
+    // register, and warp in that order. The warp is zero within this tile:
+    //
+    //   fullTile.invert():
+    //     - offset=1 -> (1, 0, 0)
+    //       offset=2 -> (2, 0, 0)
+    //       offset=4 -> (4, 0, 0)
+    //     - addr=1 -> (0, 1, 0)
+    //       addr=2 -> (0, 2, 0)
+    //       addr=4 -> (8, 0, 0)
+    //       addr=8 -> (0, 4, 0)
+    //       addr=16 -> (16, 0, 0)
+    //     where out dims are:
+    //       [lane (size 32), register (size 8), warp (size 1)]
+    //
+    // For this test, partitionLayout chooses the partition from the
+    // destination-lane basis `lane=8`:
+    //
+    //     - register=1 -> (0)
+    //       ...
+    //       register=32 -> (0)
+    //     - lane=1 -> (0)
+    //       lane=2 -> (0)
+    //       lane=4 -> (0)
+    //       lane=8 -> (1)
+    //       lane=16 -> (0)
+    //     - warp=1 -> (0)
+    //       warp=2 -> (0)
+    //     where out dims are: [partition (size 2)]
+    //
+    // Querying this with the runtime issuing lane asks for the partition of the
+    // wrong destination lane. Composing the full inverse with partitionLayout
+    // expresses the partition in terms of the issuing lane and contiguous
+    // offset:
+    //
+    //   sourceToPartition = fullTile.invert().compose(partitionLayout):
+    //     - offset=1 -> (0)
+    //       offset=2 -> (0)
+    //       offset=4 -> (0)
+    //     - addr=1 -> (0)
+    //       addr=2 -> (0)
+    //       addr=4 -> (1)
+    //       addr=8 -> (0)
+    //       addr=16 -> (0)
+    //     where out dims are: [partition (size 2)]
+    //
+    // All offset bases contribute zero, so each issuing lane's entire
+    // contiguous read belongs to one partition. A nonzero offset contribution
+    // would require multiple partitions within that read, which this lowering
+    // must reject.
+    //
+    // Use the addr bases for runtime issuing-lane queries, preserving the
+    // original register and warp contributions.
+    // Destination basis `lane=8` is reached from source basis `addr=4`, so each
+    // issuing lane selects the LDS base expected by the destinations of its
+    // data. For example, issuing lane 4 supplies destination lanes 8-15, which
+    // require partition 1. Querying the original partitionLayout with lane=4
+    // gives 0.
+    //
+    // Partition selection can also depend on a destination-register bit.
+    // For ds_load_tr16_b128 on CDNA5, destination-register bit 0 corresponds
+    // to issuing-lane bit 0. If that register bit selects the partition,
+    // issuing-lane bit 0 selects the LDS base.
+    // The partition stays constant across each issuing lane's contiguous read.
+    //
+    // See ds_transpose_partitioned_register_varying in
+    // ds_transpose_cdna5.mlir.
+    //
+    // For packed fp4, `fullTile` is expressed in nibble coordinates, so this
+    // must run before the nibble basis is dropped below.
+    auto sourceToPartition = fullTile.invert().compose(partitionLayout);
+    if (!sourceToPartition.sublayoutIsZero({kOffset}, {kPartition}))
+      return failure();
+
+    // The partition is queried with the issuing lane, and with register
+    // indices that are multiples of `elemsPerInstr`. The register bits within
+    // one instruction are therefore never queried directly; they select the
+    // partition through the remapped lane bases.
+    auto partitionBases = partitionLayout.getBases();
+    partitionBases[kLane] = sourceToPartition.getBases().lookup(kAddr);
+    partitionLayout =
+        LinearLayout(std::move(partitionBases), partitionLayout.getOutDims(),
+                     /*requireSurjective=*/false);
+  }
+
   // ds_read_tr* shuffles data across lanes so the lane issuing the load
   // matches the kAddr decomposition of fullTile. Using addrToOffset's
   // kAddr bases as the kLane bases of this layout lets us use laneId
@@ -263,96 +372,8 @@ lowerDsReadTr(Operation *op,
       actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset,
                             /*maskSpanBlocks=*/0, elemsPerInstr);
   reps = permStrides.apply(reps);
-  if (isPartitioned) {
+  if (isPartitioned)
     partitionLayout = permStrides.apply(partitionLayout);
-
-    // One ds_read_tr* instruction produces `elemsPerInstr` consecutive
-    // physical values along kReg from a single LDS base pointer. We only
-    // select a partition once per instruction, so all of those register
-    // positions must map to the same partition. For a LinearLayout that holds
-    // iff the low log2(elemsPerInstr) register bases contribute 0 to
-    // kPartition. Bail out if not, so a generic lowering can take over.
-    for (unsigned pos = 0; pos < llvm::Log2_32(elemsPerInstr); ++pos) {
-      if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
-        return failure();
-    }
-
-    // partitionLayout's kLane is the destination lane which is the lane that
-    // owns the loaded data in the destination tensor. The laneId is the
-    // source lane issuing the load. For ds_read_tr* the hardware shuffles
-    // data across lanes, so the two differ: we need to remap.
-    //
-    // Example: ds_load_tr8_b64 on CDNA5, from the test
-    // `ds_transpose_partitioned_remaps_lane`.
-    //
-    //  fullTile:
-    //   - lane=1 -> (1, 0)
-    //     lane=2 -> (2, 0)
-    //     lane=4 -> (4, 0)
-    //     lane=8 -> (0, 4)
-    //     lane=16 -> (0, 16)
-    //   - register=1 -> (0, 1)
-    //     register=2 -> (0, 2)
-    //     register=4 -> (0, 8)
-    //   where out dims are: [offset (size 8), addr (size 32)]
-    //
-    // `addr` is the non-contiguous part of the source lane's access.
-    // `lane` in the inverse tile is the destination lane after the hardware
-    // transpose. `fullTile.invert().sublayout({kAddr}, {kLane})` gives:
-    //
-    //   - addr=1 -> (0)
-    //     addr=2 -> (0)
-    //     addr=4 -> (8)
-    //     addr=8 -> (0)
-    //     addr=16 -> (16)
-    //   where out dims are: [lane (size 32)]
-    //
-    // Then rename the input dimension from `addr` to `lane` so the map can
-    // compose with partitionLayout.
-    //
-    // For this test, partitionLayout would choose the partition from the
-    // destination-lane basis `lane=8`:
-    //
-    //   - register=1 -> (0)
-    //     ...
-    //     register=32 -> (0)
-    //   - lane=1 -> (0)
-    //     lane=2 -> (0)
-    //     lane=4 -> (0)
-    //     lane=8 -> (1)
-    //     lane=16 -> (0)
-    //   - warp=1 -> (0)
-    //     warp=2 -> (0)
-    //   where out dims are: [partition (size 2)]
-    //
-    // Querying this with the runtime source lane asks for the partition of
-    // the wrong lane. Composing with laneRemap rewrites the partition basis
-    // through the transpose:
-    //
-    //   - register=1 -> (0)
-    //     ...
-    //     register=32 -> (0)
-    //   - lane=1 -> (0)
-    //     lane=2 -> (0)
-    //     lane=4 -> (1)
-    //     lane=8 -> (0)
-    //     lane=16 -> (0)
-    //   - warp=1 -> (0)
-    //     warp=2 -> (0)
-    //   where out dims are: [partition (size 2)]
-    //
-    // Destination basis `lane=8` is reached from source basis `addr=4`, so
-    // each source lane selects the LDS base expected by its destination lane.
-
-    auto regIdentity = LinearLayout::identity1D(
-        partitionLayout.getInDimSize(kReg), kReg, kReg);
-    auto srcToDstLaneMap =
-        fullTile.invert().sublayout({kAddr}, {kLane}).renameInDim(kAddr, kLane);
-    auto warpIdentity = LinearLayout::identity1D(
-        partitionLayout.getInDimSize(kWarp), kWarp, kWarp);
-    auto laneRemap = regIdentity * srcToDstLaneMap * warpIdentity;
-    partitionLayout = laneRemap.compose(partitionLayout);
-  }
 
   // Perform computation in bytes, LLVM optimises this better
   auto i8Tile =

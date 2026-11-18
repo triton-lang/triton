@@ -1363,8 +1363,8 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
 bool needsClusterBarrier(Operation *op) {
   if (isa<ClusterBarrierOp>(op))
     return true;
-  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp>(
-          op))
+  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp,
+          gpu::LocalAtomicScatterRMWOp>(op))
     return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);
 }

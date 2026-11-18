@@ -1,5 +1,13 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @fpsan_homomorphic_cast_widening(%x: f16) -> f32 {
+  // expected-error @+1 {{destination must not be wider than input}}
+  %value = tt.fpsan_homomorphic_cast %x : f16 -> f32
+  tt.return %value : f32
+}
+
+// -----
+
 tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
   // expected-error @+1 {{does not support sub-byte elements}}
   %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1
@@ -786,6 +794,51 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
      tt.map_elementwise.return %arg1 : i32
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)
   tt.return
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!tile = tensor<128xi32, #blocked>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @map_with_scratch(%seed: i32) {
+    %values = tt.splat %seed : i32 -> !tile
+    %result = "tt.map_elementwise"(%values) <{pack = 1 : i32}> ({
+    ^bb0(%x: i32):
+      %v = tt.splat %x : i32 -> !tile
+      // expected-error @below {{'tt.histogram' op requires shared memory scratch in a tt.map_elementwise callback}}
+      %bins = tt.histogram %v {allocation.offset = 0 : i32, allocation.size = 512 : i32} : !tile -> !tile
+      tt.print "bins" {hex = false, isSigned = array<i32: 1>} : %bins : !tile
+      tt.map_elementwise.return %x : i32
+    }) : (!tile) -> !tile
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!tile = tensor<128xi32, #blocked>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func private @print_histogram(%x: i32) attributes {noinline = true} {
+    %v = tt.splat %x : i32 -> !tile
+    %bins = tt.histogram %v {allocation.offset = 0 : i32, allocation.size = 512 : i32} : !tile -> !tile
+    tt.print "bins" {hex = false, isSigned = array<i32: 1>} : %bins : !tile
+    tt.return
+  }
+
+  tt.func @reduce_with_scratch_call(%seed: i32, %out: !tt.ptr<i32>) {
+    %v = tt.splat %seed : i32 -> !tile
+    %result = "tt.reduce"(%v) ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      // expected-error @below {{'tt.call' op requires shared memory scratch in a tt.reduce callback}}
+      tt.call @print_histogram(%lhs) {allocation.offset = 0 : i32, allocation.size = 512 : i32} : (i32) -> ()
+      %sum = arith.addi %lhs, %rhs : i32
+      tt.reduce.return %sum : i32
+    }) {axis = 0 : i32} : (!tile) -> i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
 }
 
 // -----

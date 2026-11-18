@@ -253,37 +253,51 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
-def test_tma_matmul_accumulator_intermediate_read(device, reset_period):
+@pytest.mark.parametrize("reset_value", [0, 1])
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, RESET_PERIOD: tl.constexpr):
+    def kernel(A, B, C, RESET_PERIOD: tl.constexpr, RESET_VALUE: tl.constexpr, SNAPSHOT: tl.constexpr):
         acc = tl.zeros((256, 16), tl.float32)
-        for k in range(8):
-            a = A.load([0, k * 16])
-            b = B.load([k * 16, 0])
+        for k in range(6):
+            a = A.load([0, k * 128])
+            b = B.load([k * 128, 0])
             acc = tl.dot(a, b, acc)
-            # Some snapshots are followed by accumulation into the same buffer.
-            if k % 2 == 0:
-                C.store([(k // 2) * 256, 0], acc)
+            # Snapshots and resets use different conditions, so the reset must
+            # wait for the MMA even when no snapshot is taken.
+            if SNAPSHOT:
+                if k % 2 == 0:
+                    C.store([(k // 2) * 256, 0], acc)
+            elif k == 5:
+                # Observe accumulation before the last reset, without taking
+                # intermediate snapshots or reading the post-loop reset value.
+                C.store([0, 0], acc)
             if RESET_PERIOD:
-                if k % RESET_PERIOD == 0:
-                    acc = tl.zeros((256, 16), tl.float32)
+                if k % RESET_PERIOD == RESET_PERIOD - 1:
+                    acc = tl.full((256, 16), RESET_VALUE, tl.float32)
 
-    a = torch.ones((256, 128), device=device, dtype=torch.float16)
-    b = torch.ones((128, 16), device=device, dtype=torch.float16)
-    c = torch.empty((1024, 16), device=device, dtype=torch.float32)
-    a_desc = TensorDescriptor.from_tensor(a, [256, 16])
-    b_desc = TensorDescriptor.from_tensor(b, [16, 16])
+    a = torch.ones((256, 768), device=device, dtype=torch.float16)
+    b = torch.ones((768, 16), device=device, dtype=torch.float16)
+    c = torch.empty(((3 if snapshot else 1) * 256, 16), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor.from_tensor(a, [256, 128])
+    b_desc = TensorDescriptor.from_tensor(b, [128, 16])
     c_desc = TensorDescriptor.from_tensor(c, [256, 16])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, num_stages=3, num_warps=4)
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, reset_period, reset_value, snapshot, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     assert "tcgen05.mma.cta_group::1" in compiled.asm["ptx"]
 
-    values = {0: [16, 48, 80, 112], 2: [16, 32, 32, 32], 4: [16, 32, 64, 32]}[reset_period]
+    values = {
+        0: [128, 384, 640, 768],
+        2: [128, 128 + reset_value, 128 + reset_value, 256 + reset_value],
+        4: [128, 384, 128 + reset_value, 256 + reset_value],
+    }[reset_period]
+    values = values[:3] if snapshot else values[-1:]
     expected = torch.tensor(values, device=device, dtype=torch.float32)
-    torch.testing.assert_close(c.view(4, 256, 16), expected[:, None, None].expand(4, 256, 16), atol=0, rtol=0)
+    expected = expected[:, None, None].expand(len(values), 256, 16).reshape_as(c)
+    torch.testing.assert_close(c, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -341,6 +355,41 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "multicast" not in ttgir
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
     assert "scf.for" in ttgir
+
+
+@pytest.mark.parametrize("then_pure, else_pure", [(True, False), (False, True), (False, False)])
+def test_matmul_pipelined_if_else_side_effects(then_pure, else_pure, device):
+
+    @triton.jit(do_not_specialize=["N"])
+    def kernel(A, B, C, marker, N, THEN_PURE: tl.constexpr, ELSE_PURE: tl.constexpr):
+        rows = tl.arange(0, 64)
+        cols = tl.arange(0, 32)
+        ks = tl.arange(0, 32)
+        acc = tl.zeros((64, 32), tl.float32)
+        for k in tl.range(N, num_stages=3):
+            a = tl.load(A + rows[:, None] * 64 + k * 32 + ks[None, :])
+            b = tl.load(B + (k * 32 + ks[:, None]) * 32 + cols[None, :])
+            acc = tl.dot(a, b, acc)
+            if k % 2 == 0:
+                if not THEN_PURE:
+                    tl.store(marker, 7)
+                value = k + 1
+            else:
+                if not ELSE_PURE:
+                    tl.store(marker + 1, 9)
+                value = k + 2
+            tl.store(marker + 2, value)
+        tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
+
+    a = torch.ones((64, 64), device=device, dtype=torch.float16)
+    b = torch.ones((64, 32), device=device, dtype=torch.float16)
+    c = torch.full((64, 32), -1.0, device=device)
+    marker = torch.full((3, ), -1, device=device, dtype=torch.int32)
+    kernel[(1, )](a, b, c, marker, 0, then_pure, else_pure, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert marker.tolist() == [-1, -1, -1]
+    assert torch.all(c == 0)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
