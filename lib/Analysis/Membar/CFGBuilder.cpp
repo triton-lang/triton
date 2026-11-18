@@ -8,40 +8,87 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
-#include <cassert>
 #include <limits>
 #include <utility>
 
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::membar;
+using mlir::presburger::Fraction;
 namespace ttg = mlir::triton::gpu;
 
-// Include loops enclosing a warp role or a compiler-generated thread scope.
-unsigned
-mlir::triton::membar::getBlockWeight(Block *block,
-                                     const BufferIndexAnalysis &indices,
-                                     unsigned invocationWeight) {
-  unsigned depth = 0;
-  for (;;) {
-    if (auto *loops = indices.getLoopInfo(block->getParent()))
-      depth += loops->getLoopDepth(block);
-    Operation *parent = block->getParentOp();
-    if (isa<FunctionOpInterface>(parent))
-      break;
-    block = parent->getBlock();
+template <typename Model>
+MembarCFGBuilder<Model>::MembarCFGBuilder(Model &model, ModuleOp module)
+    : model(model), callbacks(getTensorCallbackOps(module)) {
+  SymbolTableCollection symbols;
+  module.walk([&](CallOpInterface call) {
+    callers[call.resolveCallableInTable(&symbols)].push_back(call->getBlock());
+  });
+}
+
+template <typename Model>
+auto MembarCFGBuilder<Model>::getBlockWeight(Block *block) -> BlockWeight {
+  if (auto it = blockWeights.find(block); it != blockWeights.end())
+    return it->second;
+
+  // Every role executes once per launch. Sum the frequencies of all calls
+  // to a helper and keep its deepest calling loop for the loop tie-break.
+  Region *region = block->getParent();
+  Operation *parent = region->getParentOp();
+  BlockWeight entry{1, 0};
+  if (auto it = callers.find(parent); it != callers.end()) {
+    entry = {};
+    for (Block *caller : it->second) {
+      BlockWeight call = getBlockWeight(caller);
+      entry.cost += call.cost;
+      entry.loopDepth = std::max(entry.loopDepth, call.loopDepth);
+    }
+  } else if (!isa<FunctionOpInterface>(parent)) {
+    entry = getBlockWeight(parent->getBlock());
   }
-  constexpr unsigned maxDepth = (std::numeric_limits<unsigned>::digits - 1) / 2;
-  unsigned loopWeight = 1u << (2 * std::min(depth, maxDepth));
-  bool overflow;
-  unsigned weight =
-      llvm::SaturatingMultiply(invocationWeight, loopWeight, &overflow);
-  assert(depth <= maxDepth && !overflow && "Membar block weight overflow");
-  return weight;
+
+  auto fn = region->getParentOfType<FunctionOpInterface>();
+  const auto *loops = model.getIndices(fn).getLoopInfo(region);
+  DenseMap<Block *, Fraction> incoming;
+  incoming[&region->front()] = entry.cost;
+  // Split the incoming weight across mutually exclusive successors and add
+  // their shares at joins. Price each block once, before backedges contribute.
+  for (Block *b : llvm::ReversePostOrderTraversal<Region *>(region)) {
+    auto *loop = loops ? loops->getLoopFor(b) : nullptr;
+    unsigned depth = loop ? loop->getLoopDepth() : 0;
+    Fraction share = incoming[b];
+    Fraction cost = share;
+    for (unsigned i = 0; i < depth; ++i)
+      cost *= 4;
+    blockWeights[b] = {cost, entry.loopDepth + depth};
+    // The loop body and its continuation can both execute. The depth factor
+    // already accounts for their relative frequency.
+    if (b->getNumSuccessors() > 1 && !(loop && loop->isLoopExiting(b)))
+      share /= b->getNumSuccessors();
+    for (Block *succ : b->getSuccessors())
+      incoming[succ] += share;
+  }
+  return blockWeights.try_emplace(block, entry).first->second;
+}
+
+template <typename Model> void MembarCFGBuilder<Model>::normalizeCosts() {
+  // The GCD of reduced fractions is gcd(numerators) / lcm(denominators).
+  Fraction unit, peak;
+  for (Block *block : llvm::make_first_range(insertionCosts)) {
+    const Fraction &cost = blockWeights.at(block).cost;
+    unit = {gcd(unit.num, cost.num), lcm(unit.den, cost.den)};
+    peak = std::max(peak, cost);
+  }
+  // If the smallest integer ratios overflow, discard low bits uniformly.
+  // Rounding up keeps every legal site positive.
+  while (unit * std::numeric_limits<unsigned>::max() < peak)
+    unit *= 2;
+  for (auto &[block, cost] : insertionCosts)
+    cost = int64_t(ceil(blockWeights.at(block).cost / unit));
 }
 
 static Block *getGuardArm(Operation *op) {
@@ -96,7 +143,6 @@ std::optional<OpModel> MembarModel::describe(Operation *op, FixedSync &fixed,
 template <typename Model>
 void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
   auto function = region.getParentOfType<FunctionOpInterface>();
-  unsigned invocationWeight = calleeWeights.lookup_or(function, 1u);
   const auto &indices = model.getIndices(function);
   unsigned body = cfg.nodes.size();
   // A helper called per element cannot execute a collective.
@@ -117,9 +163,11 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
     if (arm && block.getSinglePredecessor())
       continue;
     entries.try_emplace(&block, cfg.nodes.size());
-    unsigned cost = (arm || callback)
-                        ? 0
-                        : getBlockWeight(&block, indices, invocationWeight);
+    unsigned depth = 0;
+    if (!arm && !callback) {
+      depth = getBlockWeight(&block).loopDepth;
+      insertionCosts.try_emplace(&block);
+    }
     Operation *term = block.getTerminator();
     Block *active = getGuardArm(term);
     for (Operation &op : block) {
@@ -130,7 +178,8 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
         continue;
       unsigned id = cfg.nodes.size();
       cfg.nodes.push_back({&op,
-                           cost,
+                           0,
+                           depth,
                            body,
                            fixed,
                            effects ? std::move(*effects) : Facts{},
@@ -191,6 +240,7 @@ template <typename Model>
 auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
     -> MembarCFG<Facts> {
   MembarCFG<Facts> cfg;
+  insertionCosts.clear();
   appendWithCallees(cfg, root);
   if (expandWarpRoles) {
     for (unsigned id = 0, end = cfg.nodes.size(); id < end; ++id) {
@@ -212,9 +262,12 @@ auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
     }
   }
 
+  normalizeCosts();
   DenseMap<Operation *, unsigned> gapIds;
-  for (auto [id, node] : llvm::enumerate(cfg.nodes))
+  for (auto [id, node] : llvm::enumerate(cfg.nodes)) {
+    node.insertionCost = insertionCosts.lookup(node.op->getBlock());
     node.gap = gapIds.try_emplace(node.op, id).first->second;
+  }
   return cfg;
 }
 

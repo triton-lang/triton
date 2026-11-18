@@ -23,7 +23,10 @@ LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions);
 ///
 /// The solver selects sites on uncovered paths until it covers every demand.
 /// A site can cover several demands. Each enclosing loop multiplies its cost
-/// by four. Emit the selected actions before their operations, waits first.
+/// by four. Within an MLIR region, uniform branches divide the weight equally
+/// among exclusive arms, and joins sum their shares. Each warp-specialized
+/// role and the continuation inherit the launch weight.
+/// Emit actions before their operations, waits first.
 LogicalResult placeBarriers(ModuleAllocation &allocation,
                             BufferRegionAnalysis &regions,
                             MembarFilterFn sharedFilter, PlacementMode mode,

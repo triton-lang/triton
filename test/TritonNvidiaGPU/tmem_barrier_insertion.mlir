@@ -1364,13 +1364,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Completion must stay in this block even when its last operation acquires.
+  // Each path completes the store at its first load or return.
   // WAIT-LABEL: @wait_acquire_before_cfg
   // WAIT: ttng.tmem_store
   // WAIT-NEXT: ttng.wait_barrier
-  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: cf.cond_br
-  // WAIT: ttng.tmem_load
+  // WAIT: ttng.tmem_wait store
+  // WAIT-NEXT: tt.return
+  // WAIT: ttng.tmem_wait store
+  // WAIT-NEXT: ttng.tmem_load
   // WAIT-NEXT: ttng.tmem_wait load
   // WAIT-NEXT: tt.return
   tt.func @wait_acquire_before_cfg(

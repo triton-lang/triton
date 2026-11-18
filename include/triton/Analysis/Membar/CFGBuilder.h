@@ -1,6 +1,7 @@
 #ifndef TRITON_ANALYSIS_MEMBAR_CFGBUILDER_H
 #define TRITON_ANALYSIS_MEMBAR_CFGBUILDER_H
 
+#include "mlir/Analysis/Presburger/Fraction.h"
 #include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Analysis/Membar/TmemModel.h"
 #include "llvm/ADT/DenseMap.h"
@@ -104,6 +105,7 @@ template <typename Facts> struct Node {
   Operation *op = nullptr;
   // Zero wherever the execution group cannot rendezvous.
   unsigned insertionCost = 0;
+  unsigned loopDepth = 0;
   unsigned body = 0;
   FixedSync fixed;
   Facts effects;
@@ -138,29 +140,33 @@ private:
   TMemModel *tmem;
 };
 
-unsigned getBlockWeight(Block *block, const BufferIndexAnalysis &indices,
-                        unsigned invocationWeight);
-
 template <typename Model> class MembarCFGBuilder {
   using Facts = typename Model::Facts;
 
 public:
-  MembarCFGBuilder(Model &model, const llvm::SetVector<Operation *> &callbacks,
-                   const DenseMap<Operation *, unsigned> &calleeWeights)
-      : model(model), callbacks(callbacks), calleeWeights(calleeWeights) {}
+  MembarCFGBuilder(Model &model, ModuleOp module);
 
   /// Link reachable noinline callees and optionally expand warp-specialized
   /// roles.
   MembarCFG<Facts> build(Region &root, bool expandWarpRoles);
 
 private:
+  struct BlockWeight {
+    presburger::Fraction cost;
+    unsigned loopDepth;
+  };
+  BlockWeight getBlockWeight(Block *block);
+  void normalizeCosts();
   void appendWithCallees(MembarCFG<Facts> &cfg, Region &root,
                          std::optional<Edge> roleExit = std::nullopt);
   void addRegion(MembarCFG<Facts> &cfg, Region &region);
 
   Model &model;
-  const llvm::SetVector<Operation *> &callbacks;
-  const DenseMap<Operation *, unsigned> &calleeWeights;
+  llvm::SetVector<Operation *> callbacks;
+  DenseMap<Operation *, SmallVector<Block *, 1>> callers;
+  DenseMap<Block *, BlockWeight> blockWeights;
+  // Legal blocks in the graph currently being built.
+  DenseMap<Block *, unsigned> insertionCosts;
 };
 
 } // namespace mlir::triton::membar
