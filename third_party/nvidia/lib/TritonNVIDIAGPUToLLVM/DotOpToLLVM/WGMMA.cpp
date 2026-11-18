@@ -188,7 +188,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value useCOperand, Value loadedA, Value loadedB,
                          Value loadedC, bool allowTF32,
                          bool needsPartialAccumulator,
-                         uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
+                         uint32_t maxNumImpreciseAcc, bool sync, Value thread,
+                         bool inlineDescriptors) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
@@ -282,8 +283,15 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
         Value a;
+        IntegerAttr descriptorBitsA, descriptorBitsB;
         if (aInShared) {
-          a = aLoader.smemLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
+          if (inlineDescriptors) {
+            a = aLoader.getBase();
+            descriptorBitsA = rewriter.getI64IntegerAttr(
+                aLoader.getDescriptorBits(m * mmaSizeM, k * mmaSizeK));
+          } else {
+            a = aLoader.smemLoad(m * mmaSizeM, k * mmaSizeK, rewriter, loc);
+          }
         } else {
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
@@ -327,7 +335,14 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
-        auto b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
+        Value b;
+        if (inlineDescriptors) {
+          b = bLoader->getBase();
+          descriptorBitsB = rewriter.getI64IntegerAttr(
+              bLoader->getDescriptorBits(k * mmaSizeK, n * mmaSizeN));
+        } else {
+          b = bLoader->smemLoad(k * mmaSizeK, n * mmaSizeN, rewriter, loc);
+        }
         numLowPrecisionAcc += K;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.
@@ -337,7 +352,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
         mmaAcc = triton::nvgpu::WGMMAOp::create(
             rewriter, loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC,
-            eltTypeA, eltTypeB, layoutA, layoutB);
+            eltTypeA, eltTypeB, layoutA, layoutB, descriptorBitsA,
+            descriptorBitsB);
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;
@@ -383,5 +399,7 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //
                     op.getInputPrecision() == InputPrecision::TF32,
                     op.needsPartialAccumulator(), op.getMaxNumImpreciseAcc(),
-                    !op.getIsAsync(), thread);
+                    !op.getIsAsync(), thread,
+                    op.getDescriptorMode() ==
+                        triton::nvidia_gpu::WGMMADescriptorMode::Inline);
 }

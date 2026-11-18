@@ -392,11 +392,13 @@ public:
     if (structTypeA) {
       operandsAndConstraints.push_back({opA, "r"});
     } else {
-      operandsAndConstraints.push_back({opA, "l"});
+      operandsAndConstraints.push_back(
+          {opA, op.getDescriptorBitsAAttr() ? "r" : "l"});
     }
 
     // Operand B (must be `desc`)
-    operandsAndConstraints.push_back({opB, "l"});
+    operandsAndConstraints.push_back(
+        {opB, op.getDescriptorBitsBAttr() ? "r" : "l"});
 
     // `scale-d`
     if (op.getOpC())
@@ -469,6 +471,22 @@ public:
     // Operands
     uint32_t asmOpIdx = 0;
     std::string args = "";
+    std::string descriptorAsm;
+    auto descriptorOperand = [&](IntegerAttr bits, StringRef name) {
+      std::string input = "$" + std::to_string(asmOpIdx++);
+      if (!bits)
+        return input;
+      uint64_t value = bits.getValue().getZExtValue();
+      std::string desc = name.str();
+      std::string low = desc + "_low";
+      descriptorAsm += ".reg .b32 " + low + "; .reg .b64 " + desc + "; ";
+      descriptorAsm += "add.u32 " + low + ", " + input + ", " +
+                       std::to_string(uint32_t(value)) + "; ";
+      descriptorAsm += "cvt.u64.u32 " + desc + ", " + low + "; ";
+      descriptorAsm += "or.b64 " + desc + ", " + desc + ", " +
+                       std::to_string(value & 0xffffffff00000000ULL) + "; ";
+      return desc;
+    };
 
     // Output and operand C
     uint32_t numCRegs = structTypeOutput.getBody().size();
@@ -492,11 +510,11 @@ public:
       }
       args += "}, ";
     } else {
-      args += "$" + std::to_string(asmOpIdx++) + ", ";
+      args += descriptorOperand(op.getDescriptorBitsAAttr(), "desc_a") + ", ";
     }
 
     // Operand B (must be `desc`)
-    args += "$" + std::to_string(asmOpIdx++) + ", ";
+    args += descriptorOperand(op.getDescriptorBitsBAttr(), "desc_b") + ", ";
 
     // `scale-d`
     if (op.getOpC())
@@ -522,6 +540,8 @@ public:
                   std::to_string(k) + "." + stringifyEnum(eltTypeC).str() +
                   "." + stringifyEnum(eltTypeA).str() + "." +
                   stringifyEnum(eltTypeB).str() + " " + args + ";";
+    if (!descriptorAsm.empty())
+      return "{ " + descriptorAsm + ptxAsm + " }";
     return ptxAsm;
   }
 };
