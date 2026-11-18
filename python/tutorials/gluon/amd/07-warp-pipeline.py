@@ -9,8 +9,8 @@ memory and compute within a warp. We can extend this idea to overlap
 instructions across warps as well. This includes 2 different forms of
 overlapping: hardware-controlled overlap, where we increase the occupancy of
 warps without any control and let the hardware decide how to schedule
-instructions across warps, and software-controlled overlap, which we will
-discuss in this tutorial.
+instructions across warps, and software-controlled overlap, which we have
+fine-grained control of what instructions will be overlapped.
 
 The way we achieve software-controlled overlap across warps is called "block
 pingpong", or "warp pipeline" in Gluon. It is similar to the concept of "warp
