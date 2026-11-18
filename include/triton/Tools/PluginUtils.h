@@ -29,9 +29,15 @@
 /// below; we check this version when loading a new \c TritonPlugin. See
 /// similar: [MLIR_PLUGIN_API_VERSION].
 ///
+/// v3 adds \c HostExtendCallback on \c PluginInfo for generalized IR extension
+/// (builder subclasses, Affine helpers, …). \c OpInfo layout is unchanged from
+/// v2 (table-driven \c create_*(list[Value]) on community \c TritonOpBuilder).
+/// Hosts still load v2 plugins (\c TRITON_PLUGIN_API_VERSION_MIN).
+///
 /// [MLIR_PLUGIN_API_VERSION]:
 /// https://github.com/llvm/llvm-project/blob/80d6e0b8/mlir/include/mlir/Tools/Plugins/PassPlugin.h#L32
-#define TRITON_PLUGIN_API_VERSION 2
+#define TRITON_PLUGIN_API_VERSION 3
+#define TRITON_PLUGIN_API_VERSION_MIN 2
 
 /// Use this helper macro on the public entry point for a Triton plugin.
 #define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default")))
@@ -44,6 +50,25 @@ using AddPassCallback = void (*)(mlir::PassManager *,
 using RegisterPassCallback = void (*)();
 using RegisterDialectCallback = void (*)(mlir::DialectRegistry *);
 using AddOpCallback = void (*)(TritonOpBuilder &, std::vector<mlir::Value> &);
+
+/// Host handles for the generalized IR extension callback (API v3).
+///
+/// Lifetime: valid only for the duration of \c HostExtendCallback.
+/// Plugins cast \c irModule to \c nanobind::module_ * and must call
+/// \c nanobind::register_module on it before using nanobind APIs (so the
+/// plugin DSO shares the host nanobind domain / type casters).
+///
+/// \c reserved must be ignored by plugins; hosts set them to null today.
+/// Future host capabilities grow here without a new API version as long as
+/// unknown reserved slots stay null-safe to ignore.
+struct HostExtensionArgs {
+  void *irModule;
+  void *reserved[3];
+};
+
+/// Generalized IR extension: register classes / methods / helpers on the host
+/// \c ir module. May be null when the plugin only uses Pass/Dialect/OpInfo.
+using HostExtendCallback = void (*)(HostExtensionArgs *args);
 
 /// Information provided by a plugin for loading its passes.
 struct PassInfo {
@@ -60,7 +85,8 @@ struct DialectInfo {
   RegisterDialectCallback registerDialect;
 };
 
-/// Information provided by a plugin for loading its custom ops.
+/// Information provided by a plugin for loading its custom ops
+/// (\c ir.builder.extend_with). Layout unchanged since API v2.
 struct OpInfo {
   const char *name;
   AddOpCallback addOp;
@@ -85,12 +111,16 @@ struct PluginInfo {
   DialectInfo *dialects;
   size_t numDialects;
 
-  /// The list of custom ops.
+  /// The list of custom ops (\c ir.builder.extend_with). May be empty.
   OpInfo *ops;
   size_t numOps;
 
   /// Triton Version
   const char *tritonVersion;
+
+  /// Generalized IR extension (\c ir.extend_module_with). Null if unused.
+  /// Only read when \c apiVersion >= 3.
+  HostExtendCallback extend;
 };
 
 /// A helper structure for storing information about a pass registered by a
@@ -103,7 +133,7 @@ struct Pass {
   const AddPassCallback addPass;
 };
 
-/// A helper structure for storing information about a pass registered by a
+/// A helper structure for storing information about an op registered by a
 /// plugin.
 struct Op {
   Op(const char *name, AddOpCallback addOp) : name(name), addOp(addOp) {}
@@ -156,6 +186,9 @@ public:
   /// AddOpCallback while knowing the operation name. This function will crash
   /// with an LLVM usage error if the plugin provides invalid \c PluginInfo.
   const std::vector<Op> listOps() const;
+
+  /// Invoke \c PluginInfo::extend if present (API v3 generalized IR hook).
+  void extendHost(HostExtensionArgs *args) const;
 
 private:
   TritonPlugin(const std::string &filename,
