@@ -3749,7 +3749,8 @@ def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     unmarked_bits = _unmix_payload_to_float_bits(expected, "f32").view(np.uint32)
     # Full-width unchunked reference with one E5M2 cast marker per live weight.
     expected_bits = _unmix_payload_to_float_bits(expected * np.uint64(0x71b39a53), "f32").view(np.uint32)
-    for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite", "ordinary_cast"):
+    for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite",
+                     "ordinary_cast"):
         for shards in ((1, 2, 4) if mutation == "none" else (4, )):
             partial = torch.empty((shards, 128, 32), device=device, dtype=torch.float32)
             maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
@@ -3784,7 +3785,7 @@ def test_fpsan_probability_cast_signature(device, fresh_knobs, dst, tag):
     ordinary, ordinary_arg = _as_float_bits_tensor(np.zeros(128, dtype=np.int8), dst)
     for mode in ("", "fpsan"):
         fresh_knobs.compilation.instrumentation_mode = mode
-        _probability_cast_bytes[(1,)](src, marked_arg, ordinary_arg, _float_dtype_info(dst)[5])
+        _probability_cast_bytes[(1, )](src, marked_arg, ordinary_arg, _float_dtype_info(dst)[5])
         if mode:
             plain = _mix_float_bits(ordinary.cpu().numpy(), dst)
             np.testing.assert_array_equal(_mix_float_bits(marked.cpu().numpy(), dst), (plain * tag) & 255)

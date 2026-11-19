@@ -1209,8 +1209,9 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
 }
 
 Value loadRawMmaOperand(PatternRewriter &rewriter, Location loc,
-                     const MmaOperandSource &source, RankedTensorType resultTy,
-                     bool isLhs, Value tileOffset, Value kOffset) {
+                        const MmaOperandSource &source,
+                        RankedTensorType resultTy, bool isLhs, Value tileOffset,
+                        Value kOffset) {
   if (!source.isShared()) {
     Value rowOffset = isLhs ? tileOffset : kOffset;
     Value colOffset = isLhs ? kOffset : tileOffset;
@@ -2951,10 +2952,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     return rewriteMma(op, rewriter, {}, {});
   }
 
-  LogicalResult rewriteMma(ttng::TCGen5MMAOp op, PatternRewriter &rewriter,
-                           Value aResidual, Value bResidual,
-                           function_ref<LogicalResult()> updateDestination =
-                               [] { return success(); }) const {
+  LogicalResult rewriteMma(
+      ttng::TCGen5MMAOp op, PatternRewriter &rewriter, Value aResidual,
+      Value bResidual, function_ref<LogicalResult()> updateDestination = [] {
+        return success();
+      }) const {
     auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
@@ -3625,7 +3627,8 @@ LogicalResult instrumentProbabilityCasts(ModuleOp module,
           }
           if (auto yield = dyn_cast<scf::YieldOp>(user)) {
             auto loop = dyn_cast<scf::ForOp>(yield->getParentOp());
-            if (loop && loop.getRegionIterArgs()[use.getOperandNumber()] == view)
+            if (loop &&
+                loop.getRegionIterArgs()[use.getOperandNumber()] == view)
               continue;
           }
         }
@@ -3685,10 +3688,10 @@ LogicalResult instrumentProbabilityCasts(ModuleOp module,
 
   SmallVector<ttng::TCGen5MMAOp> mmas;
   module.walk([&](ttng::TCGen5MMAOp op) {
-    if (llvm::any_of(ArrayRef<Value>{op.getA(), op.getB(), op.getD()},
-                     [&](Value v) {
-                       return scratch.probabilityBuffers.contains(getFpSanBufferRoot(v));
-                     }))
+    if (llvm::any_of(
+            ArrayRef<Value>{op.getA(), op.getB(), op.getD()}, [&](Value v) {
+              return scratch.probabilityBuffers.contains(getFpSanBufferRoot(v));
+            }))
       mmas.push_back(op);
   });
   for (auto op : mmas) {
