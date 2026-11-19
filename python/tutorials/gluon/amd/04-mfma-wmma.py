@@ -21,7 +21,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna4, cdna5
-from triton.experimental.gluon.language.amd.cdna4 import async_copy, buffer
+from triton.experimental.gluon.language.amd.cdna4 import buffer
 from triton.experimental.gluon.language.amd.cdna5 import tdm
 
 t1 = importlib.import_module("amd.01-buffer-ops")
@@ -262,8 +262,8 @@ def mfma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: g
     else:
         b_smem = gl.allocate_shared_memory(gl.bfloat16, [K, N], b_smem_layout)
         buffer.load_to_shared(b_smem, b_desc, offs_2d(K, N, N, gmem_layout))
-    async_copy.commit_group()
-    async_copy.wait_group(0)
+    cdna4.async_copy.commit_group()
+    cdna4.async_copy.wait_group(0)
 
     a = a_smem.load(gl.DotOperandLayout(0, mfma_layout, 8))
     if B_K_CONTIGUOUS:
@@ -428,8 +428,8 @@ def async_copy_tile_kernel(a_ptr, gmem_layout: gl.constexpr, smem_layout: gl.con
     smem = gl.allocate_shared_memory(gl.bfloat16, [256, 64], smem_layout)
     a_desc = buffer.make_buffer_descriptor(a_ptr, 256 * 64 * 2)
     buffer.load_to_shared(smem, a_desc, offs_2d(256, 64, 64, gmem_layout))
-    async_copy.commit_group()
-    async_copy.wait_group(0)
+    cdna4.async_copy.commit_group()
+    cdna4.async_copy.wait_group(0)
 
 
 def try_compile_async_copy(gmem_layout, smem_layout):
@@ -458,10 +458,10 @@ if __name__ == "__main__" and is_cdna4():
 #
 # Still use our 256x64 tile and `k_width=8` example. We will use `ds_read_b128`
 # for shared memory and `buffer_load_dwordx4 ... lds` for global memory. As we
-# can pad inside one shared memory load, we have to set the interval to be 512
-# which is 1KB, exactly the amount one `ds_read_b128` will read. Similar as
-# before, consider one group of lanes will touch 16 columns, we can still use
-# padding amount to be 16.
+# can't pad inside one copy instruction, we have to set the interval to be 512
+# which is 1KB, exactly the amount one `buffer_load_dwordx4 ... lds` writes.
+# Similar as before, consider one group of lanes will touch 16 columns, we can
+# still use padding amount to be 16.
 #
 # But with padding after every 512 values, the 8 rows written by one copy
 # instruction still have no padding between them. So we also reorder the rows
@@ -590,7 +590,7 @@ def matmul_cdna4_ld_gmem(k, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stri
                          NUM_BUFFERS: gl.constexpr):
     buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K * stride_ak)
     buffer.load_to_shared(b_smem.index(k % NUM_BUFFERS), b_desc, b_offs, soffset=k * BLOCK_K * stride_bk)
-    async_copy.commit_group()
+    cdna4.async_copy.commit_group()
 
 
 @gluon.jit
@@ -633,12 +633,12 @@ def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     for k in range(num_k - (NUM_BUFFERS - 1)):
         matmul_cdna4_ld_gmem(k + NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk,
                              BLOCK_K, NUM_BUFFERS)
-        async_copy.wait_group(NUM_BUFFERS - 1)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 1)
         a, b = matmul_cdna4_ld_smem(k, a_smem, b_smem, layouts, NUM_BUFFERS)
         acc = cdna4.mfma(a, b, acc)
 
     for i in gl.static_range(NUM_BUFFERS - 1):
-        async_copy.wait_group(NUM_BUFFERS - 2 - i)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 2 - i)
         a, b = matmul_cdna4_ld_smem(num_k - (NUM_BUFFERS - 1) + i, a_smem, b_smem, layouts, NUM_BUFFERS)
         acc = cdna4.mfma(a, b, acc)
 
@@ -713,7 +713,7 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     for i in gl.static_range(NUM_BUFFERS):
         matmul_cdna4_ld_gmem(i, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K,
                              NUM_BUFFERS)
-    async_copy.wait_group(NUM_BUFFERS - 1)
+    cdna4.async_copy.wait_group(NUM_BUFFERS - 1)
 
     a0, b0 = matmul_cdna4_ld_smem_subtiled(0, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
     a1, b1 = matmul_cdna4_ld_smem_subtiled(0, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
@@ -721,7 +721,7 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     acc = cdna4.mfma(a0, b0, acc)
 
     for k in range(1, num_k - (NUM_BUFFERS - 1)):
-        async_copy.wait_group(NUM_BUFFERS - 2)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 2)
         a0, b0 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
         acc = cdna4.mfma(a1, b1, acc)
         matmul_cdna4_ld_gmem(k + NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk,
@@ -731,7 +731,7 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
 
     for i in gl.static_range(NUM_BUFFERS - 1):
         k = num_k - (NUM_BUFFERS - 1) + i
-        async_copy.wait_group(NUM_BUFFERS - 2 - i)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 2 - i)
         a0, b0 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
         acc = cdna4.mfma(a1, b1, acc)
         a1, b1 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
@@ -879,14 +879,14 @@ def wmma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: g
         version=3, instr_shape=[16, 16, 32], transposed=True, warp_bases=[[0, 1], [1, 0]], reg_bases=[])
     a_desc = tdm.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [M, K], smem_layout)
     a_smem = gl.allocate_shared_memory(gl.bfloat16, [M, K], smem_layout)
-    tdm.async_load(a_desc, [0, 0], a_smem)
+    tdm.async_load(a_desc, dest=a_smem)
     if B_K_CONTIGUOUS:
         b_desc = tdm.make_tensor_descriptor(b_ptr, [N, K], [K, 1], [N, K], smem_layout)
         b_smem = gl.allocate_shared_memory(gl.bfloat16, [N, K], smem_layout)
     else:
         b_desc = tdm.make_tensor_descriptor(b_ptr, [K, N], [N, 1], [K, N], smem_layout)
         b_smem = gl.allocate_shared_memory(gl.bfloat16, [K, N], smem_layout)
-    tdm.async_load(b_desc, [0, 0], b_smem)
+    tdm.async_load(b_desc, dest=b_smem)
     tdm.async_wait(0)
 
     a = a_smem.load(gl.DotOperandLayout(0, wmma_layout, 8))
