@@ -11,6 +11,7 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
+from triton.runtime import _allocation
 from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
@@ -2311,6 +2312,14 @@ def test_ws_join_write_visibility(device, monkeypatch, num_ctas):
 
         offsets = ttgl.arange(0, block_x, layout)
         ttgl.store(output + offsets, smem.load(layout))
+
+    if num_ctas == 1:
+        # ConSan must initialize its lock before the worker first acquires it,
+        # including when a user-supplied allocator returns nonzero storage.
+        def allocate(size, alignment, stream):
+            return torch.full((size, ), 1, dtype=torch.int8, device=device)
+
+        monkeypatch.setattr(_allocation._profile_allocator, "_allocator", allocate)
 
     output = torch.empty((XBLOCK.value * num_ctas, ), device=device, dtype=torch.int32)
     kernel[(1, )](output, num_warps=4, num_ctas=num_ctas)
@@ -5117,3 +5126,157 @@ def test_mma_read_local_alloc_write(run_wrapper, monkeypatch, num_ctas):
     BLOCK_K = 64
     A = torch.randn((BLOCK_M, K), device="cuda", dtype=torch.float16)
     load_local_alloc_mma_write_after_read_kernel[(1, )](A, K, BLOCK_M, BLOCK_N, BLOCK_K, num_ctas=num_ctas)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize("failure", ["none", "read", "write", "copy", "invalidate", "bytes"])
+def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_load_synchronization, (failure, device, False, monkeypatch))
+        if failure == "none":
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            if failure in ("read", "write", "copy"):
+                assert "outstanding writes" in result.driver_stderr_output
+            elif failure == "invalidate":
+                assert "outstanding" in result.driver_stderr_output
+            else:
+                assert "Deadlock detected" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(src, out, FAILURE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, 16 if FAILURE == "bytes" else 512)
+        hopper.bulk.async_load(smem, src, 128, bar)
+        if FAILURE == "write":
+            smem.store(ttgl.full((128, ), 0, ttgl.int32, layout))
+        elif FAILURE == "copy":
+            hopper.bulk.async_load(smem, src, 128, bar)
+        elif FAILURE == "invalidate":
+            hopper.mbarrier.invalidate(bar)
+        if FAILURE != "read":
+            hopper.mbarrier.wait(bar, phase=0)
+        values = smem.load(layout)
+        ttgl.store(out + ttgl.arange(0, 128, layout), values)
+        if FAILURE != "invalidate":
+            hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, failure)
+    torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+def test_bulk_async_load_multicast_reuse_race(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_load_multicast_reuse_race, (device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(src, out):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=((0, ), ))
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=((0, ), ))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        values = ttgl.full((128, ), 0, ttgl.int32, layout)
+        for phase in range(2):
+            hopper.mbarrier.expect(bar, 512)
+            hopper.bulk.async_load(smem, src, 128, bar, multicast=True)
+            hopper.mbarrier.wait(bar, phase)
+            values += smem.load(layout)
+            # Deliberately omit the cluster join before the next multicast.
+        ttgl.store(out + ttgl.arange(0, 128, layout), values)
+        hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, num_ctas=2)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize("wait", [False, True])
+@pytest.mark.parametrize("pred", [False, True])
+def test_bulk_async_store_missing_wait(wait, pred, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_store_missing_wait, (wait, pred, device, False, monkeypatch))
+        if wait or not pred:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, pred, WAIT: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                           ttgl.full((128, ), 7, ttgl.int32, layout))
+        hopper.bulk.async_store(out, smem, 128, pred=pred)
+        if WAIT:
+            hopper.bulk.store_wait(0)
+        smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
+        hopper.bulk.store_wait(0, read_only=False)
+        ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
+
+    out = torch.full((256, ), -1, device=device, dtype=torch.int32)
+    kernel[(1, )](out, pred, wait)
+    torch.testing.assert_close(out[:128], torch.full_like(out[:128], 7 if pred else -1))
+    torch.testing.assert_close(out[128:], torch.full_like(out[128:], 9))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize("pendings", [0, 1])
+def test_bulk_async_store_false_predicate_queue(pendings, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_bulk_async_store_false_predicate_queue, (pendings, device, False, monkeypatch))
+        if pendings == 0:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, pred, PENDINGS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                           ttgl.full((128, ), 7, ttgl.int32, layout))
+        hopper.bulk.async_store(out, smem, 128)
+        hopper.bulk.async_store(out + 128, smem, 128, pred=pred)
+        hopper.bulk.store_wait(PENDINGS)
+        smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
+        hopper.bulk.store_wait(0, read_only=False)
+        ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
+
+    out = torch.empty(256, device=device, dtype=torch.int32)
+    kernel[(1, )](out, False, pendings)
+    torch.testing.assert_close(out[:128], torch.full_like(out[:128], 7))
+    torch.testing.assert_close(out[128:], torch.full_like(out[128:], 9))

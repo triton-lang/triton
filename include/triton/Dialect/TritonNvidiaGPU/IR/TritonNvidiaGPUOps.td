@@ -520,6 +520,92 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
 }
 
 
+def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, AsyncLoadOpInterface]> {
+  let summary = "copy a linear global-memory range to shared memory asynchronously";
+  let description = [{
+    Copies numBytes bytes in total, guarded by the scalar predicate, using
+    cp.async.bulk with mbarrier completion. The total is divided equally among
+    the distinct CTA tiles of the destination; replicated CTAs do not increase
+    the total. Each per-CTA count must be a positive multiple of 16 and fit in
+    the contiguous destination view. With multiple CTAs, including replicated
+    layouts, the copy must fill the entire destination view. Partial copies
+    are supported only with one CTA. Source and destination addresses must be
+    16-byte aligned.
+
+    Source tiles are packed in increasing CTA-id order, omitting broadcast
+    bits, with a stride of numBytes / numTiles.
+    This is a raw physical byte copy: a swizzled destination is supported, but
+    the source must already have the desired physical ordering. With multicast,
+    only the representative CTA issues a copy to the destination replicas.
+    The CGA layout may partition, replicate, or combine both; it need not be
+    the identity layout. Each CTA must have its own completion barrier.
+
+    The destination effect conservatively covers the entire view. Completion
+    decrements each barrier's transaction count by numBytes / numTiles; users
+    must wait on the barrier before consuming or reusing the memory.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", AsyncSharedWrite>:$dst,
+    Arg<TT_Ptr, "", [MemRead<GlobalMemory>]>:$src,
+    I32Attr:$numBytes,
+    Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
+    I1:$pred,
+    UnitAttr:$multicast
+  );
+  let assemblyFormat = [{
+    $src `,` $dst `,` $numBytes `,` $barrier `,` $pred attr-dict `:`
+    type($src) `,` qualified(type($dst)) `,` qualified(type($barrier))
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+  let extraClassDeclaration = [{
+    Value getResult() { return getDst(); }
+    int64_t getNumBytesPerCTA();
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
+def TTNG_AsyncBulkCopyLocalToGlobalOp : TTNG_Op<"async_bulk_copy_local_to_global", [
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, AsyncStoreOpInterface]> {
+  let summary = "copy a linear shared-memory range to global memory asynchronously";
+  let description = [{
+    Copies numBytes bytes in total, guarded by the scalar predicate, using
+    cp.async.bulk with bulk async-group completion. The size and physical
+    layout requirements match async_bulk_copy_global_to_local. Source tiles
+    are packed into global memory in increasing CTA-id order, omitting
+    broadcast bits. Only the representative of each replicated tile issues
+    the store. This is a raw physical byte copy without unswizzling.
+
+    Each executed store commits one group to the same queue as TMA stores.
+    A false predicate neither copies nor commits a group. Wait using
+    async_tma_store_wait before reusing shared memory or accessing the global
+    destination; global visibility requires a wait without read_only.
+    The source effect conservatively covers the entire view.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>]>:$dst,
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    I32Attr:$numBytes,
+    I1:$pred
+  );
+  let assemblyFormat = [{
+    $dst `,` $src `,` $numBytes `,` $pred attr-dict `:`
+    type($dst) `,` qualified(type($src))
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+  let extraClassDeclaration = [{
+    int64_t getNumBytesPerCTA();
+    static bool isSupported(int computeCapability) {
+      return computeCapability >= 90;
+    }
+  }];
+}
+
 def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local", [
     AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
@@ -741,7 +827,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
-  let summary = "wait for pending TMA store operations.";
+  let summary = "wait for pending bulk and TMA store operations.";
   let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
   let description = [{
     Wait for the associated store operations to complete. When `read_only` is

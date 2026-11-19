@@ -6,7 +6,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/MathExtras.h"
 #include <optional>
 
 namespace mlir {
@@ -16,8 +15,8 @@ static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
 }
 
 /// A buffer index decomposed as `baseValue + constantOffset`, optionally
-/// under a known modulus (remsi, a low-bit mask, or the pipeliner's
-/// select/cmpi idiom). Two expressions rooted at the
+/// under a known modulus (recorded when the index is wrapped by remsi or
+/// the pipeliner's select/cmpi idiom). Two expressions rooted at the
 /// same base value with different offsets (modulo the same recorded modulus,
 /// when both carry one) provably target different slots.
 struct BufferIndexExpr {
@@ -228,23 +227,16 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  auto wrap = [&](Value value, int64_t modulus) -> BufferIndexExpr {
-    auto result = analyzeBufferIndex(value);
-    // Nested moduli do not generally reduce to one modulus.
-    if (result.modulus)
-      return {indexValue, 0};
-    result.modulus = modulus;
-    return result;
-  };
+  // arith.remsi(x, N): strip the remainder and record N as the modulus.
+  // N must be a positive compile-time constant.
   if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
-    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0)
-      return wrap(remOp.getLhs(), *mod);
-  }
-  if (auto andOp = indexValue.getDefiningOp<arith::AndIOp>()) {
-    for (unsigned i : {0u, 1u}) {
-      auto mask = getConstantIntValue(andOp->getOperand(i));
-      if (mask && llvm::isPowerOf2_64(*mask + 1))
-        return wrap(andOp->getOperand(1 - i), *mask + 1);
+    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
+      auto result = analyzeBufferIndex(remOp.getLhs());
+      // Nested modulus: keep the full remsi as the expression root.
+      if (result.modulus)
+        return BufferIndexExpr{indexValue, 0};
+      result.modulus = *mod;
+      return result;
     }
   }
 

@@ -1,15 +1,28 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
-#include "triton/Conversion/MLIRTypes.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include <functional>
 #include <memory>
 #include <utility>
 
-namespace mlir::triton {
+namespace mlir {
+class ModuleOp;
+class RewriterBase;
+class ValueRange;
+
+namespace triton {
+class ReduceOp;
+enum class MemSyncScope : uint32_t;
 enum class ProgramIDDim : uint32_t;
+
+namespace gpu {
+enum class AddrSpace : uint32_t;
+} // namespace gpu
 
 class TargetInfoBase {
 public:
@@ -191,5 +204,6 @@ public:
 
   virtual ~TargetInfoBase() {}
 };
-} // namespace mlir::triton
+} // namespace triton
+} // namespace mlir
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H

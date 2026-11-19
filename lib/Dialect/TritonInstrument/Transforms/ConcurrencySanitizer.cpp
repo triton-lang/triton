@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
@@ -473,7 +474,8 @@ bool canInitializeAllocation(Value alloc) {
 uint16_t getBlockBroadcastMask(Value alloc) {
   auto allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto kBlock = StringAttr::get(alloc.getContext(), "block");
-  return toLinearLayout(allocTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(allocTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
@@ -765,6 +767,12 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     }
     return getLocalMemoryRecipientCTAs(b, messageToShared, broadcastMask);
   }
+  if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+    if (bulk.getMulticast())
+      return getRecipientCTAsForBroadcastMasks(
+          b, {getBlockBroadcastMask(bulk.getResult())});
+    return currentCTAMask(b);
+  }
   if (isa<ttng::CLCTryCancelOp>(op))
     return allCTAsMask(b);
   if (isa<ttng::MMAv5OpInterface, ttng::TMEMCopyOp>(op))
@@ -826,7 +834,7 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   }
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
-  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+  if (auto tmaLoad = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastBarrierRecipientCTAs(b, tmaLoad.getResult(),
                                               tmaLoad.getBarrier());
@@ -880,12 +888,44 @@ public:
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     if (failed(instrumentMemoryOperations(b, funcBuilder)))
       return failure();
+    markSingleCTALocks();
     auxData.createStartupClusterBarrier(hooks);
     initializeAllocations();
     return success();
   }
 
 private:
+  void markSingleCTALocks() {
+    if (ttg::lookupNumCTAs(module) != 1)
+      return;
+
+    // The shadow lock is allocated per program. With one CTA, each captured
+    // pointer still refers to that CTA's lock. Worker partitions can contend
+    // with each other, while async engines never acquire the shadow lock.
+    auto markLock = [&](auto lock) {
+      Operation *op = lock.getOperation();
+      // Warp groups join at the end of warp_specialize. In the entry function
+      // only the default group runs outside those regions. A private helper
+      // may still run on a worker. Preserve the explicit initialization store
+      // whenever a subsequent worker can acquire the lock.
+      bool defaultGroupOnly = op->getParentOfType<tt::FuncOp>() == entryPoint &&
+                              !op->getParentOfType<ttg::WarpSpecializeOp>() &&
+                              op != auxData.lockInitialization;
+      if (auxData.threadLayout.numBaseThreads == 1 || defaultGroupOnly)
+        lock.setUncontended(true);
+      else
+        lock.setCtaLocal(true);
+    };
+    for (const auto &entry : auxData.lock.values) {
+      for (Operation *user : entry.second.value.getUsers()) {
+        if (auto acquire = dyn_cast<tti::ExperimentalLockAcquireOp>(user))
+          markLock(acquire);
+        else if (auto release = dyn_cast<tti::ExperimentalLockReleaseOp>(user))
+          markLock(release);
+      }
+    }
+  }
+
   bool isCTALocalScratch(Operation *op) const {
     if (!op->hasAttr("allocation.size"))
       return true;

@@ -1401,6 +1401,38 @@ __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
   gsan::tensorLoad(threadState, stackPtr, numElems, bytesPerElem, loc);
 }
 
+extern "C" GSAN_DEVICE void
+__triton_gsan_load_range(void *globalState, const void *ptr, int numBytes,
+                         int pred, const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::NonAtomicElementHandler<gsan::ReadShadowCellHandler> handleElement{
+      state, state->reserveBase, loc, {}};
+  gsan::tensorAccessRow(reinterpret_cast<gsan::uintptr_t>(ptr), numBytes,
+                        /*elementGranularity=*/0, handleElement);
+  if (handleElement.acquired)
+    gsan::rwLockReleaseRead(state->lock);
+}
+
+extern "C" GSAN_DEVICE void
+__triton_gsan_store_range(void *globalState, const void *ptr, int numBytes,
+                          int pred, const char *file, unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::NonAtomicElementHandler<gsan::WriteShadowCellHandler> handleElement{
+      state, state->reserveBase, loc, {}};
+  gsan::tensorAccessRow(reinterpret_cast<gsan::uintptr_t>(ptr), numBytes,
+                        /*elementGranularity=*/0, handleElement);
+  if (handleElement.acquired)
+    gsan::rwLockReleaseRead(state->lock);
+}
+
 extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
     const gsan::int16_t *blockShape, int bytesPerElem, int pred, int warpId,

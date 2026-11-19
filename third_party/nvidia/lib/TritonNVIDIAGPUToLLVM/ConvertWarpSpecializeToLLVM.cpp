@@ -2,7 +2,7 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
