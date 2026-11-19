@@ -258,6 +258,8 @@ auto MembarCFGBuilder<Model>::build(Region &root, bool expandWarpRoles)
   MembarCFG<Facts> cfg;
   insertionCosts.clear();
   appendWithCallees(cfg, root);
+  if (!cfg.nodes.empty())
+    cfg.multiWarp = ttg::maybeLookupNumWarps(cfg.nodes.front().op) != 1;
   if (expandWarpRoles) {
     for (unsigned id = 0, end = cfg.nodes.size(); id < end; ++id) {
       auto ws = dyn_cast<ttg::WarpSpecializeOp>(cfg.nodes[id].op);
