@@ -8,6 +8,12 @@
 #include <numeric>
 
 namespace mlir {
+namespace arith {
+class CmpIOp;
+} // namespace arith
+namespace scf {
+class ForOp;
+} // namespace scf
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;

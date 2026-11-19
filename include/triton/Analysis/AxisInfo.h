@@ -13,6 +13,10 @@
 #include <optional>
 #include <utility>
 
+namespace mlir::scf {
+class ForOp;
+} // namespace mlir::scf
+
 namespace mlir::triton {
 
 //===----------------------------------------------------------------------===//
