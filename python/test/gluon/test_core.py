@@ -1523,7 +1523,8 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     ptx = compiled.asm["ptx"]
     # Check the physical counts before launch so a mismatch fails without hanging.
     initial_count = "2" if synchronize_expect else "8"
-    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == [initial_count]
+    assert re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)",
+                      ptx) == [initial_count]
     expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
     byte_counts = [expect.group(1) for expect in expectations]
     # Membar already synchronizes the first expectation when it precedes copies.
@@ -1704,7 +1705,7 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     # Each physical phase must collect every warp, including bootstrap arrivals.
     scale = max(4, producer_warps)
     ptx = compiled.asm["ptx"]
-    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    init_counts = re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
     expected_inits = [scale, scale, producer_warps, producer_warps]
     # Warp-specialization cluster barriers can introduce additional mbarriers.
     assert Counter(expected_inits) <= Counter(map(int, init_counts))
@@ -1812,7 +1813,7 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     out = torch.zeros((1, ), device="cuda", dtype=torch.int32)
     compiled = kernel.warmup(out, from_cta, two_ctas, grid=(1, ), num_warps=4, num_ctas=num_ctas)
     ptx = compiled.asm["ptx"]
-    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    init_counts = re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
     assert sorted(map(int, init_counts)) == ([2, 4] if two_ctas else [1])
     arrive_counts = re.findall(
         r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
