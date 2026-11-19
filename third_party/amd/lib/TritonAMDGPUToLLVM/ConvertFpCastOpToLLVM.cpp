@@ -906,8 +906,6 @@ public:
   virtual size_t getNumElements() = 0;
 
 protected:
-  bool isRoundingUndefined() { return !roundingMode.has_value(); }
-
   ISAFamily isaFamily;
   size_t maxElementsPerThread;
   std::optional<RoundingMode> roundingMode;
@@ -932,10 +930,6 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
 
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
@@ -1117,10 +1111,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E5M2fnuzToFp16HW(loc, rewriter, v);
@@ -1258,10 +1248,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E4M3ToBf16HW(loc, rewriter, v);
@@ -1377,10 +1363,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported!
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E5M2ToBf16HW(loc, rewriter, v);
@@ -1454,10 +1436,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     bool useTwoStepConversion = false;
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (isaFamily == ISAFamily::CDNA3)
@@ -1515,10 +1493,6 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
 
     bool useTwoStepConversion = false;
     if (isa<Float8E5M2FNUZType>(srcTy)) {
