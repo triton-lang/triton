@@ -83,7 +83,11 @@ struct ArriveBarrierOpConversion
 
 struct WaitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::WaitBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  WaitBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                          const AMD::TargetInfo &targetInfo,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::WaitBarrierOp op, OpAdaptor adaptor,
@@ -105,7 +109,12 @@ struct WaitBarrierOpConversion
     // Sleep for the minimum number of clocks. 64*SIMM16[6:0] = 64 * 1 = 64
     // clocks.
     ROCDL::SSleepOp::create(rewriter, loc, 1);
-    Value curState = b.load(i64_ty, smemObj.getBase());
+    // Other waves update the barrier state while this one spins, so the load
+    // is atomic: LLVM hoists a plain load of statically allocated LDS out of
+    // the loop, which then never observes the phase change.
+    Value curState =
+        targetInfo.loadRelaxed(rewriter, loc, smemObj.getBase(), i64_ty,
+                               /*pred=*/Value(), MemSyncScope::CTA);
     Value curPhase = b.and_(
         i32_ty, b.i32_val(kBarrierPhaseMask),
         b.trunc(i32_ty, b.lshr(curState, b.i64_val(kBarrierCountBitWidth))));
@@ -114,6 +123,9 @@ struct WaitBarrierOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
 struct ClusterBarrierArriveOpConversion
@@ -165,10 +177,10 @@ struct ClusterBarrierWaitOpConversion
 } // namespace
 
 void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<InitBarrierOpConversion>(typeConverter, benefit);
-  patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<WaitBarrierOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ClusterBarrierArriveOpConversion>(typeConverter, benefit);
   patterns.add<ClusterBarrierWaitOpConversion>(typeConverter, benefit);
