@@ -8685,9 +8685,10 @@ def _bulk_cluster_kernel(src, out, num_elements: ttgl.constexpr, take_copy, CGA:
     cols = ttgl.arange(0, BLOCK, ttgl.SliceLayout(0, OUT_LAYOUT))
     offsets = rows[:, None] * BLOCK + cols[None, :]
     for i in range(3):
-        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
-        if MULTICAST:
+        # Peers must finish the previous wait and read before a remote expect or copy.
+        if FROM_CTA is not None or MULTICAST:
             ttgl.barrier(cluster=True)
+        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
         hopper.bulk.async_load(smem, src + i * num_elements, num_elements, bar, pred=take_copy, multicast=MULTICAST)
         hopper.mbarrier.wait(bar, phase=i % 2, pred=take_copy)
         values = smem.load(ttgl.SliceLayout(0, OUT_LAYOUT))
