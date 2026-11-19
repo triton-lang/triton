@@ -1093,6 +1093,14 @@ def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
     return cga_layout
 
 
+def _launch_cluster_fallback(compiled, monkeypatch, *args):
+    # Force physical CTA pairs to execute one logical program.
+    warps, num_ctas, shared, fallback = compiled.packed_metadata
+    assert compiled.metadata.preferred_cluster_fallback_ctas == fallback == 2
+    monkeypatch.setattr(compiled, "packed_metadata", (warps, fallback, shared, 0))
+    compiled[(num_ctas // fallback, 1, 1)](*args)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
@@ -1162,12 +1170,8 @@ def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas, monkeypatch):
     expected = torch.matmul(a.to(out.dtype), b.to(out.dtype))
     torch.testing.assert_close(out, expected)
     if num_ctas > 2:
-        assert compiled.metadata.preferred_cluster_fallback_ctas == 2
         out.fill_(float("nan"))
-        num_warps, _, shared_memory, _ = compiled.packed_metadata
-        # Force physical CTA pairs while retaining the compiled logical grid.
-        monkeypatch.setattr(compiled, "packed_metadata", (num_warps, 2, shared_memory, 0))
-        compiled[(num_ctas // 2, 1, 1)](*args)
+        _launch_cluster_fallback(compiled, monkeypatch, *args)
         torch.testing.assert_close(out, expected)
 
 
@@ -6021,12 +6025,7 @@ def test_shared_subslice_preferred_cluster_fallback(op, monkeypatch):
     inp = torch.arange(16 * 64, dtype=torch.int32, device="cuda").reshape(16, 64)
     out = torch.empty_like(inp)
     compiled = kernel.warmup(inp, out, op, grid=(1, ), num_warps=4, num_ctas=4)
-    assert compiled.metadata.preferred_cluster_fallback_ctas == 2
-
-    num_warps, _, shared_memory, _ = compiled.packed_metadata
-    # Require two physical CTAs per cluster while preserving four logical CTAs.
-    monkeypatch.setattr(compiled, "packed_metadata", (num_warps, 2, shared_memory, 0))
-    compiled[(2, 1, 1)](inp, out, op)
+    _launch_cluster_fallback(compiled, monkeypatch, inp, out, op)
 
     values = inp[:, 32:]
     if op != "gather":
@@ -8728,6 +8727,42 @@ def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
     expected = torch.full_like(out, -7)
     expected[:, :128] = src.reshape(2, 128)
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_warp_specialized_buffer_reuse_preferred_cluster_fallback(device, monkeypatch):
+
+    @gluon.jit
+    def copy_tiles(src, out, bars):
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=[[0], [1]])
+        # Reusing the shared storage for the second multicast requires a cluster barrier in this partition.
+        for i in ttgl.static_range(2):
+            tile = ttgl.allocate_shared_memory(ttgl.int32, [256], layout)
+            bar = bars.index(i)
+            mbarrier.expect(bar, tile.nbytes_per_cta)
+            hopper.bulk.async_load(tile, src + i * 256, 256, bar, multicast=True)
+            mbarrier.wait(bar, phase=0, deps=[tile])
+            hopper.bulk.async_store(out + i * 256, tile, 256)
+            hopper.bulk.store_wait(0)
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(src, out):
+        bars = mbarrier.allocate_mbarrier(batch=2)
+        for i in ttgl.static_range(2):
+            mbarrier.init(bars.index(i), count=1)
+        ttgl.warp_specialize([(copy_tiles, (src, out, bars)), (idle, ())], [4])
+        for i in ttgl.static_range(2):
+            mbarrier.invalidate(bars.index(i))
+
+    src = torch.arange(512, dtype=torch.int32, device=device)
+    out = torch.full_like(src, -1)
+    compiled = kernel.warmup(src, out, grid=(1, ), num_warps=4, num_ctas=4)
+    _launch_cluster_fallback(compiled, monkeypatch, src, out)
+    torch.testing.assert_close(out, src)
 
 
 @gluon.jit

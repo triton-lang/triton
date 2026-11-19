@@ -170,6 +170,8 @@ static Value createMulticastMask(Location loc,
   auto encoding =
       triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (encoding.fixedBits == 0)
+    return b.i32_val(encoding.pattern);
   Value base = b.and_(ctaId, b.i32_val(encoding.fixedBits));
   return b.shl(b.i32_val(encoding.pattern), base);
 }

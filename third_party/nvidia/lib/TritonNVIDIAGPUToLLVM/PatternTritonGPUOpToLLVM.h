@@ -18,6 +18,9 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void createFenceMBarrierInitReleaseCluster(OpBuilder &builder, Location loc,
                                            Value pred);
 
+void createMBarrierInit(OpBuilder &builder, Location loc, Value pred,
+                        Value barrierPtr, Value count);
+
 void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit,
