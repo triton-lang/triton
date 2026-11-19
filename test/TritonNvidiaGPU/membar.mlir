@@ -408,8 +408,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // FOLD-LABEL: @distributed_arrival_cfg_join
   // FOLD: ttng.init_barrier {{.*}}, 4 :
   // FOLD: cf.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[JOIN:bb[0-9]+]]
-  // FOLD: ^[[JOIN]]:
+  // FOLD: tt.store
   // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: cf.br ^[[JOIN]]
+  // FOLD: ^[[JOIN]]:
   // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
   tt.func @distributed_arrival_cfg_join(%condition: i1, %out: !tt.ptr<i32>, %value: i32) {
     %phase = arith.constant 0 : i32
@@ -1319,14 +1321,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // Both readers exchange data across warps with the writer.
-  // PREP-LABEL: @shared_barrier_before_branch
+  // Only one reader executes, so each arm can rendezvous at its own load.
+  // PREP-LABEL: @shared_barrier_in_each_arm
   // PREP: ttg.local_alloc
-  // PREP-NEXT: ttg.barrier local
   // PREP-NEXT: cf.cond_br
+  // PREP: ^bb{{[0-9]+}}:
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttg.local_load
+  // PREP: ^bb{{[0-9]+}}:
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttg.local_load
   // PREP-NOT: ttg.barrier
   // PREP: tt.return
-  tt.func @shared_barrier_before_branch(%cond: i1, %data: tensor<128xi32, #write>, %left_out: tensor<128x!tt.ptr<i32>, #left>, %right_out: tensor<128x!tt.ptr<i32>, #right>) {
+  tt.func @shared_barrier_in_each_arm(%cond: i1, %data: tensor<128xi32, #write>, %left_out: tensor<128x!tt.ptr<i32>, #left>, %right_out: tensor<128x!tt.ptr<i32>, #right>) {
     %tile = ttg.local_alloc %data : (tensor<128xi32, #write>) -> !ttg.memdesc<128xi32, #shared, #smem>
     scf.if %cond {
       %value = ttg.local_load %tile : !ttg.memdesc<128xi32, #shared, #smem> -> tensor<128xi32, #left>

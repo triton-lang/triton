@@ -173,21 +173,22 @@ std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
                slack[id] == charge;
       });
     // A cold exit can share a loop barrier, but saving its one-off cost
-    // need not pull a rendezvous earlier on every iteration. At equal loop
-    // depth, compare savings within the loop, then distance to the consumer
+    // need not pull a rendezvous earlier on every iteration. At equal cost,
+    // compare savings within the loop, then distance to the consumer
     // (the witness lists sites from the consumer back to the producer).
     unsigned siteCost = cost(site);
-    if (siteCost > 1 && loopSlack[site] > charge &&
-        llvm::all_of(*cut, [&](unsigned id) {
+    if (loopSlack[site] > charge && llvm::all_of(*cut, [&](unsigned id) {
           return actions[id % actions.size()] == Action::RegionBarrier &&
                  cost(id) == siteCost;
         }))
       site = *llvm::min_element(*cut, [&](unsigned a, unsigned b) {
         return loopSlack[a] < loopSlack[b];
       });
+    unsigned depth = cfg.nodes[site / actions.size()].loopDepth;
     for (unsigned id : *cut) {
       slack[id] -= charge;
-      if (cost(id) <= siteCost)
+      if (cost(id) <= siteCost ||
+          cfg.nodes[id / actions.size()].loopDepth <= depth)
         loopSlack[id] -= charge;
     }
     result.sites.set(site);

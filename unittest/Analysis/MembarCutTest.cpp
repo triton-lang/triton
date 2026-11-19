@@ -96,6 +96,8 @@ TEST(MembarCut, DeferLoopBarrierToConsumer) {
   // Header 1 goes through prefix 2 to consumer 3, or exits to consumer 5.
   // Both overwrite scratch read by 3 on the preceding iteration.
   auto cfg = linearCFG({0, 4, 4, 4, 4, 1});
+  for (unsigned i = 1; i <= 4; ++i)
+    cfg.nodes[i].loopDepth = 1;
   cfg.nodes[1].next.push_back({5});
   cfg.nodes[4].next = {{1, true}};
   auto solution = solveMembarCut(

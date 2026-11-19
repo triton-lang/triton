@@ -1470,13 +1470,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   ^left:
     %left = ttg.local_load %first : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%left) : (tensor<64x64xf32, #blocked>) -> ()
+    // CHECK-NOT: ttng.fence_async_shared
+    // CHECK: cf.br ^[[JOIN:bb[0-9]+]]
     cf.br ^merge
   ^right:
     %right = ttg.local_load %second : !ttg.memdesc<64x64xf32, #shared, #smem, mutable> -> tensor<64x64xf32, #blocked>
     "test.keep"(%right) : (tensor<64x64xf32, #blocked>) -> ()
+    // Only this arm reads the stage overwritten at the join.
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: cf.br ^[[JOIN]]
     cf.br ^merge
   ^merge:
-    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK: ^[[JOIN]]:
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %second, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
@@ -1884,6 +1889,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     "test.keep"(%value) : (tensor<8x32xi32, #blocked>) -> ()
     cf.cond_br %choose, ^cta, ^cluster
   ^cta:
+    // CHECK: ttng.fence_async_shared {bCluster = false}
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
+    // CHECK-NEXT: cf.br
     ttng.fence_async_shared {bCluster = false}
     cf.br ^merge
   ^cluster:
@@ -1891,7 +1899,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     cf.br ^merge
   ^merge:
     // CHECK: ^bb3:
-    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buffer, %bar, %true {multicast} : !tt.tensordesc<8x32xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<8x32xi32, #shared, #smem, mutable>
     tt.return
