@@ -207,10 +207,11 @@ if __name__ == "__main__":
 # instruction takes a 32-bit offset in one VGPR, `v25`, the descriptor in
 # `s[16:19]`, and `soffset` in `s4`.
 #
-# For masked global load, the compiler has to generate branches for each lane
-# to check if the address is in bounds. That's why many branches appear in the
-# generated assembly code. However in the buffer version, the bounds check is
-# done natively by the hardware so all most of the branches are eliminated.
+# For masked global load, the compiler has to generate a branch for each load
+# instruction to check if the addresses are in bounds. That's why many branches
+# appear in the generated assembly code. However in the buffer version, the
+# bounds check is done natively by the hardware so all most of the branches are
+# eliminated.
 #
 
 # %%
