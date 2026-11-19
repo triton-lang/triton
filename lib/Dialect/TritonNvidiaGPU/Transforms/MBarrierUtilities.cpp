@@ -39,6 +39,14 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
   if (!sharedLayout.sublayoutIsZero({kBlock}, {axisDim}))
     return true;
 
+  // High coordinate bits fixed by the subview origin may select a peer.
+  if (memDescTy.getShape() != memDescTy.getAllocShape()) {
+    auto inverse = sharedLayout.pseudoinvert();
+    for (auto [dim, size] : llvm::zip_equal(allDims, memDescTy.getShape()))
+      if (getInputBasisMask(inverse, dim, {kBlock}) >= uint64_t(size))
+        return true;
+  }
+
   LinearLayout regLayout = ttg::toLinearLayout(regTy)
                                .removeZeroBasesAlongDim(kRegister)
                                .transposeOuts(allDims);

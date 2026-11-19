@@ -1,5 +1,6 @@
 #include "triton/Analysis/Membar/Solver.h"
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
+#include "triton/Analysis/Membar/ClusterBarrierModel.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SparseSet.h"
 #include <limits>
@@ -16,7 +17,7 @@ auto origin(const Demand &d) { return std::tie(d.first, d.path, d.source); }
 template <typename Facts> class CutSolver {
 public:
   CutSolver(const MembarCFG<Facts> &cfg, ArrayRef<Demand> unsorted,
-            ArrayRef<Action> actions)
+            ArrayRef<SyncKind> actions)
       : cfg(cfg), demands(unsorted), actions(actions) {
     llvm::sort(demands, [](const Demand &a, const Demand &b) {
       return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
@@ -31,7 +32,7 @@ private:
 
   const MembarCFG<Facts> &cfg;
   SmallVector<Demand> demands;
-  ArrayRef<Action> actions;
+  ArrayRef<SyncKind> actions;
 };
 
 // Keep the first uncovered path with the fewest distinct legal sites. A
@@ -65,14 +66,15 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
     // Only a cluster-scoped fence covers a peer access before its owner
     // acquires it. The insertion gap at the acquire still precedes it.
     auto needAtGap = [&](bool advanced) {
-      return d.path == Path::ClusterThenProxy && !advanced ? Need::ProxyCluster
-                                                           : d.first;
+      return d.path == Path::ClusterThenProxy && !advanced
+                 ? SyncKind::ClusterProxyFence
+                 : d.first;
     };
     auto covered = [&](unsigned mask, bool &advanced) {
       if (d.path != Path::WaitThenOrder)
         return bool(mask & bit(needAtGap(advanced)));
       advanced |= bool(mask & bit(d.first));
-      return advanced && (mask & bit(Need::RegionOrder));
+      return advanced && (mask & bit(SyncKind::RegionBarrier));
     };
 
     // Resume this group's BFS until the sink is reached or the queue is empty.
@@ -96,7 +98,7 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
           covered(from.fixed.after, advanced))
         continue;
       if (d.path == Path::ClusterThenProxy &&
-          (from.fixed.after & bit(Need::ClusterAcquire)))
+          (from.fixed.after & bit(SyncKind::ClusterBarrier)))
         advanced = true;
       for (Edge edge : from.next) {
         bool mayExitWorker = workerSource && (state == root || (state & 2));
@@ -129,10 +131,11 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
       unsigned mask = credits[node.gap] | node.fixed.before;
       if (state != sink)
         mask |= node.fixed.inside | node.fixed.after;
-      needsBarrier &= !(mask & bit(Need::RegionOrder));
+      needsBarrier &= !(mask & bit(SyncKind::RegionBarrier));
       if (!node.insertionCost)
         continue;
-      Need need = needsBarrier ? Need::RegionOrder : needAtGap(state & 1);
+      SyncKind need =
+          needsBarrier ? SyncKind::RegionBarrier : needAtGap(state & 1);
       for (unsigned i = actions.size(); i-- > 0;)
         if (coverage(actions[i]) & bit(need))
           labels.insert(node.gap * actions.size() + i);
@@ -178,7 +181,7 @@ std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
     // (the witness lists sites from the consumer back to the producer).
     unsigned siteCost = cost(site);
     if (loopSlack[site] > charge && llvm::all_of(*cut, [&](unsigned id) {
-          return actions[id % actions.size()] == Action::RegionBarrier &&
+          return actions[id % actions.size()] == SyncKind::RegionBarrier &&
                  cost(id) == siteCost;
         }))
       site = *llvm::min_element(*cut, [&](unsigned a, unsigned b) {
@@ -215,7 +218,7 @@ std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
 template <typename Facts>
 std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
                                           ArrayRef<Demand> demands,
-                                          ArrayRef<Action> actions) {
+                                          ArrayRef<SyncKind> actions) {
   CutSolver solver(cfg, demands, actions);
   auto best = solver.choose(false);
   if (!best || best->cost == best->lowerBound)
@@ -228,10 +231,14 @@ std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
   return best;
 }
 
-template std::optional<CutSolution>
-solveMembarCut(const MembarCFG<OpModel> &, ArrayRef<Demand>, ArrayRef<Action>);
+template std::optional<CutSolution> solveMembarCut(const MembarCFG<OpModel> &,
+                                                   ArrayRef<Demand>,
+                                                   ArrayRef<SyncKind>);
 template std::optional<CutSolution>
 solveMembarCut(const MembarCFG<AsyncFenceFacts> &, ArrayRef<Demand>,
-               ArrayRef<Action>);
+               ArrayRef<SyncKind>);
+template std::optional<CutSolution>
+solveMembarCut(const MembarCFG<ClusterBarrierModel::Facts> &, ArrayRef<Demand>,
+               ArrayRef<SyncKind>);
 
 } // namespace mlir::triton::membar

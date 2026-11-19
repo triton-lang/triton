@@ -560,7 +560,7 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
 }
 
 bool mayOverlap(const BufferRegionFootprint *lhs,
-                const BufferRegionFootprint *rhs) {
+                const BufferRegionFootprint *rhs, AllocationOrigin origin) {
   if (!lhs || !rhs || !lhs->memorySpace || !rhs->memorySpace)
     return true;
   if (lhs->memorySpace != rhs->memorySpace)
@@ -574,7 +574,12 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
     return llvm::any_of(right.views, [&](const BufferRegionView &b) {
       bool sameFrame =
           a.allocationFrame && a.allocationFrame == b.allocationFrame;
-      return !sameFrame || a.region.intersects(b.region);
+      if (!sameFrame)
+        return true;
+      bool same = a.allocation && a.allocation == b.allocation;
+      return (origin == AllocationOrigin::Any ||
+              same == (origin == AllocationOrigin::Same)) &&
+             a.region.intersects(b.region);
     });
   });
 }

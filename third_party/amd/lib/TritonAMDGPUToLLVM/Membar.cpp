@@ -24,8 +24,8 @@ class AMDMembarAnalysis : public MembarAnalysis {
 public:
   AMDMembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                     BufferRegionAnalysis &regions)
-      : MembarAnalysis(allocation, std::move(filter), regions, nullptr,
-                       AccessMode::AllSharedAccesses, getCompletionSync) {}
+      : MembarAnalysis(allocation, std::move(filter), regions,
+                       getCompletionSync) {}
 
   // Consume the earlier wait-count pass's scope proof before merging state.
   static CompletionSync getCompletionSync(Operation *op,

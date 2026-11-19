@@ -395,6 +395,9 @@ bool atomicResultHasCTABroadcast(Operation *op);
 
 namespace triton::nvidia_gpu {
 
+/// Full cluster rendezvous emitted by the operation's lowering.
+BarrierStages getClusterBarrierStages(Operation *op);
+
 bool needsClusterBarrier(Operation *op);
 
 } // namespace triton::nvidia_gpu
