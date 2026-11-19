@@ -4,11 +4,14 @@
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <cassert>
 #include <limits>
 #include <utility>
 
@@ -17,6 +20,29 @@ using namespace mlir::triton;
 using namespace mlir::triton::membar;
 namespace ttg = mlir::triton::gpu;
 
+// Include loops enclosing a warp role or a compiler-generated thread scope.
+unsigned
+mlir::triton::membar::getBlockWeight(Block *block,
+                                     const BufferIndexAnalysis &indices,
+                                     unsigned invocationWeight) {
+  unsigned depth = 0;
+  for (;;) {
+    if (auto *loops = indices.getLoopInfo(block->getParent()))
+      depth += loops->getLoopDepth(block);
+    Operation *parent = block->getParentOp();
+    if (isa<FunctionOpInterface>(parent))
+      break;
+    block = parent->getBlock();
+  }
+  constexpr unsigned maxDepth = (std::numeric_limits<unsigned>::digits - 1) / 2;
+  unsigned loopWeight = 1u << (2 * std::min(depth, maxDepth));
+  bool overflow;
+  unsigned weight =
+      llvm::SaturatingMultiply(invocationWeight, loopWeight, &overflow);
+  assert(depth <= maxDepth && !overflow && "Membar block weight overflow");
+  return weight;
+}
+
 static Block *getGuardArm(Operation *op) {
   auto split = dyn_cast<cf::CondBranchOp>(op);
   if (split && split.getCondition().getDefiningOp<ttg::ThreadPredicateOp>())
@@ -24,11 +50,13 @@ static Block *getGuardArm(Operation *op) {
   return nullptr;
 }
 
-OpModel MembarCFGBuilder::describe(Operation *op) {
+OpModel MembarCFGBuilder::describe(Operation *op, SMemModel &shared) {
   if (isa<CallOpInterface>(op))
-    return {.boundary = Boundary::Clean};
+    return {};
   if (isa<triton::ReturnOp>(op))
-    return {.boundary = returnBoundary};
+    return {.boundary = isKernel(op->getParentOfType<FunctionOpInterface>())
+                            ? Boundary::KernelReturn
+                            : Boundary::None};
 
   OpModel model;
   auto accesses = getMemoryAccesses(op);
@@ -38,19 +66,16 @@ OpModel MembarCFGBuilder::describe(Operation *op) {
   return model;
 }
 
-MembarCFG MembarCFGBuilder::build(Region &region) {
+void MembarCFGBuilder::addRegion(MembarCFG &cfg, Region &region) {
+  auto function = region.getParentOfType<FunctionOpInterface>();
+  unsigned invocationWeight = calleeWeights.lookup_or(function, 1u);
+  SMemModel &shared = models.at(function);
   const auto &indices = shared.getBufferIndexAnalysis();
-  MembarCFG cfg{};
-  auto &entry = cfg.nodes.emplace_back();
-  entry.next.push_back({1}); // The first block retains at least its terminator.
-  if (isa<ttg::WarpSpecializeOp, ttg::WarpSpecializePartitionsOp>(
-          region.getParentOp()))
-    entry.effects.fixedAfter = fullBarrier;
-
+  unsigned body = cfg.nodes.size();
+  // A helper called per element cannot execute a collective.
+  bool callback = callbacks.contains(function);
   DenseMap<Block *, unsigned> entries;
   SmallVector<std::pair<unsigned, Operation *>> exits;
-  const auto *loops = indices.getLoopInfo(&region);
-  constexpr unsigned maxDepth = (std::numeric_limits<unsigned>::digits - 1) / 2;
   // Build the CFG for one execution region:
   //   - Insertion costs on retained ops
   //   - One node per retained op via `describe`
@@ -65,14 +90,15 @@ MembarCFG MembarCFGBuilder::build(Region &region) {
     if (arm && block.getSinglePredecessor())
       continue;
     entries.try_emplace(&block, cfg.nodes.size());
-    unsigned depth = loops ? loops->getLoopDepth(&block) : 0;
-    unsigned cost = arm ? 0 : 1u << (2 * std::min(depth, maxDepth));
+    unsigned cost = (arm || callback)
+                        ? 0
+                        : getBlockWeight(&block, indices, invocationWeight);
     for (Operation &op : block.without_terminator()) {
-      OpModel effects = describe(&op);
-      if (effects == OpModel{})
+      OpModel effects = describe(&op, shared);
+      if (effects == OpModel{} && !isa<CallOpInterface>(&op))
         continue;
       unsigned next = cfg.nodes.size() + 1;
-      cfg.nodes.push_back({&op, cost, std::move(effects), {{next}}});
+      cfg.nodes.push_back({&op, cost, body, std::move(effects), {{next}}});
     }
 
     Operation *term = block.getTerminator();
@@ -85,7 +111,7 @@ MembarCFG MembarCFGBuilder::build(Region &region) {
       active->walk([&](Operation *op) {
         if (isa<ttg::ThreadScopeOp>(op))
           return;
-        OpModel inner = describe(op);
+        OpModel inner = describe(op, shared);
         effects.sharedIn.join(inner.sharedIn);
         effects.sharedOut.join(inner.sharedOut);
         if (inner.boundary == Boundary::Publication)
@@ -93,9 +119,9 @@ MembarCFG MembarCFGBuilder::build(Region &region) {
       });
       exit = active->getTerminator();
     } else {
-      effects = describe(term);
+      effects = describe(term, shared);
     }
-    cfg.nodes.push_back({term, cost, std::move(effects), {}});
+    cfg.nodes.push_back({term, cost, body, std::move(effects), {}});
     exits.emplace_back(cfg.nodes.size() - 1, exit);
   }
 
@@ -103,5 +129,37 @@ MembarCFG MembarCFGBuilder::build(Region &region) {
     for (Block *succ : term->getSuccessors())
       cfg.nodes[id].next.push_back(
           {entries.at(succ), indices.isBackedgeSuccessor(term, succ)});
+}
+
+MembarCFG MembarCFGBuilder::build(Region &root) {
+  struct Callee {
+    unsigned entry;
+    SmallVector<Edge, 2> continuations;
+  };
+  DenseMap<Region *, Callee> callees;
+  callees.try_emplace(&root);
+  MembarCFG cfg;
+  addRegion(cfg, root);
+
+  // Append each reachable callee once, in first-call order.
+  for (unsigned id = 0; id < cfg.nodes.size(); ++id) {
+    auto call = dyn_cast<CallOpInterface>(cfg.nodes[id].op);
+    if (!call)
+      continue;
+    Region &region =
+        cast<FunctionOpInterface>(call.resolveCallable()).getFunctionBody();
+    auto [it, inserted] = callees.try_emplace(&region);
+    auto &callee = it->second;
+    if (inserted) {
+      callee.entry = cfg.nodes.size();
+      addRegion(cfg, region);
+    }
+    Edge &next = cfg.nodes[id].next.front();
+    callee.continuations.push_back(next);
+    next = {callee.entry, true};
+  }
+  for (Node &node : cfg.nodes)
+    if (isa<triton::ReturnOp>(node.op))
+      node.next = callees.at(node.op->getParentRegion()).continuations;
   return cfg;
 }

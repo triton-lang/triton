@@ -873,9 +873,8 @@ tt.func @atomic_poll_acquire_loop(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: 
 
 // CHECK-LABEL: convert_layout1
 tt.func private @convert_layout1(%A : !tt.ptr<f16>) {
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: ttg.local_load
-  // CHECK-NEXT: ttg.barrier local
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttg.local_load
   // CHECK-NEXT: tt.return
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %1 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
@@ -886,10 +885,10 @@ tt.func private @convert_layout1(%A : !tt.ptr<f16>) {
 tt.func private @convert_layout2(%A : !tt.ptr<f16>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // CHECK: %[[INIT:[^ ]+]] = ttg.local_alloc %
   %1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK: ttg.local_load
-  // CHECK-NEXT: ttg.barrier local
-  // CHECK: ttg.local_load
+  // CHECK: ttg.barrier local
+  // CHECK: ttg.local_load %[[INIT]]
   %3 = ttg.local_load %0 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   %4 = ttg.local_load %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
   tt.return
@@ -897,6 +896,8 @@ tt.func private @convert_layout2(%A : !tt.ptr<f16>) {
 
 // CHECK-LABEL: convert_layout3
 tt.func private @convert_layout3(%cond : i1) {
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: cf.cond_br
   scf.if %cond {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #A_SHARED, #ttg.shared_memory, mutable>
     // CHECK: ttg.local_load
@@ -941,6 +942,7 @@ tt.func private @convert_layout5(%A : !tt.ptr<f16>) {
 tt.func @single_call_sync(%A : !tt.ptr<f16>) {
   %0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // CHECK: tt.call
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.convert_layout
   tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
   %1 = ttg.convert_layout %0 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
@@ -961,8 +963,12 @@ tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
 tt.func @multiple_calls(%A : !tt.ptr<f16>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: tt.call @convert_layout1
   tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: tt.call @convert_layout2
   tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
   tt.return
 }
@@ -973,8 +979,10 @@ tt.func @if_else_calls(%A : !tt.ptr<f16>, %cond : i1) {
     %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
     %cst_ = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
     %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
-    // CHECK: ttg.barrier local
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.call
+    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.local_alloc
     tt.call @convert_layout1(%A) : (!tt.ptr<f16>) -> ()
     %cst1 = ttg.local_alloc %cst_ : (tensor<16x32xf16, #AL>) -> !ttg.memdesc<16x32xf16, #A_SHARED, #ttg.shared_memory>
@@ -1009,8 +1017,10 @@ tt.func @for_calls(%A : !tt.ptr<f16>, %cond : i1) {
 // CHECK-LABEL: call_graph_1
 tt.func @call_graph_1(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>  // CHECK: ttg.barrier local
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call
+  %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.call @convert_layout3(%cond) : (i1) -> ()
   tt.return
 }
@@ -1020,6 +1030,7 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
   tt.call @convert_layout4(%A, %cond) : (!tt.ptr<f16>, i1) -> ()
   // CHECK: tt.call
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.local_alloc
   %cst0 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.return
@@ -1621,10 +1632,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // caller can reuse the callee's scratch at the same nonzero offset.
   // CHECK-LABEL: @caller_call_offset_membar
   // CHECK: ttg.local_store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: {{.*}} = tt.call @callee_call_offset_membar{{.*}}allocation.offset = [[CALL_OFFSET:[1-9][0-9]*]]
-  // CHECK-NOT: ttg.barrier local
-  // CHECK: ttg.convert_layout{{.*}}allocation.offset = [[CALL_OFFSET]]
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.convert_layout{{.*}}allocation.offset = [[CALL_OFFSET]]
   tt.func @caller_call_offset_membar() -> tensor<128x32xf16, #blockedCallDst> {
     %large = arith.constant dense<0> : tensor<65536xi8, #blockedLarge>
     %buf = ttg.local_alloc : () -> !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable>
@@ -1641,18 +1651,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
 
+  // The callee overwrites the scratch read by the caller's conversion.
+  // CHECK-LABEL: @callee_writes_first
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.convert_layout
   tt.func private @callee_writes_first() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
     tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
   }
 
-  // The caller's conversion leaves a pending shared-memory read. The callee
-  // starts with a conversion that writes the same call frame, so a barrier is
-  // required immediately before the call.
   // CHECK-LABEL: @caller_pending_read_then_call
   // CHECK: ttg.convert_layout
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call @callee_writes_first
   tt.func @caller_pending_read_then_call() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
@@ -1662,6 +1672,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
 
+  // A trailing barrier cannot order the first write against the caller's read.
+  // CHECK-LABEL: @callee_writes_then_barrier
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
   tt.func private @callee_writes_then_barrier() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
@@ -1669,11 +1684,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
   }
 
-  // A trailing callee barrier cannot order the callee's first write against
-  // the caller's access before the call.
   // CHECK-LABEL: @caller_pending_read_then_callee_trailing_barrier
   // CHECK: ttg.convert_layout
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call @callee_writes_then_barrier
   tt.func @caller_pending_read_then_callee_trailing_barrier() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
@@ -1690,10 +1702,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
   }
 
-  // The caller orders its own access even if the callee starts with a barrier.
+  // The callee's leading barrier already orders the caller's pending read.
   // CHECK-LABEL: @caller_pending_read_then_callee_leading_barrier
   // CHECK: ttg.convert_layout
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call @callee_barrier_then_writes
   tt.func @caller_pending_read_then_callee_leading_barrier() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
@@ -1703,6 +1714,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
 
+  // CHECK-LABEL: @nested_entry_c
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.convert_layout
   tt.func private @nested_entry_c() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
@@ -1717,12 +1731,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %call : tensor<128x32xf16, #blockedCallDst>
   }
 
-  // The first call has no pending shared-memory accesses and needs no barrier.
-  // The caller orders its pending conversion before the second call.
+  // The caller reuses the first invocation's scratch between the two calls.
   // CHECK-LABEL: @nested_entry_a
   // CHECK-NOT: ttg.barrier local
   // CHECK: %[[FIRST:.*]] = tt.call @nested_entry_b
-  // CHECK: ttg.convert_layout
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.convert_layout
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: %[[SECOND:.*]] = tt.call @nested_entry_b
   tt.func @nested_entry_a() -> tensor<128x32xf16, #blockedCallDst> {
@@ -2437,9 +2451,7 @@ tt.func @shared_async_disjoint_footprints(%input: tensor<128xi32, #writer>, %ptr
   tt.return %output : tensor<128xi32, #reader>
 }
 
-// Caller-owned descriptors have unknown footprints in the callee's frame.
-// Nested subslices still share relative coordinates; only the overlapping
-// load needs a barrier.
+// Only the overlapping load needs a barrier in the caller-owned allocation.
 // CHECK-LABEL: @nested_subslices_same_source
 tt.func private @nested_subslices_same_source(%allocation: !ttg.memdesc<512xi32, #shared, #smem, mutable>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) attributes {noinline = true} {
   %source = ttg.memdesc_subslice %allocation [0] : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 512>
@@ -2503,8 +2515,8 @@ tt.func private @read_first_call_slot(%input: tensor<128xi32, #writer>) -> tenso
   tt.return %output : tensor<128xi32, #reader>
 }
 
-// The live buffer forces a nonzero call frame. The caller orders its store
-// before the call. After return, both slots can be reused immediately.
+// The live buffer forces a nonzero call frame. The callee uses its first
+// slot, so the caller waits only when it overwrites that slot after return.
 // CHECK-LABEL: @call_footprints_preserve_slots
 tt.func @call_footprints_preserve_slots(%input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<1024xi32, #writer>) {
   %c0 = arith.constant 0 : i32
@@ -2515,7 +2527,6 @@ tt.func @call_footprints_preserve_slots(%input: tensor<128xi32, #writer>) -> (te
   %before_second = ttg.memdesc_index %before[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   // CHECK: ttg.local_store
   // CHECK-NEXT: ttg.local_dealloc
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: {{.*}} = tt.call @read_first_call_slot{{.*}}allocation.offset = [[FRAME:[1-9][0-9]*]]
   ttg.local_store %input, %before_second : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   ttg.local_dealloc %before : !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
@@ -2527,6 +2538,7 @@ tt.func @call_footprints_preserve_slots(%input: tensor<128xi32, #writer>) -> (te
   // CHECK: ttg.memdesc_index
   // CHECK-NEXT: {{.*}} = ttg.memdesc_index
   // CHECK-NEXT: ttg.local_store
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.local_store
   ttg.local_store %input, %after_second : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   ttg.local_store %input, %after_first : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
@@ -2555,6 +2567,9 @@ tt.func @returned_origin_in_selected_access(%condition: i1, %input: tensor<128xi
   tt.return %output : tensor<128xi32, #reader>
 }
 
+// CHECK-LABEL: @write_local_or_argument
+// CHECK: ttg.barrier local
+// CHECK-NEXT: ttg.local_store
 tt.func private @write_local_or_argument(%condition: i1, %input: tensor<128xi32, #writer>, %incoming: !ttg.memdesc<128xi32, #shared, #smem, mutable>) {
   %local = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   %selected = arith.select %condition, %local, %incoming : !ttg.memdesc<128xi32, #shared, #smem, mutable>
@@ -2569,8 +2584,8 @@ tt.func @call_with_mixed_allocation_frames(%condition: i1, %input: tensor<128xi3
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<8x128xi32, #shared, #smem, mutable>
   %incoming = ttg.memdesc_index %allocation[%c0] : !ttg.memdesc<8x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   // CHECK: ttg.local_store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: tt.call @write_local_or_argument{{.*}}allocation.offset = {{[1-9][0-9]*}}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: {{.*}} = ttg.local_load
   ttg.local_store %input, %incoming : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
   tt.call @write_local_or_argument(%condition, %input, %incoming) : (i1, tensor<128xi32, #writer>, !ttg.memdesc<128xi32, #shared, #smem, mutable>) -> ()

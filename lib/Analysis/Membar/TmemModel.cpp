@@ -18,20 +18,23 @@ TMemModel::TMemModel(ModuleOp module, BufferRegionAnalysis &regions)
     Value root = alloc.getResult();
     // A noinline function can execute in more than one warp role.
     Region *owner = isKernel(alloc->getParentOfType<FunctionOpInterface>()) &&
-                            hasRegionLocalUses(root)
+                            hasRegionLocalUses(root, /*followCalls=*/true)
                         ? alloc->getParentRegion()
                         : nullptr;
     allocations.emplace_back(regions.getFootprint(root), owner);
   });
 }
 
-bool TMemModel::isPrivate(const BufferRegionFootprint *footprint,
-                          Region *issuer) const {
-  // Different descriptor roots can reuse the same physical TMEM words.
-  return footprint && llvm::none_of(allocations, [&](const auto &allocation) {
-           auto [other, owner] = allocation;
-           return owner != issuer && mayOverlap(footprint, other);
-         });
+bool TMemModel::isPrivate(const BufferRegionFootprint *footprint) const {
+  if (!footprint)
+    return false;
+  // All allocations overlapping these words must be private to one region.
+  Region *region =
+      footprint->regionInfo.views.begin()->allocation->getParentRegion();
+  return llvm::none_of(allocations, [&](const auto &allocation) {
+    auto [other, owner] = allocation;
+    return owner != region && mayOverlap(footprint, other);
+  });
 }
 
 struct TMemModel::Info {
@@ -236,7 +239,7 @@ void TMemModel::describe(Operation *op, OpModel &model,
   if (isa<TMEMLoadOp, TMEMStoreOp, TMEMAllocOp>(op)) {
     const auto &access = llvm::getSingleElement(model.tmemAccesses);
     model.tmemProducerNeed = access.isWrite ? Need::WaitStore : Need::WaitLoad;
-    model.privateTMem = isPrivate(access.footprint, op->getParentRegion());
+    model.privateTMem = isPrivate(access.footprint);
   } else {
     model.tmemProducerNeed = Need::RegionOrder;
   }
