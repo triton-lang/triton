@@ -805,22 +805,25 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
 }
 
 Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
-  auto one = getU32ConstantLike(rewriter, loc, u.getType(), 1u);
-  auto two = getU32ConstantLike(rewriter, loc, u.getType(), 2u);
-  auto evenMask = getIntConstantLike(rewriter, loc, u.getType(), -2);
+  // For u = 2^k * t with t odd, return 2^k * inv(t). Setting the high bit
+  // before counting trailing zeros keeps both shifts in range for u = 0.
+  unsigned width = getIntBitwidth(u.getType());
+  Value highBit = getUIntConstantLike(rewriter, loc, u.getType(),
+                                      uint64_t{1} << (width - 1));
+  Value nonzero = arith::OrIOp::create(rewriter, loc, u, highBit);
+  Value k = math::CountTrailingZerosOp::create(rewriter, loc, nonzero);
+  Value t = arith::ShRUIOp::create(rewriter, loc, u, k);
 
-  Value a = arith::OrIOp::create(rewriter, loc, u, one);
-  Value x = arith::SubIOp::create(rewriter, loc, two, a);
-  for (unsigned correctBits = 2; correctBits < getIntBitwidth(u.getType());
-       correctBits *= 2) {
-    Value ax = arith::MulIOp::create(rewriter, loc, a, x);
-    Value factor = arith::SubIOp::create(rewriter, loc, two, ax);
+  // Every odd t is its own inverse modulo 8. Starting Newton iteration at t
+  // also keeps x = 0 throughout when u = 0.
+  Value two = getUIntConstantLike(rewriter, loc, u.getType(), 2);
+  Value x = t;
+  for (unsigned correctBits = 3; correctBits < width; correctBits *= 2) {
+    Value tx = arith::MulIOp::create(rewriter, loc, t, x);
+    Value factor = arith::SubIOp::create(rewriter, loc, two, tx);
     x = arith::MulIOp::create(rewriter, loc, x, factor);
   }
-
-  Value evenPart = arith::AndIOp::create(rewriter, loc, x, evenMask);
-  Value originalParity = arith::AndIOp::create(rewriter, loc, u, one);
-  return arith::OrIOp::create(rewriter, loc, evenPart, originalParity);
+  return arith::ShLIOp::create(rewriter, loc, x, k);
 }
 
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {

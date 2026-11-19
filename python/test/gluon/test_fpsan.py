@@ -389,14 +389,15 @@ def _expected_barrier_payload_u64(payload: np.ndarray, bitwidth: int) -> np.ndar
 
 
 def _expected_u32_inv(x_u32: np.ndarray) -> np.ndarray:
-    mask = np.uint64(0xFFFFFFFF)
-    a = x_u32.astype(np.uint64) | np.uint64(1)
-    x = (np.uint64(2) - a) & mask
-    for _ in range(4):
-        factor = (np.uint64(2) - ((a * x) & mask)) & mask
-        x = (x * factor) & mask
-    x = (x & np.uint64(0xFFFFFFFE)) | (x_u32.astype(np.uint64) & np.uint64(1))
-    return x.astype(np.uint32)
+
+    def inv(d):
+        d = int(d)
+        if d == 0:
+            return 0
+        scale = d & -d
+        return scale * pow(d // scale, -1, 2**32 // scale)
+
+    return np.vectorize(inv, otypes=[np.uint32])(x_u32)
 
 
 def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
@@ -748,6 +749,27 @@ def test_reciprocal_involution(device, fresh_knobs):
     )
 
     _assert_payload_equal(out, x)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_fpsan_softmax_shift_invariance(device, fresh_knobs, dtype):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit
+    def kernel(Logits, Raw, Shifted):
+        offsets = 2 * tl.program_id(0) + tl.arange(0, 2)
+        x = tl.load(Logits + offsets)
+        weights = tl.exp(x)
+        tl.store(Raw + offsets, weights / tl.sum(weights, 0))
+        tl.store(Shifted + offsets, tl.softmax(x))
+
+    # Each row sums two odd exponential payloads to an even denominator.
+    logits = torch.tensor([[1.0, 1.0], [1.0, 2.0]], device=device, dtype=dtype)
+    raw = torch.empty_like(logits)
+    shifted = torch.empty_like(logits)
+    kernel[(logits.shape[0], )](logits, raw, shifted)
+    _assert_payload_equal(raw, shifted)
 
 
 @pytest.mark.parametrize(
