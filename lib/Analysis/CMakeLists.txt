@@ -3,7 +3,6 @@ add_triton_library(TritonAnalysis
   Allocation.cpp
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
-  Membar.cpp
   Membar/AsyncFenceModel.cpp
   Membar/CFGBuilder.cpp
   Membar/ClusterBarrierModel.cpp

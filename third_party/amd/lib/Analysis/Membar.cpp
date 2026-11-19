@@ -1,4 +1,4 @@
-#include "triton/Analysis/Membar.h"
+#include "third_party/amd/include/Analysis/Membar.h"
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -7,7 +7,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 
-namespace mlir {
+namespace mlir::triton::AMD {
 
 static void insertBarrier(Operation *op, OpBuilder &builder, MembarInfo &info) {
   builder.setInsertionPoint(op);
@@ -54,8 +54,10 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   // A call's allocation belongs to the callee and is translated separately.
   if (auto call = dyn_cast<CallOpInterface>(op)) {
     auto callee = cast<FunctionOpInterface>(call.resolveCallable());
-    auto summary =
-        shared.translateCallSummary(call, callee, funcMap->at(callee));
+    MembarInfo summary = funcMap->at(callee);
+    summary.transformSlices([&](const AllocationSlice &slice) {
+      return slice.translateToCallsite(call, callee, regions);
+    });
     syncIfNeeded(op, summary.entryBlockInfo, membarInfo, builder);
     membarInfo->applyCallSummary(summary);
     return;
@@ -89,6 +91,4 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
     membarInfo->sync();
 }
 
-void ModuleMembarAnalysis::run() { run<MembarAnalysis>(); }
-
-} // namespace mlir
+} // namespace mlir::triton::AMD

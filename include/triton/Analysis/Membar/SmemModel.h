@@ -16,8 +16,6 @@
 
 namespace mlir {
 
-struct MembarInfo;
-
 struct AllocationSlice;
 
 /// Callback to allow backend to provide more information on whether a barrier
@@ -60,6 +58,7 @@ public:
   Allocation::BufferId getBufferId() const { return bufferId; }
 
   /// Translate shared-memory geometry and discard callee-local index facts.
+  /// TODO: Retire this method with the AMD forward-flow summaries.
   AllocationSlice
   translateToCallsite(CallOpInterface call, FunctionOpInterface callee,
                       triton::BufferRegionAnalysis &regions) const;
@@ -310,7 +309,7 @@ class SMemModel {
 public:
   enum class AccessMode { AllSharedAccesses, SynchronizationOnly };
 
-  /// Only legacy MembarAnalysis uses followCalls=false.
+  /// Only AMD::MembarAnalysis uses followCalls=false.
   /// TODO: When it retires, remove the flag, follow descriptor uses through
   /// calls unconditionally, and keep callee footprints in kernel coordinates.
   SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
@@ -326,11 +325,6 @@ public:
   /// and the mode of existing per-warp notifications.
   void describe(Operation *op, OpModel &model, FixedSync &fixed,
                 ArrayRef<MemoryAccess> accesses);
-  /// TODO: Retire this method and AllocationSlice::translateToCallsite with the
-  /// legacy forward-flow summaries.
-  MembarInfo translateCallSummary(CallOpInterface call,
-                                  FunctionOpInterface callee,
-                                  MembarInfo summary);
   const BufferIndexAnalysis &getBufferIndexAnalysis() const {
     return bufferIndexAnalysis;
   }

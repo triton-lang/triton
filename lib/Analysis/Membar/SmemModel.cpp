@@ -1,5 +1,4 @@
 #include "triton/Analysis/Membar/SmemModel.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -557,15 +556,6 @@ SmallVector<AllocationSlice> SMemModel::getAllocationSlices(
   for (auto bufferId : bufferIds)
     addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
   return slices;
-}
-
-MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
-                                           FunctionOpInterface callee,
-                                           MembarInfo summary) {
-  summary.transformSlices([&](const AllocationSlice &slice) {
-    return slice.translateToCallsite(call, callee, regions);
-  });
-  return summary;
 }
 
 void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,

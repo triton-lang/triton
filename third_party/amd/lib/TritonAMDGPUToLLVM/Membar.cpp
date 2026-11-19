@@ -5,10 +5,10 @@
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "third_party/amd/include/Analysis/AMDGPUAllocation.h"
+#include "third_party/amd/include/Analysis/Membar.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Membar/Pass.h"
 #include "triton/Analysis/Utility.h"
 
@@ -20,7 +20,7 @@ namespace mlir::triton {
 namespace mlir::triton {
 namespace {
 
-class AMDMembarAnalysis : public MembarAnalysis {
+class AMDMembarAnalysis : public AMD::MembarAnalysis {
 public:
   AMDMembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                     BufferRegionAnalysis &regions)
@@ -74,7 +74,7 @@ struct TritonAMDGPUMembar
     // Phase-shifted waves rendezvous at different static pipeline stages.
     if (mod.walk([](amdgpu::CondBarrierOp) { return WalkResult::interrupt(); })
             .wasInterrupted()) {
-      ModuleMembarAnalysis(allocation, AMD::membarFilter)
+      AMD::ModuleMembarAnalysis(allocation, AMD::membarFilter)
           .runAnalysis<AMDMembarAnalysis>(*regions);
     } else if (failed(membar::placeBarriers(
                    allocation, *regions, AMD::membarFilter,

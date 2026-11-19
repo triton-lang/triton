@@ -87,28 +87,6 @@ def TritonNvidiaGPUOptimizeCTALocalityPass : Pass<"triton-nvidia-gpu-optimize-ct
   ];
 }
 
-def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
-  let summary = "Insert fences across generic and async proxy.";
-
-  let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
-    This pass inserts fences at optimized location.
-    There is a pass later to handle all the functional requirements
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-
-  let options = [
-    Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"90",
-           "device compute capability">
-  ];
-}
-
 def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy";
 
@@ -194,7 +172,9 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
   let summary = "lower to TMA load/store operations";
 
   let description = [{
-    Lower Triton descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
+    Lower Triton descriptor operations to TMA loads and stores. Run proxy fence
+    insertion after allocation to order writes to shared memory before TMA
+    stores read it.
   }];
 
   let dependentDialects = [
