@@ -36,6 +36,7 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
 
 t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
+t7 = importlib.import_module("amd.07-multicta")
 
 
 def is_cdna5():
@@ -212,18 +213,18 @@ if __name__ == "__main__":
 #
 # Each pipeline stage becomes an `scf.execute_region` with its name and
 # priority. The loop of the stages is marked as `pipelined_for`, so that the
-# compiler knows to pipeline this loop across group0 and group1. When the
+# compiler knows to pipeline this loop across warps 0-3 and warps 4-7. When the
 # compiler lowers the TTGIR, the `pipelined_for` loop gets a conditional barrier
-# before the loop to hold back group1, and another conditional barrier after the
-# loop to let group1 catch up. Each `scf.execute_region` is inlined into the
-# loop and ends with a barrier at the stage boundary, and its priority becomes
-# an `s_setprio` before the stage, which sets the scheduling priority of the
-# warps that run the stage. The generated assembly looks like below:
+# before the loop to hold back warps 4-7, and another conditional barrier after
+# the loop to let warps 4-7 catch up. Each `scf.execute_region` is inlined into
+# the loop and ends with a barrier at the stage boundary, and its priority
+# becomes an `s_setprio` before the stage, which sets the scheduling priority of
+# the warps that run the stage. The generated assembly looks like below:
 #
 # ```
-# ; before the loop: hold back group1 by one stage
-# v_cmpx_lt_u32 0x7f, v0          ; turn off group0
-# s_barrier_signal -1             ; group1 waits until group0 finishes "memory"
+# ; before the loop: hold back warps 4-7 by one stage
+# v_cmpx_lt_u32 0x7f, v0          ; turn off warps 0-3
+# s_barrier_signal -1             ; warps 4-7 wait for "memory" of warps 0-3
 # s_barrier_wait -1
 # s_setprio 1
 #
@@ -241,10 +242,10 @@ if __name__ == "__main__":
 # s_barrier_signal -1             ; stage boundary
 # s_barrier_wait -1
 #
-# ; after the loop: let group1 catch up
+# ; after the loop: let warps 4-7 catch up
 # s_setprio 0
-# s_and_saveexec_b32 s0, vcc_lo   ; turn on only group0
-# s_barrier_signal -1             ; group0 waits until group1 finishes "compute"
+# s_and_saveexec_b32 s0, vcc_lo   ; turn on only warps 0-3
+# s_barrier_signal -1             ; warps 0-3 wait for "compute" of warps 4-7
 # s_barrier_wait -1
 # ```
 #
@@ -275,10 +276,10 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# wmma_w4: 5.02 ms
-# wmma_w8: 6.34 ms
-# wmma_w8_s2: 11.88 ms
-# wmma_w8_s4: 4.62 ms
+# wmma_w4: 4.95 ms
+# wmma_w8: 6.39 ms
+# wmma_w8_s2: 12.04 ms
+# wmma_w8_s4: 4.61 ms
 # ```
 #
 # With 8 warps and no stages, each warp computes a 64 x 128 part of the block
@@ -302,8 +303,8 @@ if __name__ == "__main__":
 # matmuls.
 
 # %%
-# Now we apply warp pipeline to the fp8 x mxfp4 matmul of
-# `05-mfma-wmma-scaled.py`. The kernel uses 8 warps, and each K block runs in
+# Now we apply warp pipeline to the fp8 x mxfp4 matmul of `07-multicta.py`, with
+# the same cluster layouts. The kernel uses 8 warps, and each K block runs in
 # four stages. The first stage reads the first half of the K block from shared
 # memory, and the second stage runs its WMMAs. The third and fourth stages do
 # the same for the second half. The first stage also refills the buffer slot of
@@ -315,7 +316,7 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
+def matmul_ld_gmem(k, pred, slot, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
                    BLOCK_K: gl.constexpr):
     a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
     w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
@@ -331,7 +332,7 @@ def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws
 
 
 @gluon.jit
-def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
+def matmul_ld_smem(slot, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
     HALF_K: gl.constexpr = a_smem.shape[2] // 2
     ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
     a = a_smem.index(slot).slice(half * HALF_K, HALF_K, 1).load(layouts.a_reg_layout)
@@ -342,14 +343,13 @@ def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_sm
 
 @gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
-                  M, N, K: gl.constexpr,  #
+                  M, N, K,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
-                  NUM_BUFFERS: gl.constexpr):
-    BLOCK_M: gl.constexpr = 256
-    BLOCK_N: gl.constexpr = 256
+                  CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, NUM_BUFFERS: gl.constexpr, WARP_PIPELINE: gl.constexpr):
+    BLOCK_M: gl.constexpr = 256 * CTAS_M
+    BLOCK_N: gl.constexpr = 256 * CTAS_N
     BLOCK_K: gl.constexpr = 256
-    gl.static_assert(K % BLOCK_K == 0)
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, gl.num_warps())
+    layouts: gl.constexpr = t7.get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, gl.num_warps())
 
     pid = gl.program_id(0)
     num_pid_n = gl.cdiv(N, BLOCK_N)
@@ -367,67 +367,69 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     ws_smem = gl.allocate_shared_memory(gl.uint8, [NUM_BUFFERS, BLOCK_N // 128, BLOCK_K // 32 * 128],
                                         layouts.ws_smem_layout)
 
-    num_k: gl.constexpr = K // BLOCK_K
-    num_tail_k: gl.constexpr = num_k % NUM_BUFFERS
+    num_k = gl.cdiv(K, BLOCK_K)
     for i in gl.static_range(NUM_BUFFERS - 1):
         matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(0, num_k - num_tail_k, NUM_BUFFERS):
-        for i in gl.static_range(NUM_BUFFERS):
-            # A wait can't be inside a stage, so we wait before the first stage.
-            cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
+    for k in range(num_k):
+        # A wait can't be inside a stage, so we wait before the first stage.
+        cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
+        next_k = k + NUM_BUFFERS - 1
+        if WARP_PIPELINE:
             with gl.amd.warp_pipeline_stage("lds_low", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, 0, a_smem, w_smem, ws_smem, layouts)
-                next_k = k + i + NUM_BUFFERS - 1
-                matmul_ld_gmem(next_k, next_k < num_k, (i + NUM_BUFFERS - 1) % NUM_BUFFERS, off_m, off_n, a_desc,
-                               w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
+                a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 0, a_smem, w_smem, ws_smem, layouts)
+                matmul_ld_gmem(next_k, next_k < num_k, next_k % NUM_BUFFERS, off_m, off_n, a_desc, w_desc, ws_desc,
+                               a_smem, w_smem, ws_smem, BLOCK_K)
             with gl.amd.warp_pipeline_stage("wmma_low", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
             with gl.amd.warp_pipeline_stage("lds_high", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
+                a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 1, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-    for i in gl.static_range(num_tail_k):
-        cdna5.tdm.async_wait((num_tail_k - 1 - i) * 3)
-        for half in gl.static_range(2):
-            with gl.amd.warp_pipeline_stage("lds", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, half, a_smem, w_smem, ws_smem, layouts)
-            with gl.amd.warp_pipeline_stage("wmma", priority=0):
-                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+        else:
+            # The same loop without stages.
+            a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 0, a_smem, w_smem, ws_smem, layouts)
+            matmul_ld_gmem(next_k, next_k < num_k, next_k % NUM_BUFFERS, off_m, off_n, a_desc, w_desc, ws_desc, a_smem,
+                           w_smem, ws_smem, BLOCK_K)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+            a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 1, a_smem, w_smem, ws_smem, layouts)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
-    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
-    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], layouts.y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
-    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], layouts.y_smem_layout)
     y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
     cdna5.tdm.async_store(y_desc, src=y_smem)
     cdna5.tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, NUM_BUFFERS=3):
+def matmul(A, W, W_scale, CTAS_M=4, CTAS_N=4, NUM_BUFFERS=3, warp_pipeline=True):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
-    grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
+    grid = (triton.cdiv(M, 256 * CTAS_M) * triton.cdiv(N, 256 * CTAS_N), )
     matmul_kernel[grid](
         A, W, W_scale, Y,  #
         M, N, K,  #
         A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),  #
-        NUM_BUFFERS, num_warps=8)
+        CTAS_M, CTAS_N, NUM_BUFFERS, warp_pipeline, num_warps=8, num_ctas=CTAS_M * CTAS_N)
     return Y
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024), (2048, 1024, 768), (500, 300, 1280)])
+@pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024), (2048, 1024, 768)])
+@pytest.mark.parametrize("CTAS_M, CTAS_N", [(1, 1), (2, 2), (4, 4)])
+@pytest.mark.parametrize("warp_pipeline", [False, True])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_matmul(M, N, K):
+def test_matmul(M, N, K, CTAS_M, CTAS_N, warp_pipeline):
     A = t5.random_fp8(M, K)
     W, W_scale, W_ref = t5.random_mxfp4(N, K)
-    Y = matmul(A, W, t5.preshuffle_scales_cdna5(W_scale))
+    Y = matmul(A, W, t5.preshuffle_scales_cdna5(W_scale), CTAS_M, CTAS_N, warp_pipeline=warp_pipeline)
     torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
 
 # %%
-# We can compare this kernel with the kernel of `05-mfma-wmma-scaled.py`.
+# We can compare this kernel with the kernel of `07-multicta.py`, and with the
+# same kernel without warp pipeline, all with 4x4 clusters.
 
 if __name__ == "__main__":
     print("Benchmarking matmul")
@@ -441,16 +443,19 @@ if __name__ == "__main__":
         ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
-    bench("4 warps", lambda: t5.matmul_cdna5(A, W, W_scale))
-    bench("8 warps", lambda: matmul(A, W, W_scale))
+    bench("4 warps", lambda: t7.matmul(A, W, W_scale, 4, 4))
+    bench("8 warps", lambda: matmul(A, W, W_scale, warp_pipeline=False))
+    bench("8 warps, warp pipeline", lambda: matmul(A, W, W_scale))
 
 # %%
 # ```
-# 4 warps: 7344 TFLOPS
-# 8 warps: 7292 TFLOPS
+# 4 warps: 8379 TFLOPS
+# 8 warps: 7843 TFLOPS
+# 8 warps, warp pipeline: 8839 TFLOPS
 # ```
 #
-# At this size, all WGPs run a CTA, and the copies from global memory set the
-# pace of the K loop. Warp pipeline overlaps the shared memory reads with the
-# WMMAs, but both kernels still wait for the same copies. In the next tutorial,
-# we will use multicast to reduce these copies.
+# We can see the 8-warp version with warp pipeline is much better than the
+# version without, and it is also faster than the 4-warp kernel of
+# `07-multicta.py`. In the 4-warp kernel, each warp reads its operands from
+# shared memory and then runs its WMMAs. With warp pipeline, the shared memory
+# reads of one group of warps overlap with the WMMAs of the other group.

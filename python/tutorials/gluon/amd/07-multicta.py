@@ -24,7 +24,6 @@ from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
 
 t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
-t7 = importlib.import_module("amd.07-warp-pipeline")
 
 
 def is_cdna5():
@@ -233,7 +232,7 @@ def test_copy(x_cga_layout, use_tdm):
 # the tensor descriptor holds the mask.
 
 # %%
-# Now let's apply multicast to the matmul of `07-warp-pipeline.py`. We group
+# Now let's apply multicast to the matmul of `05-mfma-wmma-scaled.py`. We group
 # `CTAS_M x CTAS_N` CTAs into a CGA, and the CGA computes one tile of `Y`. The
 # CTAs in the same row load the same tiles of `A`, and the CTAs in the same
 # column load the same tiles of `W`. With multicast, the CGA reads each of these
@@ -292,37 +291,13 @@ def get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
 
 @gluon.jit
-def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
-                   BLOCK_K: gl.constexpr):
-    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
-                                                clamp_bounds=True)
-    ws_desc = cdna5.tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128],
-                                                 pred=pred, clamp_bounds=True)
-    cdna5.tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
-    cdna5.tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
-    cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
-
-
-@gluon.jit
-def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
-    HALF_K: gl.constexpr = a_smem.shape[2] // 2
-    ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
-    a = a_smem.index(slot).slice(half * HALF_K, HALF_K, 1).load(layouts.a_reg_layout)
-    w = w_smem.index(slot).slice(half * HALF_K // 2, HALF_K // 2, 1).permute([1, 0]).load(layouts.w_reg_layout)
-    w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(slot)).slice(half * HALF_K // 32, HALF_K // 32, 1).load(ws_layout)
-    return a, w, w_scale
-
-
-@gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
-                  M, N, K: gl.constexpr,  #
+                  M, N, K,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
                   CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, NUM_BUFFERS: gl.constexpr):
     BLOCK_M: gl.constexpr = 256 * CTAS_M
     BLOCK_N: gl.constexpr = 256 * CTAS_N
     BLOCK_K: gl.constexpr = 256
-    gl.static_assert(K % BLOCK_K == 0)
     layouts: gl.constexpr = get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, gl.num_warps())
 
     pid = gl.program_id(0)
@@ -341,32 +316,19 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     ws_smem = gl.allocate_shared_memory(gl.uint8, [NUM_BUFFERS, BLOCK_N // 128, BLOCK_K // 32 * 128],
                                         layouts.ws_smem_layout)
 
-    num_k: gl.constexpr = K // BLOCK_K
-    num_tail_k: gl.constexpr = num_k % NUM_BUFFERS
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
+    # The K loop of `05-mfma-wmma-scaled.py`, with the cluster layouts.
+    num_k = gl.cdiv(K, BLOCK_K)
+    for k in gl.static_range(NUM_BUFFERS - 1):
+        t5.matmul_cdna5_ld_gmem(k, k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
+                                NUM_BUFFERS, 128)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(0, num_k - num_tail_k, NUM_BUFFERS):
-        for i in gl.static_range(NUM_BUFFERS):
-            cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
-            with gl.amd.warp_pipeline_stage("lds_low", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, 0, a_smem, w_smem, ws_smem, layouts)
-                next_k = k + i + NUM_BUFFERS - 1
-                matmul_ld_gmem(next_k, next_k < num_k, (i + NUM_BUFFERS - 1) % NUM_BUFFERS, off_m, off_n, a_desc,
-                               w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
-            with gl.amd.warp_pipeline_stage("wmma_low", priority=0):
-                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-            with gl.amd.warp_pipeline_stage("lds_high", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
-            with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
-                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-    for i in gl.static_range(num_tail_k):
-        cdna5.tdm.async_wait((num_tail_k - 1 - i) * 3)
-        for half in gl.static_range(2):
-            with gl.amd.warp_pipeline_stage("lds", priority=1):
-                a, w, w_scale = matmul_ld_smem(i, half, a_smem, w_smem, ws_smem, layouts)
-            with gl.amd.warp_pipeline_stage("wmma", priority=0):
-                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+    for k in range(num_k):
+        next_k = k + NUM_BUFFERS - 1
+        t5.matmul_cdna5_ld_gmem(next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
+                                BLOCK_K, NUM_BUFFERS, 128)
+        cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 3)
+        a, w, w_scale = t5.matmul_cdna5_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS, True)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], layouts.y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
@@ -385,12 +347,12 @@ def matmul(A, W, W_scale, CTAS_M, CTAS_N, NUM_BUFFERS=3):
         A, W, W_scale, Y,  #
         M, N, K,  #
         A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),  #
-        CTAS_M, CTAS_N, NUM_BUFFERS, num_warps=8, num_ctas=CTAS_M * CTAS_N)
+        CTAS_M, CTAS_N, NUM_BUFFERS, num_ctas=CTAS_M * CTAS_N)
     return Y
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 1024, 1024), (2048, 1024, 768)])
-@pytest.mark.parametrize("CTAS_M, CTAS_N", [(1, 1), (2, 1), (1, 2), (2, 2), (2, 4)])
+@pytest.mark.parametrize("CTAS_M, CTAS_N", [(1, 1), (2, 1), (1, 2), (2, 2), (2, 4), (4, 4)])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
 def test_matmul(M, N, K, CTAS_M, CTAS_N):
     A = t5.random_fp8(M, K)
@@ -400,8 +362,8 @@ def test_matmul(M, N, K, CTAS_M, CTAS_N):
 
 
 # %%
-# We can compare the kernel of `07-warp-pipeline.py` with clusters of different
-# shapes with M = N = K = 8192.
+# We can compare the kernel of `05-mfma-wmma-scaled.py` with clusters of
+# different shapes with M = N = K = 8192.
 
 if __name__ == "__main__":
     print("Benchmarking matmul")
@@ -415,15 +377,16 @@ if __name__ == "__main__":
         ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
-    bench("no cluster", lambda: t7.matmul(A, W, W_scale))
-    for CTAS_M, CTAS_N in [(2, 1), (1, 2), (2, 2), (2, 4)]:
+    bench("no cluster", lambda: t5.matmul_cdna5(A, W, W_scale))
+    for CTAS_M, CTAS_N in [(2, 1), (1, 2), (2, 2), (2, 4), (4, 4)]:
         bench(f"{CTAS_M}x{CTAS_N} cluster", lambda: matmul(A, W, W_scale, CTAS_M, CTAS_N))
 
 # %%
 # ```
-# no cluster: 7198 TFLOPS
-# 2x1 cluster: 7704 TFLOPS
-# 1x2 cluster: 7943 TFLOPS
-# 2x2 cluster: 8037 TFLOPS
-# 2x4 cluster: 8133 TFLOPS
+# no cluster: 7727 TFLOPS
+# 2x1 cluster: 7954 TFLOPS
+# 1x2 cluster: 8020 TFLOPS
+# 2x2 cluster: 8180 TFLOPS
+# 2x4 cluster: 8248 TFLOPS
+# 4x4 cluster: 8337 TFLOPS
 # ```
