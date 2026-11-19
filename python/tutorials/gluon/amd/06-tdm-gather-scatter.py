@@ -285,11 +285,11 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 12.5 TB/s
-# tdm gather: 18.3 TB/s
+# global load: 13.9 TB/s
+# tdm gather: 19.1 TB/s
 # ```
 #
-# The TDM gather is 46% faster than the global load kernel.
+# The TDM gather is 37% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -371,7 +371,7 @@ def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N, stride_ym, off_m, of
 
 @gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr,  #
-                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N, K,  #
+                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N, K: gl.constexpr,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
                   NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr, SCATTER: gl.constexpr):
     BLOCK_M: gl.constexpr = 256
@@ -493,6 +493,6 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# mlp1: 6082 TFLOPS
-# mlp2: 5552 TFLOPS
+# mlp1: 6522 TFLOPS
+# mlp2: 6043 TFLOPS
 # ```
