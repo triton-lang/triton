@@ -681,9 +681,9 @@ def test_scaled_wmma_smem(M, N, K, a_kind, b_kind, preshuffle):
 
 
 # %%
-# Similarly, here is an end-to-end matmul example. It follows the best WMMA
-# kernel of `04-mfma-wmma.py`, and TDM also copies the preshuffled scales along
-# with the tiles.
+# Similarly, here is an end-to-end matmul example. It uses the partitioned
+# layouts of the best WMMA kernel of `04-mfma-wmma.py`, and TDM also copies the
+# preshuffled scales along with the tiles.
 
 
 @gluon.aggregate
@@ -777,7 +777,7 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
 
     num_k = gl.cdiv(K, BLOCK_K)
     for k in gl.static_range(NUM_BUFFERS - 1):
-        matmul_cdna5_ld_gmem(k, True, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
+        matmul_cdna5_ld_gmem(k, k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
                              NUM_BUFFERS, GROUP)
 
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
@@ -844,7 +844,7 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# bf16: 2114 TFLOPS
-# fp8 x mxfp4: 7187 TFLOPS
-# fp8 x mxfp4, preshuffled scales: 7306 TFLOPS
+# bf16: 2287 TFLOPS
+# fp8 x mxfp4: 7700 TFLOPS
+# fp8 x mxfp4, preshuffled scales: 7841 TFLOPS
 # ```

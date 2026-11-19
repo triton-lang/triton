@@ -1162,6 +1162,6 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# padded: 2106 TFLOPS
-# partitioned: 2128 TFLOPS
+# padded: 2195 TFLOPS
+# partitioned: 2290 TFLOPS
 # ```
