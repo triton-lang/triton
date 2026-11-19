@@ -685,6 +685,62 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("k, n", [(40, 40), (39, 40), (40, 39), (39, 39)])
+def test_dense_matmul_padded_rows(k, n, device):
+    if not cuda_capability_geq(8, 0):
+        pytest.skip("requires CUDA SM80 or newer")
+    m, pitch = 67, 40
+    a = torch.randint(-2, 3, (m, pitch), device=device).to(torch.bfloat16)
+    w = torch.randint(-2, 3, (n, pitch), device=device).to(torch.bfloat16)
+    a[:, k:] = 11
+    w[:, k:] = 13
+    out = torch.full((m, pitch), 73, dtype=torch.bfloat16, device=device)
+    expected = out.clone()
+    a, b = a[:, :k], w[:, :k].T
+    expected[:, :n] = a.float() @ b.float()
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
+        matmul(a, b, None, c=out[:, :n])
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn, torch.float32])
+def test_dense_matmul_runtime_alignment(dtype, device, monkeypatch):
+    if not cuda_capability_geq(8, 0) or (dtype == torch.float8_e4m3fn and not cuda_capability_geq(9, 0)):
+        pytest.skip("requires CUDA tensor core support for the input dtype")
+    m = 67
+    kernel = importlib.import_module("triton_kernels.matmul").specializations.get()._dense_matmul
+    run = kernel.run
+    hashes = set()
+
+    def record_kernel(*args, **kwargs):
+        compiled = run(*args, **kwargs)
+        hashes.add(compiled.hash)
+        return compiled
+
+    monkeypatch.setattr(kernel, "run", record_kernel)
+
+    def padded(rows, width, dtype, base_offset, pitch_offset):
+        pitch = 96 + pitch_offset
+        storage = torch.full((rows, pitch), 11, dtype=dtype, device=device)
+        return storage, storage[:, base_offset:base_offset + width]
+
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1, "block_k": 64, "block_n": 64}):
+        for i, offset in enumerate((1, 2, 4, 8, 16, 0)):
+            # Different base addresses, row pitches and logical tails share one kernel configuration.
+            k = (48, 36, 40, 34, 33, 32)[i]
+            n = (32, 33, 34, 36, 40, 48)[i]
+            _, x = padded(m, k, dtype, offset, 0)
+            _, w = padded(n, k, dtype, 0, offset)
+            out_storage, y = padded(m, n, torch.bfloat16, 1 << (i % 5), 0)
+            x.copy_(torch.randint(-2, 3, x.shape, device=device))
+            w.copy_(torch.randint(-2, 3, w.shape, device=device))
+            expected = out_storage.clone()
+            expected[:, y.storage_offset():y.storage_offset() + n] = x.float() @ w.float().T
+            matmul(x, w.T, None, c=y, precision_config=PrecisionConfig(allow_tf32=False))
+            torch.testing.assert_close(out_storage, expected, rtol=0, atol=0)
+    assert len(hashes) == 1
+
+
 @pytest.mark.parametrize("is_persistent", [False, True])
 @pytest.mark.parametrize("split_k", [1, 2])
 @pytest.mark.parametrize("k", [64, 80])
