@@ -641,3 +641,47 @@ tt.func @test_combine_broadcast_mul_reduce_multiple_results(%arg0: tensor<32x16x
     }) : (tensor<32x16x32xf32>, tensor<32x16x32xf32>) -> (tensor<32x32xf32>, tensor<32x32xf32>)
     tt.return %5#0 : tensor<32x32xf32>
 }
+
+// Issue #5916: a reshape that only adds/removes unit dims is folded into the
+// operands of a pointer tt.load, so the dot operand comes straight from a load.
+
+// CHECK-LABEL: @test_rank_reduce_load_middle_unit_dim
+tt.func @test_rank_reduce_load_middle_unit_dim(%p: tensor<64x1x64x!tt.ptr<f16>>, %m: tensor<64x1x64xi1>, %o: tensor<64x1x64xf16>) -> tensor<64x64xf16> {
+  // CHECK-DAG: %[[P:.+]] = tt.reshape %arg0 : tensor<64x1x64x!tt.ptr<f16>> -> tensor<64x64x!tt.ptr<f16>>
+  // CHECK-DAG: %[[M:.+]] = tt.reshape %arg1 : tensor<64x1x64xi1> -> tensor<64x64xi1>
+  // CHECK-DAG: %[[O:.+]] = tt.reshape %arg2 : tensor<64x1x64xf16> -> tensor<64x64xf16>
+  // CHECK: %[[L:.+]] = tt.load %[[P]], %[[M]], %[[O]] {isVolatile = true} : tensor<64x64x!tt.ptr<f16>>
+  // CHECK-NOT: tt.reshape
+  // CHECK: tt.return %[[L]]
+  %l = tt.load %p, %m, %o {isVolatile = true} : tensor<64x1x64x!tt.ptr<f16>>
+  %r = tt.reshape %l : tensor<64x1x64xf16> -> tensor<64x64xf16>
+  tt.return %r : tensor<64x64xf16>
+}
+
+// CHECK-LABEL: @test_rank_expand_load_unit_dim
+tt.func @test_rank_expand_load_unit_dim(%p: tensor<64x64x!tt.ptr<f16>>) -> tensor<1x64x64xf16> {
+  // CHECK: %[[P:.+]] = tt.reshape %arg0 : tensor<64x64x!tt.ptr<f16>> -> tensor<1x64x64x!tt.ptr<f16>>
+  // CHECK: %[[L:.+]] = tt.load %[[P]] : tensor<1x64x64x!tt.ptr<f16>>
+  // CHECK: tt.return %[[L]]
+  %l = tt.load %p : tensor<64x64x!tt.ptr<f16>>
+  %r = tt.reshape %l : tensor<64x64xf16> -> tensor<1x64x64xf16>
+  tt.return %r : tensor<1x64x64xf16>
+}
+
+// CHECK-LABEL: @test_no_rank_reduce_load_multi_use
+tt.func @test_no_rank_reduce_load_multi_use(%p: tensor<64x1x64x!tt.ptr<f16>>) -> (tensor<64x64xf16>, tensor<64x1x64xf16>) {
+  // CHECK: %[[L:.+]] = tt.load %arg0 : tensor<64x1x64x!tt.ptr<f16>>
+  // CHECK: tt.reshape %[[L]]
+  %l = tt.load %p : tensor<64x1x64x!tt.ptr<f16>>
+  %r = tt.reshape %l : tensor<64x1x64xf16> -> tensor<64x64xf16>
+  tt.return %r, %l : tensor<64x64xf16>, tensor<64x1x64xf16>
+}
+
+// CHECK-LABEL: @test_no_rank_reduce_load_non_unit_reshape
+tt.func @test_no_rank_reduce_load_non_unit_reshape(%p: tensor<64x2x32x!tt.ptr<f16>>) -> tensor<64x64xf16> {
+  // CHECK: %[[L:.+]] = tt.load %arg0 : tensor<64x2x32x!tt.ptr<f16>>
+  // CHECK: tt.reshape %[[L]]
+  %l = tt.load %p : tensor<64x2x32x!tt.ptr<f16>>
+  %r = tt.reshape %l : tensor<64x2x32xf16> -> tensor<64x64xf16>
+  tt.return %r : tensor<64x64xf16>
+}

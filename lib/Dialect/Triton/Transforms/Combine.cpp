@@ -224,6 +224,75 @@ public:
   }
 };
 
+// Returns true if `reshape` only inserts and/or removes size-1 dimensions,
+// i.e. the sequence of non-unit extents is unchanged. Such a reshape is a pure
+// re-indexing that never moves elements relative to each other.
+static bool isUnitDimOnlyReshape(ArrayRef<int64_t> srcShape,
+                                 ArrayRef<int64_t> dstShape) {
+  auto nonUnit = [](ArrayRef<int64_t> shape) {
+    SmallVector<int64_t> dims;
+    for (int64_t d : shape)
+      if (d != 1)
+        dims.push_back(d);
+    return dims;
+  };
+  return nonUnit(srcShape) == nonUnit(dstShape);
+}
+
+// tt.load is elementwise in (ptr, mask, other), so a reshape of its result can
+// be applied to its operands instead:
+//
+//   %v = tt.load %ptr, %mask, %other : tensor<64x1x64x!tt.ptr<f16>>
+//   %r = tt.reshape %v : tensor<64x1x64xf16> -> tensor<64x64xf16>
+// =>
+//   %p = tt.reshape %ptr : ... -> tensor<64x64x!tt.ptr<f16>>
+//   %r = tt.load %p, (reshape %mask), (reshape %other)
+//
+// This is the pointer-load counterpart of RankedReduceDescriptorLoads. We
+// restrict it to reshapes that only add/remove unit dims: AxisInfo maps
+// contiguity/divisibility exactly through those, so the load keeps its
+// vectorization, and the value reaching tt.dot is produced directly by a load
+// again. That lets the MMA pipeliner pick a dot-operand shared layout and
+// lets TritonGPUPrefetch slice the operand (see issue #5916).
+class RankReduceLoadThroughReshape : public mlir::OpRewritePattern<ReshapeOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp reshapeOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto loadOp = reshapeOp.getSrc().getDefiningOp<triton::LoadOp>();
+    if (!loadOp || !loadOp->hasOneUse())
+      return failure();
+    auto ptrTy = dyn_cast<RankedTensorType>(loadOp.getPtr().getType());
+    if (!ptrTy)
+      return failure();
+    auto srcTy = reshapeOp.getSrc().getType();
+    auto dstTy = reshapeOp.getType();
+    if (!isUnitDimOnlyReshape(srcTy.getShape(), dstTy.getShape()))
+      return failure();
+
+    ArrayRef<int64_t> dstShape = dstTy.getShape();
+    rewriter.setInsertionPoint(loadOp);
+    auto reshapeOperand = [&](Value v) -> Value {
+      if (!v)
+        return v;
+      return ReshapeOp::create(rewriter, reshapeOp.getLoc(), dstShape, v);
+    };
+    Value ptr = reshapeOperand(loadOp.getPtr());
+    Value mask = reshapeOperand(loadOp.getMask());
+    Value other = reshapeOperand(loadOp.getOther());
+
+    auto newLoad = triton::LoadOp::create(rewriter, loadOp.getLoc(), ptr, mask,
+                                          other, loadOp.getIsVolatile());
+    // Keep cache/eviction policy and any discardable attributes.
+    newLoad->setAttrs(loadOp->getAttrs());
+    rewriter.replaceOp(reshapeOp, newLoad.getResult());
+    rewriter.eraseOp(loadOp);
+    return success();
+  }
+};
+
 template <typename DotOpType, typename AddOpType>
 class CombineDotAddPattern : public mlir::OpRewritePattern<AddOpType> {
 public:
@@ -286,6 +355,7 @@ public:
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
     patterns.add<RankedReduceDescriptorLoads>(context);
+    patterns.add<RankReduceLoadThroughReshape>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
