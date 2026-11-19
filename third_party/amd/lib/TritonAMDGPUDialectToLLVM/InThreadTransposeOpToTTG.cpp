@@ -1,5 +1,5 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "triton/Conversion/MLIRTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 using namespace mlir;
 using namespace mlir::triton;

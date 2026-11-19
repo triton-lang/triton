@@ -4,6 +4,7 @@
 #include <numeric>
 #include <utility>
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"

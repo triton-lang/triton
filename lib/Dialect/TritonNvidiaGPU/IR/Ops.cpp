@@ -35,6 +35,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
@@ -626,21 +627,7 @@ LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
 
 // -- ClusterBarrierOp --
 LogicalResult ClusterBarrierOp::verify() {
-  if (failed(verifyClusterIsMultiCTA(getOperation())))
-    return failure();
-  auto func = getOperation()->getParentOfType<FunctionOpInterface>();
-  if (!func)
-    return emitOpError("must be inside a kernel function");
-  if (triton::isKernel(func))
-    return success();
-  // Inlineable Triton helpers are verified before the inliner moves their
-  // bodies into the kernel.
-  if (auto tritonFunc = dyn_cast<triton::FuncOp>(func.getOperation())) {
-    auto noinline = tritonFunc->getAttrOfType<BoolAttr>("noinline");
-    if (!noinline || !noinline.getValue())
-      return success();
-  }
-  return emitOpError("must be inside a kernel function");
+  return verifyClusterIsMultiCTA(getOperation());
 }
 
 // -- TMA operation verifiers --
@@ -772,6 +759,19 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   return success();
 }
 
+bool hasCrossCTAAsyncSharedAccess(Operation *op) {
+  if (auto bulk = dyn_cast<AsyncBulkCopyGlobalToLocalOp>(op))
+    return bulk.getMulticast();
+  if (auto tma = dyn_cast<TMALoadLikeOpInterface>(op))
+    return tma.getMulticast() ||
+           getTMASubviewCTAMask(cast<MemDescType>(tma.getResult().getType()));
+  if (auto mma = dyn_cast<MMAv5OpInterface>(op))
+    return mma.getTwoCtas();
+  if (isa<TMEMCopyOp>(op))
+    return getModuleTwoCTAs(op);
+  return isa<CLCTryCancelOp>(op) && gpu::lookupNumCTAs(op) > 1;
+}
+
 static LogicalResult verifyAsyncTMALoadOp(Operation *op,
                                           TensorDescInterface desc,
                                           TypedValue<MemDescType> barrier,
@@ -782,18 +782,16 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
     return op->emitOpError("cannot store into immutable memory");
   if (failed(verifyTMAEncoding(op, desc, resultType)))
     return failure();
+  uint32_t subviewMask = getTMASubviewCTAMask(resultType);
+  if (!subviewMask)
+    return success();
   auto block = StringAttr::get(op->getContext(), "block");
   uint32_t barrierMask =
       toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
-  auto shape =
-      dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
-  auto allocation = toLinearLayoutIgnoringPadding(resultType);
-  for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
-    for (auto [component, size] : llvm::zip_equal(basis, shape))
-      if (component >= size && (bit || barrierMask > 1))
-        return op->emitOpError(
-            "TMA destination and completion barrier must belong to the same "
-            "CTA or a CTA pair");
+  if (subviewMask > 1 || barrierMask > 1)
+    return op->emitOpError(
+        "TMA destination and completion barrier must belong to the same "
+        "CTA or a CTA pair");
   return success();
 }
 
@@ -805,14 +803,8 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   // do not support fp4_padded operands.
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
-  auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
-  auto allocation = toLinearLayoutIgnoringPadding(srcType);
-  auto block = StringAttr::get(op->getContext(), "block");
-  for (const auto &basis : allocation.getBases().lookup(block))
-    for (auto [component, size] : llvm::zip_equal(basis, shape))
-      if (component >= size)
-        return op->emitOpError(
-            "source subview may have an origin in another CTA");
+  if (getTMASubviewCTAMask(srcType))
+    return op->emitOpError("source subview may have an origin in another CTA");
   return verifyTMAEncoding(op, desc.getType(), srcType);
 }
 

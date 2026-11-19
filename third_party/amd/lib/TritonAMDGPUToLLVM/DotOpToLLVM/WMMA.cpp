@@ -451,9 +451,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
   if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
                          maybeWmmaIntrinsic->requiredFeature)) {
-    return op.emitError("wmma intrinsic ")
-           << maybeWmmaIntrinsic->name << " is not supported on "
-           << targetFeatures.getArch();
+    return op.emitError("wmma layout chosen invokes intrinsic ")
+           << maybeWmmaIntrinsic->name
+           << ", which is not supported on this architecture";
   }
 
   unsigned kInstrSize = maybeWmmaIntrinsic->kDim;
@@ -681,9 +681,9 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
   if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
                          maybeWmmaScaleIntrinsic->requiredFeature)) {
-    return op.emitError("wmma scale intrinsic ")
-           << maybeWmmaScaleIntrinsic->name << " is not supported on "
-           << targetFeatures.getArch();
+    return op.emitError("wmma layout chosen invokes intrinsic ")
+           << maybeWmmaScaleIntrinsic->name
+           << ", which is not supported on this architecture";
   }
 
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;

@@ -2,9 +2,11 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
@@ -89,6 +91,10 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
 } // namespace
 
 namespace mlir::triton::NVIDIA {
+
+void registerNVVMDialect(DialectRegistry &registry) {
+  registry.insert<NVVM::NVVMDialect>();
+}
 
 void registerTargetInfo() {
   TargetInfoBase::registerFactory("cuda", [](ModuleOp moduleOp) {

@@ -9,7 +9,6 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace mlir {
@@ -154,14 +153,14 @@ protected:
 TEST_F(LinearLayoutConversionsTest, SimpleBlocked) {
   auto layout =
       toLinearLayout({16}, blocked({1}, {4}, {4}, {1}, {1}, {0}, {0}));
-  EXPECT_THAT(layout, LinearLayout(
-                          {
-                              {S("register"), {}},
-                              {S("lane"), {{1}, {2}}},
-                              {S("warp"), {{4}, {8}}},
-                              {S("block"), {}},
-                          },
-                          {S("dim0")}));
+  EXPECT_EQ(layout, LinearLayout(
+                        {
+                            {S("register"), {}},
+                            {S("lane"), {{1}, {2}}},
+                            {S("warp"), {{4}, {8}}},
+                            {S("block"), {}},
+                        },
+                        {S("dim0")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, CTADuplication) {

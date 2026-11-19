@@ -6,8 +6,13 @@
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <optional>
 
+namespace mlir {
+class DialectRegistry;
+} // namespace mlir
+
 namespace mlir::triton::AMD {
 void registerTargetInfo();
+void registerROCDLDialect(DialectRegistry &registry);
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:

@@ -1702,19 +1702,17 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     out = torch.empty_like(inp)
     compiled = kernel.warmup(inp, out, iterations, block, producer_warps, grid=(8, ), num_warps=4, num_ctas=num_ctas)
 
-    # Each physical phase must collect every warp, including bootstrap arrivals.
-    scale = max(4, producer_warps)
     ptx = compiled.asm["ptx"]
     init_counts = re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
-    expected_inits = [scale, scale, producer_warps, producer_warps]
+    # Each empty slot counts four consumer warps. One producer lane signals ready.
+    actual_inits = Counter(map(int, init_counts))
     # Warp-specialization cluster barriers can introduce additional mbarriers.
-    assert Counter(expected_inits) <= Counter(map(int, init_counts))
+    assert Counter([4, 4, 1, 1]) <= actual_inits
     arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
-    # The launch rendezvous covers the first bootstrap arrival's full count.
-    # A CTA barrier before the consumer's arrival can also fold its full count.
-    expected_arrivals = [scale, scale // producer_warps, 1]
+    # The launch rendezvous covers both scalar bootstrap arrivals. Each
+    # contributes four credits. The two loop arrivals contribute one per issuer.
     actual_arrivals = Counter(int(count or 1) for count in arrive_counts)
-    assert any(Counter(expected_arrivals + [count]) <= actual_arrivals for count in (scale // 4, scale))
+    assert Counter([4, 4, 1, 1]) <= actual_arrivals
     assert "bar.warp.sync" in ptx
     kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out, inp + 1)
@@ -3493,6 +3491,111 @@ def test_tmem_subslice_unpacked_one_column():
     kernel[(1, )](inp, out, num_warps=4)
     torch.testing.assert_close(out[:, 0], torch.full_like(out[:, 0], 777), atol=0, rtol=0)
     torch.testing.assert_close(out[:, 1], inp[:, 1], atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("sem,peer_offset", [("relaxed", None), ("release", None), ("release", 0), ("release", 2)],
+                         ids=["relaxed", "release", "release-reused", "release-disjoint"])
+def test_tmem_store_before_scalar_atomic(device, fresh_knobs, sem, peer_offset):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit
+    def tile_offsets(layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))
+        return ttgl.program_id(0) * 256 + rows[:, None] * 2 + cols[None, :]
+
+    @gluon.jit
+    def read_peer(tile, out, layout: ttgl.constexpr):
+        ttgl.store(out + tile_offsets(layout), tile.load(layout))
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(inp, flag, out, SEM: ttgl.constexpr, PEER_OFFSET: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 2], [0, 1])
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout([128, 128], col_stride=1)
+        offsets = tile_offsets(layout)
+        pool = allocate_tensor_memory(ttgl.int32, [128, 4], tmem_layout)
+        tile = pool.slice(0 if PEER_OFFSET is None else PEER_OFFSET, 2)
+        tile.store(ttgl.load(inp + offsets))
+        ttgl.atomic_add(flag + ttgl.program_id(0), 1, sem=SEM, scope="cta")
+        values = tile.load(layout)
+        if PEER_OFFSET is not None:
+            peer_layout: ttgl.constexpr = TensorMemoryLayout([128, 2], col_stride=1)
+            peer_tile = allocate_tensor_memory(ttgl.int32, [128, 2], peer_layout, values + 1)
+            ttgl.warp_specialize([(idle, ()), (read_peer, (peer_tile, out, layout))], [8])
+        else:
+            ttgl.store(out + offsets, values)
+
+    flags = torch.zeros(2, dtype=torch.int32, device=device)
+    data = torch.arange(2 * 256, dtype=torch.int32, device=device)
+    out = torch.empty_like(data)
+    compiled = kernel[(2, )](data, flags, out, sem, peer_offset, num_warps=8)
+    torch.testing.assert_close(out, data + int(peer_offset is not None))
+    torch.testing.assert_close(flags, torch.ones_like(flags))
+
+    # The worker can observe columns 0–1. Private stores can wait at the
+    # join after the guarded atomic, just before the TMEM load.
+    ptx = compiled.asm["ptx"]
+    atomic = ptx.index(f".{sem}.cta.global.add")
+    store = ptx.rindex("tcgen05.st.sync", 0, atomic)
+    load = ptx.index("tcgen05.ld.sync", atomic)
+    waits = list(re.compile(r"\btcgen05\.wait::st\b").finditer(ptx, store, load))
+    assert len(waits) == 1
+    wait = waits[0].start()
+    barriers = [m.start() for m in re.compile(r"\bbar(?:rier)?\.sync\b").finditer(ptx, store, load)]
+    assert len(barriers) == int(sem == "release")
+    if peer_offset == 0:
+        assert wait < barriers[0] < atomic
+    else:
+        assert all(barrier < atomic for barrier in barriers)
+        assert atomic < wait < load
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_scalar_atomic_peer_handoff(device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit
+    def transfer(tile, flag, out, iterations, PRODUCER: ttgl.constexpr):
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, tile.get_reg_layout()))[:, None]
+        for i in range(iterations):
+            offsets = (ttgl.program_id(0) * iterations + i) * 128 + rows
+            if PRODUCER:
+                ttgl.atomic_poll(flag, 2 * i, sem="acquire", scope="cta")
+                tile.store(offsets)
+                ttgl.atomic_xchg(flag, 2 * i + 1, sem="release", scope="cta")
+            else:
+                ttgl.atomic_poll(flag, 2 * i + 1, sem="acquire", scope="cta")
+                values = tile.load()
+                ttgl.atomic_add(flag, 1, sem="release", scope="cta")
+                ttgl.store(out + offsets, values)
+
+    @gluon.jit
+    def kernel(flags, out, iterations):
+        tile = allocate_tensor_memory(ttgl.int32, [128, 1], TensorMemoryLayout([128, 1], col_stride=1))
+        flag = flags + ttgl.program_id(0)
+        ttgl.warp_specialize([(transfer, (tile, flag, out, iterations, True)),
+                              (transfer, (tile, flag, out, iterations, False))], [4])
+
+    ctas, iterations = 8, 5
+    flags = torch.zeros(ctas, dtype=torch.int32, device=device)
+    out = torch.full((ctas * iterations * 128, ), -1, dtype=torch.int32, device=device)
+    compiled = kernel.warmup(flags, out, iterations, grid=(ctas, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    # Complete the store before the peer reads, and the load before the peer overwrites.
+    for access, atomic in [("st", "exch"), ("ld", "add")]:
+        release = ptx.index(f".release.cta.global.{atomic}")
+        issue = ptx.rindex(f"tcgen05.{access}.sync", 0, release)
+        wait = ptx.index(f"tcgen05.wait::{access}", issue, release)
+        assert re.search(r"\bbar(?:rier)?\.sync\b", ptx[wait:release])
+
+    kernel[(ctas, )](flags, out, iterations, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(out.numel(), dtype=out.dtype, device=device))
+    torch.testing.assert_close(flags, torch.full_like(flags, 2 * iterations))
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -8987,9 +9090,10 @@ def _bulk_cluster_kernel(src, out, num_elements: ttgl.constexpr, take_copy, CGA:
     cols = ttgl.arange(0, BLOCK, ttgl.SliceLayout(0, OUT_LAYOUT))
     offsets = rows[:, None] * BLOCK + cols[None, :]
     for i in range(3):
-        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
-        if MULTICAST:
+        # Peers must finish the previous wait and read before a remote expect or copy.
+        if FROM_CTA is not None or MULTICAST:
             ttgl.barrier(cluster=True)
+        hopper.mbarrier.expect(bar, num_elements * smem.nbytes_per_cta // smem.numel, pred=take_copy, from_cta=FROM_CTA)
         hopper.bulk.async_load(smem, src + i * num_elements, num_elements, bar, pred=take_copy, multicast=MULTICAST)
         hopper.mbarrier.wait(bar, phase=i % 2, pred=take_copy)
         values = smem.load(ttgl.SliceLayout(0, OUT_LAYOUT))

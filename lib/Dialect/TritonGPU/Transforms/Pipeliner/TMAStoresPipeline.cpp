@@ -67,7 +67,6 @@ static void createTMAAsyncCopy(const TMAStore &store, Value alloc) {
   // need the TMA read from the allocation to complete before reusing it.
   ttng::TMAStoreWaitOp::create(builder, loc, 0, /*read_only=*/true);
   ttg::LocalStoreOp::create(builder, loc, store.src, alloc);
-  ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
   if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
     ttng::AsyncTMACopyLocalToGlobalOp::create(builder, loc, desc,

@@ -15,6 +15,12 @@ namespace mlir {
 class DominanceInfo;
 class PostDominanceInfo;
 
+namespace scf {
+class ForOp;
+class IfOp;
+class WhileOp;
+} // namespace scf
+
 namespace triton {
 class ModuleAxisInfoAnalysis;
 class LoadOp;

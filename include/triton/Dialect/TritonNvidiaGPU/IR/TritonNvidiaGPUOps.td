@@ -495,9 +495,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     the specified count.
 
     The compiler-owned `per_warp` flag selects an arrival from each of the
-    execution region's warps. The compiler may set this flag before final count
-    scaling. Before lowering, the count must be divisible by the warp count;
-    it remains the total decrement per source CTA and target barrier. Membar
+    execution region's warps. The count is the total decrement per source CTA
+    and target barrier and must be divisible by the warp count. Membar
     inserts the required warp synchronization before each warp contributes its
     equal share to every routed target.
 

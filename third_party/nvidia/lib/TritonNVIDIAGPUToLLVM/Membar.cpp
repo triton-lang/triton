@@ -6,12 +6,11 @@
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Membar/MBarrierArrivals.h"
+#include "triton/Analysis/Membar/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 namespace mlir::triton {
@@ -42,51 +41,53 @@ struct TritonNvidiaGPUMembar
     }
 
     // Synchronization insertion and arrival attributes preserve this geometry.
-    ttng::runClusterBarrierInsertion(allocation, computeCapability, *regions);
-    if (failed(ttng::runCrossCTAMBarrierInitSyncInsertion(allocation,
-                                                          computeCapability))) {
+    if (failed(membar::placeClusterBarriers(allocation, *regions)))
+      return signalPassFailure();
+    if (failed(membar::placeBarriersAndArrivals(
+            allocation, *regions, NVIDIA::canSkipBarSync, computeCapability)))
       signalPassFailure();
-      return;
-    }
-    ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
-
-    ModuleMembarAnalysis membarPass(allocation, NVIDIA::canSkipBarSync);
-    membarPass.runAnalysis<MembarAnalysis>(*regions);
   }
 };
 
 // Preserve aliases introduced by allocator reuse. Multiple possible origins
 // are safe when every physical overlap has the same allocation origin.
 bool hasOnlySourceAliases(const AllocationSlice &lhs,
-                          const AllocationSlice &rhs) {
+                          const AllocationSlice &rhs, Allocation &allocation) {
   auto *before = lhs.physicalFootprint;
   auto *after = rhs.physicalFootprint;
   if (!before || !after)
     return false;
+  // A kernel-entry allocation has one lifetime across all calls.
+  auto kernel = cast<FunctionOpInterface>(allocation.getOperation());
+  bool local = lhs.getBufferId() != Allocation::InvalidBufferId &&
+               rhs.getBufferId() != Allocation::InvalidBufferId;
+  bool overlaps = false;
   for (const auto &a : before->regionInfo.views) {
-    assert(isa_and_nonnull<gpu::LocalAllocOp>(a.allocation) &&
-           "shared descriptor footprints must have allocation origins");
     for (const auto &b : after->regionInfo.views) {
-      assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
-             "shared accesses must use the current function frame");
-      if (a.allocation != b.allocation && a.region.intersects(b.region))
+      if (a.allocationFrame != b.allocationFrame)
         return false;
+      if (!a.region.intersects(b.region))
+        continue;
+      if (!a.allocation || a.allocation != b.allocation ||
+          (!local &&
+           a.allocation->getBlock() != &kernel.getFunctionBody().front()))
+        return false;
+      overlaps = true;
     }
   }
-  return true;
+  return overlaps;
 }
 
 } // namespace
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
-                            Allocation * /*allocation*/,
+                            Allocation *allocation,
                             const AllocationSlice &beforeSlice,
                             const AllocationSlice &afterSlice) {
   // Init and inval execute synchronously on the same lane within a region.
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after) &&
-      before->getParentRegion() == after->getParentRegion())
+      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after))
     return true;
 
   auto completesTransactions = [](Operation *op) {
@@ -97,7 +98,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
   // writes visible to the generic proxy.
   if (completesTransactions(before) &&
       beforeSlice.sharedKind != gpu::SharedKind::Barrier &&
-      hasOnlySourceAliases(beforeSlice, afterSlice))
+      hasOnlySourceAliases(beforeSlice, afterSlice, *allocation))
     return true;
 
   // If before and after are mbarriers
@@ -122,11 +123,12 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       return true;
 
     auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
-    auto contribution = dyn_cast<gpu::MBarrierOpInterface>(after);
-    // Each CTA must wait and contribute before the next phase can complete.
-    // Broadcast waits and nonidentity fromCTA routing omit participating CTAs.
-    if (wait && contribution && contribution.isPerWarp() &&
-        wait.getAlloc() == contribution.getBarrier() &&
+    auto contribution = cast<gpu::MBarrierOpInterface>(after);
+    // Thread ordering covers direct contributions to the same counter. A
+    // scalar issuer needs a CTA rendezvous. With per-warp issuers, each warp
+    // finishes its wait before contributing to the next phase. Broadcast
+    // waits and nonidentity fromCTA routing omit participating CTAs.
+    if (wait && wait.getAlloc() == contribution.getBarrier() &&
         !ttng::hasCGABroadcast(wait.getAlloc().getType())) {
       auto expect = dyn_cast<ttng::BarrierExpectOp>(after);
       auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);
