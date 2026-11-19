@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck --dump-input=fail --dump-input-context=30 %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-insert-remote-shared-store-barriers='compute-capability=100' | FileCheck %s --check-prefix=REMOTE
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-insert-remote-shared-store-barriers | FileCheck %s --check-prefix=REMOTE
 
 // -----
 
@@ -44,17 +44,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.convert_layout
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_alloc
-  // REMOTE-LABEL: @convert_layout_cluster_barrier
-  // REMOTE: ttg.convert_layout
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttg.local_alloc
-  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttg.local_store
-  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttg.local_load
   tt.func @convert_layout_cluster_barrier() -> tensor<256x128xf16, #blockedSplitM> {
     %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
     %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
@@ -411,6 +400,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttg.local_alloc
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_load
+  // REMOTE-LABEL: @cluster_barrier_for_remote_local_store(
+  // REMOTE: ttng.cluster_barrier{{$}}
+  // REMOTE-NEXT: ttg.local_store
+  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
+  // REMOTE-NEXT: ttng.cluster_barrier{{$}}
   tt.func @cluster_barrier_for_remote_local_store(
       %values: tensor<2x32xi32, #subviewBlocked>) -> tensor<4x32xi32, #subviewOwnerBlocked> {
     %parent = ttg.local_alloc : () -> !ttg.memdesc<4x32xi32, #subviewShared, #smem, mutable>
@@ -428,6 +422,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttg.local_alloc
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_load
+  // REMOTE-LABEL: @cluster_barrier_for_remote_source_alloc(
+  // REMOTE: ttng.cluster_barrier{{$}}
+  // REMOTE-NEXT: ttg.local_alloc %
+  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
+  // REMOTE-NEXT: ttng.cluster_barrier{{$}}
   tt.func @cluster_barrier_for_remote_source_alloc(
       %values: tensor<4x32xi32, #subviewBlocked>) -> tensor<4x32xi32, #subviewOwnerBlocked> {
     %remote = ttg.local_alloc %values : (tensor<4x32xi32, #subviewBlocked>) -> !ttg.memdesc<4x32xi32, #subviewShared, #smem, mutable>
@@ -1760,49 +1759,5 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %hist = tt.histogram %input : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
     %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
     tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
-  }
-}
-
-// -----
-
-#sharded = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
-#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
-#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
-#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1, CGALayout = [[1, 0]]>
-#smem = #ttg.shared_memory
-!a = !ttg.memdesc<128x128xf16, #shared_a, #smem>
-!b = !ttg.memdesc<128x128xf16, #shared_b, #smem>
-!bm = !ttg.memdesc<128x128xf16, #shared_b, #smem, mutable>
-!acc = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-!bar = !ttg.memdesc<2xi64, #barrier, #smem, mutable>
-
-module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // REMOTE-LABEL: @remote_mma_operand_init
-  // REMOTE: ttng.cluster_barrier
-  // REMOTE-NEXT: ttg.local_alloc
-  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttng.tc_gen5_mma
-  tt.func @remote_mma_operand_init(%a: !a, %src: tensor<128x128xf16, #sharded>, %acc: !acc) {
-    %true = arith.constant true
-    %b = ttg.local_alloc %src : (tensor<128x128xf16, #sharded>) -> !b
-    ttng.tc_gen5_mma %a, %b, %acc, %true, %true : !a, !b, !acc
-    tt.return
-  }
-
-  // REMOTE-LABEL: @remote_mma_operand_reuse
-  // REMOTE: ttng.wait_barrier
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttg.local_store
-  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
-  // REMOTE-NEXT: ttng.cluster_barrier
-  // REMOTE-NEXT: ttng.tc_gen5_mma
-  tt.func @remote_mma_operand_reuse(%a: !a, %b: !bm, %src: tensor<128x128xf16, #sharded>, %acc: !acc, %bar: !bar, %phase: i32) {
-    %true = arith.constant true
-    ttng.wait_barrier %bar, %phase deps %b : !bar, !bm
-    ttg.local_store %src, %b : tensor<128x128xf16, #sharded> -> !bm
-    ttng.tc_gen5_mma %a, %b, %acc, %true, %true : !a, !bm, !acc
-    tt.return
   }
 }

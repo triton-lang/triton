@@ -8,6 +8,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   FenceInsertion.cpp
   FuseTMemLoadReduce.cpp
   HoistMBarrierLifecycle.cpp
+  InsertRemoteSharedStoreBarriers.cpp
   InterleaveTMem.cpp
   MBarrierUtilities.cpp
   MMALowering.cpp
