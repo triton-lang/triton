@@ -144,7 +144,7 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
       TRITON_WMMA_v(2, 16, 16, ocpFp8T, ocpFp8T, 8, f32T,
                     "llvm.amdgcn.wmma.f32.16x16x16.fp8.fp8", 16, 8),
       // wmma_f32_16x16x128_fp8_fp8 & wmma_f32_16x16x64_fp8_fp8
-      // x128 gives wrong results on gfx1250-strict
+      // x128 instructions do not exist on gfx1250-strict, but x64 does
       TRITON_WMMA_v_2case_feature(3, 16, 16, ocpFp8T, ocpFp8T, 8, f32T,
                                   "llvm.amdgcn.wmma.f32.16x16x128.fp8.fp8", 128,
                                   64, kWmmaRestrictedInstsFeature,

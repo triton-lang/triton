@@ -94,9 +94,10 @@ def get_test_gemm_shapes():
     ]
 
 
+@pytest.mark.parametrize("arch", ["gfx1250", "gfx1250-strict"])
 @pytest.mark.parametrize("a_dtype,b_dtype,k_dim,c_dtype", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
-def test_compile_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K):
+def test_compile_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K, arch, capfd):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -118,9 +119,22 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_
         "INSTR_SHAPE_K": k_dim, "K_WIDTH": 2 if a_dtype == "fp32" else 8
     }
     fn = gemm_kernel
+    src = gluon._runtime.GluonASTSource(fn, signature, constexprs)
+    target = GPUTarget("hip", arch, 32)
 
-    k = triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs),
-                       target=GPUTarget("hip", 'gfx1250', 32))
+    if arch == "gfx1250-strict" and k_dim == 128:
+        # x128 fp8 wmma does not exist on strict so the layout is rejected
+        a_ty = "fp8" if a_dtype == "fp8e4nv" else "bf8"
+        b_ty = "fp8" if b_dtype == "fp8e4nv" else "bf8"
+        acc = "f16" if c_dtype == "fp16" else "f32"
+        with pytest.raises(RuntimeError):
+            triton.compile(src=src, target=target)
+        # NOTE: transposed wmma layout swaps A and B
+        err = "".join(capfd.readouterr())
+        assert f"llvm.amdgcn.wmma.{acc}.16x16x128.{b_ty}.{a_ty}" in err and "not supported" in err
+        return
+
+    k = triton.compile(src=src, target=target)
     amdgcn = k.asm["amdgcn"]
 
     wmma_pattern = "v_wmma_"
@@ -457,13 +471,22 @@ def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
 @pytest.mark.parametrize("a_dtype,b_dtype,k_dim,c_dtype", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
 @pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
-def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
+def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K, capfd):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
-    if get_current_target().arch == "gfx1250-strict" and k_dim == 128:
-        pytest.skip("16x16x128 fp8 wmma is not supported on gfx1250-strict")
 
     k_width = 2 if a_dtype == "float32" else 8
+    if get_current_target().arch == "gfx1250-strict" and k_dim == 128:
+        # x128 fp8 wmma does not exist on strict so the layout is rejected
+        a_ty = "fp8" if a_dtype == "float8_e4m3fn" else "bf8"
+        b_ty = "fp8" if b_dtype == "float8_e4m3fn" else "bf8"
+        acc = "f16" if c_dtype == "float16" else "f32"
+        with pytest.raises(RuntimeError):
+            run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+        # NOTE: transposed wmma layout swaps A and B
+        err = "".join(capfd.readouterr())
+        assert f"llvm.amdgcn.wmma.{acc}.16x16x128.{b_ty}.{a_ty}" in err and "not supported" in err
+        return
     run_gemm(a_dtype, b_dtype, k_dim, c_dtype, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
 
 
@@ -1203,7 +1226,7 @@ def get_test_mxfp_variants():
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("with_a_scale, with_b_scale", list(itertools.product([True, False], repeat=2)))
 def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor,
-                         with_a_scale, with_b_scale):
+                         with_a_scale, with_b_scale, capfd):
     instr_m, instr_n = wmma_shape
 
     if instr_m == 32:
@@ -1289,13 +1312,16 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
     # represents restricted fp4 wmma instructions unsupported on gfx1250-strict hardware
     is_restricted = (get_current_target().arch == "gfx1250-strict" and instr_m == 32 and a_type == "e2m1"
                      and b_type == "e2m1")
-    with pytest.raises(RuntimeError, match="PassManager::run failed") if is_restricted else contextlib.nullcontext():
+    no_scales = not with_a_scale and not with_b_scale
+    with pytest.raises(RuntimeError) if is_restricted else contextlib.nullcontext():
         pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n,
                             transposed, num_warps=4)
     if is_restricted:
+        intrinsic = ("llvm.amdgcn.wmma.scale.f32.32x16x128.f4"
+                     if scale_factor == 32 or no_scales else "llvm.amdgcn.wmma.scale16.f32.32x16x128.f4")
+        err = "".join(capfd.readouterr())
+        assert intrinsic in err and "not supported" in err
         return
-
-    no_scales = not with_a_scale and not with_b_scale
 
     if instr_m == 32:
         if scale_factor == 32 or no_scales:
