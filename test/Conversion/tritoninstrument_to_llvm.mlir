@@ -1,5 +1,11 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20 --implicit-check-not=tti.
 // RUN: split-file %s %t
+// RUN: triton-opt %t/region-simplification.mlir --convert-nv-gpu-to-llvm | FileCheck %s --check-prefix=MERGED
+// RUN: triton-opt %t/region-simplification.mlir --convert-nv-gpu-to-llvm=consan | FileCheck %s --check-prefix=NORMAL
+// RUN: triton-opt %t/region-simplification.mlir --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=MERGED
+// RUN: triton-opt %t/region-simplification.mlir --convert-triton-gpu-to-llvm=consan | FileCheck %s --check-prefix=NORMAL
+// RUN: triton-opt %t/region-simplification.mlir --pass-pipeline='builtin.module(llvm.func(canonicalize-llvm-ir))' | FileCheck %s --check-prefix=MERGED
+// RUN: triton-opt %t/region-simplification.mlir --pass-pipeline='builtin.module(llvm.func(canonicalize-llvm-ir{consan}))' | FileCheck %s --check-prefix=NORMAL
 // RUN: triton-opt %t/lock-acquire.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=PTX
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -231,5 +237,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tti.experimental_lock_acquire %lock, %pred {ctaLocal} : !tt.ptr<i32>
     tti.experimental_lock_release %lock, %pred {ctaLocal} : !tt.ptr<i32>
     tt.return
+  }
+}
+
+// -----
+
+//--- region-simplification.mlir
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // MERGED-LABEL: llvm.func @repeated_blocks
+  // MERGED: llvm.store
+  // MERGED-NOT: llvm.store
+  // NORMAL-LABEL: llvm.func @repeated_blocks
+  // NORMAL-COUNT-2: llvm.store
+  llvm.func @repeated_blocks(%pred: i1, %ptr: !llvm.ptr, %val: i32) {
+    llvm.cond_br %pred, ^left, ^right
+  ^left:
+    llvm.store %val, %ptr : i32, !llvm.ptr
+    llvm.return
+  ^right:
+    llvm.store %val, %ptr : i32, !llvm.ptr
+    llvm.return
   }
 }
