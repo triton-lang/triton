@@ -265,11 +265,8 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.arrive_barrier %barrier, 8 {fromCTA = 5 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     // CHECK: nvvm.barrier
     // CHECK-NOT: nvvm.bar.warp.sync
-    // CHECK: %[[MULTICAST_CTA:.*]] = nvg.cluster_id
-    // CHECK: %[[MULTICAST_BASE:.*]] = llvm.and %[[MULTICAST_CTA]], %[[C5]] : i32
-    // CHECK: %[[MULTICAST_MASK:.*]] = llvm.shl %[[C5]], %[[MULTICAST_BASE]] : i32
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 12, $2;
-    // CHECK-SAME: "b,r,r" %{{[^,]+}}, %{{[^,]+}}, %[[MULTICAST_MASK]]
+    // CHECK-SAME: "b,r,r" %{{[^,]+}}, %{{[^,]+}}, %[[MASK]]
     ttg.barrier local
     ttng.arrive_barrier %barrier, 12 {multicastCTA = 2 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return

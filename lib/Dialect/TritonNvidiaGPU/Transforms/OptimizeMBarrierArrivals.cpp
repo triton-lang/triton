@@ -131,8 +131,8 @@ getDistributionScale(const BarrierUses &uses,
     // Lowering counts all CTAs that contribute to the same physical barrier.
     uint64_t ctasPerBarrier =
         gpu::lookupNumCTAs(init) / init.getAlloc().getType().getNumElements();
-    maxInitCount =
-        std::max(maxInitCount, uint64_t(init.getCount()) * ctasPerBarrier);
+    auto count = std::max(init.getCount(), init.getFallbackCount().value_or(0));
+    maxInitCount = std::max(maxInitCount, count * ctasPerBarrier);
   }
   uint64_t scale = 1;
   if (!uses.expects.empty()) {
@@ -281,8 +281,11 @@ struct OptimizeMBarrierArrivalsPass
         return;
       // Scale every contribution, including bootstrap and conditional arrivals.
       OpBuilder builder(alloc.getContext());
-      for (InitBarrierOp init : uses.inits)
+      for (InitBarrierOp init : uses.inits) {
         init.setCountAttr(builder.getI32IntegerAttr(init.getCount() * scale));
+        if (auto count = init.getFallbackCount())
+          init.setFallbackCountAttr(builder.getI32IntegerAttr(*count * scale));
+      }
       for (ArriveBarrierOp arrive : uses.arrivals)
         arrive.setCountAttr(
             builder.getI32IntegerAttr(arrive.getCount() * scale));

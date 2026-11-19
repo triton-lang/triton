@@ -29,6 +29,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -48,6 +49,26 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
   PTXBuilder ptxBuilder;
   auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
   fence().predicate(pred);
+  ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
+}
+
+void mlir::triton::NVIDIA::createMBarrierInit(OpBuilder &builder, Location loc,
+                                              Value pred, Value barrierPtr,
+                                              Value count) {
+  PTXBuilder ptxBuilder;
+  SmallVector<PTXBuilder::Operand *> operands{
+      ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(barrierPtr, "r")};
+  llvm::APInt constant;
+  std::string countOperand;
+  if (matchPattern(count, m_ConstantInt(&constant))) {
+    countOperand = std::to_string(constant.getZExtValue());
+  } else {
+    operands.push_back(ptxBuilder.newOperand(count, "r"));
+    countOperand = "$2";
+  }
+  auto &init = *ptxBuilder.create("@$0 mbarrier.init.shared::cta.b64 [$1], " +
+                                  countOperand + ";");
+  init(operands, /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
 }
 
@@ -188,20 +209,21 @@ struct InitBarrierOpConversion
       pred = b.and_(pred, *leaderPred);
 
     auto numCTAs = triton::gpu::lookupNumCTAs(op);
-    auto initCount = op.getCount();
     // The lead barrier accounts for all arrives from CTAs that broadcast into
     // the same barrier.
-    initCount *= numCTAs / barrierTy.getNumElements();
-
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(initCount) + ";";
-    auto &barSyncOp = *ptxBuilder.create(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
-               ptxBuilder.newOperand(smemObj.getBase(), "r")},
-              /*onlyAttachMLIRArgs=*/true);
-    auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    auto countScale = numCTAs / barrierTy.getNumElements();
+    Value count = b.i32_val(op.getCount() * countScale);
+    auto fallbackCount = op.getFallbackCount();
+    if (fallbackCount && *fallbackCount != op.getCount() &&
+        LLVM::NVIDIA::usePreferredClusterFallback(
+            op->getParentOfType<ModuleOp>())) {
+      Value actualNumCTAs =
+          NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
+      Value isFallback = b.icmp_ne(actualNumCTAs, b.i32_val(numCTAs));
+      count =
+          b.select(isFallback, b.i32_val(*fallbackCount * countScale), count);
+    }
+    NVIDIA::createMBarrierInit(rewriter, loc, pred, smemObj.getBase(), count);
     rewriter.eraseOp(op);
     return success();
   }
@@ -510,7 +532,7 @@ struct CLCTryCancelOpConversion
     auto numCTAs = ttg::lookupNumCTAs(op);
     if (numCTAs > 1) {
       TritonLLVMOpBuilder b(loc, rewriter);
-      auto clusterCtaId = targetInfo->getClusterCTAId(rewriter, loc);
+      Value clusterCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       pred = b.and_(pred, b.icmp_eq(clusterCtaId, b.i32_val(0)));
     }
 

@@ -537,7 +537,7 @@ tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.sh
   // CHECK: [[IS_WARP_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]] : i32
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
   // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
-  // CHECK: nvg.cluster_id
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
   // CHECK: llvm.and {{.*}}, {{.*}} : i32
   // CHECK: [[IS_CLUSTER_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]]
   // CHECK: [[LEAD_PRED:%.*]] = llvm.and [[WARP_PRED]], [[IS_CLUSTER_0]]
@@ -557,7 +557,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK-LABEL: @tma_scatter_broadcast_two_ctas
   // CHECK-DAG: %[[MASK:.+]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG: %[[ZERO:.+]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK: %[[CTA:.+]] = nvg.cluster_id
+  // CHECK: %[[CTA:.+]] = nvg.program_cta_id
   // CHECK: %[[CTA_IN_GROUP:.+]] = llvm.and %[[CTA]], %[[MASK]] : i32
   // CHECK: %[[IS_LEADER:.+]] = llvm.icmp "eq" %[[CTA_IN_GROUP]], %[[ZERO]] : i32
   // CHECK: %[[WARP_PRED:.+]] = llvm.icmp "eq" {{.*}} : i32

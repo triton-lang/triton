@@ -1487,7 +1487,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @convert_layout_cta_broadcast
   tt.func @convert_layout_cta_broadcast(%arg0: tensor<64xi32, #src>) {
-    // CHECK: nvg.cluster_id
+    // CHECK: nvg.program_cta_id
     // CHECK-NOT: nvvm.bar
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: nvvm.shfl.sync
@@ -2030,7 +2030,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: convert_layout_loads_local_replica
   // CHECK: llvm.store
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   // CHECK-NOT: nvvm.cluster.arrive
@@ -3153,7 +3153,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_load_uses_local_cta
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   tt.func private @local_load_uses_local_cta(%arg0: !ttg.memdesc<2xf32, #shared, #smem>) -> tensor<2xf32, #reg> {
@@ -3169,7 +3169,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_store_populates_both_ctas
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK: llvm.store
   // CHECK: %[[PEER:.*]] = nvvm.mapa
   // CHECK: llvm.store {{.*}}, %[[PEER]]{{.*}} : vector<1xi32>, !llvm.ptr<7>
@@ -4088,7 +4088,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-DAG: %[[MASK:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK-DAG: %[[CTA0:.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-DAG: %[[CTA2:.*]] = llvm.mlir.constant(2 : i32)
-  // CHECK: %[[CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[MASKED:.*]] = llvm.and %[[CTA]], %[[MASK]]
   // CHECK: %[[PRED:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
   // CHECK: %[[UPDATE:.*]] = llvm.and %{{.*}}, %[[PRED]] : i1
@@ -4455,7 +4455,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @store_in_owner_scope_two_ctas
   // CHECK: llvm.cond_br
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK: llvm.inline_asm {{.*}}@$2 st.global.b32
   tt.func public @store_in_owner_scope_two_ctas(%out: !tt.ptr<i32>, %v: i32) {
     %owner = ttg.thread_predicate <31, 3>

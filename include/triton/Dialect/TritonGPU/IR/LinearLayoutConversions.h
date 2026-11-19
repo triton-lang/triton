@@ -5,6 +5,7 @@
 #define TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
 
 #include <optional>
+#include <utility>
 
 #include "triton/Tools/LinearLayout.h"
 
@@ -68,6 +69,10 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type);
 LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding);
+
+// Returns masks of shared-memory offset and CTA bits that a subview's origin
+// may change. Offset bits exclude padding.
+std::pair<uint64_t, uint64_t> getMaskSpanOffsetsAndBlocks(MemDescType type);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.

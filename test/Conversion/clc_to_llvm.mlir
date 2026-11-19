@@ -19,6 +19,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: clc_try_cancel_multicast
   tt.func @clc_try_cancel_multicast(%result: !ttg.memdesc<2xi64, #shared_clc, #smem>, %mbar: !ttg.memdesc<1xi64, #barrier, #smem>) {
+    // CHECK: %[[RANK:.+]] = nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: llvm.icmp "eq" %[[RANK]], {{.*}} : i32
     // CHECK: clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128
     ttng.clc_try_cancel %result, %mbar : !ttg.memdesc<2xi64, #shared_clc, #smem>, !ttg.memdesc<1xi64, #barrier, #smem>
     tt.return
