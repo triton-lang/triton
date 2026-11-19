@@ -1918,17 +1918,31 @@ LogicalResult TMEMStoreOp::canonicalize(TMEMStoreOp op,
   return eraseIfPredicateIsFalse(op, rewriter);
 }
 
+void FPSanStoreProbabilityOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  if (isa<SharedMemorySpaceAttr>(getDst().getType().getMemorySpace()))
+    effects.push_back(makeShared<MemoryEffects::Write>(&getDstMutable(),
+                                                       SharedKind::Generic));
+  else
+    effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
+                         TensorMemory::get());
+}
+
 LogicalResult FPSanStoreProbabilityOp::verify() {
   auto dst = getDst().getType();
   auto result = getResult().getType();
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   if (dst.getRank() != 2 || !dst.getMutableMemory() ||
-      !isa<TensorMemoryEncodingAttr>(dst.getEncoding()))
-    return emitOpError("requires a mutable 2D TMEM destination");
+      !isa<TensorMemoryEncodingAttr, SharedEncodingTrait>(dst.getEncoding()))
+    return emitOpError("requires a mutable 2D SMEM or TMEM destination");
+  if (getPred() && isa<SharedEncodingTrait>(dst.getEncoding()))
+    return emitOpError("predication requires a TMEM destination");
   if (getSrc().getType().clone(result.getElementType()) != result)
     return emitOpError("source and result must have matching shape and layout");
-  if (failed(verifyTMEMOperand(*this, result, dst, "result")))
+  if (isa<TensorMemoryEncodingAttr>(dst.getEncoding()) &&
+      failed(verifyTMEMOperand(*this, result, dst, "result")))
     return failure();
   return triton::gpu::verifyMemoryOpTypes(*this, result, dst);
 }

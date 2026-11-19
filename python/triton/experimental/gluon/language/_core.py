@@ -427,13 +427,19 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_load(self, layout)
 
     @builtin
-    def store(self, value, _semantic: GluonSemantic = None) -> None:
+    def store(self, value, _semantic: GluonSemantic = None) -> tensor | None:
         """
         Store a tensor into shared memory.
 
         Args:
             value (tensor): The tensor whose contents to store.
+
+        When value is prepared with gl.fpsan.probability_store, return the rounded FP8 tile.
         """
+        from .fpsan import _ProbabilityStore
+
+        if isinstance(value, _ProbabilityStore):
+            return value._store(self, _semantic)
         return _semantic.shared_store(self, value)
 
     @builtin

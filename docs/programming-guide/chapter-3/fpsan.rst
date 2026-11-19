@@ -600,18 +600,22 @@ FP32-to-FP8 rounding at the store to the P operand.
 .. code-block:: python
 
    p = gl.exp2(centered_scores)
-   rounded = gl.fpsan.store_probability(p_tile, p, expected_zero=masked)
+   value_to_store = gl.fpsan.probability_store(p, expect_zero=masked)
+   rounded = p_tile.store(value_to_store)
    # After the usual producer/consumer synchronization
    tcgen05_mma(p_tile, v_tile, acc, use_acc=use_acc, mbarriers=[done])
 
-The destination is a two-dimensional E4M3 or E5M2 TMEM descriptor. The
-operation rounds, stores and returns the FP8 tile. The optional
-``expected_zero`` follows ``gl.expect_zero`` on the rounded value. Debug
+``probability_store`` prepares the FP32 tile and optional mask as a Gluon
+aggregate. It can pass through helpers and control flow before the store.
+The two-dimensional SMEM or TMEM destination determines the FP8 format
+(E4M3 or E5M2). Its ``store`` method rounds the tile, writes it and returns
+the rounded tensor. For TMEM, the optional store predicate guards the
+write of both bytes and residuals. The optional ``expect_zero`` follows ``gl.expect_zero`` on the rounded value. Debug
 execution asserts that the indicated values round to zero. FPSan writes
 zeros in those positions, including their residuals.
 
-In single-CTA FPSan kernels using this operation, each physical TMEM byte
-has a 32-bit residual in scratch. An unscaled FP8 MMA with an FP32
+In single-CTA FPSan kernels using this operation, each stored probability
+byte has a 32-bit residual in global scratch. An unscaled FP8 MMA with an FP32
 accumulator reconstructs a tagged FP32 payload from the byte and residual
 at its operand address. The format-specific odd multiplier distinguishes
 the rounding operation and commutes with online softmax rescaling. This
@@ -620,11 +624,21 @@ tests are needed to check underflow and overflow.
 
 Reading the tile into registers gives the tagged narrow payload. An ordinary
 store, including a store of those same bytes, clears the residuals it
-overwrites. This also applies when QK reuses P storage for FP32 scores.
-Stage selection and descriptor views determine the addresses of both data
-and residuals. Scratch for each physical column holds 128 data words and
-four planes of 128 residual words. This experimental path targets packed
-probabilities in ordinary TMEM allocations.
+overwrites. Stage selection and descriptor views determine the addresses
+of both data and residuals. Use the usual synchronization for the destination
+memory space, including the async proxy fence for SMEM.
+
+For SMEM, FPSan uses shared-memory alias analysis to identify the allocation
+backing the destination. Each access must resolve to a single allocation.
+The FP8 bytes reside in SMEM. The byte offset within the allocation, including
+the swizzle and view offsets, indexes its residual array. Either MMA operand
+can read these residuals. FPSan supports ordinary stores through views of
+the allocation and diagnoses unsupported accesses such as asynchronous
+copies into it.
+
+For packed TMEM probabilities, scratch for each physical column holds
+128 data words and four planes of 128 residual words. A QK write that
+reuses P storage for FP32 scores clears the corresponding residuals.
 The physical emulation requires whole-cell TMEM writes, including full
 instruction widths for MMA destinations. It reports unsupported descriptor
 operations during compilation.

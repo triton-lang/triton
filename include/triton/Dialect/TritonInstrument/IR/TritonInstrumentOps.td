@@ -93,6 +93,14 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalLocalAddressesOp : TTI_Op<"experimental_local_addresses", [Pure]> {
+  let summary = "Physical CTA-local byte addresses of a shared tile at logical offsets";
+  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
+  let results = (outs RankedTensorOf<[I32]>:$result);
+  let assemblyFormat = "$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def TTI_ExperimentalLocalGatherOp
     : TTI_Op<"experimental_local_gather"> {
   let summary = "Gather elements from shared memory with logical base offsets";

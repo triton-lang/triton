@@ -1,9 +1,12 @@
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Analysis/Alias.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -193,6 +196,7 @@ struct MmaOperandSource {
 
   ttg::MemDescType physicalType{};
   bool readResidual = false;
+  Value sharedShadow{};
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -518,7 +522,6 @@ public:
     return std::nullopt;
   }
 
-private:
   Value remapToScope(Value value, PatternRewriter &rewriter, Region *scope,
                      Location loc) {
     if (!scope || isValueAvailableInScope(value, scope))
@@ -549,6 +552,7 @@ private:
     return scope->getArgument(captureIdx);
   }
 
+private:
   bool physicalCells;
   DenseMap<Value, ScratchState> scratchMap;
   bool sharedClusterState;
@@ -1199,14 +1203,54 @@ void writeCells(PatternRewriter &rw, Location loc, CellPointers ptrs,
   }
 }
 
+Value sharedResidualPointers(PatternRewriter &rw, Location loc, Value shadow,
+                             Value desc, RankedTensorType tile,
+                             ValueRange offsets) {
+  auto ptrTy = tile.clone(shadow.getType());
+  Value addresses = ExperimentalLocalAddressesOp::create(
+      rw, loc, tile.clone(rw.getI32Type()), desc, offsets);
+  Value base = tt::SplatOp::create(rw, loc, ptrTy, shadow);
+  return tt::AddPtrOp::create(rw, loc, ptrTy, base, addresses);
+}
+
+void writeSharedResidual(PatternRewriter &rw, Location loc, Value shadow,
+                         Value desc, RankedTensorType tile,
+                         Value residual = {}) {
+  Value zero = arith::ConstantIntOp::create(rw, loc, 0, 32);
+  SmallVector<Value> offsets(tile.getRank(), zero);
+  auto ptrs = sharedResidualPointers(rw, loc, shadow, desc, tile, offsets);
+  auto wide = tile.clone(rw.getI32Type());
+  if (!residual)
+    residual = getIntConstantLike(rw, loc, wide, 0);
+  for (unsigned b = 0; b < tile.getElementTypeBitWidth() / 8; ++b) {
+    Value p = tt::AddPtrOp::create(rw, loc, ptrs.getType(), ptrs,
+                                   getIntConstantLike(rw, loc, wide, b));
+    tt::StoreOp::create(rw, loc, p, residual);
+  }
+  createGlobalScratchBarrier(rw, loc);
+}
+
+Value reconstructProbability(PatternRewriter &rw, Location loc, Value data,
+                             Value ptr) {
+  Value residual = tt::LoadOp::create(rw, loc, ptr);
+  Value decoded = arith::ExtSIOp::create(rw, loc, residual.getType(),
+                                         embedToInt(rw, loc, data));
+  return arith::AddIOp::create(rw, loc, decoded, residual);
+}
+
 struct StoreProbabilityPattern
     : OpRewritePattern<ttng::FPSanStoreProbabilityOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(ttng::FPSanStoreProbabilityOp op,
                                 PatternRewriter &rw) const override {
+    return rewrite(op, rw, {});
+  }
+
+  static LogicalResult rewrite(ttng::FPSanStoreProbabilityOp op,
+                               PatternRewriter &rw, Value shadow) {
     auto loc = op.getLoc();
-    if (!writesWholeCells(op.getDst().getType()))
-      return op.emitOpError("store_probability requires packed TMEM cells");
+    if (!shadow && !writesWholeCells(op.getDst().getType()))
+      return op.emitOpError("probability_store requires packed TMEM cells");
     auto ty = op.getResult().getType();
     Value wide = embedToInt(rw, loc, op.getSrc());
     // Odd format tags distinguish the rounding sites while commuting with
@@ -1220,35 +1264,37 @@ struct StoreProbabilityPattern
         rw, loc, byte, getIntConstantLike(rw, loc, byte.getType(), tag & 255));
     Value decoded = arith::ExtSIOp::create(rw, loc, wide.getType(), byte);
     Value residual = arith::SubIOp::create(rw, loc, tagged, decoded);
-    Value base = cellBase(rw, loc, op.getDst());
-    auto ptrs = cellPointers(rw, loc, base, op.getDst().getType(), ty);
-    writeCells(rw, loc, ptrs, byte, {}, residual);
-    createGlobalScratchBarrier(rw, loc);
-    rw.replaceOp(op, unembedToFloat(rw, loc, byte, ty));
+    Value rounded = unembedToFloat(rw, loc, byte, ty);
+    if (shadow) {
+      ttg::LocalStoreOp::create(rw, loc, rounded, op.getDst());
+      writeSharedResidual(rw, loc, shadow, op.getDst(), ty, residual);
+    } else {
+      Value base = cellBase(rw, loc, op.getDst());
+      auto ptrs = cellPointers(rw, loc, base, op.getDst().getType(), ty);
+      writeCells(rw, loc, ptrs, byte, op.getPred(), residual);
+      createGlobalScratchBarrier(rw, loc);
+    }
+    rw.replaceOp(op, rounded);
     return success();
   }
 };
 
-// Initialize the four contiguous residual planes at allocation time. Every
-// subsequent writer updates the shadow under the same predicate as its data.
-void clearResidualPlanes(PatternRewriter &rw, Location loc, Value base,
-                         int columns) {
+void clearResiduals(PatternRewriter &rw, Location loc, Value base, int groups,
+                    int width, int stride) {
   OpBuilder::InsertionGuard guard(rw);
   auto i32 = rw.getI32Type();
   auto constant = [&](int n) {
     return arith::ConstantOp::create(rw, loc, rw.getI32IntegerAttr(n));
   };
   auto loop =
-      scf::ForOp::create(rw, loc, constant(0), constant(columns), constant(1));
+      scf::ForOp::create(rw, loc, constant(0), constant(groups), constant(1));
   rw.setInsertionPointToStart(loop.getBody());
-  Value offset = arith::MulIOp::create(rw, loc, loop.getInductionVar(),
-                                       constant(kColumnBytes));
-  offset = arith::AddIOp::create(rw, loc, offset, constant(kPlaneBytes));
+  Value offset =
+      arith::MulIOp::create(rw, loc, loop.getInductionVar(), constant(stride));
   Value ptr = tt::AddPtrOp::create(rw, loc, base.getType(), base, offset);
-  ptr = tt::BitcastOp::create(rw, loc, tt::getPointerType(i32), ptr);
-  auto encoding = getOptimizedBlockedEncoding(rw, {4 * kRows}, i32);
-  auto ty = RankedTensorType::get({4 * kRows}, i32, encoding);
-  Value indices = tt::MakeRangeOp::create(rw, loc, ty, 0, 4 * kRows);
+  auto encoding = getOptimizedBlockedEncoding(rw, {width}, i32);
+  auto ty = RankedTensorType::get({width}, i32, encoding);
+  Value indices = tt::MakeRangeOp::create(rw, loc, ty, 0, width);
   auto ptrTy = ty.clone(ptr.getType());
   Value ptrs = tt::SplatOp::create(rw, loc, ptrTy, ptr);
   ptrs = tt::AddPtrOp::create(rw, loc, ptrTy, ptrs, indices);
@@ -1276,13 +1322,17 @@ LogicalResult lowerCellDescriptors(ModuleOp module) {
       auto ty = alloc.getType();
       if (alloc.getSrc() && !writesWholeCells(ty)) {
         alloc.emitOpError(
-            "unsupported TMEM initializer in a store_probability kernel");
+            "unsupported TMEM initializer in a probability_store kernel");
         return WalkResult::interrupt();
       }
       auto size = ttng::getTmemAllocSizes(ty);
       ptr = createThirdPartyScratchAlloc(
           rw, loc, ptrTy, size.numCols * kColumnBytes, 16, false);
-      clearResidualPlanes(rw, loc, ptr, size.numCols);
+      Value start =
+          tt::AddPtrOp::create(rw, loc, ptrTy, ptr, constant(kPlaneBytes));
+      start = tt::BitcastOp::create(rw, loc,
+                                    tt::getPointerType(rw.getI32Type()), start);
+      clearResiduals(rw, loc, start, size.numCols, 4 * kRows, kColumnBytes / 4);
       createGlobalScratchBarrier(rw, loc);
       if (Value init = alloc.getSrc()) {
         auto ptrs = cellPointers(rw, loc, ptr, ty,
@@ -1326,7 +1376,7 @@ LogicalResult lowerCellDescriptors(ModuleOp module) {
       return WalkResult::advance();
     } else {
       op->emitOpError(
-          "unsupported TMEM operation in a store_probability kernel");
+          "unsupported TMEM operation in a probability_store kernel");
       return WalkResult::interrupt();
     }
     auto result = op->getResult(0);
@@ -1482,12 +1532,8 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                        resultTy, rowOffset, colOffset);
       Value data = tt::LoadOp::create(rewriter, loc, ptrs.data);
       if (source.readResidual &&
-          source.physicalType.getElementTypeBitWidth() == 8) {
-        Value residual = tt::LoadOp::create(rewriter, loc, ptrs.residual);
-        Value decoded =
-            arith::ExtSIOp::create(rewriter, loc, residual.getType(), data);
-        return arith::AddIOp::create(rewriter, loc, decoded, residual);
-      }
+          source.physicalType.getElementTypeBitWidth() == 8)
+        return reconstructProbability(rewriter, loc, data, ptrs.residual);
       return isFloatLike(resultTy)
                  ? unembedToFloat(rewriter, loc, data, resultTy)
                  : data;
@@ -1514,17 +1560,18 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                                  rewriter.getI32Type());
   Value indices =
       tt::MakeRangeOp::create(rewriter, loc, kTy, 0, loadShape[kAxis]);
-  Value kSplat = tt::SplatOp::create(rewriter, loc, kTy, kOffset);
-  indices = arith::AddIOp::create(rewriter, loc, indices, kSplat);
   indices = reshapeAndBroadcast(rewriter, loc, indices,
                                 {static_cast<int>(kAxis)}, indicesTy);
-  Value zero =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  SmallVector<Value> offsets(2, zero);
+  SmallVector<Value> offsets(2, kOffset);
   offsets[tileAxis] = tileOffset;
-  return ExperimentalLocalGatherOp::create(rewriter, loc, resultTy, shared,
-                                           indices, offsets,
-                                           rewriter.getI32IntegerAttr(kAxis));
+  Value raw = ExperimentalLocalGatherOp::create(
+      rewriter, loc, resultTy, shared, indices, offsets,
+      rewriter.getI32IntegerAttr(kAxis));
+  if (!source.sharedShadow || resultTy.getElementTypeBitWidth() != 8)
+    return raw;
+  Value ptr = sharedResidualPointers(rewriter, loc, source.sharedShadow, shared,
+                                     resultTy, offsets);
+  return reconstructProbability(rewriter, loc, raw, ptr);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -3244,6 +3291,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAOp op,
                                 PatternRewriter &rewriter) const override {
+    return rewrite(op, rewriter, {}, {});
+  }
+
+  LogicalResult rewrite(ttng::TCGen5MMAOp op, PatternRewriter &rewriter,
+                        Value aShadow, Value bShadow) const {
     auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
@@ -3315,6 +3367,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 
+    aSource->sharedShadow = aShadow;
+    bSource->sharedShadow = bShadow;
     aSource->readResidual = bSource->readResidual =
         dMemTy.getElementType().isF32();
     // TMEM and D scratch are written cooperatively. In two-CTA mode, the
@@ -3777,6 +3831,163 @@ getFpSanCallsRequiringInlining(ModuleOp module) {
   return calls;
 }
 
+struct SharedProbabilityAccess {
+  Operation *op;
+  Value root;
+  Value rhsRoot;
+};
+
+// Only the allocation identity is static. Views, stages and operand
+// coordinates are resolved at runtime by the shared memory lowering.
+FailureOr<SmallVector<SharedProbabilityAccess>>
+collectSharedProbabilityAccesses(ModuleOp module) {
+  auto solver = createDataFlowSolver();
+  auto *analysis = solver->load<SharedMemoryAliasAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return failure();
+  auto aliases = [&](Value value) -> const DenseSet<Value> & {
+    return analysis->getLatticeElement(value)->getValue().getAllocs();
+  };
+  DenseSet<Value> probabilityRoots;
+  auto roots =
+      module.walk([&](ttng::FPSanStoreProbabilityOp store) -> WalkResult {
+        if (isPhysicalTmem(store.getDst().getType()))
+          return WalkResult::advance();
+        const auto &allocs = aliases(store.getDst());
+        if (allocs.size() != 1 ||
+            !(*allocs.begin()).getDefiningOp<ttg::LocalAllocOp>()) {
+          store.emitOpError(
+              "requires a dedicated shared probability allocation");
+          return WalkResult::interrupt();
+        }
+        probabilityRoots.insert(*allocs.begin());
+        return WalkResult::advance();
+      });
+  if (roots.wasInterrupted())
+    return failure();
+
+  // Check every use of a marked allocation before rewriting. Reject writers
+  // (e.g. TMA) whose completion we cannot mirror. Register loads consume the
+  // narrow bytes, just like a TMEM register load.
+  DominanceInfo dom(module);
+  SmallVector<SharedProbabilityAccess> accesses;
+  auto uses = module.walk([&](Operation *op) -> WalkResult {
+    if (op->hasTrait<OpTrait::MemDescViewTrait>() ||
+        op->hasTrait<OpTrait::LocalLoadTrait>() ||
+        isa<ttg::LocalDeallocOp, ttg::WarpSpecializePartitionsOp,
+            ttg::WarpYieldOp, scf::ForOp, scf::WhileOp, scf::YieldOp,
+            scf::ConditionOp, arith::SelectOp>(op))
+      return WalkResult::advance();
+    auto mma = dyn_cast<ttng::TCGen5MMAOp>(op);
+    SharedProbabilityAccess access{op, {}, {}};
+    for (auto &operand : op->getOpOperands()) {
+      auto desc = dyn_cast<ttg::MemDescType>(operand.get().getType());
+      if (!desc || !isa<ttg::SharedMemorySpaceAttr>(desc.getMemorySpace()))
+        continue;
+      const auto &allocs = aliases(operand.get());
+      if (!llvm::any_of(allocs,
+                        [&](Value v) { return probabilityRoots.contains(v); }))
+        continue;
+      // Only the first operand is the barrier, the other descriptors
+      // extend allocation lifetimes or specify multicast groups.
+      if (isa<ttng::WaitBarrierOp, ttng::TCGen5CommitOp>(op) &&
+          operand.getOperandNumber() != 0)
+        continue;
+      Value root = *allocs.begin();
+      auto rootTy = cast<ttg::MemDescType>(root.getType());
+      if (allocs.size() != 1 || !dom.dominates(root, op) ||
+          isa<ttg::PartitionedSharedEncodingAttr>(rootTy.getEncoding()) ||
+          isa<ttg::PartitionedSharedEncodingAttr>(desc.getEncoding()) ||
+          desc.getElementTypeBitWidth() < 8) {
+        op->emitOpError("requires a dedicated byte-addressable shared "
+                        "probability allocation");
+        return WalkResult::interrupt();
+      }
+      if (isa<ttng::FPSanStoreProbabilityOp, ttg::LocalStoreOp>(op)) {
+        access.root = root;
+      } else if (mma && getFpSanMmaKind(mma) == FpSanMmaKind::Floating &&
+                 mma.getD().getType().getElementType().isF32() &&
+                 (&operand == &mma.getAMutable() ||
+                  &operand == &mma.getBMutable())) {
+        if (&operand == &mma.getAMutable())
+          access.root = root;
+        else
+          access.rhsRoot = root;
+      } else {
+        op->emitOpError(
+            "unsupported access to shared probability_store allocation");
+        return WalkResult::interrupt();
+      }
+    }
+    if (access.root || access.rhsRoot)
+      accesses.push_back(access);
+    return WalkResult::advance();
+  });
+  if (uses.wasInterrupted())
+    return failure();
+  return accesses;
+}
+
+Value createSharedProbabilityShadow(PatternRewriter &rw,
+                                    TmemScratchManager &scratch, Value root) {
+  OpBuilder::InsertionGuard guard(rw);
+  auto ty = cast<ttg::MemDescType>(root.getType());
+  auto ptrTy = tt::getPointerType(rw.getI32Type());
+  int elements = ttg::getAllocationElems(ty.getEncoding(), ty.getAllocShape());
+  if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
+    elements = padded.getPaddedSize({elements});
+  int bytes = elements * ty.getElementTypeBitWidth() / 8;
+  auto loc = root.getLoc();
+  rw.setInsertionPointAfter(root.getDefiningOp());
+  Value base = scratch.createScratchAlloc(rw, loc, ptrTy, bytes * 4, 16);
+  int width = std::min(512, bytes & -bytes);
+  clearResiduals(rw, loc, base, bytes / width, width, width);
+  createGlobalScratchBarrier(rw, loc);
+  // Bias the global pointer once, so adding a physical SMEM byte address
+  // indexes the corresponding i32 entry, even across partition captures.
+  Value origin = ExperimentalMemDescToI32Op::create(rw, loc, root);
+  Value zero = arith::ConstantIntOp::create(rw, loc, 0, 32);
+  Value bias = arith::SubIOp::create(rw, loc, zero, origin);
+  return tt::AddPtrOp::create(rw, loc, ptrTy, base, bias);
+}
+
+LogicalResult instrumentSharedProbabilities(ModuleOp module,
+                                            TmemScratchManager &scratch) {
+  auto accesses = collectSharedProbabilityAccesses(module);
+  if (failed(accesses))
+    return failure();
+
+  PatternRewriter rw(module.getContext());
+  DenseMap<Value, Value> shadows;
+  TCGen5MMAPattern mmaPattern(module.getContext(), &scratch);
+  for (auto [op, root, rhsRoot] : *accesses) {
+    rw.setInsertionPoint(op);
+    auto shadow = [&](Value v) -> Value {
+      if (!v)
+        return {};
+      Value &ptr = shadows[v];
+      if (!ptr)
+        ptr = createSharedProbabilityShadow(rw, scratch, v);
+      return scratch.remapToScope(ptr, rw, getScratchScopeRegion(op),
+                                  op->getLoc());
+    };
+    Value ptr = shadow(root);
+    if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      if (failed(mmaPattern.rewrite(mma, rw, ptr, shadow(rhsRoot))))
+        return failure();
+    } else if (auto store = dyn_cast<ttng::FPSanStoreProbabilityOp>(op)) {
+      if (failed(StoreProbabilityPattern::rewrite(store, rw, ptr)))
+        return failure();
+    } else {
+      auto ordinary = cast<ttg::LocalStoreOp>(op);
+      rw.setInsertionPointAfter(ordinary);
+      writeSharedResidual(rw, op->getLoc(), ptr, ordinary.getDst(),
+                          ordinary.getSrc().getType());
+    }
+  }
+  return success();
+}
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3811,17 +4022,23 @@ public:
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
-    bool physicalCells = getOperation()
-                             .walk([](ttng::FPSanStoreProbabilityOp) {
-                               return WalkResult::interrupt();
-                             })
-                             .wasInterrupted();
-    if (physicalCells && sharedClusterState) {
+    bool physicalCells = false;
+    bool sharedProbabilities = false;
+    getOperation().walk([&](ttng::FPSanStoreProbabilityOp op) {
+      if (isPhysicalTmem(op.getDst().getType()))
+        physicalCells = true;
+      else
+        sharedProbabilities = true;
+    });
+    if ((physicalCells || sharedProbabilities) && sharedClusterState) {
       getOperation().emitError(
-          "store_probability requires single-CTA FPSan emulation");
+          "probability_store requires single-CTA FPSan emulation");
       return signalPassFailure();
     }
     TmemScratchManager scratch(sharedClusterState, physicalCells);
+    if (sharedProbabilities &&
+        failed(instrumentSharedProbabilities(getOperation(), scratch)))
+      return signalPassFailure();
     RewritePatternSet patterns(&getContext());
     patterns
         .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,

@@ -386,17 +386,18 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
   auto coords = emitIndices(loc, rewriter, targetInfo, regLayout, regTy,
                             /*withCTAOffset=*/true);
   SmallVector<std::pair<Value, Value>> offsetAndBlock;
-  offsetAndBlock.reserve(idxValues.size());
-  for (auto [coords, idxVal] : llvm::zip(coords, idxValues)) {
-    Value idx = idxVal;
-    unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
-    if (idxWidth > 32)
-      idx = b.trunc(i32_ty, idx);
-    else if (idxWidth < 32)
-      idx = b.zext(i32_ty, idx);
-
-    SmallVector<Value> indices(coords);
-    indices[axis] = idx;
+  offsetAndBlock.reserve(coords.size());
+  for (auto [i, coord] : llvm::enumerate(coords)) {
+    SmallVector<Value> indices(coord);
+    if (!idxValues.empty()) {
+      Value idx = idxValues[i];
+      unsigned width = idx.getType().getIntOrFloatBitWidth();
+      if (width > 32)
+        idx = b.trunc(i32_ty, idx);
+      else if (width < 32)
+        idx = b.zext(i32_ty, idx);
+      indices[axis] = idx;
+    }
     for (auto [dim, offset] : llvm::enumerate(offsets))
       indices[dim] = b.add(indices[dim], offset);
 
@@ -412,38 +413,47 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
   return offsetAndBlock;
 }
 
-struct LocalGatherOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalLocalGatherOp> {
+template <typename Op>
+struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<Op> {
+  using Base = ConvertOpToLLVMPattern<Op>;
+  using typename Base::OpAdaptor;
+  static constexpr bool addresses =
+      std::is_same_v<Op, tti::ExperimentalLocalAddressesOp>;
   LocalGatherOpConversion(const LLVMTypeConverter &converter,
                           const TargetInfoBase &targetInfo,
                           PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern<tti::ExperimentalLocalGatherOp>(converter,
-                                                               benefit),
-        targetInfo(targetInfo) {}
+      : Base(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalLocalGatherOp op, OpAdaptor adaptor,
+  matchAndRewrite(Op op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto memDescTy = cast<ttg::MemDescType>(op.getSrc().getType());
     auto regTy = cast<RankedTensorType>(op.getType());
-    auto typeConverter = getTypeConverter();
+    auto typeConverter = this->getTypeConverter();
 
     Type llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-    auto idxValues = unpackTensorElements(loc, adaptor.getIndices(), rewriter,
-                                          op.getIndices().getType());
+    SmallVector<Value> idxValues;
+    unsigned axis = 0;
+    if constexpr (!addresses) {
+      axis = op.getAxis();
+      idxValues = unpackTensorElements(loc, adaptor.getIndices(), rewriter,
+                                       op.getIndices().getType());
+    }
     SmallVector<Value> offsets(adaptor.getOffsets());
 
     auto offsetAndBlock = computeLocalOffsetsWithLogicalOffsets(
-        loc, memDescTy, regTy, idxValues, op.getAxis(), offsets, rewriter,
-        targetInfo);
+        loc, memDescTy, regTy, idxValues, axis, offsets, rewriter, targetInfo);
     auto addrs = materializeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy,
                                        offsetAndBlock, rewriter);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    SmallVector<Value> results =
-        llvm::map_to_vector(addrs, [&](const LocalSharedMemoryAddress &addr) {
+    SmallVector<Value> results = llvm::map_to_vector(
+        addrs, [&](const LocalSharedMemoryAddress &addr) -> Value {
+          if constexpr (addresses)
+            return b.and_(b.ptrtoint(i32_ty, addr.ptr),
+                          b.i32_val(kSharedMemoryObjectMask));
           return targetInfo.loadDShared(rewriter, loc, addr.ptr, addr.ctaId,
                                         llvmElemTy, b.true_val());
         });
@@ -470,5 +480,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MemDescToI32OpConversion>(typeConverter);
   patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
-  patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
+  patterns.add<LocalGatherOpConversion<tti::ExperimentalLocalGatherOp>,
+               LocalGatherOpConversion<tti::ExperimentalLocalAddressesOp>>(
+      typeConverter, targetInfo);
 }

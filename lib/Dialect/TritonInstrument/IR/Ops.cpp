@@ -40,6 +40,18 @@ LogicalResult DotI8Op::verify() {
                                                            bEnc);
 }
 
+LogicalResult ExperimentalLocalAddressesOp::verify() {
+  auto desc = getSrc().getType();
+  if (!isa<ttg::SharedEncodingTrait>(desc.getEncoding()) ||
+      ttg::lookupNumCTAs(getOperation()) != 1)
+    return emitOpError("requires single-CTA shared memory");
+  if (desc.getRank() != getType().getRank() ||
+      getOffsets().size() != static_cast<size_t>(desc.getRank()))
+    return emitOpError(
+        "requires one result dimension and offset per source dimension");
+  return success();
+}
+
 LogicalResult ExperimentalLocalGatherOp::verify() {
   auto srcTy = getSrc().getType();
   auto indicesTy = cast<RankedTensorType>(getIndices().getType());
