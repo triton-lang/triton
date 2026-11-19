@@ -29,8 +29,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna4 import buffer
-from triton.experimental.gluon.language.amd.cdna4 import async_copy as cp
-from triton.experimental.gluon.language.amd import cdna5
+from triton.experimental.gluon.language.amd import cdna4, cdna5
 
 t1 = importlib.import_module("amd.01-buffer-ops")
 
@@ -58,7 +57,7 @@ warp_size = gl.constexpr(64 if is_cdna4() else 32)
 # Let's first look at some important wait counters:
 #
 # - `vmcnt` counts global memory accesses.
-# - `lgkmcnt` counts shared memory accesses.
+# - `lgkmcnt` counts shared memory accesses, scalar memory loads, and messages.
 #
 # To wait for a result, the warp runs an `s_waitcnt` instruction. For example,
 # `s_waitcnt vmcnt(N)` waits until at most `N` of its memory instructions are
@@ -119,10 +118,10 @@ def elementwise_async_copy_kernel(  #
     for yoff in range(0, ynumel, YBLOCK):
         yoffs = yoff + gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
         mask = (xoffs < xnumel)[:, None] & (yoffs < ynumel)[None, :]
-        cp.global_load_to_shared(a_smem, a_ptrs + ystride_a * yoffs[None, :], mask)
-        cp.global_load_to_shared(b_smem, b_ptrs + ystride_b * yoffs[None, :], mask)
-        cp.commit_group()
-        cp.wait_group(0)
+        cdna4.async_copy.global_load_to_shared(a_smem, a_ptrs + ystride_a * yoffs[None, :], mask)
+        cdna4.async_copy.global_load_to_shared(b_smem, b_ptrs + ystride_b * yoffs[None, :], mask)
+        cdna4.async_copy.commit_group()
+        cdna4.async_copy.wait_group(0)
 
         a_val = a_smem.load(layout)
         b_val = b_smem.load(layout)
@@ -162,8 +161,8 @@ def elementwise_async_copy_w_buffer_kernel(  #
         mask = (yoff + yidx < ynumel)[None, :]
         buffer.load_to_shared(a_smem, a_desc, a_offs, mask, soffset=yoff * ystride_a)
         buffer.load_to_shared(b_smem, b_desc, b_offs, mask, soffset=yoff * ystride_b)
-        cp.commit_group()
-        cp.wait_group(0)
+        cdna4.async_copy.commit_group()
+        cdna4.async_copy.wait_group(0)
 
         a_val = a_smem.load(layout)
         b_val = b_smem.load(layout)
@@ -306,7 +305,7 @@ def issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, yidx, 
     mask = (yoff + yidx < ynumel)[None, :]
     buffer.load_to_shared(a_smem.index(copy_idx % num_buffers), a_desc, a_offs, mask, soffset=yoff * ystride_a)
     buffer.load_to_shared(b_smem.index(copy_idx % num_buffers), b_desc, b_offs, mask, soffset=yoff * ystride_b)
-    cp.commit_group()
+    cdna4.async_copy.commit_group()
     return copy_idx + 1
 
 
@@ -353,12 +352,12 @@ def elementwise_pipelined_kernel(  #
     for _ in range(gl.cdiv(ynumel, YBLOCK) - (num_buffers - 1)):
         copy_idx = issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, yidx, ynumel, ystride_a,
                                ystride_b, YBLOCK, num_buffers)
-        cp.wait_group(num_buffers - 1)
+        cdna4.async_copy.wait_group(num_buffers - 1)
         read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, yidx, ynumel, ystride_c, YBLOCK, num_buffers,
                                layout)
 
     for i in gl.static_range(num_buffers - 1):
-        cp.wait_group(num_buffers - 2 - i)
+        cdna4.async_copy.wait_group(num_buffers - 2 - i)
         read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, yidx, ynumel, ystride_c, YBLOCK, num_buffers,
                                layout)
 
@@ -558,6 +557,61 @@ if __name__ == "__main__" and is_cdna5():
 # doesn't have to fill consecutive shared memory. On CDNA4, the layout that
 # spreads the lanes of a warp over 8 rows fails to compile on a tile with 256
 # columns. On CDNA5, it works.
+
+# %%
+# Besides `wait_group`, CDNA5 async copies can also signal an mbarrier when they
+# complete. An mbarrier is a 64-bit object in shared memory. It holds a pending
+# count and a phase. `mbarrier.init` sets the pending count, and
+# `async_copy.mbarrier_arrive` decreases it once all earlier async copies of the
+# lane are complete. Each lane arrives once, so we set the count to the number
+# of lanes in the CTA. When the count reaches zero, the phase flips, and
+# `mbarrier.wait(bar, phase)` returns after the given phase has completed.
+
+
+@gluon.jit
+def elementwise_async_copy_mbarrier_kernel(  #
+        a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
+        XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
+        smem_layout: gl.constexpr,  #
+):
+    xoffs = gl.program_id(0) * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
+    yoffs = gl.program_id(1) * YBLOCK + gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
+    offs = xoffs[:, None] * ynumel + yoffs[None, :]
+    mask = (xoffs < xnumel)[:, None] & (yoffs < ynumel)[None, :]
+
+    dtype: gl.constexpr = a_ptr.dtype.element_ty
+    a_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    bar = gl.allocate_shared_memory(gl.int64, [1], cdna5.mbarrier.MBarrierLayout())
+    cdna5.mbarrier.init(bar, count=gl.num_warps() * warp_size)
+
+    cdna5.async_copy.global_to_shared(a_smem, a_ptr + offs, mask)
+    cdna5.async_copy.global_to_shared(b_smem, b_ptr + offs, mask)
+    cdna5.async_copy.mbarrier_arrive(bar)
+    cdna5.mbarrier.wait(bar, 0)
+
+    gl.store(c_ptr + offs, a_smem.load(layout) + b_smem.load(layout), mask=mask)
+
+
+def elementwise_async_copy_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+    xnumel, ynumel = A.shape
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    return elementwise_async_copy_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout,
+                                                        num_warps=num_warps)
+
+
+@pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 256), (4, 512)])
+@pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
+def test_elementwise_async_copy_mbarrier(xnumel, ynumel, XBLOCK, YBLOCK):
+    a = torch.randn(xnumel, ynumel, device="cuda")
+    b = torch.randn(xnumel, ynumel, device="cuda")
+    c = torch.empty_like(a)
+    elementwise_async_copy_mbarrier(a, b, c, XBLOCK, YBLOCK)
+    torch.testing.assert_close(a + b, c, atol=0, rtol=0)
+
 
 # %%
 # Next, we measure the bandwidth on an MI455X GPU.
