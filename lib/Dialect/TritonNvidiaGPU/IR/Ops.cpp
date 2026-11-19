@@ -1918,6 +1918,21 @@ LogicalResult TMEMStoreOp::canonicalize(TMEMStoreOp op,
   return eraseIfPredicateIsFalse(op, rewriter);
 }
 
+LogicalResult FPSanStoreProbabilityOp::verify() {
+  auto dst = getDst().getType();
+  auto result = getResult().getType();
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
+  if (dst.getRank() != 2 || !dst.getMutableMemory() ||
+      !isa<TensorMemoryEncodingAttr>(dst.getEncoding()))
+    return emitOpError("requires a mutable 2D TMEM destination");
+  if (getSrc().getType().clone(result.getElementType()) != result)
+    return emitOpError("source and result must have matching shape and layout");
+  if (failed(verifyTMEMOperand(*this, result, dst, "result")))
+    return failure();
+  return triton::gpu::verifyMemoryOpTypes(*this, result, dst);
+}
+
 LogicalResult TMEMStoreOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();

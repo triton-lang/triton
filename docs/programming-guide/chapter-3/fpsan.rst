@@ -589,3 +589,42 @@ FpSan is a poor fit when you want to check:
 
 In short, rely on FpSan for structure-preserving kernel validation, and rely on
 ordinary numerical tests for IEEE behavior.
+
+FP8 probability stores in Gluon
+===============================
+
+Online softmax can center the same scores at different running maxima when
+KV shard boundaries change. To compare the resulting PV products, mark the
+FP32-to-FP8 rounding at the store to the P operand.
+
+.. code-block:: python
+
+   p = gl.exp2(centered_scores)
+   rounded = gl.fpsan.store_probability(p_tile, p, expected_zero=masked)
+   # After the usual producer/consumer synchronization
+   tcgen05_mma(p_tile, v_tile, acc, use_acc=use_acc, mbarriers=[done])
+
+The destination is a two-dimensional E4M3 or E5M2 TMEM descriptor. The
+operation rounds, stores and returns the FP8 tile. The optional
+``expected_zero`` follows ``gl.expect_zero`` on the rounded value. Debug
+execution asserts that the indicated values round to zero. FPSan writes
+zeros in those positions, including their residuals.
+
+In single-CTA FPSan kernels using this operation, each physical TMEM byte
+has a 32-bit residual in scratch. An unscaled FP8 MMA with an FP32
+accumulator reconstructs a tagged FP32 payload from the byte and residual
+at its operand address. The format-specific odd multiplier distinguishes
+the rounding operation and commutes with online softmax rescaling. This
+also permits other compensating scale changes across the store, so numerical
+tests are needed to check underflow and overflow.
+
+Reading the tile into registers gives the tagged narrow payload. An ordinary
+store, including a store of those same bytes, clears the residuals it
+overwrites. This also applies when QK reuses P storage for FP32 scores.
+Stage selection and descriptor views determine the addresses of both data
+and residuals. Scratch for each physical column holds 128 data words and
+four planes of 128 residual words. This experimental path targets packed
+probabilities in ordinary TMEM allocations.
+The physical emulation requires whole-cell TMEM writes, including full
+instruction widths for MMA destinations. It reports unsupported descriptor
+operations during compilation.

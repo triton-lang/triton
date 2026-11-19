@@ -1159,6 +1159,15 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   }];
 }
 
+def TTNG_FPSanStoreProbabilityOp : TTNG_Op<"fpsan_store_probability"> {
+  let summary = "Round and store a probability tile with a wide FPSan payload";
+  let arguments = (ins Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+                       RankedTensorOf<[F32]>:$src);
+  let results = (outs RankedTensorOf<[F8E4M3FN, F8E5M2]>:$result);
+  let assemblyFormat = "$dst `,` $src attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";

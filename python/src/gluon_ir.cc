@@ -1020,6 +1020,10 @@ void init_gluon_ir(py::module_ &m) {
                                                   value.value_or(Value{}));
           },
           py::arg("resultTy"), py::arg("value").none())
+      .def("create_fpsan_store_probability",
+           [](GluonOpBuilder &self, Type ty, Value dst, Value src) -> Value {
+             return self.create<ttng::FPSanStoreProbabilityOp>(ty, dst, src);
+           })
       .def("create_tmem_store",
            [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
              self.create<ttng::TMEMStoreOp>(memDesc, value, pred);
