@@ -1161,10 +1161,10 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
 
 def TTNG_FPSanStoreProbabilityOp : TTNG_Op<"fpsan_store_probability", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let summary = "Round and store a probability tile with a wide FPSan payload";
-  let arguments = (ins TTG_MemDescType:$dst, RankedTensorOf<[F32]>:$src, Optional<I1>:$pred);
-  let results = (outs RankedTensorOf<[F8E4M3FN, F8E5M2]>:$result);
-  let assemblyFormat = "$dst `,` $src (`,` $pred^)? attr-dict `:` functional-type(operands, results)";
+  let summary = "Store an FP8 probability tile and its FPSan residuals";
+  let arguments = (ins TTG_MemDescType:$dst, RankedTensorOf<[F8E4M3FN, F8E5M2]>:$src,
+                       RankedTensorOf<[I32]>:$residual, Optional<I1>:$pred);
+  let assemblyFormat = "$dst `,` $src `,` $residual (`,` $pred^)? attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

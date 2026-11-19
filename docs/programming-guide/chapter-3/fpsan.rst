@@ -590,36 +590,38 @@ FpSan is a poor fit when you want to check:
 In short, rely on FpSan for structure-preserving kernel validation, and rely on
 ordinary numerical tests for IEEE behavior.
 
-FP8 probability stores in Gluon
-===============================
+FP8 probability casts in Gluon
+==============================
 
 Online softmax can center the same scores at different running maxima when
 KV shard boundaries change. To compare the resulting PV products, mark the
-FP32-to-FP8 rounding at the store to the P operand.
+FP32-to-FP8 cast of the P operand.
 
 .. code-block:: python
 
    p = gl.exp2(centered_scores)
-   value_to_store = gl.fpsan.probability_store(p, expect_zero=masked)
+   value_to_store = gl.fpsan.probability_cast(p, dtype=p_tile.dtype, expect_zero=masked)
    rounded = p_tile.store(value_to_store)
    # After the usual producer/consumer synchronization
    tcgen05_mma(p_tile, v_tile, acc, use_acc=use_acc, mbarriers=[done])
 
-``probability_store`` prepares the FP32 tile and optional mask as a Gluon
-aggregate. It can pass through helpers and control flow before the store.
-The two-dimensional SMEM or TMEM destination determines the FP8 format
-(E4M3 or E5M2). Its ``store`` method rounds the tile, writes it and returns
-the rounded tensor. For TMEM, the optional store predicate guards the
-write of both bytes and residuals. The optional ``expect_zero`` follows ``gl.expect_zero`` on the rounded value. Debug
-execution asserts that the indicated values round to zero. FPSan writes
-zeros in those positions, including their residuals.
+``probability_cast`` rounds the FP32 tile to the requested FP8 format
+(E4M3 or E5M2). The optional ``expect_zero`` mask applies at the cast.
+Debug execution asserts that the indicated values round to zero. FPSan
+produces a tagged byte and residual together, zeroing both in masked positions.
+
+The cast returns one opaque Gluon value that can pass through helpers and
+control flow. Pass it to a two-dimensional SMEM or TMEM descriptor with
+the same shape and dtype. Its ``store`` method writes the tile and returns
+the rounded FP8 tensor. In FPSan the store takes both cast results as
+explicit operands. For TMEM the store predicate guards both writes.
 
 In single-CTA FPSan kernels using this operation, each stored probability
 byte has a 32-bit residual in global scratch. An unscaled FP8 MMA with an FP32
 accumulator reconstructs a tagged FP32 payload from the byte and residual
 at its operand address. The format-specific odd multiplier distinguishes
 the rounding operation and commutes with online softmax rescaling. This
-also permits other compensating scale changes across the store, so numerical
+also permits other compensating scale changes across the cast, so numerical
 tests are needed to check underflow and overflow.
 
 Reading the tile into registers gives the tagged narrow payload. An ordinary

@@ -3645,8 +3645,8 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
 
 
 @gluon.jit
-def _probability_store_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constexpr, MUTATION: gl.constexpr,
-                               SHARED: gl.constexpr):
+def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constexpr, MUTATION: gl.constexpr,
+                              SHARED: gl.constexpr):
     M: gl.constexpr = 128
     N: gl.constexpr = 32
     layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
@@ -3680,7 +3680,7 @@ def _probability_store_partial(Scores, Values, Partial, Maxima, WIDTH: gl.conste
     else:
         if MUTATION == "narrow_math":
             p = p.to(gl.float8e5).to(gl.float32)
-        value_to_store = gl.fpsan.probability_store(p, expect_zero=mask)
+        value_to_store = gl.fpsan.probability_cast(p, dst.dtype, expect_zero=mask)
         rounded = dst.store(value_to_store)
         if MUTATION == "restore_byte":
             dst.store(rounded)
@@ -3710,7 +3710,7 @@ def _probability_store_partial(Scores, Values, Partial, Maxima, WIDTH: gl.conste
 
 
 @gluon.jit
-def _probability_store_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
+def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
     cols = gl.arange(0, 32, layout=gl.BlockedLayout([1], [32], [4], [0]))
     maximum = gl.load(Maxima)
     acc = gl.load(Partial + gl.program_id(0) * 32 + cols)
@@ -3730,7 +3730,7 @@ def _probability_store_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATIO
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("shared", [False, True], ids=["tmem", "smem"])
-def test_fpsan_probability_store_shard_identity(device, fresh_knobs, shared):
+def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, shared):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     # Increasing maxima make both omitted and reversed alpha observable.
     scores = np.arange(128, dtype=np.uint64)
@@ -3752,8 +3752,8 @@ def test_fpsan_probability_store_shard_identity(device, fresh_knobs, shared):
             partial = torch.empty((shards, 128, 32), device=device, dtype=torch.float32)
             maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
             out = torch.empty_like(partial[0])
-            _probability_store_partial[(shards, )](s, vals, partial, maxima, 128 // shards, mutation, shared)
-            _probability_store_merge[(128, )](partial, maxima, out, shards, mutation)
+            _probability_cast_partial[(shards, )](s, vals, partial, maxima, 128 // shards, mutation, shared)
+            _probability_cast_merge[(128, )](partial, maxima, out, shards, mutation)
             actual = out.view(torch.int32).cpu().numpy().view(np.uint32)
             if mutation == "overwrite":
                 assert np.all(actual == 0)
@@ -3785,8 +3785,8 @@ def _probability_stage(Out, X, Y, count, overwrite, WRITER: gl.constexpr):
             src_layout: gl.constexpr = dst.get_reg_layout()
         x = gl.full((128, 128), X, gl.int32, layout=src_layout)
         y = gl.full((128, 128), Y, gl.int32, layout=src_layout)
-        px = gl.fpsan.probability_store(gl.fpsan.unembed(x, gl.float32))
-        py = gl.fpsan.probability_store(gl.fpsan.unembed(y, gl.float32))
+        px = gl.fpsan.probability_cast(gl.fpsan.unembed(x, gl.float32), gl.float8e5)
+        py = gl.fpsan.probability_cast(gl.fpsan.unembed(y, gl.float32), gl.float8e5, expect_zero=False)
         if SHARED:
             if i == 0:
                 value = px
@@ -3848,7 +3848,7 @@ def _probability_stage(Out, X, Y, count, overwrite, WRITER: gl.constexpr):
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("writer", ["tmem", "qk", "smem", "smem_rhs"])
-def test_fpsan_probability_store_stage(device, fresh_knobs, writer):
+def test_fpsan_probability_cast_stage(device, fresh_knobs, writer):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     # Both stages have identical narrow bytes but different residuals.
     payloads = np.arange(2048, dtype=np.uint64)
@@ -3869,8 +3869,8 @@ def test_fpsan_probability_store_stage(device, fresh_knobs, writer):
 
 
 @gluon.jit
-def _prepare_probability(value, mask):
-    return gl.fpsan.probability_store(value, expect_zero=mask)
+def _cast_probability(value, dtype: gl.constexpr, mask):
+    return gl.fpsan.probability_cast(value, dtype=dtype, expect_zero=mask)
 
 
 @gluon.jit
@@ -3886,7 +3886,7 @@ def _probability_bytes(Src, Returned, Stored, DTYPE: gl.constexpr, SHARED: gl.co
     cols = gl.arange(0, 32, layout=gl.SliceLayout(0, reg))
     idx = rows[:, None] * 32 + cols[None, :]
     x = gl.load(Src + idx)
-    value = _prepare_probability(x, idx == 0)
+    value = _cast_probability(x, DTYPE, idx == 0)
     p = dst.store(value)
     gl.store(Returned + idx, p)
     gl.store(Stored + idx, dst.load(reg))
@@ -3895,7 +3895,7 @@ def _probability_bytes(Src, Returned, Stored, DTYPE: gl.constexpr, SHARED: gl.co
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dst,tag", [("e5m2", 0x53), ("e4m3", 0x23)])
 @pytest.mark.parametrize("shared", [False, True], ids=["tmem", "smem"])
-def test_fpsan_probability_store_bytes(device, fresh_knobs, dst, tag, shared):
+def test_fpsan_probability_cast_bytes(device, fresh_knobs, dst, tag, shared):
     src = torch.linspace(-1., 1., 4096, device=device)
     src[0] = 2.0**-30  # The debug assertion must check the rounded value.
     dtype = torch.float8_e5m2 if dst == "e5m2" else torch.float8_e4m3fn
@@ -3915,7 +3915,7 @@ def test_fpsan_probability_store_bytes(device, fresh_knobs, dst, tag, shared):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_fpsan_probability_store_rejects_shared_scatter(device, fresh_knobs, capfd):
+def test_fpsan_probability_cast_rejects_shared_scatter(device, fresh_knobs, capfd):
 
     @gluon.jit
     def kernel(Out):
@@ -3923,7 +3923,7 @@ def test_fpsan_probability_store_rejects_shared_scatter(device, fresh_knobs, cap
         layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 32], gl.float8e5)
         dst = gl.allocate_shared_memory(gl.float8e5, (128, 32), layout)
         x = gl.full((128, 32), 1, gl.float32, layout=reg)
-        narrow = dst.store(gl.fpsan.probability_store(x))
+        narrow = dst.store(gl.fpsan.probability_cast(x, gl.float8e5))
         cols = gl.arange(0, 32, layout=gl.SliceLayout(0, reg))
         dst.scatter(narrow, cols[None, :], axis=1)
         rows = gl.arange(0, 128, layout=gl.SliceLayout(1, reg))
@@ -3933,4 +3933,4 @@ def test_fpsan_probability_store_rejects_shared_scatter(device, fresh_knobs, cap
     out = torch.empty((128, 32), device=device, dtype=torch.float8_e5m2)
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
         kernel[(1, )](out)
-    assert "unsupported access to shared probability_store allocation" in capfd.readouterr().err
+    assert "unsupported access to shared probability_cast allocation" in capfd.readouterr().err

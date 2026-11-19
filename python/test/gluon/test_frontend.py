@@ -666,6 +666,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("mode,cast_op,store_op", [
+    ("", "tt.fp_to_fp", "ttg.local_store"),
+    ("fpsan", "tti.experimental_fpsan_probability_cast", "ttng.fpsan_store_probability"),
+])
+def test_probability_cast_before_store(mode, cast_op, store_op):
+
+    @gluon.jit
+    def kernel(dst_dtype: ttgl.constexpr):
+        reg: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        src = ttgl.full((128, 32), 1.0, ttgl.float32, layout=reg)
+        p = ttgl.fpsan.probability_cast(src, ttgl.float8e5)
+        layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([128, 32], dst_dtype)
+        dst = ttgl.allocate_shared_memory(dst_dtype, (128, 32), layout)
+        dst.store(p)
+
+    target = GPUTarget("cuda", 100, 32)
+    options = {"instrumentation_mode": mode}
+    module = run_parser(kernel, (ttgl.float8e5, ), options, target)
+    ir = module.str_nodebug()
+    assert ir.index(cast_op) < ir.index("ttg.local_alloc") < ir.index(store_op)
+    with pytest.raises(CompilationError, match="probability_cast shape and dtype must match"):
+        run_parser(kernel, (ttgl.float8e4nv, ), options, target)
+
+
 @gluon.jit
 def warp_specialize_default(a, b, e: ttgl.constexpr):
     return b, a

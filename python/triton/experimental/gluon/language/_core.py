@@ -434,11 +434,11 @@ class shared_memory_descriptor(base_value):
         Args:
             value (tensor): The tensor whose contents to store.
 
-        When value is prepared with gl.fpsan.probability_store, return the rounded FP8 tile.
+        When storing the result of gl.fpsan.probability_cast, return the rounded FP8 tile.
         """
-        from .fpsan import _ProbabilityStore
+        from .fpsan import _Probability
 
-        if isinstance(value, _ProbabilityStore):
+        if isinstance(value, _Probability):
             return value._store(self, _semantic)
         return _semantic.shared_store(self, value)
 

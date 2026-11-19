@@ -459,13 +459,13 @@ class tensor_memory_descriptor(base_value):
             value (tensor): The tensor to store.
             pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
 
-        When value is prepared with gl.fpsan.probability_store, return the rounded FP8 tile.
+        When storing the result of gl.fpsan.probability_cast, return the rounded FP8 tile.
         """
-        from ...fpsan import _ProbabilityStore
+        from ...fpsan import _Probability
 
         pred = _unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
-        if isinstance(value, _ProbabilityStore):
+        if isinstance(value, _Probability):
             return value._store(self, _semantic, pred)
         assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
         assert value.dtype == self.dtype, f"source dtype {value.dtype} does not match destination dtype {self.dtype}"

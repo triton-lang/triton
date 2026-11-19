@@ -1238,20 +1238,13 @@ Value reconstructProbability(PatternRewriter &rw, Location loc, Value data,
   return arith::AddIOp::create(rw, loc, decoded, residual);
 }
 
-struct StoreProbabilityPattern
-    : OpRewritePattern<ttng::FPSanStoreProbabilityOp> {
+struct ProbabilityCastPattern
+    : OpRewritePattern<ExperimentalFPSanProbabilityCastOp> {
   using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(ttng::FPSanStoreProbabilityOp op,
+  LogicalResult matchAndRewrite(ExperimentalFPSanProbabilityCastOp op,
                                 PatternRewriter &rw) const override {
-    return rewrite(op, rw, {});
-  }
-
-  static LogicalResult rewrite(ttng::FPSanStoreProbabilityOp op,
-                               PatternRewriter &rw, Value shadow) {
     auto loc = op.getLoc();
-    if (!shadow && !writesWholeCells(op.getDst().getType()))
-      return op.emitOpError("probability_store requires packed TMEM cells");
-    auto ty = op.getResult().getType();
+    auto ty = op.getRounded().getType();
     Value wide = embedToInt(rw, loc, op.getSrc());
     // Odd format tags distinguish the rounding sites while commuting with
     // alpha.
@@ -1265,16 +1258,37 @@ struct StoreProbabilityPattern
     Value decoded = arith::ExtSIOp::create(rw, loc, wide.getType(), byte);
     Value residual = arith::SubIOp::create(rw, loc, tagged, decoded);
     Value rounded = unembedToFloat(rw, loc, byte, ty);
+    rw.replaceOp(op, {rounded, residual});
+    return success();
+  }
+};
+
+struct StoreProbabilityPattern
+    : OpRewritePattern<ttng::FPSanStoreProbabilityOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ttng::FPSanStoreProbabilityOp op,
+                                PatternRewriter &rw) const override {
+    return rewrite(op, rw, {});
+  }
+
+  static LogicalResult rewrite(ttng::FPSanStoreProbabilityOp op,
+                               PatternRewriter &rw, Value shadow) {
+    auto loc = op.getLoc();
+    if (!shadow && !writesWholeCells(op.getDst().getType()))
+      return op.emitOpError("probability_cast requires packed TMEM cells");
+    auto rounded = op.getSrc();
+    auto residual = op.getResidual();
+    auto ty = rounded.getType();
     if (shadow) {
       ttg::LocalStoreOp::create(rw, loc, rounded, op.getDst());
       writeSharedResidual(rw, loc, shadow, op.getDst(), ty, residual);
     } else {
       Value base = cellBase(rw, loc, op.getDst());
       auto ptrs = cellPointers(rw, loc, base, op.getDst().getType(), ty);
-      writeCells(rw, loc, ptrs, byte, op.getPred(), residual);
+      writeCells(rw, loc, ptrs, rounded, op.getPred(), residual);
       createGlobalScratchBarrier(rw, loc);
     }
-    rw.replaceOp(op, rounded);
+    rw.eraseOp(op);
     return success();
   }
 };
@@ -1322,7 +1336,7 @@ LogicalResult lowerCellDescriptors(ModuleOp module) {
       auto ty = alloc.getType();
       if (alloc.getSrc() && !writesWholeCells(ty)) {
         alloc.emitOpError(
-            "unsupported TMEM initializer in a probability_store kernel");
+            "unsupported TMEM initializer in a probability_cast kernel");
         return WalkResult::interrupt();
       }
       auto size = ttng::getTmemAllocSizes(ty);
@@ -1376,7 +1390,7 @@ LogicalResult lowerCellDescriptors(ModuleOp module) {
       return WalkResult::advance();
     } else {
       op->emitOpError(
-          "unsupported TMEM operation in a probability_store kernel");
+          "unsupported TMEM operation in a probability_cast kernel");
       return WalkResult::interrupt();
     }
     auto result = op->getResult(0);
@@ -3915,7 +3929,7 @@ collectSharedProbabilityAccesses(ModuleOp module) {
           access.rhsRoot = root;
       } else {
         op->emitOpError(
-            "unsupported access to shared probability_store allocation");
+            "unsupported access to shared probability_cast allocation");
         return WalkResult::interrupt();
       }
     }
@@ -4032,7 +4046,7 @@ public:
     });
     if ((physicalCells || sharedProbabilities) && sharedClusterState) {
       getOperation().emitError(
-          "probability_store requires single-CTA FPSan emulation");
+          "probability_cast requires single-CTA FPSan emulation");
       return signalPassFailure();
     }
     TmemScratchManager scratch(sharedClusterState, physicalCells);
@@ -4071,7 +4085,8 @@ public:
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
-    patterns.add<StoreProbabilityPattern>(&getContext());
+    patterns.add<ProbabilityCastPattern, StoreProbabilityPattern>(
+        &getContext());
     patterns.add<WarpGroupDotPattern>(&getContext());
     patterns.add<TCGen5CommitPattern>(&getContext(), sharedClusterState);
 

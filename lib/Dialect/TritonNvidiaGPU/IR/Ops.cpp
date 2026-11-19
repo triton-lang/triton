@@ -1931,7 +1931,7 @@ void FPSanStoreProbabilityOp::getEffects(
 
 LogicalResult FPSanStoreProbabilityOp::verify() {
   auto dst = getDst().getType();
-  auto result = getResult().getType();
+  auto src = getSrc().getType();
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   if (dst.getRank() != 2 || !dst.getMutableMemory() ||
@@ -1939,12 +1939,13 @@ LogicalResult FPSanStoreProbabilityOp::verify() {
     return emitOpError("requires a mutable 2D SMEM or TMEM destination");
   if (getPred() && isa<SharedEncodingTrait>(dst.getEncoding()))
     return emitOpError("predication requires a TMEM destination");
-  if (getSrc().getType().clone(result.getElementType()) != result)
-    return emitOpError("source and result must have matching shape and layout");
+  if (getResidual().getType().clone(src.getElementType()) != src)
+    return emitOpError(
+        "source and residual must have matching shape and layout");
   if (isa<TensorMemoryEncodingAttr>(dst.getEncoding()) &&
-      failed(verifyTMEMOperand(*this, result, dst, "result")))
+      failed(verifyTMEMOperand(*this, src, dst, "source")))
     return failure();
-  return triton::gpu::verifyMemoryOpTypes(*this, result, dst);
+  return triton::gpu::verifyMemoryOpTypes(*this, src, dst);
 }
 
 LogicalResult TMEMStoreOp::verify() {
