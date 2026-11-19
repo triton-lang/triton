@@ -18,7 +18,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna4
-from triton.experimental.gluon.language.amd.cdna4 import async_copy, buffer
+from triton.experimental.gluon.language.amd.cdna4 import buffer
 from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -180,7 +180,7 @@ if __name__ == "__main__" and is_cdna4():
     mfma_layout = gl.amd.AMDMFMALayout(  #
         version=4, instr_shape=[16, 16, 128], transposed=True, warps_per_cta=[1, 1], tiles_per_warp=[2, 2])
     b_layout = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
-    # A operand [32, 256] has the scale [32, 8]
+    # Operand B has shape [256, 32], and its scales have shape [32, 8].
     print(cdna4.get_mfma_scale_layout(b_layout, [32, 8]).format_tensor_view([32, 8]))
 
 # %%
@@ -394,7 +394,7 @@ def matmul_cdna4_ld_gmem(k, a_desc, w_desc, ws_desc, a_offs, w_offs, ws_offs, a_
     buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K)
     buffer.load_to_shared(w_smem.index(k % NUM_BUFFERS), w_desc, w_offs, soffset=k * BLOCK_K // 2)
     buffer.load_to_shared(ws_smem.index(k % NUM_BUFFERS), ws_desc, ws_offs, soffset=k * ws_smem.shape[2])
-    async_copy.commit_group()
+    cdna4.async_copy.commit_group()
 
 
 @gluon.jit
@@ -411,7 +411,7 @@ def matmul_cdna4_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS: gl.co
 @gluon.jit
 def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
                         stride_am, stride_wn, stride_scale, stride_ym,  #
-                        PRESHUFFLE: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
+                        NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
     BLOCK_M: gl.constexpr = 128
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 256
@@ -445,12 +445,12 @@ def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     for k in range(num_k - (NUM_BUFFERS - 1)):
         matmul_cdna4_ld_gmem(k + NUM_BUFFERS - 1, a_desc, w_desc, ws_desc, a_offs, w_offs, ws_offs, a_smem, w_smem,
                              ws_smem, BLOCK_K, NUM_BUFFERS)
-        async_copy.wait_group(NUM_BUFFERS - 1)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 1)
         a, w, w_scale = matmul_cdna4_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS, PRESHUFFLE)
         acc = cdna4.mfma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     for i in gl.static_range(NUM_BUFFERS - 1):
-        async_copy.wait_group(NUM_BUFFERS - 2 - i)
+        cdna4.async_copy.wait_group(NUM_BUFFERS - 2 - i)
         a, w, w_scale = matmul_cdna4_ld_smem(num_k - (NUM_BUFFERS - 1) + i, a_smem, w_smem, ws_smem, layouts,
                                              NUM_BUFFERS, PRESHUFFLE)
         acc = cdna4.mfma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
@@ -462,13 +462,13 @@ def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     buffer.store(acc.to(y_ptr.dtype.element_ty), y_desc, rows[:, None] * stride_ym + cols[None, :], mask)
 
 
-def matmul_cdna4(A, W, W_scale, preshuffle=True):
+def matmul_cdna4(A, W, W_scale, preshuffle=True, NUM_BUFFERS=2):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
     matmul_cdna4_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),
-                              preshuffle)
+                              NUM_BUFFERS, preshuffle)
     return Y
 
 
