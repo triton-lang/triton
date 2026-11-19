@@ -332,7 +332,7 @@ def matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFER
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                   M, N, K,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
-                  CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, NUM_BUFFERS: gl.constexpr):
+                  CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, NUM_BUFFERS: gl.constexpr = 3):
     BLOCK_M: gl.constexpr = 256 * CTAS_M
     BLOCK_N: gl.constexpr = 256 * CTAS_N
     BLOCK_K: gl.constexpr = 256
@@ -376,7 +376,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     cdna5.tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, CTAS_M, CTAS_N, NUM_BUFFERS=3):
+def matmul(A, W, W_scale, CTAS_M, CTAS_N):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
@@ -385,7 +385,7 @@ def matmul(A, W, W_scale, CTAS_M, CTAS_N, NUM_BUFFERS=3):
         A, W, W_scale, Y,  #
         M, N, K,  #
         A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),  #
-        CTAS_M, CTAS_N, NUM_BUFFERS, num_ctas=CTAS_M * CTAS_N)
+        CTAS_M, CTAS_N, num_ctas=CTAS_M * CTAS_N)
     return Y
 
 

@@ -54,7 +54,7 @@ warp_size = gl.constexpr(32)
 # All our previous tutorials assume 4 warps. Now we switch to the 8-warp
 # configuration, where 2 warps share a SIMD. All warps of a CTA run at the same
 # time, so the two warps of a SIMD split its 1024 VGPRs: each warp can use at
-# most 512 VGPRs, and the compiler spills registers beyond that.
+# most 512 VGPRs.
 #
 # In Gluon, we use `gl.amd.warp_pipeline_stage` to split a loop into stages for
 # 8 warps. Each `with gl.amd.warp_pipeline_stage(...)` groups a region of Gluon
@@ -85,17 +85,17 @@ warp_size = gl.constexpr(32)
 #
 # Warp pipeline can achieve an even better interleaving of shared memory reads
 # and WMMAs, and keep both units busy. While one warp waits for its shared
-# memory reads, the SIMD can run the WMMAs of the other warp. But the two warps
+# memory reads, the SIMD can run the WMMAs of the other warp. But the 2 warps
 # run the same loop, so without coordination, they tend to read shared memory at
 # the same time, and then run WMMAs at the same time. While both read, the
 # matrix core is idle, and while both run WMMAs, the shared memory is idle. Warp
-# pipeline keeps the two groups one stage apart, so that one group reads shared
+# pipeline keeps the 2 groups one stage apart, so that one group reads shared
 # memory while the other group runs WMMAs, and both stay busy.
 #
 # We can build a simple memory + WMMA loop. It keeps a block of `A` and `B` in
 # shared memory, and each iteration runs the WMMAs of the block without any
 # access to global memory. As in `04-mfma-wmma.py`, the loop splits the K
-# dimension of the block into two sub-tiles with `slice`. It reads each sub-tile
+# dimension of the block into 2 sub-tiles with `slice`. It reads each sub-tile
 # from shared memory and runs one WMMA per sub-tile, so the compiler can issue
 # the reads of the second sub-tile while the WMMA of the first one runs. First,
 # we run it without stages, with 4 and 8 warps.
@@ -273,7 +273,7 @@ if __name__ == "__main__":
 # waits for the operands of one WMMA at a time, so its first WMMAs run while its
 # later reads still arrive.
 #
-# The compiler only adds a wait at a stage boundary when the two groups depend
+# The compiler only adds a wait at a stage boundary when the 2 groups depend
 # on each other through shared memory. For example, when one group writes shared
 # memory that the other group reads in its next stage, or when a buffer is
 # refilled while the other group may still read it. This loop only reads shared
@@ -299,7 +299,7 @@ if __name__ == "__main__":
 #
 # With 8 warps and no stages, each warp computes a 64 x 128 part of the block
 # instead of 128 x 128, so the CTA reads 384 KB from shared memory per iteration
-# instead of 256 KB, and the two warps of a SIMD often read shared memory at the
+# instead of 256 KB, and the 2 warps of a SIMD often read shared memory at the
 # same time. `wmma_w8_s2` holds the operands of both halves in registers at the
 # same time. It needs more than the 512 VGPRs that a warp can use with 8 warps,
 # so the compiler spills some registers to scratch memory inside the loop.
@@ -310,7 +310,7 @@ if __name__ == "__main__":
 #
 # So the size of the stages matters. A stage should be large enough to overlap
 # with the stage of the other group, but small enough that the registers of the
-# two warps of a SIMD still fit.
+# 2 warps of a SIMD still fit.
 
 # %%
 # Here we only show the overlap of memory accesses and compute. In practice, we
@@ -353,7 +353,8 @@ def matmul_ld_smem(slot, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: g
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                   M, N, K,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
-                  CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, NUM_BUFFERS: gl.constexpr, WARP_PIPELINE: gl.constexpr):
+                  CTAS_M: gl.constexpr, CTAS_N: gl.constexpr, WARP_PIPELINE: gl.constexpr,  #
+                  NUM_BUFFERS: gl.constexpr = 3):
     BLOCK_M: gl.constexpr = 256 * CTAS_M
     BLOCK_N: gl.constexpr = 256 * CTAS_N
     BLOCK_K: gl.constexpr = 256
@@ -380,7 +381,6 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
         matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
-        # A wait can't be inside a stage, so we wait before the first stage.
         cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
         next_k = k + NUM_BUFFERS - 1
         if WARP_PIPELINE:
@@ -411,7 +411,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     cdna5.tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, CTAS_M=4, CTAS_N=4, NUM_BUFFERS=3, warp_pipeline=True):
+def matmul(A, W, W_scale, CTAS_M=4, CTAS_N=4, warp_pipeline=True):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
@@ -420,7 +420,7 @@ def matmul(A, W, W_scale, CTAS_M=4, CTAS_N=4, NUM_BUFFERS=3, warp_pipeline=True)
         A, W, W_scale, Y,  #
         M, N, K,  #
         A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),  #
-        CTAS_M, CTAS_N, NUM_BUFFERS, warp_pipeline, num_warps=8, num_ctas=CTAS_M * CTAS_N)
+        CTAS_M, CTAS_N, warp_pipeline, num_warps=8, num_ctas=CTAS_M * CTAS_N)
     return Y
 
 

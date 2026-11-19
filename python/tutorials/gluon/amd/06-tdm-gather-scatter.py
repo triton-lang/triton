@@ -352,28 +352,10 @@ def matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFER
 
 
 @gluon.jit
-def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N, stride_ym, off_m, off_n, y_smem_layout: gl.constexpr,
-                   SCATTER: gl.constexpr):
-    BLOCK_M: gl.constexpr = acc.shape[0]
-    BLOCK_N: gl.constexpr = acc.shape[1]
-    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
-    y_smem.store(acc.to(y_ptr.dtype.element_ty))
-    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
-    if SCATTER:
-        scatter_idx = gl.load(scatter_idx_ptr + rows).to(gl.int16)
-        y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[0, off_n], clamp_bounds=True)
-        cdna5.tdm.async_scatter(y_desc, scatter_idx, y_smem)
-    else:
-        y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
-        cdna5.tdm.async_store(y_desc, src=y_smem)
-    cdna5.tdm.async_wait(0)
-
-
-@gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr,  #
                   M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N, K: gl.constexpr,  #
                   stride_am, stride_wn, stride_scale, stride_ym,  #
-                  NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr, SCATTER: gl.constexpr):
+                  GATHER: gl.constexpr, SCATTER: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 256
@@ -422,10 +404,20 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
         acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
-    matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N, stride_ym, off_m, off_n, y_smem_layout, SCATTER)
+    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_smem.store(acc.to(y_ptr.dtype.element_ty))
+    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
+    if SCATTER:
+        scatter_idx = gl.load(scatter_idx_ptr + rows).to(gl.int16)
+        y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[0, off_n], clamp_bounds=True)
+        cdna5.tdm.async_scatter(y_desc, scatter_idx, y_smem)
+    else:
+        y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
+        cdna5.tdm.async_store(y_desc, src=y_smem)
+    cdna5.tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, NUM_BUFFERS=2):
+def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None):
     E, N, K = W.shape[0], W.shape[1], A.shape[1]
     M = E * rows_per_expert
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
@@ -434,7 +426,7 @@ def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None, NU
         A, W, W_scale, Y, gather_idx, scatter_idx,  #
         M, E, rows_per_expert, N, K,  #
         A.stride(0), W.stride(1), W_scale.stride(0), Y.stride(0),  #
-        NUM_BUFFERS, gather_idx is not None, scatter_idx is not None)
+        gather_idx is not None, scatter_idx is not None)
     return Y
 
 

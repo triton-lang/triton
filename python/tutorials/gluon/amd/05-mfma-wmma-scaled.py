@@ -409,7 +409,7 @@ def matmul_cdna4_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS: gl.co
 @gluon.jit
 def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
                         stride_am, stride_wn, stride_scale, stride_ym,  #
-                        NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
+                        PRESHUFFLE: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 128
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 256
@@ -460,13 +460,13 @@ def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     cdna4.buffer.store(acc.to(y_ptr.dtype.element_ty), y_desc, rows[:, None] * stride_ym + cols[None, :], mask)
 
 
-def matmul_cdna4(A, W, W_scale, preshuffle=True, NUM_BUFFERS=2):
+def matmul_cdna4(A, W, W_scale, preshuffle=True):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (triton.cdiv(M, 128) * triton.cdiv(N, 256), )
     matmul_cdna4_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),
-                              NUM_BUFFERS, preshuffle)
+                              preshuffle)
     return Y
 
 
@@ -601,8 +601,6 @@ def unshuffle_scales_cdna5(s_buf):
 @gluon.jit
 def load_scales_cdna5(scale_ptr, ROWS: gl.constexpr, K_SCALE: gl.constexpr, layout: gl.constexpr,
                       PRESHUFFLE: gl.constexpr):
-    # Copy the scales to shared memory, 4 bytes per lane, and read them with
-    # `layout`.
     smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     if PRESHUFFLE:
         gmem_layout: gl.constexpr = gl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
@@ -748,7 +746,7 @@ def matmul_cdna5_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS: gl.co
 @gluon.jit
 def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
                         stride_am, stride_wn, stride_scale, stride_ym,  #
-                        NUM_BUFFERS: gl.constexpr, PRESHUFFLE: gl.constexpr):
+                        PRESHUFFLE: gl.constexpr, NUM_BUFFERS: gl.constexpr = 3):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 256
@@ -794,13 +792,13 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     cdna5.tdm.async_wait(0)
 
 
-def matmul_cdna5(A, W, W_scale, preshuffle=True, NUM_BUFFERS=3):
+def matmul_cdna5(A, W, W_scale, preshuffle=True):
     M, K = A.shape
     N = W.shape[0]
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
     matmul_cdna5_kernel[grid](A, W, W_scale, Y, M, N, K, A.stride(0), W.stride(0), W_scale.stride(0), Y.stride(0),
-                              NUM_BUFFERS, preshuffle)
+                              preshuffle)
     return Y
 
 

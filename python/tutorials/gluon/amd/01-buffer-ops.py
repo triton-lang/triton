@@ -128,18 +128,18 @@ def elementwise_w_buffer_kernel(  #
         cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
 
 
-def elementwise(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise(A, B, C, kernel, XBLOCK=32, YBLOCK=256):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
 
     # In this layout, each lane accesses 4 consecutive fp32 values, which is one
     # 128-bit access.
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 120)])

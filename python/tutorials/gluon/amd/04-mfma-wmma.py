@@ -86,8 +86,7 @@ def mfma(A, B, instr_shape, warps_per_cta):
     M, K = A.shape
     N = B.shape[1]
     C = torch.empty(M, N, device=A.device, dtype=torch.float32)
-    num_warps = warps_per_cta[0] * warps_per_cta[1]
-    mfma_kernel[(1, )](A, B, C, M, N, K, tuple(instr_shape), tuple(warps_per_cta), num_warps=num_warps)
+    mfma_kernel[(1, )](A, B, C, M, N, K, tuple(instr_shape), tuple(warps_per_cta))
     return C
 
 
@@ -218,7 +217,7 @@ def mfma_chain_kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK: gl.constexpr):
 def test_mfma_chain():
     A, B, C = (torch.randn(64, 64, device="cuda", dtype=torch.bfloat16) for _ in range(3))
     out = torch.empty(64, 64, device="cuda", dtype=torch.float32)
-    mfma_chain_kernel[(1, )](A, B, C, out, 64, num_warps=4)
+    mfma_chain_kernel[(1, )](A, B, C, out, 64)
     ref = (A.float() @ B.float()).to(torch.bfloat16).float() @ C.float()
     torch.testing.assert_close(ref, out, atol=1e-2, rtol=1e-2)
 
@@ -282,7 +281,7 @@ def mfma_smem(A, B, b_k_contiguous):
     N = B.shape[0] if b_k_contiguous else B.shape[1]
     C = torch.empty(M, N, device=A.device, dtype=torch.float32)
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    compiled = mfma_smem_kernel[(1, )](A, B, C, M, N, K, b_k_contiguous, smem_layout, smem_layout, num_warps=4)
+    compiled = mfma_smem_kernel[(1, )](A, B, C, M, N, K, b_k_contiguous, smem_layout, smem_layout)
     return C, compiled
 
 
@@ -434,7 +433,7 @@ def try_compile_async_copy(gmem_layout, smem_layout):
     A = torch.randn(256, 64, device="cuda", dtype=torch.bfloat16)
     try:
         with t2.suppress_stderr():
-            async_copy_tile_kernel[(1, )](A, gmem_layout, smem_layout, num_warps=4)
+            async_copy_tile_kernel[(1, )](A, gmem_layout, smem_layout)
         return True
     except RuntimeError:
         return False
@@ -469,10 +468,10 @@ if __name__ == "__main__" and is_cdna4():
 # apart. In shared memory, the rows are arranged like this:
 #
 # ```
-# r0,   r16,  r32,  r48,  r64,  r80,  r96,  r112, padding,
-# r1,   r17,  r33,  r49,  r65,  r81,  r97,  r113, padding,
+# r000, r016, r032, r048, r064, r080, r096, r112, padding,
+# r001, r017, r033, r049, r065, r081, r097, r113, padding,
 # ...
-# r15,  r31,  r47,  r63,  r79,  r95,  r111, r127, padding,
+# r015, r031, r047, r063, r079, r095, r111, r127, padding,
 # r128, r144, r160, r176, r192, r208, r224, r240, padding,
 # ...
 # ```
@@ -603,7 +602,7 @@ def matmul_cdna4_ld_smem(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.constexpr):
 @gluon.jit
 def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                         stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
-                        NUM_BUFFERS: gl.constexpr):
+                        NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 64
@@ -647,13 +646,12 @@ def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     cdna4.buffer.store(acc.to(c_ptr.dtype.element_ty), c_desc, rows[:, None] * stride_cm + cols[None, :], mask)
 
 
-def matmul_cdna4(A, B, kernel, NUM_BUFFERS=2):
+def matmul_cdna4(A, B, kernel):
     M, K = A.shape
     N = B.shape[0]
     C = torch.empty(M, N, device=A.device, dtype=A.dtype)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
-    compiled = kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1), C.stride(0),
-                            NUM_BUFFERS=NUM_BUFFERS, num_warps=4)
+    compiled = kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1), C.stride(0))
     return C, compiled
 
 
@@ -687,7 +685,7 @@ def matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.co
 @gluon.jit
 def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                                  stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
-                                 NUM_BUFFERS: gl.constexpr):
+                                 NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 64
@@ -897,7 +895,7 @@ def wmma_smem(A, B, b_k_contiguous):
     N = B.shape[0] if b_k_contiguous else B.shape[1]
     C = torch.empty(M, N, device=A.device, dtype=torch.float32)
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    compiled = wmma_smem_kernel[(1, )](A, B, C, M, N, K, b_k_contiguous, smem_layout, num_warps=4)
+    compiled = wmma_smem_kernel[(1, )](A, B, C, M, N, K, b_k_contiguous, smem_layout)
     return C, compiled
 
 
@@ -1065,7 +1063,7 @@ def matmul_cdna5_ld_gmem(k, a_desc, b_desc, a_smem, b_smem, off_m, off_n, BLOCK_
 @gluon.jit
 def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                         stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
-                        PARTITIONED: gl.constexpr, NUM_BUFFERS: gl.constexpr):
+                        PARTITIONED: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
     BLOCK_K: gl.constexpr = 64
@@ -1098,7 +1096,6 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 2)
         a0, b0 = matmul_cdna5_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
         acc = cdna5.wmma(a1, b1, acc)
-        # K block `k - 1` is done, so its slot can take the next copy.
         matmul_cdna5_ld_gmem(k + NUM_BUFFERS - 1, a_desc, b_desc, a_smem, b_smem, off_m, off_n, BLOCK_K, NUM_BUFFERS)
         a1, b1 = matmul_cdna5_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
         acc = cdna5.wmma(a0, b0, acc)
@@ -1120,14 +1117,13 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     cdna5.tdm.async_wait(0)
 
 
-def matmul_cdna5(A, B, partitioned, NUM_BUFFERS=2):
+def matmul_cdna5(A, B, partitioned):
     M, K = A.shape
     N = B.shape[0]
-    assert triton.cdiv(K, 64) >= NUM_BUFFERS
     C = torch.empty(M, N, device=A.device, dtype=A.dtype)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
     compiled = matmul_cdna5_kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1),
-                                         C.stride(0), partitioned, NUM_BUFFERS=NUM_BUFFERS, num_warps=4)
+                                         C.stride(0), partitioned)
     return C, compiled
 
 

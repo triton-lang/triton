@@ -117,16 +117,16 @@ def elementwise_tdm_kernel(  #
     cdna5.tdm.async_wait(0)
 
 
-def elementwise_tdm(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_tdm(A, B, C, XBLOCK=32, YBLOCK=256):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return elementwise_tdm_kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, smem_layout, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -273,13 +273,12 @@ def elementwise_mix_kernel(  #
     gl.store(c_ptr + offs, a_val + b_val, mask)
 
 
-def elementwise_mix(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_mix(A, B, C, XBLOCK=32, YBLOCK=256):
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
-    return elementwise_mix_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout,
-                                        num_warps=num_warps)
+    return elementwise_mix_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -356,13 +355,12 @@ def elementwise_tdm_mbarrier_kernel(  #
     gl.store(c_ptr + offs, a_smem.load(layout) + b_smem.load(layout), mask)
 
 
-def elementwise_tdm_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_tdm_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256):
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
-    return elementwise_tdm_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout,
-                                                 num_warps=num_warps)
+    return elementwise_tdm_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -440,16 +438,16 @@ def elementwise_tdm_pipelined_kernel(  #
     cdna5.tdm.async_wait(0)
 
 
-def elementwise_tdm_pipelined(A, B, C, XBLOCK=32, YBLOCK=256, num_buffers=2, num_warps=4):
+def elementwise_tdm_pipelined(A, B, C, XBLOCK=32, YBLOCK=256, num_buffers=2):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return elementwise_tdm_pipelined_kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, smem_layout, num_buffers, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout, smem_layout, num_buffers)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -464,14 +462,14 @@ def test_elementwise_tdm_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
 
 
-def elementwise(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise(A, B, C, XBLOCK=32, YBLOCK=256):
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return t1.elementwise_kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout)
 
 
 if __name__ == "__main__":
@@ -560,13 +558,12 @@ def elementwise_tdm_prefetch_kernel(  #
     cdna5.tdm.async_wait(0)
 
 
-def elementwise_tdm_prefetch(A, B, C, prefetch, XBLOCK=64, YBLOCK=256, num_warps=4):
+def elementwise_tdm_prefetch(A, B, C, prefetch, XBLOCK=64, YBLOCK=256):
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
-    return elementwise_tdm_prefetch_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout, prefetch,
-                                                 num_warps=num_warps)
+    return elementwise_tdm_prefetch_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout, prefetch)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])

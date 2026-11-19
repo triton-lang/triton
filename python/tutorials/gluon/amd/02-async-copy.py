@@ -168,10 +168,10 @@ def elementwise_async_copy_w_buffer_kernel(  #
         cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
 
 
-def elementwise_async_copy(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_async_copy(A, B, C, kernel, XBLOCK=32, YBLOCK=256):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     # With these parameters, `SwizzledSharedLayout` is a plain shared memory
     # layout without padding or swizzling.
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
@@ -179,7 +179,7 @@ def elementwise_async_copy(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
     return kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, smem_layout, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -249,7 +249,7 @@ def try_compile_elementwise(layout, XBLOCK, YBLOCK):
     try:
         with suppress_stderr():
             elementwise_async_copy_w_buffer_kernel[(1, )](A, B, C, XBLOCK, YBLOCK, *A.stride(), *B.stride(),
-                                                          *C.stride(), XBLOCK, YBLOCK, layout, smem_layout, num_warps=4)
+                                                          *C.stride(), XBLOCK, YBLOCK, layout, smem_layout)
         return True
     except RuntimeError:
         return False
@@ -361,16 +361,16 @@ def elementwise_pipelined_kernel(  #
                                layout)
 
 
-def elementwise_pipelined(A, B, C, XBLOCK=32, YBLOCK=256, num_buffers=2, num_warps=4):
+def elementwise_pipelined(A, B, C, XBLOCK=32, YBLOCK=256, num_buffers=2):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return elementwise_pipelined_kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, smem_layout, num_buffers, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout, smem_layout, num_buffers)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -507,16 +507,16 @@ def elementwise_async_copy_cdna5_kernel(  #
         gl.store(c_ptrs + ystride_c * yoffs[None, :], a_val + b_val, mask=mask)
 
 
-def elementwise_async_copy_cdna5(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_async_copy_cdna5(A, B, C, XBLOCK=32, YBLOCK=256):
     assert A.shape == B.shape == C.shape
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), )
     return elementwise_async_copy_cdna5_kernel[grid](
         A, B, C, xnumel, ynumel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout, smem_layout, num_warps=num_warps)
+        XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -592,13 +592,12 @@ def elementwise_async_copy_mbarrier_kernel(  #
     gl.store(c_ptr + offs, a_smem.load(layout) + b_smem.load(layout), mask=mask)
 
 
-def elementwise_async_copy_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+def elementwise_async_copy_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256):
     xnumel, ynumel = A.shape
-    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
-    return elementwise_async_copy_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout,
-                                                        num_warps=num_warps)
+    return elementwise_async_copy_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout)
 
 
 @pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
@@ -627,7 +626,7 @@ if __name__ == "__main__" and is_cdna5():
     def global_load(XBLOCK, YBLOCK):
         layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
         t1.elementwise_kernel[(triton.cdiv(xnumel, XBLOCK), )](A, B, C, xnumel, ynumel, *A.stride(), *B.stride(),
-                                                               *C.stride(), XBLOCK, YBLOCK, layout, num_warps=4)
+                                                               *C.stride(), XBLOCK, YBLOCK, layout)
 
     XBLOCK, YBLOCK = 4, 512
     bench("global load", lambda: global_load(XBLOCK, YBLOCK))
