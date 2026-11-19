@@ -528,11 +528,13 @@ public:
 
 static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
                            std::string exclusive, size_t size, Value pred,
-                           bool twoCTAs) {
+                           bool twoCTAs, int64_t baseAddressOffset) {
   PTXBuilder ptxBuilder;
   Location loc = func.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  Value sharedMem = b.gep(ptr_ty(func.getContext(), 3), i8_ty,
+                          mlir::LLVM::getStackPointer(rewriter, func),
+                          b.i32_val(baseAddressOffset));
   if (twoCTAs) {
     auto ctx = func->getContext();
     NVVM::ClusterArriveOp::create(rewriter, loc, UnitAttr::get(ctx));
@@ -557,9 +559,6 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
     address = b.i32_val(0);
   } else {
     address = b.load(i32_ty, sharedMem);
-    // Do not let another shared-memory use overwrite the allocation result
-    // until every thread has read it.
-    NVVM::BarrierOp::create(rewriter, loc);
   }
   address = b.inttoptr(ptr_ty(func.getContext(), 6), address);
   return address;
@@ -639,11 +638,16 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
           ? ".exclusive"
           : "";
   bool useTwoCTAs = mlir::triton::nvidia_gpu::getModuleTwoCTAs(mod);
+  // The tensor memory allocation pass reserves the shared memory slot that
+  // tcgen05.alloc writes the base address to.
+  auto baseAddressOffset = mod->getAttrOfType<IntegerAttr>(
+      mlir::triton::nvidia_gpu::kTensorMemoryBaseSmemOffsetAttrName);
+  assert(baseAddressOffset && "missing ttg.tensor_memory_base_smem_offset");
   // This code is only executed by the default warp group.
   Value threadId = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
   Value pred = b.icmp_ult(threadId, b.i32_val(32));
-  Value alloc =
-      createTMAlloc(rewriter, func, exclusive, size, pred, useTwoCTAs);
+  Value alloc = createTMAlloc(rewriter, func, exclusive, size, pred, useTwoCTAs,
+                              baseAddressOffset.getInt());
   createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
   // TODO: pred will have a long liverange, we need to check if this is a
   // problem and how it can be fixed.

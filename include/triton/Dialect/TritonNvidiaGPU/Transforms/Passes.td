@@ -222,6 +222,9 @@ def TritonTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "
 
   let description = [{
     Decide on tensor memory allocation and assign attributes to each allocation.
+    Also reserve a shared memory slot after all other buffers for the tensor
+    memory base address written by tcgen05.alloc, and record its offset in
+    `ttg.tensor_memory_base_smem_offset`.
   }];
 
   let dependentDialects = [

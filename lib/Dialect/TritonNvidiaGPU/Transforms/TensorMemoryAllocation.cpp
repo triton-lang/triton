@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -420,15 +421,17 @@ public:
       }
     }
     if (totalMemorySize > 0) {
-      // We use a small smem allocation to get the tensor memory base address
-      // from tcgen05.alloc, ensure the block has at least 4 bytes of smem
+      // tcgen05.alloc writes the tensor memory base address to shared memory.
+      // Give it a dedicated 4-byte slot after all other shared memory buffers,
+      // so that no buffer ever overlaps it.
       int shared = 0;
       if (auto sharedAttr = mod->getAttr("ttg.shared")) {
         shared = cast<IntegerAttr>(sharedAttr).getInt();
       }
-      if (shared < 4) {
-        mod->setAttr("ttg.shared", getI32Attr(4));
-      }
+      int baseAddressOffset = llvm::alignTo(shared, 4);
+      mod->setAttr(kTensorMemoryBaseSmemOffsetAttrName,
+                   getI32Attr(baseAddressOffset));
+      mod->setAttr("ttg.shared", getI32Attr(baseAddressOffset + 4));
     }
     mod->setAttr("ttg.tensor_memory_size", getI32Attr(totalMemorySize));
   }

@@ -4,11 +4,17 @@
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
 
-module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, ttg.tensor_memory_size = 128 : i32, "ttng.two-ctas" = true} {
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, ttg.tensor_memory_base_smem_offset = 4 : i32, ttg.tensor_memory_size = 128 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @automatic_tmem_lifecycle
+  // CHECK-DAG: %[[OFFSET:.+]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: %[[SHMEM:.+]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  // CHECK: %[[SLOT:.+]] = llvm.getelementptr %[[SHMEM]][%[[OFFSET]]]
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait
-  // CHECK-NEXT: {{.*}}tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32
+  // CHECK-NEXT: {{.*}}tcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [$1], 128;", "b,r" %{{.+}}, %[[SLOT]]
+  // CHECK-NEXT: nvvm.barrier
+  // CHECK-NEXT: llvm.load %[[SLOT]]
+  // CHECK-NOT: nvvm.barrier
   // CHECK: tcgen05.relinquish_alloc_permit.cta_group::2.sync.aligned
   // CHECK: nvvm.cluster.arrive
   // CHECK-NEXT: nvvm.cluster.wait
@@ -47,7 +53,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 2 : i32, "ttg.num
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
-module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_base_smem_offset = 0 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Disjoint stores to %a, %b, and %c share a wait before overwriting %a,
   // even when %c's predicate is false.
   // CHECK-LABEL: @tmem_store_wait_chain
@@ -103,7 +109,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #mixed = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
-module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_base_smem_offset = 8192 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Layout conversion and reduction lower to CTA barriers. The stores to
   // %a and %b share one wait before the last barrier.
   // CHECK-LABEL: @tmem_store_wait_scratch_boundaries
@@ -151,7 +157,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
 
-module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_base_smem_offset = 8 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Stores to %a and %b complete before their CTA and warp rendezvous.
   // The load from %b needs a store wait; the disjoint store to %c needs no
   // load wait. Both accesses complete after the acquire, before invalidation.
