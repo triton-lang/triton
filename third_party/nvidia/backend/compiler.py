@@ -388,6 +388,7 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
 
+        nvidia.passes.ttnvgpuir.add_insert_remote_shared_store_barriers(pm, capability)
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod

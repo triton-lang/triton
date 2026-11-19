@@ -183,6 +183,20 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
   ];
 }
 
+def TritonNvidiaGPUInsertRemoteSharedStoreBarriersPass : Pass<"triton-nvidia-gpu-insert-remote-shared-store-barriers", "mlir::ModuleOp"> {
+  let summary = "Synchronize synchronous writes to peer shared memory";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
 def TritonNvidiaGPUClusterBarrierMbarAllocatorPass : Pass<"triton-nvidia-gpu-cluster-barrier-mbar-allocator", "mlir::ModuleOp"> {
   let summary = "Allocate mbarriers for warp-specialized cluster barriers";
 

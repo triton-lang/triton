@@ -252,6 +252,53 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("num_stages, warp_specialize", [(1, False), (2, False), (2, True)])
+def test_matmul_rhs_from_dot(num_ctas, num_stages, warp_specialize, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(Q, K, V, Out, n, NUM_STAGES: tl.constexpr, WARP_SPECIALIZE: tl.constexpr):
+        x = tl.arange(0, 128)
+        q = Q.load([0, 0])
+        acc = tl.full((128, 128), 0, tl.float32)
+        for i in tl.range(n, num_stages=NUM_STAGES, warp_specialize=WARP_SPECIALIZE):
+            k = K.load([128 * i, 0])
+            qk = tl.dot(q, k.T)
+            p = tl.math.exp2(qk * 0.125).to(tl.float16)
+            v = V.load([128 * i, 0])
+            acc = tl.dot(v, p.T, acc)
+        tl.store(Out + x[:, None] * 128 + x[None, :], acc)
+
+    n = 4
+    q = torch.ones((128, 64), device=device, dtype=torch.float16)
+    k = (torch.arange(n, device=device, dtype=torch.float16) / 8).repeat_interleave(128)
+    k = k[:, None].expand(-1, 64).contiguous()
+    v = torch.ones((n * 128, 128), device=device, dtype=torch.float16)
+    out = torch.empty((128, 128), device=device, dtype=torch.float32)
+    descriptors = [TensorDescriptor.from_tensor(t, [128, t.shape[1]]) for t in (q, k, v)]
+
+    # The first dot produces 8*i and the second sums 128 copies of 2**i.
+    expected = 128 * (1 + 2 + 4 + 8)
+    for _ in range(8):
+        compiled = kernel[(1, )](*descriptors, out, n, NUM_STAGES=num_stages, WARP_SPECIALIZE=warp_specialize,
+                                 num_ctas=num_ctas)
+        if is_compile_warmup():
+            return
+        assert torch.all(out == expected)
+    if num_ctas == 2:
+        assert "ttng.cluster_barrier" in compiled.asm["ttgir"]
+        assert "ttng.fence_async_shared {bCluster = true}" in compiled.asm["ttgir"]
+        assert "st.shared::cluster" in compiled.asm["ptx"]
+        assert "fence.proxy.async.shared::cluster" in compiled.asm["ptx"]
+    if warp_specialize:
+        assert "ttg.warp_specialize" in compiled.asm["ttgir"]
+    elif num_stages > 1:
+        prologue = compiled.asm["ttgir"].split("scf.for", 1)[0]
+        assert prologue.count("ttng.async_tma_copy_global_to_local") > 1
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("reset_period", [0, 2, 4])
 @pytest.mark.parametrize("reset_value", [0, 1])
 @pytest.mark.parametrize("snapshot", [False, True])

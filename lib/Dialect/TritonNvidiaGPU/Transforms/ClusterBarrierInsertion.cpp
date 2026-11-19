@@ -1,10 +1,12 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -19,10 +21,45 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+#define GEN_PASS_DEF_TRITONNVIDIAGPUINSERTREMOTESHAREDSTOREBARRIERSPASS
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
 namespace {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+struct InsertRemoteSharedStoreBarriersPass
+    : public impl::TritonNvidiaGPUInsertRemoteSharedStoreBarriersPassBase<
+          InsertRemoteSharedStoreBarriersPass> {
+  using Base::Base;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    if (computeCapability < 90 || ttg::TritonGPUDialect::getNumCTAs(mod) == 1)
+      return;
+
+    for (auto func : mod.getOps<triton::FuncOp>()) {
+      // Cluster barriers must be placed in kernel bodies after inlining.
+      if (!triton::isKernel(func))
+        continue;
+      func.walk([](Operation *op) {
+        if (!isa<ttg::LocalStoreOp, ttg::LocalAllocOp>(op) ||
+            !hasCrossCTASharedAccess(op).value_or(false))
+          return;
+
+        OpBuilder builder(op);
+        Location loc = op->getLoc();
+        // Rendezvous after each CTA's preceding accesses and async waits.
+        ttng::ClusterBarrierOp::create(builder, loc);
+        builder.setInsertionPointAfter(op);
+        // Publish remote writes to generic and async consumers.
+        ttng::FenceAsyncSharedOp::create(builder, loc, /*bCluster=*/true);
+        ttng::ClusterBarrierOp::create(builder, loc);
+      });
+    }
+  }
+};
 
 // Returns whether an operation's tracked access touches distributed shared
 // memory across CTAs.
