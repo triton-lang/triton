@@ -10,7 +10,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
 
 #include <map>
 
@@ -20,17 +19,25 @@ namespace mlir::triton::membar {
 namespace {
 
 template <typename Facts>
-void emit(const MembarCFG<Facts> &cfg, ArrayRef<SyncKind> actions,
-          const llvm::BitVector &selected) {
-  for (unsigned id : selected.set_bits()) {
+FailureOr<llvm::BitVector>
+placeRequired(FunctionOpInterface function, const MembarCFG<Facts> &cfg,
+              ArrayRef<Demand> required, ArrayRef<SyncKind> actions) {
+  auto cut = solveMembarCut(cfg, required, actions);
+  if (!cut)
+    return function.emitError("synchronization demand has no legal cut");
+  LLVM_DEBUG({
+    llvm::dbgs() << function.getName() << ": " << cfg.nodes.size()
+                 << " CFG points, " << required.size() << " demands, "
+                 << cut->sites.count() << " sites, cost " << cut->cost
+                 << ", lower bound " << cut->lowerBound << "\n";
+  });
+  for (unsigned id : cut->sites.set_bits()) {
     const auto &node = cfg.nodes[id / actions.size()];
     Operation *before = node.op;
     SyncKind action = actions[id % actions.size()];
     OpBuilder builder(before);
     auto loc = before->getLoc();
     switch (action) {
-    case SyncKind::WarpConvergence:
-      llvm_unreachable("warp convergence is only a demand");
     case SyncKind::ClusterBarrier:
     case SyncKind::ClusterFenceMbarInit: {
       // The specialized release must run on the thread that issued the init.
@@ -65,34 +72,7 @@ void emit(const MembarCFG<Facts> &cfg, ArrayRef<SyncKind> actions,
       break;
     }
   }
-}
-
-template <typename Model, typename Discover>
-LogicalResult placeRegions(FunctionOpInterface function,
-                           MembarCFGBuilder<Model> &builder,
-                           ArrayRef<SyncKind> actions, Discover discover,
-                           bool expandWarpRoles = false) {
-  SmallVector<Region *> bodies{&function.getFunctionBody()};
-  if (!expandWarpRoles)
-    function.walk([&](gpu::WarpSpecializeOp ws) {
-      bodies.push_back(&ws.getDefaultRegion());
-      llvm::append_range(bodies, ws.getPartitionRegions());
-    });
-  for (Region *body : bodies) {
-    auto cfg = builder.build(*body, expandWarpRoles);
-    auto demands = discover(cfg);
-    auto cut = solveMembarCut(cfg, demands, actions);
-    if (!cut)
-      return function.emitError("synchronization demand has no legal cut");
-    LLVM_DEBUG({
-      llvm::dbgs() << function.getName() << ": " << cfg.nodes.size()
-                   << " CFG points, " << demands.size() << " demands, "
-                   << cut->sites.count() << " sites, cost " << cut->cost
-                   << ", lower bound " << cut->lowerBound << "\n";
-    });
-    emit(cfg, actions, cut->sites);
-  }
-  return success();
+  return std::move(cut->sites);
 }
 
 template <typename T, typename Model>
@@ -100,9 +80,10 @@ LogicalResult placeAcrossRoles(const CallGraph<T> &calls, Model &model,
                                ArrayRef<SyncKind> actions) {
   MembarCFGBuilder builder(model, calls.getModuleOp());
   for (auto function : calls.getRoots()) {
-    auto discover = [&](auto &cfg) { return model.discoverDemands(cfg); };
-    if (failed(placeRegions(function, builder, actions, discover,
-                            /*expandWarpRoles=*/true)))
+    auto cfg =
+        builder.build(function.getFunctionBody(), /*expandWarpRoles=*/true);
+    if (failed(
+            placeRequired(function, cfg, model.discoverDemands(cfg), actions)))
       return failure();
   }
   return success();
@@ -142,7 +123,8 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
 LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                             BufferRegionAnalysis &regions,
                             MembarFilterFn sharedFilter, PlacementMode mode,
-                            CompletionScopeFn completionScope) {
+                            CompletionScopeFn completionScope,
+                            DenseSet<Operation *> distributable) {
   ModuleOp module = moduleAllocation.getModuleOp();
   std::optional<TMemModel> tmem;
   if (mode != PlacementMode::Shared)
@@ -165,11 +147,31 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   for (auto function : moduleAllocation.getRoots()) {
     // Callee footprints are in kernel coordinates.
     Allocation &allocation = *moduleAllocation.getFuncData(function);
-    auto discover = [&](const auto &cfg) {
-      return discoverDemands(cfg, allocation, sharedFilter, tmemModel);
-    };
-    if (failed(placeRegions(function, builder, ACTIONS, discover)))
-      return failure();
+    SmallVector<Region *> bodies{&function.getFunctionBody()};
+    function.walk([&](gpu::WarpSpecializeOp ws) {
+      bodies.push_back(&ws.getDefaultRegion());
+      llvm::append_range(bodies, ws.getPartitionRegions());
+    });
+    for (Region *body : bodies) {
+      auto cfg = builder.build(*body, /*expandWarpRoles=*/false);
+      // A shared callee occurs once per role graph. The first role chooses
+      // its notification modes. Later roles see the emitted modes as fixed.
+      for (auto &node : cfg.nodes)
+        if (distributable.erase(node.op))
+          node.effects.arrivalMode = ArrivalMode::Either;
+      auto [required, optional] =
+          discoverDemands(cfg, allocation, sharedFilter, tmemModel);
+      auto sites = placeRequired(function, cfg, required, ACTIONS);
+      if (failed(sites))
+        return failure();
+      for (unsigned sink : findUncoveredSinks(cfg, optional, ACTIONS, *sites)) {
+        Operation *op = cfg.nodes[sink].op;
+        if (auto arrive = dyn_cast<nvidia_gpu::ArriveBarrierOp>(op))
+          arrive.setPerWarp(true);
+        else
+          cast<nvidia_gpu::BarrierExpectOp>(op).setPerWarp(true);
+      }
+    }
   }
   return success();
 }

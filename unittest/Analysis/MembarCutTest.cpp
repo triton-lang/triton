@@ -54,17 +54,6 @@ TEST(MembarCut, SiteIndexesUseTheAvailableActions) {
   EXPECT_FALSE(solveMembarCut(cfg, {{0, 1, SyncKind::WaitStore}}, actions));
 }
 
-TEST(MembarCut, CompletionAlsoConvergesTheWarp) {
-  auto cfg = linearCFG({0, 1, 1});
-  auto solution = solveMembarCut(
-      cfg, {{1, 2, SyncKind::WarpConvergence}, {1, 2, SyncKind::WaitStore}});
-  ASSERT_TRUE(solution);
-  EXPECT_EQ(solution->sites.count(), 1u);
-  EXPECT_TRUE(solution->sites.test(site(2, SyncKind::WaitStore)));
-  EXPECT_EQ(solution->cost, 1u);
-  EXPECT_EQ(solution->lowerBound, 1u);
-}
-
 TEST(MembarCut, TwoActionsAtOneGapPayTwice) {
   constexpr unsigned cost = std::numeric_limits<unsigned>::max();
   auto cfg = linearCFG({0, cost});
@@ -144,15 +133,15 @@ TEST(MembarCut, OrderedHandoffUsesFirstBFSArrival) {
   }
 }
 
-TEST(MembarCut, ReverseGapTiesKeepWarpBarrierForConvergence) {
+TEST(MembarCut, ReverseGapTiesKeepWarpBarrier) {
   // Six shared store/read pairs need three barriers with forward ties and two
-  // with reverse ties. The independent convergence demand has no TMEM issuer.
+  // with reverse ties. The independent demand only needs warp ordering.
   auto cfg = linearCFG({0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1});
   const Demand demands[] = {
       {1, 5, SyncKind::RegionBarrier},  {2, 8, SyncKind::RegionBarrier},
       {3, 9, SyncKind::RegionBarrier},  {4, 7, SyncKind::RegionBarrier},
       {6, 11, SyncKind::RegionBarrier}, {10, 12, SyncKind::RegionBarrier},
-      {0, 1, SyncKind::WarpConvergence}};
+      {0, 1, SyncKind::WarpBarrier}};
   auto solution = solveMembarCut(cfg, demands);
   ASSERT_TRUE(solution);
   EXPECT_EQ(solution->sites.count(), 3u);
@@ -197,6 +186,44 @@ TEST(MembarCut, EqualCostPrefersLowerRegionBarrierWeight) {
   ASSERT_TRUE(cut);
   EXPECT_EQ(cut->sites.count(), 1u);
   EXPECT_TRUE(cut->sites.test(site(5, SyncKind::RegionBarrier)));
+}
+
+TEST(MembarCut, ReportEachUncoveredOptionalSinkOnce) {
+  auto cfg = linearCFG({0, 0, 0});
+  cfg.nodes[2].next.push_back({1, true});
+  // Two producers reach 2. Only the backedge carries 1's effect to itself.
+  const Demand demands[] = {{0, 2, SyncKind::RegionBarrier},
+                            {1, 2, SyncKind::RegionBarrier},
+                            {1, 1, SyncKind::RegionBarrier, Path::LoopCarried}};
+  auto sinks = findUncoveredSinks(cfg, demands, {}, {});
+  llvm::sort(sinks);
+  EXPECT_EQ(sinks, (llvm::SmallVector<unsigned>{1, 2}));
+}
+
+TEST(MembarCut, OptionalHandoffStillRequiresCompletion) {
+  auto cfg = linearCFG({0, 0, 1});
+  cfg.nodes[1].fixed.after = fullBarrier;
+  auto cut = solveMembarCut(cfg, {{0, 2, SyncKind::WaitLoad}});
+  ASSERT_TRUE(cut);
+  EXPECT_TRUE(cut->sites.test(site(2, SyncKind::WaitLoad)));
+  EXPECT_EQ(cut->cost, 1u);
+  auto sinks =
+      findUncoveredSinks(cfg, {{0, 2, SyncKind::WaitLoad, Path::WaitThenOrder}},
+                         ACTIONS, cut->sites);
+  EXPECT_EQ(sinks, llvm::SmallVector<unsigned>{2});
+}
+
+TEST(MembarCut, RequiredCutCoversOptionalDemandAtLowerBound) {
+  // The region barrier for the longer path also covers the shorter one.
+  auto cfg = linearCFG({0, 1, 1, 1});
+  auto cut = solveMembarCut(cfg, {{0, 3, SyncKind::RegionBarrier}});
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->cost, cut->lowerBound);
+  EXPECT_EQ(cut->sites.count(), 1u);
+  EXPECT_TRUE(cut->sites.test(site(3, SyncKind::RegionBarrier)));
+  auto sinks = findUncoveredSinks(cfg, {{2, 3, SyncKind::RegionBarrier}},
+                                  ACTIONS, cut->sites);
+  EXPECT_TRUE(sinks.empty());
 }
 
 // Give each original node a separate predecessor for its insertion gap. This

@@ -189,36 +189,40 @@ SmallVector<Demand>
 ClusterBarrierModel::discoverDemands(MembarCFG<Facts> &cfg) {
   recordCompletions(cfg);
   SmallVector<Demand> demands;
-  for (auto [start, producer] : llvm::enumerate(cfg.nodes)) {
+  for (unsigned source = 0; source < cfg.nodes.size(); ++source) {
+    const auto &producer = cfg.nodes[source];
     bool init = initializesPeerCounter(cfg, producer);
     for (auto [access, initial] : producer.effects.sources) {
-      membar::discoverDemands(
-          cfg, demands, start, initial,
-          [](unsigned state, unsigned fixed) {
-            return fixed & bit(SyncKind::ClusterBarrier) ? 0u : state;
-          },
-          [&](const auto &node, unsigned state) -> Conflict {
+      walkEdges(
+          cfg, producer, initial,
+          [&](unsigned sink, unsigned state, bool) -> std::optional<unsigned> {
+            const auto &node = cfg.nodes[sink];
             Path path = state & carried ? Path::LoopCarried : Path::Any;
-            if (node.next.empty() && access.crossCTA)
-              return {SyncKind::ClusterBarrier, path, true};
-            for (const auto &other : node.effects.accesses)
-              if (conflicts(access, other, state & reallocated))
-                return {SyncKind::ClusterBarrier, path, true};
+            if ((node.next.empty() && access.crossCTA) ||
+                llvm::any_of(node.effects.accesses, [&](const auto &other) {
+                  return conflicts(access, other, state & reallocated);
+                })) {
+              demands.push_back({source, sink, SyncKind::ClusterBarrier, path});
+              return std::nullopt;
+            }
             if (init && node.effects.initDeadline) {
               if (auto arrive =
                       dyn_cast<ExperimentalGSanMBarrierArriveOp>(node.op);
                   arrive && !mayOverlap(access.footprint,
                                         getFootprint(arrive.getBarrier()),
                                         AllocationOrigin::Same))
-                return {};
-              return {producer.body == 0 ? *node.effects.initDeadline
-                                         : SyncKind::ClusterBarrier,
-                      path};
+                return state;
+              SyncKind need = producer.body == 0 ? *node.effects.initDeadline
+                                                 : SyncKind::ClusterBarrier;
+              demands.push_back({source, sink, need, path});
             }
-            return {};
+            return state;
+          },
+          [](unsigned state, unsigned fixed) {
+            return fixed & bit(SyncKind::ClusterBarrier) ? 0u : state;
           },
           [&](Edge edge, unsigned state) {
-            if (cfg.invalidatesIteration(edge, start))
+            if (cfg.invalidatesIteration(edge, source))
               state |= carried;
             return advanceLifetime(state, cfg.nodes[edge.to].op, access);
           });

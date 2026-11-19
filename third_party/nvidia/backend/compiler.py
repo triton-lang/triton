@@ -376,7 +376,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
-        nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
         passes.common.add_sccp(pm)
@@ -446,7 +445,6 @@ class CUDABackend(BaseBackend):
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
-        nvidia.passes.ttnvgpuir.add_optimize_mbarrier_arrivals(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)

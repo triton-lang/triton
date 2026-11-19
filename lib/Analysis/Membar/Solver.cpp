@@ -14,17 +14,16 @@ constexpr unsigned unseen = std::numeric_limits<unsigned>::max();
 
 auto origin(const Demand &d) { return std::tie(d.first, d.path, d.source); }
 
-template <typename Facts> class CutSolver {
-public:
-  CutSolver(const MembarCFG<Facts> &cfg, ArrayRef<Demand> unsorted,
-            ArrayRef<SyncKind> actions)
-      : cfg(cfg), demands(unsorted), actions(actions) {
-    llvm::sort(demands, [](const Demand &a, const Demand &b) {
-      return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
-    });
-  }
+template <typename Facts> struct CutSolver {
+  const MembarCFG<Facts> &cfg;
+  ArrayRef<SyncKind> actions;
 
-  std::optional<CutSolution> choose(bool reverseTies) const;
+  std::optional<CutSolution> choose(ArrayRef<Demand> required,
+                                    bool reverseTies) const;
+
+  std::optional<SiteList> search(const llvm::BitVector &selected,
+                                 ArrayRef<Demand> &pending,
+                                 SiteList *sinks = nullptr) const;
 
   auto score(const CutSolution &cut) const {
     uint64_t multiWarpCost = 0;
@@ -36,40 +35,34 @@ public:
           multiWarpCost += cfg.nodes[site / actions.size()].insertionCost;
     return std::pair(cut.cost, multiWarpCost);
   }
-
-private:
-  std::optional<SiteList> shortestCut(const llvm::BitVector &selected,
-                                      size_t &first) const;
-
-  const MembarCFG<Facts> &cfg;
-  SmallVector<Demand> demands;
-  ArrayRef<SyncKind> actions;
 };
 
-// Keep the first uncovered path with the fewest distinct legal sites. A
-// covered prefix stays covered while the placement grows.
+// Collect reachable sinks when requested. Otherwise keep the first uncovered
+// path with the fewest sites, skipping covered prefixes as the cut grows.
 template <typename Facts>
 std::optional<SiteList>
-CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
-                              size_t &first) const {
+CutSolver<Facts>::search(const llvm::BitVector &selected,
+                         ArrayRef<Demand> &pending, SiteList *sinks) const {
+  ArrayRef<Demand> demands = pending;
+  if (demands.empty())
+    return std::nullopt;
   SmallVector<unsigned> credits(cfg.nodes.size(), 0), parent, queue;
   for (unsigned id : selected.set_bits())
     credits[id / actions.size()] |= coverage(actions[id % actions.size()]);
   llvm::SparseSet<unsigned> labels;
-  labels.setUniverse(selected.size());
+  labels.setUniverse(sinks ? cfg.nodes.size() : selected.size());
   std::optional<SiteList> best;
   size_t next = 0;
 
   // The root is the departure after the producer. Returning to the producer
   // itself requires traversing a CFG edge.
-  for (size_t i = first; i != demands.size(); ++i) {
-    const Demand &d = demands[i];
+  for (auto [i, d] : llvm::enumerate(demands)) {
     // A worker's own effect can leave once. Incoming parent effects follow
     // the default continuation, while remaining visible to worker consumers.
     const bool workerSource = cfg.nodes[d.source].inWorker;
     const unsigned width = workerSource ? 4 : 2;
     const unsigned root = width * cfg.nodes.size();
-    if (queue.empty() || origin(demands[i - 1]) != origin(d)) {
+    if (i == 0 || origin(demands[i - 1]) != origin(d)) {
       parent.assign(root, unseen);
       queue.assign(1, root);
       next = 0;
@@ -127,11 +120,15 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
         }
       }
     }
-    if (sink == unseen) {
-      if (!best)
-        ++first;
+    if (sink == unseen)
+      continue;
+    if (sinks) {
+      if (labels.insert(d.sink).second)
+        sinks->push_back(d.sink);
       continue;
     }
+    if (!best)
+      pending = demands.drop_front(i);
 
     // A violated handoff needs a wait up to its last rendezvous or another
     // rendezvous after it. At a shared gap, the wait executes first.
@@ -162,7 +159,8 @@ CutSolver<Facts>::shortestCut(const llvm::BitVector &selected,
 }
 
 template <typename Facts>
-std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
+std::optional<CutSolution> CutSolver<Facts>::choose(ArrayRef<Demand> required,
+                                                    bool reverseTies) const {
   SmallVector<unsigned> slack, order;
   for (const Node<Facts> &node : cfg.nodes)
     slack.append(actions.size(), node.insertionCost);
@@ -171,8 +169,8 @@ std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
   auto cost = [&](unsigned site) {
     return cfg.nodes[site / actions.size()].insertionCost;
   };
-  size_t first = 0;
-  while (auto cut = shortestCut(result.sites, first)) {
+  auto pending = required;
+  while (auto cut = search(result.sites, pending)) {
     if (cut->empty())
       return std::nullopt;
     // Charge this path before searching again with the selected site.
@@ -215,8 +213,8 @@ std::optional<CutSolution> CutSolver<Facts>::choose(bool reverseTies) const {
     return result;
   for (unsigned site : llvm::reverse(order)) {
     result.sites.reset(site);
-    first = 0;
-    if (!shortestCut(result.sites, first))
+    pending = required;
+    if (!search(result.sites, pending))
       result.cost -= cost(site);
     else
       result.sites.set(site);
@@ -230,19 +228,32 @@ template <typename Facts>
 std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
                                           ArrayRef<Demand> demands,
                                           ArrayRef<SyncKind> actions) {
-  CutSolver solver(cfg, demands, actions);
-  auto best = solver.choose(false);
+  SmallVector<Demand> required(demands);
+  llvm::sort(required, [](const Demand &a, const Demand &b) {
+    return std::tuple(origin(a), a.sink) < std::tuple(origin(b), b.sink);
+  });
+  CutSolver<Facts> solver{cfg, actions};
+  auto best = solver.choose(required, false);
   if (!best)
     return best;
   auto bestScore = solver.score(*best);
   if (best->cost == best->lowerBound && bestScore.second == 0)
     return best;
-  auto other = solver.choose(true);
+  auto other = solver.choose(required, true);
   assert(other && "changing ties cannot change feasibility");
   if (solver.score(*other) < bestScore)
     best.swap(other);
   best->lowerBound = std::max(best->lowerBound, other->lowerBound);
   return best;
+}
+
+SmallVector<unsigned> findUncoveredSinks(const MembarCFG<OpModel> &cfg,
+                                         ArrayRef<Demand> demands,
+                                         ArrayRef<SyncKind> actions,
+                                         const llvm::BitVector &selected) {
+  SiteList sinks;
+  CutSolver<OpModel>{cfg, actions}.search(selected, demands, &sinks);
+  return sinks;
 }
 
 template std::optional<CutSolution> solveMembarCut(const MembarCFG<OpModel> &,

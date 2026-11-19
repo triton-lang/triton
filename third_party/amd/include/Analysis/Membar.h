@@ -1,13 +1,11 @@
-#ifndef TRITON_ANALYSIS_MEMBAR_H
-#define TRITON_ANALYSIS_MEMBAR_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_MEMBAR_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_MEMBAR_H_
 
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/Membar/SmemModel.h"
 #include <utility>
 
-namespace mlir {
-
-class OpBuilder;
+namespace mlir::triton::AMD {
 
 /// Legacy forward-flow state at the current program point and at function
 /// boundaries.
@@ -25,15 +23,10 @@ struct MembarInfo {
   /// point has synchronized the whole execution region.
   bool allPathsFromEntrySynced = false;
 
-  /// Every warp has synchronized since the last memory or thread effect.
-  /// This does not discharge dependencies between different warps.
-  bool warpsSynced = false;
-
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
     entryBlockInfo.join(other.entryBlockInfo);
     allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
-    warpsSynced &= other.warpsSynced;
     return *this;
   }
 
@@ -41,16 +34,11 @@ struct MembarInfo {
     if (!allPathsFromEntrySynced)
       entryBlockInfo.join(blockInfo);
     pending.join(blockInfo);
-    if (blockInfo.hasEffects())
-      warpsSynced = false;
   }
-
-  void syncWarps() { warpsSynced = true; }
 
   void sync() {
     pending.sync();
     allPathsFromEntrySynced = true;
-    syncWarps();
   }
 
   void applyCallSummary(const MembarInfo &callee) {
@@ -59,7 +47,6 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
-    warpsSynced &= !callee.pending.hasEffects();
   }
 
   template <typename Transform> void transformSlices(Transform transform) {
@@ -74,8 +61,8 @@ struct MembarInfo {
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-/// TODO: Retire this analysis and MembarInfo after mbarrier arrival folding
-/// and the AMD conditional-barrier fallback migrate.
+/// TODO: Retire this analysis and MembarInfo after the AMD conditional-barrier
+/// fallback migrates.
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
@@ -91,7 +78,7 @@ public:
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                  triton::BufferRegionAnalysis &regions,
                  CompletionScopeFn completionScope = nullptr)
-      : allocation(allocation), filter(std::move(filter)),
+      : allocation(allocation), regions(regions), filter(std::move(filter)),
         shared(allocation, regions,
                triton::membar::SMemModel::AccessMode::AllSharedAccesses,
                completionScope) {}
@@ -102,17 +89,14 @@ private:
 
   void updateExitState(MembarInfo *membarInfo) override;
 
-protected:
-  /// A null builder analyzes existing synchronization without inserting any.
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
-  Allocation &allocation;
-
-private:
   void syncIfNeeded(Operation *operation, const BlockInfo &effects,
                     MembarInfo *membarInfo, OpBuilder *builder);
 
+  Allocation &allocation;
+  BufferRegionAnalysis &regions;
   MembarFilterFn filter;
   triton::membar::SMemModel shared;
 };
@@ -120,17 +104,14 @@ private:
 /// Inserts shared-memory and operation rendezvous barriers across a module,
 /// before async-completion analyses consume the synchronization points.
 /// Function summaries retain entry-prefix and pending exit states for calls.
-/// TODO: Redirect the Python analysis.membar binding and the AMD test pass
-/// before removing this driver with MembarAnalysis.
+/// TODO: Retire with MembarAnalysis once the AMD test pass migrates.
 class ModuleMembarAnalysis {
 public:
   ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
                        MembarFilterFn filter = nullptr)
       : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
-  void run();
-
-  template <typename AnalysisT> void run() {
+  void run() {
     // Geometry and interval slices use the same completed allocation, including
     // backend scratch sizes and shared-memory partition offsets.
     auto solver = createDataFlowSolver();
@@ -138,7 +119,7 @@ public:
         triton::BufferRegionAnalysis::Mode::AllMemory, &moduleAllocation);
     if (failed(solver->initializeAndRun(moduleAllocation.getModuleOp())))
       llvm::report_fatal_error("failed to analyze allocated buffer regions");
-    runAnalysis<AnalysisT>(*regions);
+    runAnalysis<MembarAnalysis>(*regions);
   }
 
   template <typename AnalysisT>
@@ -155,6 +136,6 @@ private:
   MembarFilterFn filter;
 };
 
-} // namespace mlir
+} // namespace mlir::triton::AMD
 
-#endif // TRITON_ANALYSIS_MEMBAR_H
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_MEMBAR_H_

@@ -173,7 +173,7 @@ static Boundary getTMemBoundary(Operation *op) {
         atomic.getMemSemantic() == MemSemantic::ACQUIRE_RELEASE)
       return Boundary::Publication;
   if (auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op)) {
-    if (barrier.isPerWarp() || isa<InitBarrierOp, InvalBarrierOp>(op))
+    if (isa<InitBarrierOp, InvalBarrierOp>(op))
       return Boundary::WaitAll;
     return barrier.getBarriers().empty() ? Boundary::None
                                          : Boundary::Publication;
@@ -241,6 +241,8 @@ void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
     model.tmemProducerNeed =
         access.isWrite ? SyncKind::WaitStore : SyncKind::WaitLoad;
     model.privateTMem = isPrivate(access.footprint);
+    // TMEM demands already order native transfers before publication.
+    model.sharedOut.threadSync.effectIssuer = ThreadIssuer::None;
   } else {
     model.tmemProducerNeed = SyncKind::RegionBarrier;
   }

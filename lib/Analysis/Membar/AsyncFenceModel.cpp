@@ -133,27 +133,33 @@ SmallVector<Demand> AsyncFenceModel::discoverDemands(FenceCFG &cfg) {
   recordCompletedWrites(cfg);
   unsigned scopes = numCTAs == 1 ? bit(SyncKind::CTAProxyFence) : proxyScopes;
   SmallVector<Demand> demands;
-  for (auto [source, producer] : llvm::enumerate(cfg.nodes)) {
+  for (unsigned source = 0; source < cfg.nodes.size(); ++source) {
+    const auto &producer = cfg.nodes[source];
     if (producer.effects.proxy != gpu::SharedKind::Generic)
       continue;
     for (const SharedAccess &access : producer.effects.accesses) {
       unsigned state =
           scopes | (access.crossCTA ? bit(SyncKind::ClusterBarrier) : 0);
-      membar::discoverDemands(
-          cfg, demands, source, state, applyFixed,
-          [&](const auto &sink, unsigned live) -> Conflict {
-            if (sink.effects.proxy == gpu::SharedKind::Async)
-              for (const SharedAccess &other : sink.effects.accesses) {
+      walkEdges(
+          cfg, producer, state,
+          [&](unsigned sink, unsigned live, bool) -> std::optional<unsigned> {
+            const auto &in = cfg.nodes[sink].effects;
+            if (in.proxy == gpu::SharedKind::Async)
+              for (const SharedAccess &other : in.accesses) {
                 SyncKind need = other.crossCTA ? SyncKind::ClusterProxyFence
                                                : SyncKind::CTAProxyFence;
                 if ((live & bit(need)) && (access.isWrite || other.isWrite) &&
-                    mayOverlap(access.footprint, other.footprint))
-                  return {need, !other.crossCTA && access.crossCTA
-                                    ? Path::ClusterThenProxy
-                                    : Path::Any};
+                    mayOverlap(access.footprint, other.footprint)) {
+                  Path path = !other.crossCTA && access.crossCTA
+                                  ? Path::ClusterThenProxy
+                                  : Path::Any;
+                  demands.push_back({source, sink, need, path});
+                  break;
+                }
               }
-            return {};
-          });
+            return live;
+          },
+          applyFixed);
     }
   }
   coalesceDemands(demands);

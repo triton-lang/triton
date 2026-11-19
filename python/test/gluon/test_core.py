@@ -1701,20 +1701,17 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     out = torch.empty_like(inp)
     compiled = kernel.warmup(inp, out, iterations, block, producer_warps, grid=(8, ), num_warps=4, num_ctas=num_ctas)
 
-    scale = max(4, producer_warps)
     ptx = compiled.asm["ptx"]
     init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
-    # Both empty slots collect the bootstrap or consumer credits. After a
-    # producer rendezvous, one lane can signal ready for the entire partition.
+    # Each empty slot counts four consumer warps. One producer lane signals ready.
     actual_inits = Counter(map(int, init_counts))
     # Warp-specialization cluster barriers can introduce additional mbarriers.
-    assert any(Counter([scale, scale, ready, ready]) <= actual_inits for ready in (1, producer_warps))
+    assert Counter([4, 4, 1, 1]) <= actual_inits
     arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
-    # The launch rendezvous covers the first bootstrap arrival's full count.
-    # A CTA barrier before the consumer's arrival can also fold its full count.
-    expected_arrivals = [scale, scale // producer_warps, 1]
+    # The launch rendezvous covers both scalar bootstrap arrivals. Each
+    # contributes four credits. The two loop arrivals contribute one per issuer.
     actual_arrivals = Counter(int(count or 1) for count in arrive_counts)
-    assert any(Counter(expected_arrivals + [count]) <= actual_arrivals for count in (scale // 4, scale))
+    assert Counter([4, 4, 1, 1]) <= actual_arrivals
     assert "bar.warp.sync" in ptx
     kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out, inp + 1)

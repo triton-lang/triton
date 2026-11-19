@@ -13,8 +13,19 @@ auto stopAt(SyncKind need) {
   };
 }
 
+void addDemand(MembarDemands &demands, ArrivalMode mode, Demand demand) {
+  if (mode == ArrivalMode::Either)
+    demands.optional.push_back(demand);
+  if (mode != ArrivalMode::Scalar) {
+    if (demand.first == SyncKind::RegionBarrier)
+      demand.first = SyncKind::WarpBarrier;
+    demand.path = Path::Any;
+  }
+  demands.required.push_back(demand);
+}
+
 std::optional<Path> sharedNeed(const BlockInfo &out, const OpModel &in,
-                               bool carried,
+                               bool threadSync, bool carried,
                                std::optional<BlockInfo> &carriedOut,
                                Allocation &allocation,
                                const MembarFilterFn &filter) {
@@ -23,7 +34,7 @@ std::optional<Path> sharedNeed(const BlockInfo &out, const OpModel &in,
     return out.threadSync.completion == CompletionSync::All
                ? std::optional(Path::Any)
                : std::nullopt;
-  if (BlockInfo::requiresThreadSync(out, in.sharedIn) ||
+  if ((threadSync && in.arrivalMode == ArrivalMode::Scalar) ||
       out.isIntersected(in.sharedIn, filter, &allocation))
     return Path::Any;
   if (!carried)
@@ -46,11 +57,12 @@ bool tmemConflicts(ArrayRef<TMemAccess> before, ArrayRef<TMemAccess> after) {
 }
 
 std::optional<Path> tmemNeed(const Node<OpModel> &producer,
-                             const Node<OpModel> &consumer, TMemModel &tmem,
-                             bool needsWait) {
+                             const Node<OpModel> &consumer, TMemModel &tmem) {
+  bool needsWait =
+      *producer.effects.tmemProducerNeed != SyncKind::RegionBarrier;
   auto boundary = consumer.effects.boundary;
   Path ordered = needsWait ? Path::WaitThenOrder : Path::Any;
-  // Peer-visible TMEM accesses require a rendezvous before publication.
+  // A scalar publication must observe all issuing warps' completions.
   if (boundary == Boundary::Publication && !producer.effects.privateTMem)
     return ordered;
   // A completion wait orders same-warp RAW, WAR, and WAW dependencies.
@@ -65,18 +77,17 @@ std::optional<Path> tmemNeed(const Node<OpModel> &producer,
 
 } // namespace
 
-SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
-                                    Allocation &allocation,
-                                    const MembarFilterFn &sharedFilter,
-                                    TMemModel *tmem) {
-  bool needsWarp = llvm::any_of(
-      cfg.nodes, [](const auto &node) { return node.effects.needsWarp; });
+MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
+                              Allocation &allocation,
+                              const MembarFilterFn &sharedFilter,
+                              TMemModel *tmem) {
   bool ordersThreadEffects = llvm::any_of(cfg.nodes, [](const auto &node) {
     return node.effects.sharedIn.threadDemands.publicationIssuer !=
            ThreadIssuer::None;
   });
-  SmallVector<Demand> demands;
-  for (auto [source, producer] : llvm::enumerate(cfg.nodes)) {
+  MembarDemands demands;
+  for (unsigned source = 0; source < cfg.nodes.size(); ++source) {
+    const auto &producer = cfg.nodes[source];
     const OpModel &out = producer.effects;
     const BlockInfo &shared = out.sharedOut;
     const auto &sync = shared.threadSync;
@@ -86,44 +97,46 @@ SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
         (ordersThreadEffects && sync.effectIssuer != ThreadIssuer::None)) {
       constexpr unsigned fresh = 1, carried = 2;
       std::optional<BlockInfo> carriedOut;
-      discoverDemands(
-          cfg, demands, source, fresh, stopAt(SyncKind::RegionBarrier),
-          [&](const auto &sink, unsigned state) -> Conflict {
-            return {SyncKind::RegionBarrier,
-                    sharedNeed(shared, sink.effects, state == carried,
-                               carriedOut, allocation, sharedFilter),
-                    /*stopOnMatch=*/true};
+      walkEdges(
+          cfg, producer, fresh,
+          [&](unsigned sink, unsigned state, bool) -> std::optional<unsigned> {
+            const auto &in = cfg.nodes[sink].effects;
+            bool threadSync =
+                BlockInfo::requiresThreadSync(shared, in.sharedIn);
+            if (auto path = sharedNeed(shared, in, threadSync, state == carried,
+                                       carriedOut, allocation, sharedFilter)) {
+              demands.required.push_back(
+                  {source, sink, SyncKind::RegionBarrier, *path});
+              return std::nullopt;
+            }
+            // A pending effect reaches consecutive direct notifications until a
+            // CTA rendezvous. Lane zero in each warp can issue both in order.
+            if (threadSync)
+              addDemand(demands, in.arrivalMode,
+                        {source, sink, SyncKind::RegionBarrier});
+            return state;
           },
+          stopAt(SyncKind::RegionBarrier),
           [&](Edge edge, unsigned state) {
             return hasSlices && cfg.invalidatesIteration(edge, source) ? carried
                                                                        : state;
           });
     }
 
-    SyncKind producerNeed =
-        out.tmemProducerNeed.value_or(SyncKind::RegionBarrier);
-    bool needsWait = producerNeed != SyncKind::RegionBarrier;
-    if (out.tmemProducerNeed)
-      discoverDemands(cfg, demands, source, 1, stopAt(producerNeed),
-                      [&](const auto &sink, unsigned) -> Conflict {
-                        return {producerNeed,
-                                tmemNeed(producer, sink, *tmem, needsWait)};
-                      });
-
-    // A completion wait leaves an outgoing issuer but has no input to order.
-    if (needsWarp && shared.hasEffects()) {
-      SyncKind warpNeed = needsWait || !out.sharedIn.hasEffects()
-                              ? SyncKind::WarpConvergence
-                              : SyncKind::WarpBarrier;
-      discoverDemands(cfg, demands, source, 1, stopAt(warpNeed),
-                      [&](const auto &sink, unsigned) -> Conflict {
-                        return {warpNeed, sink.effects.needsWarp
-                                              ? std::optional(Path::Any)
-                                              : std::nullopt};
-                      });
-    }
+    if (auto need = out.tmemProducerNeed)
+      walkEdges(
+          cfg, producer, 1,
+          [&](unsigned sink, unsigned state, bool) {
+            const auto &consumer = cfg.nodes[sink];
+            if (auto path = tmemNeed(producer, consumer, *tmem))
+              addDemand(demands, consumer.effects.arrivalMode,
+                        {source, sink, *need, *path});
+            return std::optional(state);
+          },
+          stopAt(*need));
   }
-  coalesceDemands(demands);
+  coalesceDemands(demands.required);
+  coalesceDemands(demands.optional);
   return demands;
 }
 
