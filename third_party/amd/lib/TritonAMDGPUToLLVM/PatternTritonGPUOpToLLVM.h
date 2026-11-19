@@ -68,6 +68,7 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        PatternBenefit benefit);
 
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     const TargetInfo &targetInfo,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
 void populateWarpIdOpToLLVMPattern(LLVMTypeConverter &typeConverter,
