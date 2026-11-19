@@ -982,6 +982,14 @@ static bool isExpensiveMathOp(Operation *op) {
              math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
 }
 
+static bool isFullPrecisionTrigOp(Operation *op) {
+  if (auto sin = dyn_cast<math::SinOp>(op))
+    return sin.getFastmath() == arith::FastMathFlags::none;
+  if (auto cos = dyn_cast<math::CosOp>(op))
+    return cos.getFastmath() == arith::FastMathFlags::none;
+  return false;
+}
+
 static int64_t getByteCount(Value result, int64_t minElementCount = 0,
                             int64_t minBitWidth = 0) {
   int64_t elementCount = 0;
@@ -1130,6 +1138,19 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       // operations which use the special function unit and/or involve
       // multiple instructions.
       int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      if (isFullPrecisionTrigOp(op)) {
+        auto type = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+        auto module = op->getParentOfType<ModuleOp>();
+        auto target = module ? module->getAttrOfType<StringAttr>(AttrTargetName)
+                             : StringAttr{};
+        // CUDA f32 sin/cos use full libdevice implementations, including range
+        // reduction, rather than one approximate SFU instruction. Charge a
+        // higher empirical cost for duplicating them; this is not a latency
+        // estimate. Other types, targets and fast-math modes keep their costs.
+        if (type && type.getElementType().isF32() && target &&
+            target.getValue().starts_with("cuda:"))
+          multiplier = 16;
+      }
       for (Value result : op->getResults()) {
         Attribute rematEncoding = layout.lookup(result);
         int64_t cost = multiplier * getByteCount(result);

@@ -4992,3 +4992,65 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// Full CUDA f32 trigonometry should not be duplicated as cheap SFU work.
+#a = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#b = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#row = #ttg.slice<{dim = 1, parent = #a}>
+#col = #ttg.slice<{dim = 0, parent = #a}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @preserve_full_precision_trig
+  // CHECK: %[[SIN:.+]] = math.sin
+  // CHECK-NOT: math.sin
+  // CHECK: %[[COS:.+]] = math.cos %[[SIN]]
+  // CHECK-NOT: math.cos
+  // CHECK: %[[CVT:.+]] = ttg.convert_layout %[[COS]]
+  // CHECK: tt.return %[[COS]], %[[CVT]]
+  tt.func @preserve_full_precision_trig(%seed: f32) -> (tensor<32x32xf32, #a>, tensor<32x32xf32, #b>) {
+    %i = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #row>
+    %j = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #col>
+    %ix = tt.expand_dims %i {axis = 1 : i32} : tensor<32xi32, #row> -> tensor<32x1xi32, #a>
+    %jx = tt.expand_dims %j {axis = 0 : i32} : tensor<32xi32, #col> -> tensor<1x32xi32, #a>
+    %ib = tt.broadcast %ix : tensor<32x1xi32, #a> -> tensor<32x32xi32, #a>
+    %jb = tt.broadcast %jx : tensor<1x32xi32, #a> -> tensor<32x32xi32, #a>
+    %c32 = arith.constant dense<32> : tensor<32x32xi32, #a>
+    %istride = arith.muli %ib, %c32 : tensor<32x32xi32, #a>
+    %idx = arith.addi %istride, %jb : tensor<32x32xi32, #a>
+    %fp = arith.sitofp %idx : tensor<32x32xi32, #a> to tensor<32x32xf32, #a>
+    %scale = arith.constant dense<9.765625e-04> : tensor<32x32xf32, #a>
+    %scaled = arith.mulf %fp, %scale : tensor<32x32xf32, #a>
+    %seedv = tt.splat %seed : f32 -> tensor<32x32xf32, #a>
+    %input = arith.addf %scaled, %seedv : tensor<32x32xf32, #a>
+    %e1 = math.sin %input : tensor<32x32xf32, #a>
+    %e2 = math.cos %e1 : tensor<32x32xf32, #a>
+    %converted = ttg.convert_layout %e2 : tensor<32x32xf32, #a> -> tensor<32x32xf32, #b>
+    tt.return %e2, %converted : tensor<32x32xf32, #a>, tensor<32x32xf32, #b>
+  }
+
+  // CHECK-LABEL: @keep_f64_trig_cost
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return
+  tt.func @keep_f64_trig_cost(%seed: f64) -> (tensor<32x32xf64, #a>, tensor<32x32xf64, #b>) {
+    %i = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #row>
+    %j = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #col>
+    %ix = tt.expand_dims %i {axis = 1 : i32} : tensor<32xi32, #row> -> tensor<32x1xi32, #a>
+    %jx = tt.expand_dims %j {axis = 0 : i32} : tensor<32xi32, #col> -> tensor<1x32xi32, #a>
+    %ib = tt.broadcast %ix : tensor<32x1xi32, #a> -> tensor<32x32xi32, #a>
+    %jb = tt.broadcast %jx : tensor<1x32xi32, #a> -> tensor<32x32xi32, #a>
+    %c32 = arith.constant dense<32> : tensor<32x32xi32, #a>
+    %istride = arith.muli %ib, %c32 : tensor<32x32xi32, #a>
+    %idx = arith.addi %istride, %jb : tensor<32x32xi32, #a>
+    %fp = arith.sitofp %idx : tensor<32x32xi32, #a> to tensor<32x32xf64, #a>
+    %scale = arith.constant dense<9.765625e-04> : tensor<32x32xf64, #a>
+    %scaled = arith.mulf %fp, %scale : tensor<32x32xf64, #a>
+    %seedv = tt.splat %seed : f64 -> tensor<32x32xf64, #a>
+    %input = arith.addf %scaled, %seedv : tensor<32x32xf64, #a>
+    %e1 = math.sin %input : tensor<32x32xf64, #a>
+    %e2 = math.cos %e1 : tensor<32x32xf64, #a>
+    %converted = ttg.convert_layout %e2 : tensor<32x32xf64, #a> -> tensor<32x32xf64, #b>
+    tt.return %e2, %converted : tensor<32x32xf64, #a>, tensor<32x32xf64, #b>
+  }
+
+}
