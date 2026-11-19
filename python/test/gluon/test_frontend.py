@@ -2,6 +2,7 @@ import expecttest
 import math
 import pytest
 import re
+import triton
 from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
@@ -42,6 +43,24 @@ def test_chained_comparison_range():
     # CHECK: arith.andi [[LOW]], [[HIGH]] : tensor<128xi1, #blocked>
     result = 0 <= x <= 8
     ttgl.static_assert(result.type == ttgl.distributed_type(ttgl.int1, [128], layout))
+
+
+@filecheck_test
+@gluon.jit
+def test_gdc_arch_exports():
+    # CHECK-LABEL: test_gdc_arch_exports
+    # CHECK: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    hopper.gdc.wait()
+    hopper.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    blackwell.gdc.wait()
+    blackwell.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    rubin.gdc.wait()
+    rubin.gdc.launch_dependents()
 
 
 @filecheck_test
@@ -2289,6 +2308,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("kind", ["reduce", "scan", "map_elementwise"])
+def test_callback_rejects_indirect_load(kind, capfd):
+
+    @gluon.jit(noinline=True)
+    def enabled(ptr):
+        return ttgl.load(ptr) != 0
+
+    @gluon.jit
+    def choose(lhs, rhs):
+        return ttgl.where(enabled(lhs), lhs, rhs)
+
+    @gluon.jit
+    def kernel(ptr, KIND: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if KIND == "reduce":
+            ttgl.reduce(ptr + offsets, 0, choose)
+        elif KIND == "scan":
+            ttgl.associative_scan(ptr + offsets, 0, choose)
+        else:
+            ttgl.map_elementwise(choose, ptr + offsets, ptr + offsets + 1)
+
+    with pytest.raises(CompilationError):
+        run_parser(kernel, *make_args(MockTensor(ttgl.int32), kind))
+    assert f"'tt.load' op is not allowed in a tt.{kind} callback" in capfd.readouterr().err
+
+
 @gluon.jit
 def pair_add(a0, a1, b0, b1):
     return a0 + b0, a1 + b1
@@ -2641,6 +2686,59 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
         ttgl.static_assert(conflicts == ref_conflicts)
 
     run_parser(kernel, args=args, target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
+    # swizzled layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 3),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 4, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 8, order=[1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 7),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 8, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 16, order=[1, 0]), [256, 64], 16, 0),
+    # padded layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8], [512, 16]], [256, 64], [1, 0]), [256, 64], 16, 2),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout([[512, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0],
+                                           [1, 0], [2, 0], [4, 0], [8, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout(
+         [[64, 8]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [2, 0], [1, 0], [8, 0], [4, 0], [16, 0], [32, 0],
+                     [64, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(1, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [64, 256], [0, 1]), [64, 256], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [32, 32, 16], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 4]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 0),
+])
+def test_bank_conflicts_amd(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
+    dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
+    args = (ttgl.distributed_type(dtype, shape,
+                                  reg_layout), ttgl.shared_memory_descriptor_type(dtype, shape, shared_layout,
+                                                                                  shape), ref_conflicts)
+
+    @gluon.jit
+    def kernel(reg_type: ttgl.constexpr, shared_type: ttgl.constexpr, ref_conflicts: ttgl.constexpr):
+        conflicts: ttgl.constexpr = ttgl.bank_conflicts(reg_type, shared_type)
+        ttgl.static_assert(conflicts == ref_conflicts)
+
+    run_parser(kernel, args=args, target=HIP_TARGET_CDNA4)
 
 
 @pytest.mark.parametrize(
@@ -6022,3 +6120,140 @@ def test_tma_cache_policy_frontend_invalid(kind, policy, message):
     with pytest.raises(CompilationError, match=message):
         run_parser(tma_cache_policy_kernel, *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, kind,
                                                        False), target=BLACKWELL_TARGET)
+
+
+@gluon.jit
+def _bulk_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, 10240, pred=pred)
+    hopper.bulk.async_load(smem, src, 2560, bar, pred=pred)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred)
+    offsets = ttgl.arange(0, 4096, layout)
+    ttgl.store(out + offsets, smem.load(layout), (offsets < 2560) & pred)
+    hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("capability", [90, 100, 103])
+def test_bulk_async_load_codegen(capability):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32))
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes.*(0x2800|10240)", ptx)
+    assert "mbarrier.try_wait.parity" in ptx
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [
+    (80, 86, "compute capability 9.0"),
+    (90, 85, "PTX 8.6"),
+])
+def test_bulk_async_load_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err
+
+
+def test_bulk_async_load_requires_compile_time_count():
+
+    @gluon.jit
+    def kernel(src, num_elements):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.bulk.async_load(smem, src, num_elements, bar)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_elements": "i32"}, {})
+    with pytest.raises(CompilationError, match="num_elements must be a compile-time integer"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga,multicast", [([[1]], False), ([[0]], True), ([[1], [0]], True), ([[0], [1]], False)])
+@pytest.mark.parametrize("num_elements", [128, 256])
+@pytest.mark.parametrize("pred", [False, True])
+def test_bulk_async_load_cluster_count(cga, multicast, num_elements, pred):
+
+    @gluon.jit
+    def kernel(src, SHARED: ttgl.constexpr, NUM_ELEMENTS: ttgl.constexpr, PRED: ttgl.constexpr,
+               MULTICAST: ttgl.constexpr):
+        allocation = ttgl.allocate_shared_memory(ttgl.int32, [2, 256], SHARED)
+        smem = allocation.index(1)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, NUM_ELEMENTS * smem.nbytes_per_cta // smem.numel, pred=PRED)
+        hopper.bulk.async_load(smem, src, NUM_ELEMENTS, bar, pred=PRED, multicast=MULTICAST)
+        hopper.mbarrier.wait(bar, phase=0, pred=PRED)
+        hopper.mbarrier.invalidate(bar)
+
+    shared = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)
+    source = gluon.GluonASTSource(
+        kernel, {"src": "*i32"}, {"SHARED": shared, "NUM_ELEMENTS": num_elements, "PRED": pred, "MULTICAST": multicast})
+    target = GPUTarget("cuda", 90, 32)
+    options = {"num_ctas": 2**len(cga)}
+    if num_elements != 256:
+        with pytest.raises(CompilationError, match="num_elements must equal smem.numel for multi-CTA copies"):
+            triton.compile(source, target=target, options=options)
+    else:
+        # The whole indexed view is sufficient; the allocation is twice as large.
+        compiled = triton.compile(source, target=target, options=options)
+        assert ("cp.async.bulk" in compiled.asm["ptx"]) == pred
+
+
+@gluon.jit
+def _bulk_store_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    values = ttgl.load(src + ttgl.arange(0, 4096, layout))
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
+    hopper.bulk.async_store(out, smem, 2560, pred=pred)
+    hopper.bulk.store_wait(0, read_only=False)
+
+
+@pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])
+def test_bulk_async_store_codegen(capability, ptx_version):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.global.shared::cta.bulk_group") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.global.shared::cta.bulk_group.*(0x2800|10240)", ptx)
+    assert re.search(r"@%?\w+ cp.async.bulk.commit_group", ptx)
+    assert re.search(r"cp\.async\.bulk\.wait_group\s+0;", ptx)
+    assert "fence.proxy.async.shared::cta" in ptx
+
+
+@pytest.mark.parametrize("num_elements", [0, 3, 129, None])
+def test_bulk_async_store_invalid_count(num_elements):
+
+    @gluon.jit
+    def kernel(out, count, COUNT: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        hopper.bulk.async_store(out, smem, count if COUNT is None else COUNT)
+        hopper.bulk.store_wait(0)
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32", "count": "i32"}, {"COUNT": num_elements})
+    with pytest.raises((CompilationError, RuntimeError)):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga", [[[1]], [[0]], [[0], [1]]])
+def test_bulk_async_store_partial_cluster_rejected(cga):
+
+    @gluon.jit
+    def kernel(out, SHARED: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], SHARED)
+        hopper.bulk.async_store(out, smem, 128)
+        hopper.bulk.store_wait(0)
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32"},
+                                  {"SHARED": ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)})
+    with pytest.raises(CompilationError, match="num_elements must equal smem.numel"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_ctas": 2**len(cga)})
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [(80, 80, "compute capability 9.0"), (90, 78, "PTX 8.0")])
+def test_bulk_async_store_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err

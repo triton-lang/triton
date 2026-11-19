@@ -1,3 +1,4 @@
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"

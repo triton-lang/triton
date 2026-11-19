@@ -1,5 +1,6 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,GFX11
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,GFX11
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s --check-prefix=GFX12
 
 #blocked3 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -75,4 +76,38 @@ tt.func private @bf16_mulf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf
   %0 = arith.mulf %arg0, %arg1 : tensor<64xbf16, #blocked>
   tt.return %0 : tensor<64xbf16, #blocked>
 }
+}
+
+// -----
+
+// GFX11-DAG: [[$REL_GLOBAL:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX11-LABEL: @atomic_release_scalar_multi_wave
+  // GFX12-LABEL: @atomic_release_scalar_multi_wave
+  tt.func @atomic_release_scalar_multi_wave(%ptr: !tt.ptr<i32>, %val: i32) {
+    // GFX11: llvm.fence syncscope("agent") release {llvm.mmra = [[$REL_GLOBAL]]}
+    // GFX11-NEXT: llvm.fence syncscope("workgroup") release
+    // GFX11-NEXT: rocdl.s.barrier
+    // GFX11: llvm.atomicrmw add {{.*}} syncscope("agent") release
+    // GFX12: rocdl.s.wait.storecnt 0
+    // GFX12-NEXT: llvm.fence syncscope("workgroup") release
+    // GFX12-NEXT: rocdl.s.barrier.signal
+    // GFX12: llvm.atomicrmw add {{.*}} syncscope("agent") release
+    %0 = tt.atomic_rmw add, release, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // The system-scope release does not repeat global_wb in every wave on
+    // gfx12; the atomic's own release writes back once.
+    // GFX11: llvm.fence syncscope("agent") release {llvm.mmra = [[$REL_GLOBAL]]}
+    // GFX11-NEXT: llvm.fence syncscope("workgroup") release
+    // GFX11: llvm.atomicrmw add {{.*}} release
+    // GFX12: rocdl.s.wait.storecnt 0
+    // GFX12-NEXT: llvm.fence syncscope("workgroup") release
+    // GFX12: llvm.atomicrmw add {{.*}} release
+    %1 = tt.atomic_rmw add, release, sys, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    // GFX11-NOT: llvm.fence syncscope("agent")
+    // GFX12-NOT: rocdl.s.wait.storecnt
+    // GFX11: llvm.atomicrmw add {{.*}} syncscope("workgroup") release
+    // GFX12: llvm.atomicrmw add {{.*}} syncscope("workgroup") release
+    %2 = tt.atomic_rmw add, release, cta, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return
+  }
 }

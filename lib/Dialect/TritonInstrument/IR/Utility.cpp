@@ -425,11 +425,12 @@ FuncOp getEntryPoint(ModuleOp module) {
   return publicFuncs.front();
 }
 
-AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
-                                         const ConSanTargetHooks &hooks) {
+FailureOr<AuxDataMap::ThreadLayout>
+getThreadLayout(FuncOp entryPoint, const ConSanTargetHooks &hooks) {
   AuxDataMap::ThreadLayout layout;
   bool hasTMA = false;
   bool hasTC = false;
+  bool hasTCARead = false;
   bool hasCLC = false;
   bool hasAsyncCopyMbarrierArrive = false;
 
@@ -442,6 +443,8 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
     hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
+    if (auto commit = dyn_cast<TCGen5CommitOp>(op))
+      hasTCARead |= commit.getEarlyARelease();
     hasCLC |= hooks.isCLCOp(op);
     hasAsyncCopyMbarrierArrive |= hooks.usesAsyncCopyMbarrierArriveThread(op);
   });
@@ -458,6 +461,10 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     layout.tcThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
   }
+  if (hasTCARead) {
+    layout.tcAReadThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
   if (hasCLC) {
     layout.clcThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
@@ -467,9 +474,14 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     nextThread += layout.numBaseThreads;
   }
   layout.totalNumThreads = nextThread;
+  if (layout.totalNumThreads > 64) {
+    entryPoint.emitError()
+        << "ConSan requires " << layout.totalNumThreads
+        << " tracking identities for " << layout.numBaseThreads
+        << " base execution regions, but supports at most 64";
+    return failure();
+  }
   layout.numThreadSlots = llvm::PowerOf2Ceil(layout.totalNumThreads);
-  assert(layout.totalNumThreads <= 64 &&
-         "ConSan thread bitsets are stored in i64 masks");
   return layout;
 }
 
@@ -519,7 +531,10 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   if (failed(getBuffersAndBarriers(module, entryPoint, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
-  threadLayout = getThreadLayout(entryPoint, hooks);
+  auto layout = getThreadLayout(entryPoint, hooks);
+  if (failed(layout))
+    return failure();
+  threadLayout = *layout;
   entryPoint.walk([&](Operation *op) {
     std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
     if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
@@ -682,16 +697,12 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Value zero = arith::ConstantIntOp::create(b, 0, 32);
   Value isCTA0 =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
-  if (numCTAs > 1) {
-    SmallVector<Operation *> clusterBarriers =
-        hooks.createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
-  } else {
+  auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  lockInitialization = lockRelease;
+  if (numCTAs > 1)
+    startupClusterBarrierAnchor = lockRelease;
+  else
     BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
-  }
   lock.insert(entryRegion, {lockVal, lockVal.getType()});
   passValueToWarpSpecialize(lock.at(entryRegion), lock);
 
@@ -714,6 +725,18 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             captureBytes)))
     return failure();
   return success();
+}
+
+void AuxDataMap::createStartupClusterBarrier(const ConSanTargetHooks &hooks) {
+  if (!startupClusterBarrierAnchor)
+    return;
+  ImplicitLocOpBuilder b(startupClusterBarrierAnchor->getLoc(),
+                         startupClusterBarrierAnchor);
+  b.setInsertionPointAfter(startupClusterBarrierAnchor);
+  startupClusterBarrierAnchor = nullptr;
+  SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+  assert(!barriers.empty() &&
+         "target must provide a cluster initialization barrier");
 }
 
 namespace {

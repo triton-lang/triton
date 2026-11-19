@@ -5,6 +5,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -391,7 +392,8 @@ static void forEachCapture(TritonLLVMIRRewriter &b, WarpSpecializeOp ws,
   Value base = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
   auto ptrTy = ptr_ty(b.getContext(), targetInfo.getSharedAddressSpace());
   for (auto [i, value] : llvm::enumerate(captures))
-    access(value, b.gep(ptrTy, type, base, ArrayRef<LLVM::GEPArg>{0, i}));
+    access(value, b.gep(ptrTy, type, base,
+                        ArrayRef<LLVM::GEPArg>{0, static_cast<int32_t>(i)}));
 }
 
 static void rewritePartitionRegion(WarpSpecializeOp ws, Region &partition,

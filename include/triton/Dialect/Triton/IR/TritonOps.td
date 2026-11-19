@@ -164,6 +164,40 @@ def TT_ClampFOp : TT_Op<"clampf", [Elementwise,
 // Math Ops
 //
 
+def TT_FpSanBarrierOp : TT_Op<"fpsan_barrier", [Elementwise,
+                                               SameOperandsAndResultType,
+                                               Pure]> {
+    let summary = "Mark an expression boundary for floating-point sanitization";
+    let description = [{
+        Apply a deterministic, non-homomorphic transformation to the input's
+        FPSan payload. This makes the placement of the boundary observable
+        without changing the input's shape, element type, or layout.
+
+        The frontend emits this operation only when FPSan is enabled. It is
+        neither a synchronization barrier nor a floating-point rounding mode.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
+def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
+                                      SameOperandsAndResultShape,
+                                      SameOperandsAndResultEncoding, Pure]> {
+    let summary = "Project an FPSan payload into a same-width or narrower ring";
+    let description = [{
+        Preserve the low bits of the input's FPSan payload in the destination
+        floating-point type. Unlike an ordinary FPSan downcast, this operation
+        preserves addition and multiplication. Widening is not supported.
+
+        The frontend emits this operation only when FPSan is enabled.
+    }];
+    let arguments = (ins TT_FloatLike:$input);
+    let results = (outs TT_FloatLike:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input) `->` type($result)";
+    let hasVerifier = 1;
+}
+
 def TT_PreciseSqrtOp : TT_Op<"precise_sqrt", [Elementwise,
                                               SameOperandsAndResultType,
                                               Pure]> {
@@ -214,6 +248,21 @@ def TT_ApproxDivFOp
 
   let results = (outs AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$result);
 
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
+def TT_ClMulOp : TT_Op<"clmul", [Elementwise, Commutative,
+                                 SameOperandsAndResultType, Pure]> {
+  let summary = "Low N bits of the carry-less product of two N-bit integers";
+
+  let description = [{
+        Multiplies the operands as binary polynomials over GF(2), replacing
+        addition with XOR, and returns the low N bits. Signed operands are
+        interpreted by their bit patterns. Tensor operands operate elementwise.
+    }];
+
+  let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+  let results = (outs TT_IntLike:$result);
   let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
@@ -423,6 +472,7 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  AtomicOpInterface,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">,
@@ -866,6 +916,11 @@ def TT_ReduceOp: TT_Op<"reduce",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Reduction using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -903,6 +958,11 @@ def TT_ScanOp: TT_Op<"scan",
                         SingleBlock,
                         DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
     let summary = "Associative scan using generic combination algorithm";
+    let description = [{
+      The combiner and its callees may contain memory-effect-free operations,
+      `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
@@ -931,6 +991,11 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
                                                    SameOperandsAndResultShape,
                                                    RecursiveMemoryEffects]> {
     let summary = "Map a scalar subregion over a tensor";
+    let description = [{
+      The scalar function and its callees may contain memory-effect-free
+      operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
+    }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
     let regions = (region AnyRegion:$scalarOp);
@@ -1409,7 +1474,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
   let hasVerifier = 1;
 }
 
-def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
+def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [AtomicOpInterface, TT_DescriptorStoreLikeOpInterface]> {
   let summary = "performs a reducing store operation based on a descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1428,6 +1493,12 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
+  }];
 }
 
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {

@@ -61,6 +61,11 @@ std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
                                       LocalMemOpTile srcTile = {},
                                       LocalMemOpTile dstTile = {});
 
+llvm::SmallVector<int32_t> getLaneTile(const LocalMemOpTile &tile,
+                                       llvm::ArrayRef<int32_t> lane,
+                                       int32_t vecSize, int32_t bitwidth,
+                                       int32_t numBanks);
+
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
                          int32_t bitwidth, int32_t numBanks = 32,
                          LocalMemOpTile laneTile = {});

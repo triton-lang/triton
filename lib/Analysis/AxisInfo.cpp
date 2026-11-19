@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
@@ -397,6 +398,23 @@ public:
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     return operands[0]->getValue();
+  }
+};
+
+template <typename OpTy>
+class PointerCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    if (isa<RankedTensorType>(op.getSrc().getType()))
+      return AxisInfo::getPessimisticValueState(op.getResult());
+    // Scalar pointer casts preserve byte alignment.
+    const AxisInfo &info = operands[0]->getValue();
+    return AxisInfo(/*contiguity=*/{1}, info.getDivisibility(),
+                    /*constancy=*/{1});
   }
 };
 
@@ -1223,6 +1241,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
+                  PointerCastOpAxisInfoVisitor<triton::IntToPtrOp>,
+                  PointerCastOpAxisInfoVisitor<triton::PtrToIntOp>,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

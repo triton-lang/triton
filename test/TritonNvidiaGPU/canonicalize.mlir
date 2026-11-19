@@ -256,3 +256,23 @@ tt.func @fdiv_constant_no_target(%x: f32) -> f32 {
   tt.return %a : f32
 }
 }
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // BARRIER-LABEL: @false_bulk_copy
+  // BARRIER-NEXT: tt.return
+  tt.func @false_bulk_copy(%src: !tt.ptr<i32>, %dst: !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>) {
+    %false = arith.constant false
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %false : !tt.ptr<i32>, !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // BARRIER-LABEL: @false_bulk_store
+  // BARRIER-NEXT: tt.return
+  tt.func @false_bulk_store(%dst: !tt.ptr<i32>, %src: !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>) {
+    %false = arith.constant false
+    ttng.async_bulk_copy_local_to_global %dst, %src, 48, %false : !tt.ptr<i32>, !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>
+    tt.return
+  }
+}

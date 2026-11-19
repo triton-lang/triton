@@ -11,9 +11,7 @@
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -39,6 +37,8 @@ constexpr unsigned kWarpSpecializeCTABarrierId = 1;
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 std::pair<Value, Value> shuffleUp(Location loc, RewriterBase &rewriter,
                                   Value val, int delta);
+std::pair<Value, Value> shuffleDown(Location loc, RewriterBase &rewriter,
+                                    Value val, int delta);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
@@ -65,8 +65,8 @@ LogicalResult lowerLdStMatrix(
 // Given a broadcast mask and the number of CTAs, create a mask of ones
 // where for ctaId, it sets as 1's the positions that are in the same broadcast
 // group
-Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits, Value ctaId = {});
+Value createMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
+                          uint16_t broadcastBits, Value ctaId = {});
 
 uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy);
 

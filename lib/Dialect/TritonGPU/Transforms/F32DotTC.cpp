@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"

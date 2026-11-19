@@ -3,6 +3,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 namespace mlir {

@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -709,5 +708,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %b: tensor<2x256xf32, #blocked>) -> tensor<2x256xf32, #blocked> {
     %0 = ttng.packed_arith add %a, %b : (tensor<2x256xf32, #blocked>, tensor<2x256xf32, #blocked>) -> tensor<2x256xf32, #blocked>
     tt.return %0 : tensor<2x256xf32, #blocked>
+  }
+}
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @early_a_release
+  tt.func @early_a_release(%early: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>, %full: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>) {
+    // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.sync_restrict::shared::read::mma::a.shared::cluster.multicast::cluster.b64
+    ttng.tc_gen5_commit %early {early_a_release} : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+    ttng.tc_gen5_commit %full : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    tt.return
   }
 }

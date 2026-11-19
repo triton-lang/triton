@@ -446,7 +446,6 @@ class CUDABackend(BaseBackend):
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
-        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttnvgpuir.add_optimize_mbarrier_arrivals(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
@@ -522,6 +521,7 @@ class CUDABackend(BaseBackend):
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
             enable_nvptx_tti=True,
+            merge_nvptx_assert_blocks=is_enabled(options, "consan"),
         )
 
         # Get some metadata

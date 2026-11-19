@@ -2,6 +2,7 @@
 #include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"

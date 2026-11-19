@@ -6,11 +6,15 @@
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -216,8 +220,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
       typeConverter, targetInfo, patterns, benefit);
   mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
       typeConverter, patterns, patternBenefitNvidiaTensorCoreSubviewPattern);
-  mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
-                                                  patterns, benefit);
+  mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
+      typeConverter, targetInfo, axisInfoAnalysis, patterns, benefit);
   populateDotOpToLLVMPatterns(typeConverter, patterns, computeCapability,
                               benefit);
   populateElementwiseOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,

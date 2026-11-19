@@ -119,8 +119,11 @@ drv::Result ensureTopologyConfigured() {
 }
 
 size_t getShadowSize(size_t realMemSize, uintptr_t realAddress) {
-  auto wordSize = cdiv(realMemSize, gsan::getShadowGranularity(realAddress));
-  return wordSize * gsan::getShadowCellSize(realAddress);
+  auto wordSize =
+      cdiv(realMemSize,
+           gsan::getShadowGranularity(realAddress, alloc->reserveBaseAddress));
+  return wordSize *
+         gsan::getShadowCellSize(realAddress, alloc->reserveBaseAddress);
 }
 
 // GlobalState stores the clock buffer size as a u16.
@@ -163,18 +166,43 @@ int getMaxClockBufferSize(int numSMs, int numThreads) {
 AllocNode *findAllocation(uintptr_t address) {
   if (!gsan::isGsanManaged(address, alloc->reserveBaseAddress))
     return nullptr;
-  return findNodeByAddress(&alloc->treeRoots[gsan::getPoolIndex(address)],
-                           address);
+  return findNodeByAddress(
+      &alloc->treeRoots[gsan::getPoolIndex(address, alloc->reserveBaseAddress)],
+      address);
+}
+
+drv::Result getReserveAlignment(size_t &alignment) {
+  // All pools share a reservation. Its base must satisfy the minimum mapping
+  // granularity of every visible device, including devices first used later.
+  alignment = 0;
+  int numDevices = 0;
+  drv::Result err = drv::deviceCount(&numDevices);
+  if (err != drv::kSuccess)
+    return err;
+  const auto handleType = getRequestedShareableHandleType();
+  for (int device = 0; device < numDevices; ++device) {
+    size_t granularity = 0;
+    err = drv::allocationGranularity(device, handleType, &granularity);
+    if (err != drv::kSuccess)
+      return err;
+    alignment = std::max(alignment, granularity);
+  }
+  return drv::kSuccess;
 }
 
 int gsanEnsureInit() {
   if (alloc)
     return 0;
 
+  size_t alignment = 0;
+  drv::Result err = getReserveAlignment(alignment);
+  if (err != drv::kSuccess) {
+    printDriverError(err);
+    return -1;
+  }
   uintptr_t reserveBase;
-  drv::Result err =
-      drv::addressReserve(&reserveBase, /*size*/ gsan::kReserveSize,
-                          /*alignment*/ gsan::kReserveSize);
+  err =
+      drv::addressReserve(&reserveBase, /*size*/ gsan::kReserveSize, alignment);
   if (err != drv::kSuccess) {
     printDriverError(err);
     return -1;
@@ -421,10 +449,11 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
   if (node == nullptr)
     return nullptr;
 
-  err = createAllocation(node, allocSize,
-                         gsan::getShadowAddress(node->virtualAddress),
-                         getShadowSize(allocSize, node->virtualAddress), device,
-                         handleType, reinterpret_cast<drv::Stream>(stream));
+  err = createAllocation(
+      node, allocSize,
+      gsan::getShadowAddress(node->virtualAddress, alloc->reserveBaseAddress),
+      getShadowSize(allocSize, node->virtualAddress), device, handleType,
+      reinterpret_cast<drv::Stream>(stream));
   if (err != drv::kSuccess) {
     printDriverError(err);
     freeNode(node);
@@ -501,9 +530,11 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   if (err != drv::kSuccess)
     printDriverError(err);
 
-  releaseAllocation(node, gsan::getShadowAddress(node->virtualAddress),
-                    getShadowSize(node->allocSize, node->virtualAddress),
-                    reinterpret_cast<drv::Stream>(stream));
+  releaseAllocation(
+      node,
+      gsan::getShadowAddress(node->virtualAddress, alloc->reserveBaseAddress),
+      getShadowSize(node->allocSize, node->virtualAddress),
+      reinterpret_cast<drv::Stream>(stream));
 }
 
 void *gsanGetReservePointer() {
@@ -542,9 +573,11 @@ int gsanExportAllocationHandles(void *void_ptr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
-  int defaultGranularity = gsan::isWriteOnceAddress(ptr) ? 1 : 4;
+  int defaultGranularity =
+      gsan::isWriteOnceAddress(ptr, alloc->reserveBaseAddress) ? 1 : 4;
   if (!includeGranularity &&
-      gsan::getShadowGranularity(ptr) != defaultGranularity)
+      gsan::getShadowGranularity(ptr, alloc->reserveBaseAddress) !=
+          defaultGranularity)
     return -2;
 
   drv::Result err = exportAllocation(node, realShareableHandle,
@@ -590,8 +623,8 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
 
   *realPtr = static_cast<uintptr_t>(node->virtualAddress);
   *realSize = node->allocSize;
-  *shadowPtr =
-      static_cast<uintptr_t>(gsan::getShadowAddress(node->virtualAddress));
+  *shadowPtr = static_cast<uintptr_t>(
+      gsan::getShadowAddress(node->virtualAddress, alloc->reserveBaseAddress));
   *shadowSize = getShadowSize(node->allocSize, node->virtualAddress);
   return 0;
 }
@@ -678,7 +711,8 @@ void *gsanImportAllocationHandles(const ShareableHandle *realShareableHandle,
     return nullptr;
 
   err = importAllocation(
-      node, allocSize, gsan::getShadowAddress(node->virtualAddress),
+      node, allocSize,
+      gsan::getShadowAddress(node->virtualAddress, alloc->reserveBaseAddress),
       getShadowSize(allocSize, node->virtualAddress), *realShareableHandle,
       *shadowShareableHandle, handleType, device);
   if (err != drv::kSuccess) {
@@ -1210,7 +1244,8 @@ PyObject *pyIsWriteOnceAllocation(PyObject *self, PyObject *arg) {
                     "expected a live GSan allocation pointer");
     return nullptr;
   }
-  return PyBool_FromLong(gsan::isWriteOnceAddress(realPtr));
+  return PyBool_FromLong(
+      gsan::isWriteOnceAddress(realPtr, alloc->reserveBaseAddress));
 }
 
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
@@ -1233,8 +1268,9 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
   int writeOnce = nargs >= 3 ? PyObject_IsTrue(args[2]) : 0;
   if (writeOnce < 0)
     return nullptr;
-  if (gsan::isWriteOnceAddress(reinterpret_cast<uintptr_t>(ptr)) !=
-      static_cast<bool>(writeOnce)) {
+  if (alloc && gsan::isWriteOnceAddress(reinterpret_cast<uintptr_t>(ptr),
+                                        alloc->reserveBaseAddress) !=
+                   static_cast<bool>(writeOnce)) {
     PyErr_SetString(PyExc_ValueError,
                     "write_once does not match the allocation mode");
     return nullptr;
@@ -1268,7 +1304,8 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
       "(NNKi)", shareableHandleToPyObject(realShareableHandle, handleType),
       shareableHandleToPyObject(shadowShareableHandle, handleType),
       static_cast<unsigned long long>(allocSize),
-      gsan::getShadowGranularity(reinterpret_cast<uintptr_t>(ptr)));
+      gsan::getShadowGranularity(reinterpret_cast<uintptr_t>(ptr),
+                                 alloc->reserveBaseAddress));
 }
 
 PyObject *pyExportAllocationMemhandleRegions(PyObject *self,

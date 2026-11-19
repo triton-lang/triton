@@ -7,7 +7,9 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -42,6 +44,48 @@ Value emitCtaMulticastMaskIfSupported(RewriterBase &rewriter, Location loc,
     ctaId = targetInfo.getClusterCTAId(rewriter, loc);
   return LLVM::AMD::emitCtaMulticastMask(
       rewriter, loc, ctaId, layout, targetInfo.getMaxMulticastMaskPopcount());
+}
+
+// Returns the shared memory base of a TDM access, i.e. the allocation base
+// advanced by the subview's offset. TDM lowerings pad the offsets they add to
+// this base, so the subview's offset is padded separately, which is exact
+// because the memdesc_subslice verifier keeps it bitwise disjoint from them.
+Value getTDMSharedMemoryBase(Location loc, RewriterBase &rewriter,
+                             const LLVM::SharedMemoryObject &smemObj,
+                             MemDescType memDescTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  offset =
+      applyPadding(loc, rewriter, offset,
+                   getPaddedSharedShifts(memDescTy.getEncoding(),
+                                         memDescTy.getElementTypeBitWidth(),
+                                         /*offsetInBytes=*/false));
+  Value base = smemObj.getBase();
+  return b.gep(base.getType(), smemObj.getBaseElemType(), base, offset);
+}
+
+// Partitioned layouts take one base per partition; the TDM verifiers reject
+// subviews of them.
+SmallVector<Value>
+getTDMSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                        const LLVM::SharedMemoryObject &smemObj,
+                        MemDescType memDescTy) {
+  if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding()))
+    return llvm::to_vector(smemObj.getBases());
+  return {getTDMSharedMemoryBase(loc, rewriter, smemObj, memDescTy)};
+}
+
+// TDM addresses shared memory through the layout of the whole allocation, with
+// one dimension per descriptor dimension. Restore leading unit dimensions for
+// rank-reducing accesses. The verifiers require pipeline buffers to be selected
+// before the transfer.
+triton::LinearLayout getTDMSharedLayout(MemDescType memDescTy, int rank) {
+  triton::LinearLayout layout = toLinearLayoutIgnoringPadding(memDescTy);
+  assert(layout.getNumOutDims() <= rank &&
+         "TDM verifiers reject allocations of higher rank than the descriptor");
+  SmallVector<int64_t> shape(rank - layout.getNumOutDims(), 1);
+  llvm::append_range(shape, layout.getOutDimSizes());
+  return triton::reshapeLayout(memDescTy.getContext(), layout, shape);
 }
 
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
@@ -1398,14 +1442,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto tensorDescTy = op.getDesc().getType();
+    auto smemTy = op.getResult().getType();
     auto encoding = tensorDescTy.getSharedLayout();
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
-    // Use descBlockTy to query shared layout because TDM lowering logic expects
-    // the descriptor's dimensionality. For rank-reducing loads, destination
-    // shared memory may have fewer dimensions than the descriptor block type.
     triton::LinearLayout sharedLayout =
-        toLinearLayoutIgnoringPadding(tensorDescTy.getShape(), encoding);
+        getTDMSharedLayout(smemTy, tensorDescTy.getShape().size());
     // Extract padding information if present
     unsigned padInterval = 0;
     unsigned padAmount = 0;
@@ -1432,7 +1474,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
-    SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
+    SmallVector<Value> dstPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, dstMemObj, smemTy);
     // Positioning lives in the descriptor; the copy only does per-warp
     // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
@@ -1499,11 +1542,12 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
 
     for (size_t i = 0; i < numMembers; ++i) {
       auto descTy = cast<triton::TensorDescType>(op.getDescs()[i].getType());
+      auto dstTy = cast<MemDescType>(op.getDests()[i].getType());
       auto enc = descTy.getSharedLayout();
       mlir::LLVM::AMD::TDMFusedLoadMemberInfo &m = members[i];
 
       m.elementType = getTypeConverter()->convertType(descTy.getElementType());
-      m.sharedLayout = toLinearLayoutIgnoringPadding(descTy.getShape(), enc);
+      m.sharedLayout = getTDMSharedLayout(dstTy, descTy.getShape().size());
       if (auto padEnc = getPaddedEncoding(enc)) {
         assert(padEnc.getIntervals().size() == 1 &&
                padEnc.getPaddings().size() == 1);
@@ -1522,7 +1566,7 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
 
       auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
           loc, adaptor.getDests()[i], m.elementType, rewriter);
-      m.dstPtrs = llvm::to_vector(dstMemObj.getBases());
+      m.dstPtrs = getTDMSharedMemoryBases(loc, rewriter, dstMemObj, dstTy);
       m.pred = Value();
       memberHints.push_back(static_cast<uint32_t>(op.getWarpUsedHints()[i]));
     }
@@ -1571,10 +1615,11 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     assert((blockShape.size() <= 2 && desc.size() == 2) ||
            (blockShape.size() > 2 && desc.size() == 4));
 
-    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+    auto srcMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
-    SmallVector<Value> srcPtrs = llvm::to_vector(dstMemObj.getBases());
+    SmallVector<Value> srcPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, srcMemObj, smemTy);
     // Positioning lives in the descriptor; the copy only does per-warp
     // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
@@ -1656,7 +1701,8 @@ struct AsyncTDMScatterOpConversion
 
     auto srcMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
-    Value srcPtr = srcMemObj.getBase();
+    SmallVector<Value> srcPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, srcMemObj, smemTy);
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1679,8 +1725,7 @@ struct AsyncTDMScatterOpConversion
         cast<RankedTensorType>(op.getDstRowIndices().getType());
 
     // Extract padding information if present
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto paddedEnc = getPaddedEncoding(smemTy.getEncoding());
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
@@ -1691,12 +1736,8 @@ struct AsyncTDMScatterOpConversion
     }
 
     // Create the CGA layout
-    triton::LinearLayout sharedLayout;
-    if (paddedEnc) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
-    }
+    triton::LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
     auto kBlock = rewriter.getStringAttr("block");
     auto cgaLayout = sharedLayout.sublayout(
         {kBlock}, to_vector(sharedLayout.getOutDimNames()));
@@ -1705,8 +1746,8 @@ struct AsyncTDMScatterOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, srcPtr, /*multicastMask=*/{}, elementType, barrierPtr,
-            cgaLayout, ctaId, dstRowIndices,
+            padAmount, srcPtrs, /*multicastMask=*/{}, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, dstRowIndices,
             /*isGather=*/false, numWarps, dstRowIndicesType, *auxBits)))
       return failure();
 
@@ -1738,8 +1779,7 @@ struct AsyncTDMGatherOpConversion
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getDst().getType();
-    auto paddedEnc =
-        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    auto paddedEnc = getPaddedEncoding(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
     SmallVector<Value> desc =
@@ -1753,7 +1793,8 @@ struct AsyncTDMGatherOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getDst(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    SmallVector<Value> dstPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, dstMemObj, smemTy);
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1776,17 +1817,15 @@ struct AsyncTDMGatherOpConversion
         cast<RankedTensorType>(op.getSrcRowIndices().getType());
 
     // Create the CGA layout
-    triton::LinearLayout sharedLayout;
+    triton::LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(smemTy);
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
       assert(paddedEnc.getIntervals().size() == 1 &&
              paddedEnc.getPaddings().size() == 1);
-      sharedLayout = paddedEnc.getLinearComponent();
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(smemTy);
     }
 
     auto kBlock = rewriter.getStringAttr("block");
@@ -1800,8 +1839,8 @@ struct AsyncTDMGatherOpConversion
 
     if (failed(mlir::LLVM::AMD::emitTDMGatherScatter(
             rewriter, loc, getTypeConverter(), desc, shapePerCTA, padInterval,
-            padAmount, dstPtr, multicastMask, elementType, barrierPtr,
-            cgaLayout, ctaId, srcRowIndices,
+            padAmount, dstPtrs, multicastMask, elementType, barrierPtr,
+            sharedLayout, cgaLayout, ctaId, srcRowIndices,
             /*isGather=*/true, numWarps, srcRowIndicesType, *auxBits)))
       return failure();
 
@@ -1910,7 +1949,8 @@ struct BufferAtomicRMWOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -2038,7 +2078,8 @@ struct BufferAtomicCASOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -2155,7 +2196,7 @@ struct BufferAtomicLoadOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, op.getScope(), rewriter, targetInfo);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     Type resultTy = op.getType();
@@ -2221,7 +2262,8 @@ struct BufferAtomicStoreOpConversion
       return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     Type valueTy = op.getValue().getType();
@@ -2391,7 +2433,8 @@ struct AtomicCASOpConversion
 
     // extract relevant info from Module
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
@@ -2489,7 +2532,8 @@ struct AtomicRMWOpConversion
           "scalar atomic RMW is not supported in multi-CTA kernels on AMD");
 
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     Type atomicElementType = getElementTypeOrSelf(op.getVal().getType());

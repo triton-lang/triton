@@ -41,6 +41,29 @@ def test_topk_valid_k(k):
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
 
 
+@pytest.mark.parametrize("arch", [90, 100, 103])
+@pytest.mark.parametrize("rows", [2, 4096])
+def test_tensor_descriptor_template_compile_only(arch, rows):
+
+    @triton.jit
+    def kernel(src, dst, ROWS: tl.constexpr):
+        desc = tl.make_tensor_descriptor(src, [ROWS, 64], [64, 1], [1, 64])
+        tile = desc.load([0, 0])
+        tl.store(dst + tl.arange(0, 64), tile.reshape((64, )))
+
+    source = ASTSource(kernel, {"src": "*fp16", "dst": "*fp16", "ROWS": "constexpr"}, constexprs={"ROWS": rows})
+    compiled = triton.compile(source, target=GPUTarget("cuda", arch, 32))
+    ptx = compiled.asm["ptx"]
+    assert f".target sm_{arch}a" in ptx
+    version = re.search(r"(?m)^\.version (\d+)\.(\d+)$", ptx)
+    assert version is not None
+    ptx_version = tuple(map(int, version.groups()))
+    uses_large_alloc = arch in (100, 103) and ptx_version >= (9, 5) and rows == 4096
+    assert ("tensormap.replace.tile.global_address.alloc_same" in ptx) == uses_large_alloc
+    replaced = re.findall(r"tensormap\.replace\.tile\.(\w+)", ptx)
+    assert replaced == ["global_address"]
+
+
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:
 
     @triton.jit
@@ -69,6 +92,30 @@ def test_compile_only_sm100() -> None:
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
     assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("arch", ["gfx942", "gfx950"])
+@pytest.mark.parametrize("transpose", [False, True])
+def test_compile_only_amd_static_lds_metadata(arch, transpose):
+
+    @triton.jit
+    def kernel(src, dst, TRANSPOSE: tl.constexpr):
+        if TRANSPOSE:
+            rows = tl.arange(0, 128)[:, None]
+            cols = tl.arange(0, 128)[None, :]
+            values = tl.load(src + rows * 128 + cols)
+            tl.store(dst + cols * 128 + rows, values)
+        else:
+            offsets = tl.arange(0, 128)
+            tl.store(dst + offsets, tl.load(src + offsets))
+
+    source = ASTSource(fn=kernel, signature={"src": "*fp32", "dst": "*fp32", "TRANSPOSE": "constexpr"},
+                       constexprs={"TRANSPOSE": transpose})
+    target = GPUTarget("hip", arch, 64)
+    compiled = triton.compile(source, target=target, options={"num_warps": 8})
+    shared = compiled.metadata.shared
+    assert (shared > 0) == transpose
+    assert f".amdhsa_group_segment_fixed_size {shared}" in compiled.asm["amdgcn"]
 
 
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
@@ -567,3 +614,110 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+def test_ir_module_lifetime(tmp_path):
+    import gc
+    from triton._C.libtriton import ir
+    from triton.compiler import make_backend
+
+    @triton.jit
+    def reduce_kernel(x_ptr, out_ptr, scale=1, BLOCK: tl.constexpr = 128):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(x_ptr + offs)
+        acc = tl.sum(x, axis=0) * scale
+        tl.store(out_ptr, acc)
+
+    @triton.jit
+    def invalid_kernel():
+        return unknown_symbol  # noqa: F821
+
+    target = GPUTarget("cuda", 90, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({})
+    codegen_fns = backend.get_codegen_implementation(options)
+    module_map = backend.get_module_map()
+    src = ASTSource(
+        fn=reduce_kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "scale": "i32", "BLOCK": "constexpr"},
+        constexprs={"BLOCK": 128},
+    )
+    bad_src = ASTSource(fn=invalid_kernel, signature={}, constexprs={})
+
+    ttir_file = tmp_path / "reduce.ttir"
+
+    # 1. Verify created and parsed modules keep MLIRContext alive on their own
+    #    (even without `mod.context`) and are cleanly reclaimed across GC cycles.
+    ctx = ir.context()
+    ir.load_dialects(ctx)
+    backend.load_dialects(ctx)
+    mod = src.make_ir(target, options, codegen_fns, module_map, ctx)
+    ttir_file.write_text(str(mod))
+    del mod.context, ctx
+    gc.collect()
+    assert "reduce_kernel" in str(mod)
+    mod._self_cycle = mod
+    del mod
+
+    ctx2 = ir.context()
+    ir.load_dialects(ctx2)
+    backend.load_dialects(ctx2)
+    parsed = ir.parse_mlir_module(str(ttir_file), ctx2)
+    del ctx2
+    gc.collect()
+    assert "reduce_kernel" in str(parsed)
+    parsed._self_cycle = parsed
+    del parsed
+
+    # 2. Verify exception path in AST codegen (raises before `module.context = context`).
+    ctx3 = ir.context()
+    ir.load_dialects(ctx3)
+    backend.load_dialects(ctx3)
+    with pytest.raises(triton.CompilationError):
+        bad_src.make_ir(target, options, codegen_fns, module_map, ctx3)
+    del ctx3
+
+    gc.collect()
+
+
+def test_ir_module_released_at_shutdown(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import triton
+        import triton.language as tl
+        from triton._C.libtriton import ir
+        from triton.backends.compiler import GPUTarget
+        from triton.compiler import ASTSource, make_backend
+
+
+        @triton.jit
+        def kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
+            tl.store(out_ptr, tl.sum(tl.load(x_ptr + tl.arange(0, BLOCK)), axis=0))
+
+
+        target = GPUTarget("cuda", 90, 32)
+        backend = make_backend(target)
+        options = backend.parse_options({})
+        context = ir.context()
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+        src = ASTSource(
+            fn=kernel,
+            signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+            constexprs={"BLOCK": 128},
+        )
+        module = src.make_ir(
+            target,
+            options,
+            backend.get_codegen_implementation(options),
+            backend.get_module_map(),
+            context,
+        )  # alive until shutdown
+    """)
+    script = tmp_path / "keep_module.py"
+    script.write_text(code)
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
+    assert "nanobind: leaked" not in result.stderr, result.stderr

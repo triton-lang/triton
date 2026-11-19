@@ -1,5 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -737,6 +739,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
+  POPULATE_BINARY_OP(ClMulOp, LLVM::ClmulOp)
   POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
   POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %

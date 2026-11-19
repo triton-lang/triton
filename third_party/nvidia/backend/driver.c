@@ -594,7 +594,13 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
     goto cleanup;
-  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  Py_ssize_t blockRank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  if (blockRank < 1 || blockRank > 5) {
+    PyErr_SetString(PyExc_ValueError,
+                    "tensor map rank must be between 1 and 5");
+    goto cleanup;
+  }
+  int rank = (int)blockRank;
 
   for (int i = 0; i < rank; ++i) {
     PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
@@ -648,7 +654,7 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   stridesFast = NULL;
 
   // cuTensorMapEncodeTiled requires 128 FP6 values. SM103 also accepts 64
-  // for a b6p2x16 store. Encode just that unswizzled 2D map here.
+  // for a b6p2x16 store. Encode the unswizzled narrow map here.
   if (elemType == CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B &&
       blockSizeInt[0] == 64) {
     CUdevice device;
@@ -663,25 +669,29 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
                       "64-value FP6 TMA stores require SM103");
       goto cleanup;
     }
-    if (rank != 2 || swizzle || padding || elemSize != 1 || !global_address ||
-        global_address % 16 || !shapeInt[0] || shapeInt[0] % 64 ||
-        shapeInt[0] > (1ULL << 32) || !shapeInt[1] ||
-        shapeInt[1] > (1ULL << 32) || !stridesLL[0] || stridesLL[0] % 16 ||
-        stridesLL[0] / 16 > UINT32_MAX || !blockSizeInt[1] ||
-        blockSizeInt[1] > 256) {
-      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
-      goto cleanup;
-    }
     uint32_t words[32] = {
         [0] = (uint32_t)global_address,
         [1] = global_address >> 32,
-        [2] = 0x690, // Tiled 2D FP6, no swizzle.
-        [3] = stridesLL[0] >> 4,
+        [2] = 0x680 | ((uint32_t)(rank - 1) << 4), // Tiled FP6, no swizzle.
         [8] = shapeInt[0] - 1,
-        [9] = shapeInt[1] - 1,
-        [13] = 63U << 24,
-        [14] = blockSizeInt[1] - 1,
+        [13] = 63U << 24, // Innermost box size minus one.
     };
+    bool valid = rank >= 2 && !swizzle && !padding && elemSize == 1 &&
+                 global_address && global_address % 16 == 0 && shapeInt[0] &&
+                 shapeInt[0] <= (1ULL << 32) && shapeInt[0] % 64 == 0;
+    for (int i = 0; i < rank - 1; ++i) {
+      uint64_t dim = shapeInt[i + 1], stride = stridesLL[i];
+      uint32_t box = blockSizeInt[i + 1];
+      valid &= dim && dim <= (1ULL << 32) && stride && stride % 16 == 0 &&
+               stride / 16 <= UINT32_MAX && box && box <= 256;
+      words[3 + i] = stride >> 4;
+      words[9 + i] = dim - 1;
+      words[14] |= (box - 1) << (8 * i);
+    }
+    if (!valid) {
+      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
+      goto cleanup;
+    }
     _Static_assert(sizeof(words) == sizeof(CUtensorMap),
                    "unexpected tensor map size");
     memcpy(&desc->tensorMap, words, sizeof(words));

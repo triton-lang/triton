@@ -55,7 +55,8 @@ SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
 
   int rank = shape.size();
   if (rank == 1) {
@@ -104,7 +105,8 @@ AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
 
   int rank = shape.size();
   if (rank == 1) {
@@ -377,7 +379,8 @@ FailureOr<LinearLayout>
 nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                           NVMMASharedEncodingAttr shared, TMAMode mode,
                           bool disableSwizzle, bool emitErrors) {
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
   SmallVector<int64_t> tmaShape;
   if (emitErrors) {
     tmaShape =

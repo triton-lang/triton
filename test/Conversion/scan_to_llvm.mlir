@@ -14,6 +14,9 @@
 // RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
 // RUN: triton-opt %t/small-lanes.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SMALL-LANES --implicit-check-not="nvvm.shfl.sync idx" --implicit-check-not="nvvm.barrier"
 
+// RUN: triton-opt %t/lane-local-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=LOCAL
+// RUN: triton-opt %t/lane-local-carries.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=LOCAL
+
 //--- cross-cta.mlir
 // ERROR: scan axis distributed across CTAs is not supported
 #layout = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[32], [64]], block = [[128]]}>
@@ -106,6 +109,7 @@ tt.func private @test_scan_warp_transpose_forward(%a: tensor<16xi8, #transpose>,
 //--- shuffle-offsets.mlir
 
 #groups = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#independent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #strided = #ttg.linear<{register = [], lane = [[1, 0], [0, 1], [0, 2], [0, 4], [0, 8]], warp = [[0, 0], [0, 0]], block = []}>
 #gapped = #ttg.linear<{register = [], lane = [[0, 1], [1, 0], [0, 2], [2, 0], [0, 4]], warp = [[0, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
@@ -180,6 +184,106 @@ tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) 
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped>
+  tt.return %result : tensor<4x8xi32, #gapped>
+}
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_carry(
+// OFFSETS-NOT: nvvm.shfl.sync idx
+// OFFSETS: [[SHFL:%.*]] = nvvm.shfl.sync down {{.*}} return_value_and_is_valid
+// OFFSETS-DAG: [[DATA:%.*]] = llvm.extractvalue [[SHFL]][0]
+// OFFSETS-DAG: [[VALID:%.*]] = llvm.extractvalue [[SHFL]][1]
+// OFFSETS: llvm.select [[VALID]],
+// OFFSETS-COUNT-4: nvvm.shfl.sync down {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync down {{.*}} : i32 -> i32
+// OFFSETS-NOT: nvvm.shfl.sync
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_carry(
+// AMD-OFFSETS: [[ONE:%.*]] = llvm.mlir.constant(1 : i32)
+// AMD-OFFSETS: [[SOURCE:%.*]] = llvm.add [[LANE:%[^,]+]], [[ONE]]
+// AMD-OFFSETS: [[VALID:%.*]] = llvm.icmp "ult" [[SOURCE]],
+// AMD-OFFSETS: [[INDEX:%.*]] = llvm.select [[VALID]], [[SOURCE]], [[LANE]] : i1, i32
+// AMD-OFFSETS: [[ADDR:%.*]] = llvm.shl [[INDEX]],
+// AMD-OFFSETS: rocdl.ds_bpermute [[ADDR]],
+// AMD-OFFSETS: llvm.select [[VALID]],
+// AMD-OFFSETS-COUNT-5: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_carry(%arg: tensor<64xi32, #groups>) -> tensor<64xi32, #groups> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<64xi32, #groups>) -> tensor<64xi32, #groups>
+  tt.return %result : tensor<64xi32, #groups>
+}
+
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_tuple(
+// OFFSETS-COUNT-5: nvvm.shfl.sync down {{.*}} return_value_and_is_valid
+// OFFSETS-NOT: return_value_and_is_valid
+// OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_tuple(%a: tensor<64xi64, #groups>, %b: tensor<64xi32, #groups>) -> (tensor<64xi64, #groups>, tensor<64xi32, #groups>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%a1: i64, %b1: i32, %a2: i64, %b2: i32):
+    %a_sum = arith.addi %a1, %a2 : i64
+    %b_sum = arith.addi %b1, %b2 : i32
+    tt.scan.return %a_sum, %b_sum : i64, i32
+  }) : (tensor<64xi64, #groups>, tensor<64xi32, #groups>) -> (tensor<64xi64, #groups>, tensor<64xi32, #groups>)
+  tt.return %a_out, %b_out : tensor<64xi64, #groups>, tensor<64xi32, #groups>
+}
+
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_independent_scans(
+// OFFSETS: [[VALID:%.*]] = llvm.icmp "ult"
+// OFFSETS: nvvm.shfl.sync down {{.*}} : i32 -> i32
+// OFFSETS: llvm.select [[VALID]],
+// OFFSETS-NOT: return_value_and_is_valid
+// OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_independent_scans(%arg: tensor<4x8xi32, #independent>) -> tensor<4x8xi32, #independent> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4x8xi32, #independent>) -> tensor<4x8xi32, #independent>
+  tt.return %result : tensor<4x8xi32, #independent>
+}
+
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_strided(
+// OFFSETS-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
+// OFFSETS-DAG: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32)
+// OFFSETS-DAG: %[[EIGHT:.*]] = llvm.mlir.constant(8 : i32)
+// OFFSETS-DAG: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[TWO]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[FOUR]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[EIGHT]], {{.*}} return_value_and_is_valid
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_strided(
+// AMD-OFFSETS-COUNT-4: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_strided(%arg: tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided>
+  tt.return %result : tensor<2x16xi32, #strided>
+}
+
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_gapped(
+// OFFSETS: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
+// OFFSETS-COUNT-2: nvvm.shfl.sync idx
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[SIXTEEN]], {{.*}} return_value_and_is_valid
+// OFFSETS-NOT: nvvm.shfl.sync
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_gapped(
+// AMD-OFFSETS-COUNT-3: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
     tt.scan.return %sum : i32
@@ -261,6 +365,28 @@ tt.func private @test_scan_shuffle_up_wave64(%arg: tensor<64xi64, #wave64>) -> t
   }) : (tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64>
   tt.return %result : tensor<64xi64, #wave64>
 }
+
+// GFX90A-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_wave64(
+// GFX90A: [[LIMIT:%.*]] = llvm.mlir.constant(64 : i32)
+// GFX90A: [[SOURCE:%.*]] = llvm.add [[LANE:%[^,]+]],
+// GFX90A: [[VALID:%.*]] = llvm.icmp "ult" [[SOURCE]], [[LIMIT]]
+// GFX90A: [[INDEX:%.*]] = llvm.select [[VALID]], [[SOURCE]], [[LANE]] : i1, i32
+// GFX90A: [[ADDR:%.*]] = llvm.shl [[INDEX]],
+// GFX90A: rocdl.ds_bpermute [[ADDR]],
+// GFX90A: rocdl.ds_bpermute
+// GFX90A: [[SUM:%.*]] = llvm.add {{.*}} : i64
+// GFX90A: llvm.select [[VALID]], [[SUM]],
+// GFX90A-COUNT-10: rocdl.ds_bpermute
+// GFX90A-NOT: rocdl.ds_bpermute
+// GFX90A: llvm.return
+tt.func private @test_scan_shuffle_down_wave64(%arg: tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<64xi64, #wave64>) -> tensor<64xi64, #wave64>
+  tt.return %result : tensor<64xi64, #wave64>
+}
 }
 
 //--- tiny-totals.mlir
@@ -299,4 +425,56 @@ tt.func private @test_small_independent_lane_scans(%arg: tensor<64x8xi32, #layou
   }) : (tensor<64x8xi32, #layout>) -> tensor<64x8xi32, #layout>
   tt.return %result : tensor<64x8xi32, #layout>
 }
+}
+
+//--- lane-local-carries.mlir
+
+#lane_local = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_reverse(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_reverse(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_broadcast_lanes(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_broadcast_lanes(%arg: tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local>
+  tt.return %result : tensor<8x16xi32, #lane_local>
+}
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_broadcast_lanes_reverse(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_broadcast_lanes_reverse(%arg: tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local>
+  tt.return %result : tensor<8x16xi32, #lane_local>
+}
+
 }

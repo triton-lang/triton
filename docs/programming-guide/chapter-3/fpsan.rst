@@ -289,6 +289,66 @@ Important caveat:
 
 - There is no special fused-rounding behavior.
 
+Opt-in Expression Boundaries
+===========================
+
+Use ``tl.fpsan.barrier(x)`` (or ``gl.fpsan.barrier(x)`` in Gluon) to make an
+intermediate result significant to a FpSan comparison. The input must be a
+floating-point scalar or tensor; its type, shape, and layout are preserved.
+
+With FpSan enabled, the barrier applies a deterministic, non-homomorphic
+transformation to each element's payload. For example:
+
+.. code-block:: python
+
+   left = tl.fpsan.barrier(a * b) * c
+   right = a * tl.fpsan.barrier(b * c)
+
+   unfused = tl.fpsan.barrier(a * b) + c
+   fused = tl.fma(a, b, c)
+
+These pairs can have different FpSan results. Without the barriers, each pair
+has identical payload algebra. Put the barrier around the intermediate whose
+boundary matters: wrapping only the final result does not distinguish
+expressions that already have identical payloads.
+
+Every barrier uses the same transformation, independent of source location.
+Equivalent annotated computations therefore still agree across kernels. Each
+call applies the transformation again; nested barriers are not redundant.
+As with other FpSan checks, different computations can collide for particular
+inputs, so a matching result is not proof of equivalence.
+
+When FpSan is disabled, this function returns its input unchanged and emits no
+operation. It does not enforce rounding, prevent fusion or reassociation in
+normal compilation, or synchronize execution.
+
+Local Homomorphic Casts
+======================
+
+``tl.fpsan.homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
+retains the low payload bits when converting to a narrower floating-point type.
+It preserves addition and multiplication across the conversion. Other casts
+retain their existing FpSan semantics.
+
+Use a barrier to mark how far such a cast may move without changing the FpSan
+signature:
+
+.. code-block:: python
+
+   result = tl.fpsan.homomorphic_cast(tl.fpsan.barrier(a * b), tl.float16)
+
+The barrier mixes high payload bits into low bits before they are discarded.
+Moving the downcast ahead of the barrier therefore generally changes the result,
+including when the narrowed value is cast back to the original width before
+the barrier. This is a signature distinction, not a compiler optimization
+restriction; collisions remain possible.
+
+The source and destination must be floating-point types, and the destination
+must be the same width or narrower. Same-width conversions preserve the payload.
+Widening is rejected because signed extension is not a ring homomorphism.
+Without FpSan, this function performs an ordinary floating-point cast, with the
+optional ``fp_downcast_rounding`` argument interpreted as for ``tl.cast``.
+
 ----------------
 Unary Math Ops
 ----------------

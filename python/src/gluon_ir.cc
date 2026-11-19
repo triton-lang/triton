@@ -11,7 +11,6 @@
 #include <optional>
 #include <stdexcept>
 
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -897,7 +896,8 @@ void init_gluon_ir(py::module_ &m) {
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
-             auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
+             auto smemLayout =
+                 ttg::toLinearLayoutIgnoringPadding(shape, sharedLayoutAttr);
              auto mod = self.getBuilder()
                             .getInsertionBlock()
                             ->getParentOp()
@@ -906,18 +906,28 @@ void init_gluon_ir(py::module_ &m) {
              if (!arch.has_value())
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
+
              tt::AMD::TargetInfo targetInfo(arch->str());
              int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
+             auto padded =
+                 dyn_cast<ttg::PaddedSharedEncodingAttr>(sharedLayoutAttr);
+             auto maybeMaxVecElems =
+                 padded ? std::optional<int>(padded.getMinInterval())
+                        : std::nullopt;
+             auto cvt = regLayout.invertAndCompose(smemLayout);
+             auto [elemsPerVec, perm] = tt::largestVectorisation(
+                 mod.getContext(), cvt, bitwidth, maybeMaxVecElems);
+             constexpr int maxVecBitwidth = 128;
+             auto vecBitwidth =
+                 std::clamp(elemsPerVec * bitwidth, 32, maxVecBitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
-             (void)srcTile;
-             assert(srcTile.laneAddr.empty() &&
-                    "srcTile.laneAddr should be empty");
+             assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
+                    "srcTile should be empty");
+
+             if (padded)
+               return bankConflictsMemDescPadded(regLayout, padded, bitwidth,
+                                                 numBanks, dstTile);
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks, dstTile);
            })
@@ -1157,10 +1167,25 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
-              std::vector<Value> &descs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
+              std::vector<Value> &descs, bool earlyARelease) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs,
+                                               earlyARelease);
            })
 
+      .def("create_async_bulk_copy_global_to_local",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value barrier, Value pred, bool multicast) {
+             multicast &=
+                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(dst.getType()));
+             self.create<ttng::AsyncBulkCopyGlobalToLocalOp>(
+                 dst, src, numBytes, barrier, pred, multicast);
+           })
+      .def("create_async_bulk_copy_local_to_global",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value pred) {
+             self.create<ttng::AsyncBulkCopyLocalToGlobalOp>(dst, src, numBytes,
+                                                             pred);
+           })
       .def(
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
@@ -1539,24 +1564,15 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_amd_sched_barrier",
            [](GluonOpBuilder &self, uint32_t mask) {
-             auto schedMask = ROCDL::symbolizeSchedGroupMask(mask);
-             if (!schedMask)
+             if (failed(ttag::createSchedBarrier(self.getBuilder(),
+                                                 self.getLastLoc(), mask)))
                throw std::invalid_argument("invalid scheduling barrier mask " +
                                            std::to_string(mask));
-             self.create<ROCDL::SchedBarrier>(*schedMask);
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {
-             auto border =
-                 self.create<ROCDL::SchedBarrier>(ROCDL::SchedGroupMask::none);
-             auto ctx = self.getContext();
-             border->setAttr("triton.warp_pipeline.border",
-                             StringAttr::get(ctx, marker));
-             if (priority > -1) {
-               auto i32Ty = IntegerType::get(ctx, 32);
-               border->setAttr("triton.warp_pipeline.priority",
-                               IntegerAttr::get(i32Ty, priority));
-             }
+             ttag::createWarpPipelineBorder(
+                 self.getBuilder(), self.getLastLoc(), marker, priority);
            });
 
   m.def("compute_tmem_reg_layout",
