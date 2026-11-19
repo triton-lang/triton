@@ -14,7 +14,7 @@ enum class Path {
 
 struct Demand {
   unsigned source, sink;
-  Need first;
+  SyncKind first;
   Path path = Path::Any;
 };
 
@@ -59,7 +59,7 @@ void walkEdges(const MembarCFG<Facts> &cfg, const Node<Facts> &producer,
 // A model returns the ordering required at a reachable consumer. The first
 // SMEM conflict also orders subsequent consumers on that path.
 struct Conflict {
-  Need need{};
+  SyncKind need{};
   std::optional<Path> path;
   bool stopOnMatch = false;
 };

@@ -583,7 +583,7 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
     fixed.after = barrier.hasLocal()
                       ? (barrier.isWarp() ? warpBarrier : fullBarrier)
-                      : bit(Need::WarpConvergence);
+                      : bit(SyncKind::WarpConvergence);
     return;
   }
   if (isa<ttng::TMEMWaitOp>(op)) {
@@ -591,7 +591,7 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
     // The wait itself converges each warp and adds no memory-order demand.
     if (includeShared)
       model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
-    fixed.after = bit(Need::WarpConvergence);
+    fixed.after = bit(SyncKind::WarpConvergence);
     return;
   }
 

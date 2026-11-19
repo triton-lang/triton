@@ -8,7 +8,7 @@
 namespace mlir::triton::membar {
 namespace {
 
-constexpr unsigned proxyScopes = bit(Need::ProxyCTA) | bit(Need::ProxyCluster);
+constexpr unsigned proxyScopes = coverage(SyncKind::ClusterProxyFence);
 
 using FenceCFG = MembarCFG<AsyncFenceFacts>;
 
@@ -23,12 +23,12 @@ bool mayObserveBarrier(const Node<AsyncFenceFacts> &node,
 // A cluster fence covers both windows. A CTA fence covers a peer generic
 // access once the owner has acquired it.
 unsigned applyFixed(unsigned state, unsigned sync) {
-  if (sync & bit(Need::ProxyCluster))
+  if (sync & bit(SyncKind::ClusterProxyFence))
     return 0;
-  if (!(state & bit(Need::ClusterAcquire)))
-    state &= ~(sync & bit(Need::ProxyCTA));
-  if (sync & bit(Need::ClusterAcquire))
-    state &= ~bit(Need::ClusterAcquire);
+  if (!(state & bit(SyncKind::ClusterBarrier)))
+    state &= ~(sync & bit(SyncKind::CTAProxyFence));
+  if (sync & bit(SyncKind::ClusterBarrier))
+    state &= ~bit(SyncKind::ClusterBarrier);
   return state & proxyScopes ? state : 0;
 }
 
@@ -51,13 +51,13 @@ AsyncFenceModel::describe(Operation *op, FixedSync &fixed, Block *active) {
     return facts;
   }
   if (auto fence = dyn_cast<nvidia_gpu::FenceAsyncSharedOp>(op)) {
-    fixed.after =
-        coverage(fence.getBCluster() ? Action::ProxyCluster : Action::ProxyCTA);
+    fixed.after = coverage(fence.getBCluster() ? SyncKind::ClusterProxyFence
+                                               : SyncKind::CTAProxyFence);
     return std::nullopt;
   }
   if (auto barrier = dyn_cast<nvidia_gpu::ClusterBarrierOp>(op)) {
     if (!barrier.getRelaxed())
-      fixed.after = bit(Need::ClusterAcquire);
+      fixed.after = bit(SyncKind::ClusterBarrier);
     return std::nullopt;
   }
   bool usesCompletionBarrier =
@@ -131,21 +131,21 @@ static void recordCompletedWrites(FenceCFG &cfg) {
 
 SmallVector<Demand> AsyncFenceModel::discoverDemands(FenceCFG &cfg) {
   recordCompletedWrites(cfg);
-  unsigned scopes = numCTAs == 1 ? bit(Need::ProxyCTA) : proxyScopes;
+  unsigned scopes = numCTAs == 1 ? bit(SyncKind::CTAProxyFence) : proxyScopes;
   SmallVector<Demand> demands;
   for (auto [source, producer] : llvm::enumerate(cfg.nodes)) {
     if (producer.effects.proxy != gpu::SharedKind::Generic)
       continue;
     for (const SharedAccess &access : producer.effects.accesses) {
       unsigned state =
-          scopes | (access.crossCTA ? bit(Need::ClusterAcquire) : 0);
+          scopes | (access.crossCTA ? bit(SyncKind::ClusterBarrier) : 0);
       membar::discoverDemands(
           cfg, demands, source, state, applyFixed,
           [&](const auto &sink, unsigned live) -> Conflict {
             if (sink.effects.proxy == gpu::SharedKind::Async)
               for (const SharedAccess &other : sink.effects.accesses) {
-                Need need =
-                    other.crossCTA ? Need::ProxyCluster : Need::ProxyCTA;
+                SyncKind need = other.crossCTA ? SyncKind::ClusterProxyFence
+                                               : SyncKind::CTAProxyFence;
                 if ((live & bit(need)) && (access.isWrite || other.isWrite) &&
                     mayOverlap(access.footprint, other.footprint))
                   return {need, !other.crossCTA && access.crossCTA

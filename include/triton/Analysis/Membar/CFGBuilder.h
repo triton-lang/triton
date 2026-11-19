@@ -6,62 +6,47 @@
 #include "triton/Analysis/Membar/TmemModel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/ErrorHandling.h"
 #include <map>
 #include <optional>
 #include <utility>
 
 namespace mlir::triton::membar {
 
-enum class Action {
+// A demand names the minimum synchronization it requires. An action can
+// satisfy several kinds of demand at its insertion site.
+enum class SyncKind {
   WaitLoad,
   WaitStore,
   RegionBarrier,
   WarpBarrier,
-  ProxyCluster,
-  ProxyCTA,
+  WarpConvergence, // Demand only.
+  CTAProxyFence,
+  ClusterProxyFence,
   ClusterBarrier,
-  ClusterInit
+  ClusterFenceMbarInit
 };
 
-enum class Need {
-  WaitLoad,
-  WaitStore,
-  RegionOrder,
-  WarpOrder,
-  WarpConvergence,
-  ProxyCTA,
-  ProxyCluster,
-  ClusterAcquire,
-  ClusterInit
-};
+constexpr unsigned bit(SyncKind kind) { return 1u << unsigned(kind); }
 
-constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
-constexpr unsigned warpBarrier =
-    bit(Need::WarpOrder) | bit(Need::WarpConvergence);
-constexpr unsigned fullBarrier = bit(Need::RegionOrder) | warpBarrier;
-
-constexpr unsigned coverage(Action action) {
+constexpr unsigned coverage(SyncKind action) {
   switch (action) {
-  case Action::WaitLoad:
-    return bit(Need::WaitLoad) | bit(Need::WarpConvergence);
-  case Action::WaitStore:
-    return bit(Need::WaitStore) | bit(Need::WarpConvergence);
-  case Action::RegionBarrier:
-    return fullBarrier;
-  case Action::WarpBarrier:
-    return warpBarrier;
-  case Action::ProxyCluster:
-    return bit(Need::ProxyCluster) | bit(Need::ProxyCTA);
-  case Action::ProxyCTA:
-    return bit(Need::ProxyCTA);
-  case Action::ClusterBarrier:
-    return bit(Need::ClusterAcquire) | bit(Need::ClusterInit);
-  case Action::ClusterInit:
-    return bit(Need::ClusterInit);
+  case SyncKind::WaitLoad:
+  case SyncKind::WaitStore:
+  case SyncKind::WarpBarrier:
+    return bit(action) | bit(SyncKind::WarpConvergence);
+  case SyncKind::RegionBarrier:
+    return bit(action) | coverage(SyncKind::WarpBarrier);
+  case SyncKind::ClusterProxyFence:
+    return bit(action) | bit(SyncKind::CTAProxyFence);
+  case SyncKind::ClusterBarrier:
+    return bit(action) | bit(SyncKind::ClusterFenceMbarInit);
+  default:
+    return bit(action);
   }
-  llvm_unreachable("unknown synchronization action");
 }
+
+constexpr unsigned warpBarrier = coverage(SyncKind::WarpBarrier);
+constexpr unsigned fullBarrier = coverage(SyncKind::RegionBarrier);
 
 enum class Boundary {
   None,
@@ -76,7 +61,7 @@ struct OpModel {
   BlockInfo sharedIn, sharedOut;
   SmallVector<TMemAccess, 1> tmemAccesses;
   // Native transfers need a completion wait; descriptor asm needs region order.
-  std::optional<Need> tmemProducerNeed;
+  std::optional<SyncKind> tmemProducerNeed;
   Boundary boundary = Boundary::None;
   bool privateTMem = false;
   bool needsWarp = false;
