@@ -25,9 +25,7 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd.cdna5 import tdm
 from triton.experimental.gluon.language.amd import cdna5
-from triton.experimental.gluon.language.amd.cdna5 import mbarrier
 from triton.experimental.gluon.amd.cdna5 import TensorDescriptor
 
 t1 = importlib.import_module("amd.01-buffer-ops")
@@ -72,19 +70,19 @@ def elementwise_tdm_kernel(  #
         smem_layout: gl.constexpr,  #
 ):
     xoff = gl.program_id(0) * XBLOCK
-    a_desc = tdm.make_tensor_descriptor(  #
+    a_desc = cdna5.tdm.make_tensor_descriptor(  #
         base=a_ptr + xoff * xstride_a,  #
         shape=[xnumel - xoff, ynumel],  #
         strides=[xstride_a, ystride_a],  #
         block_shape=[XBLOCK, YBLOCK],  #
         layout=smem_layout)
-    b_desc = tdm.make_tensor_descriptor(  #
+    b_desc = cdna5.tdm.make_tensor_descriptor(  #
         base=b_ptr + xoff * xstride_b,  #
         shape=[xnumel - xoff, ynumel],  #
         strides=[xstride_b, ystride_b],  #
         block_shape=[XBLOCK, YBLOCK],  #
         layout=smem_layout)
-    c_desc = tdm.make_tensor_descriptor(  #
+    c_desc = cdna5.tdm.make_tensor_descriptor(  #
         base=c_ptr + xoff * xstride_c,  #
         shape=[xnumel - xoff, ynumel],  #
         strides=[xstride_c, ystride_c],  #
@@ -97,27 +95,27 @@ def elementwise_tdm_kernel(  #
     c_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
 
     for _ in range(0, ynumel, YBLOCK):
-        tdm.async_load(a_desc, dest=a_smem)
-        tdm.async_load(b_desc, dest=b_smem)
+        cdna5.tdm.async_load(a_desc, dest=a_smem)
+        cdna5.tdm.async_load(b_desc, dest=b_smem)
         # Wait for the loads. This also waits for the store of the previous
         # iteration, so we can overwrite `c_smem`.
-        tdm.async_wait(0)
+        cdna5.tdm.async_wait(0)
 
         c_val = a_smem.load(layout) + b_smem.load(layout)
         c_smem.store(c_val)
-        tdm.async_store(c_desc, src=c_smem)
+        cdna5.tdm.async_store(c_desc, src=c_smem)
 
         # Move the descriptors to the next column block. The descriptor stores
         # the address of the block and the extent of the tensor measured from
         # that address. `add_offsets` moves the block but keeps the extent, so
         # we also pass `clamp_bounds=True` to shrink the extent by the same
         # offsets. Then the bounds check stays correct after the move.
-        a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
-        b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
-        c_desc = tdm.update_tensor_descriptor(c_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
+        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
+        b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
+        c_desc = cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[0, YBLOCK], clamp_bounds=True)
 
     # Wait for the last store.
-    tdm.async_wait(0)
+    cdna5.tdm.async_wait(0)
 
 
 def elementwise_tdm(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
@@ -187,12 +185,12 @@ def copy_kernel(in_desc, out_desc):
     smem = gl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     xoff = gl.program_id(0) * in_desc.block_shape[0]
     yoff = gl.program_id(1) * in_desc.block_shape[1]
-    in_desc = tdm.update_tensor_descriptor(in_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    out_desc = tdm.update_tensor_descriptor(out_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    tdm.async_load(in_desc, dest=smem)
-    tdm.async_wait(0)
-    tdm.async_store(out_desc, src=smem)
-    tdm.async_wait(0)
+    in_desc = cdna5.tdm.update_tensor_descriptor(in_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    out_desc = cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    cdna5.tdm.async_load(in_desc, dest=smem)
+    cdna5.tdm.async_wait(0)
+    cdna5.tdm.async_store(out_desc, src=smem)
+    cdna5.tdm.async_wait(0)
 
 
 def copy(A, B, XBLOCK=32, YBLOCK=256, num_warps=4):
@@ -228,9 +226,9 @@ def elementwise_warp_hint_kernel(  #
         XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
 ):
-    a_desc = tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
-    b_desc = tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
-    c_desc = tdm.make_tensor_descriptor(c_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
     xoff = gl.program_id(0) * XBLOCK
     yoff = gl.program_id(1) * YBLOCK
 
@@ -239,19 +237,19 @@ def elementwise_warp_hint_kernel(  #
     b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
     c_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
 
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    c_desc = tdm.update_tensor_descriptor(c_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    c_desc = cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
     # Warps 0-3 (0b00001111) load A, and warps 4-7 (0b11110000) load B.
-    tdm.async_load(a_desc, dest=a_smem, warp_used_hint=0b00001111)
-    tdm.async_load(b_desc, dest=b_smem, warp_used_hint=0b11110000)
+    cdna5.tdm.async_load(a_desc, dest=a_smem, warp_used_hint=0b00001111)
+    cdna5.tdm.async_load(b_desc, dest=b_smem, warp_used_hint=0b11110000)
     # Each warp waits only for its own copies. The CTA barrier after the wait
     # makes both blocks visible to all warps.
-    tdm.async_wait(0)
+    cdna5.tdm.async_wait(0)
 
     c_smem.store(a_smem.load(layout) + b_smem.load(layout))
-    tdm.async_store(c_desc, src=c_smem)
-    tdm.async_wait(0)
+    cdna5.tdm.async_store(c_desc, src=c_smem)
+    cdna5.tdm.async_wait(0)
 
 
 def elementwise_warp_hint(A, B, C, XBLOCK=32, YBLOCK=256):
@@ -290,7 +288,7 @@ def elementwise_mix_kernel(  #
         XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
 ):
-    a_desc = tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
     xoff = gl.program_id(0) * XBLOCK
     yoff = gl.program_id(1) * YBLOCK
     xoffs = xoff + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
@@ -302,14 +300,14 @@ def elementwise_mix_kernel(  #
     a_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
     b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
 
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    tdm.async_load(a_desc, dest=a_smem)
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    cdna5.tdm.async_load(a_desc, dest=a_smem)
     cdna5.async_copy.global_to_shared(b_smem, b_ptr + offs, mask)
     cdna5.async_copy.commit_group()
 
     cdna5.async_copy.wait_group(0)
     b_val = b_smem.load(layout)
-    tdm.async_wait(0)
+    cdna5.tdm.async_wait(0)
     a_val = a_smem.load(layout)
     gl.store(c_ptr + offs, a_val + b_val, mask)
 
@@ -373,8 +371,8 @@ def elementwise_tdm_mbarrier_kernel(  #
         XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
 ):
-    a_desc = tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
-    b_desc = tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
     xoff = gl.program_id(0) * XBLOCK
     yoff = gl.program_id(1) * YBLOCK
     xoffs = xoff + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
@@ -385,14 +383,14 @@ def elementwise_tdm_mbarrier_kernel(  #
     dtype: gl.constexpr = a_ptr.dtype.element_ty
     a_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
     b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
-    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(bar, count=2 * gl.num_warps())
+    bar = gl.allocate_shared_memory(gl.int64, [1], cdna5.mbarrier.MBarrierLayout())
+    cdna5.mbarrier.init(bar, count=2 * gl.num_warps())
 
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    tdm.async_load(a_desc, dest=a_smem, mbarrier=bar)
-    tdm.async_load(b_desc, dest=b_smem, mbarrier=bar)
-    mbarrier.wait(bar, 0)
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    cdna5.tdm.async_load(a_desc, dest=a_smem, mbarrier=bar)
+    cdna5.tdm.async_load(b_desc, dest=b_smem, mbarrier=bar)
+    cdna5.mbarrier.wait(bar, 0)
 
     gl.store(c_ptr + offs, a_smem.load(layout) + b_smem.load(layout), mask)
 
@@ -428,10 +426,10 @@ def issue_loads(copy_idx, num_blocks, a_desc, b_desc, a_smem, b_smem, YBLOCK: gl
     # Turn off the loads past the last block. They still count in `tensorcnt`,
     # so every iteration waits with the same count.
     pred = copy_idx < num_blocks
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[0, yoff], pred=pred, clamp_bounds=True)
-    b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[0, yoff], pred=pred, clamp_bounds=True)
-    tdm.async_load(a_desc, dest=a_smem.index(copy_idx % num_buffers))
-    tdm.async_load(b_desc, dest=b_smem.index(copy_idx % num_buffers))
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, yoff], pred=pred, clamp_bounds=True)
+    b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, yoff], pred=pred, clamp_bounds=True)
+    cdna5.tdm.async_load(a_desc, dest=a_smem.index(copy_idx % num_buffers))
+    cdna5.tdm.async_load(b_desc, dest=b_smem.index(copy_idx % num_buffers))
     return copy_idx + 1
 
 
@@ -442,8 +440,8 @@ def perform_add(read_idx, a_smem, b_smem, c_smem, c_desc, YBLOCK: gl.constexpr, 
     b_val = b_smem.index(read_idx % num_buffers).load(layout)
     c_buf = c_smem.index(read_idx % num_buffers)
     c_buf.store(a_val + b_val)
-    c_desc = tdm.update_tensor_descriptor(c_desc, add_offsets=[0, read_idx * YBLOCK], clamp_bounds=True)
-    tdm.async_store(c_desc, src=c_buf)
+    c_desc = cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[0, read_idx * YBLOCK], clamp_bounds=True)
+    cdna5.tdm.async_store(c_desc, src=c_buf)
     return read_idx + 1
 
 
@@ -455,12 +453,12 @@ def elementwise_tdm_pipelined_kernel(  #
         smem_layout: gl.constexpr, num_buffers: gl.constexpr,  #
 ):
     xoff = gl.program_id(0) * XBLOCK
-    a_desc = tdm.make_tensor_descriptor(a_ptr + xoff * xstride_a, [xnumel - xoff, ynumel], [xstride_a, ystride_a],
-                                        [XBLOCK, YBLOCK], smem_layout)
-    b_desc = tdm.make_tensor_descriptor(b_ptr + xoff * xstride_b, [xnumel - xoff, ynumel], [xstride_b, ystride_b],
-                                        [XBLOCK, YBLOCK], smem_layout)
-    c_desc = tdm.make_tensor_descriptor(c_ptr + xoff * xstride_c, [xnumel - xoff, ynumel], [xstride_c, ystride_c],
-                                        [XBLOCK, YBLOCK], smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr + xoff * xstride_a, [xnumel - xoff, ynumel], [xstride_a, ystride_a],
+                                              [XBLOCK, YBLOCK], smem_layout)
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr + xoff * xstride_b, [xnumel - xoff, ynumel], [xstride_b, ystride_b],
+                                              [XBLOCK, YBLOCK], smem_layout)
+    c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr + xoff * xstride_c, [xnumel - xoff, ynumel], [xstride_c, ystride_c],
+                                              [XBLOCK, YBLOCK], smem_layout)
 
     dtype: gl.constexpr = a_ptr.dtype.element_ty
     a_smem = gl.allocate_shared_memory(dtype, [num_buffers, XBLOCK, YBLOCK], layout=smem_layout)
@@ -475,10 +473,10 @@ def elementwise_tdm_pipelined_kernel(  #
 
     for _ in range(num_blocks):
         copy_idx = issue_loads(copy_idx, num_blocks, a_desc, b_desc, a_smem, b_smem, YBLOCK, num_buffers)
-        tdm.async_wait((num_buffers - 1) * 2)
+        cdna5.tdm.async_wait((num_buffers - 1) * 2)
         read_idx = perform_add(read_idx, a_smem, b_smem, c_smem, c_desc, YBLOCK, num_buffers, layout)
 
-    tdm.async_wait(0)
+    cdna5.tdm.async_wait(0)
 
 
 def elementwise_tdm_pipelined(A, B, C, XBLOCK=32, YBLOCK=256, num_buffers=2, num_warps=4):

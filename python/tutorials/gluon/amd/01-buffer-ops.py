@@ -26,7 +26,7 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd.cdna4 import buffer
+from triton.experimental.gluon.language.amd import cdna4
 
 
 def is_cdna4():
@@ -100,7 +100,7 @@ def elementwise_kernel(  #
 def make_buffer_descriptor(ptr, xoff, xnumel, xstride, XBLOCK: gl.constexpr):
     nrows = gl.minimum(xnumel - xoff, XBLOCK)
     nbytes = nrows * xstride * ptr.dtype.element_ty.primitive_bitwidth // 8
-    return buffer.make_buffer_descriptor(ptr + xoff * xstride, nbytes)
+    return cdna4.buffer.make_buffer_descriptor(ptr + xoff * xstride, nbytes)
 
 
 @gluon.jit
@@ -123,9 +123,9 @@ def elementwise_w_buffer_kernel(  #
 
     for yoff in range(0, ynumel, YBLOCK):
         mask = (yoff + yidx < ynumel)[None, :]
-        a_val = buffer.load(a_desc, a_offs, mask, soffset=yoff * ystride_a)
-        b_val = buffer.load(b_desc, b_offs, mask, soffset=yoff * ystride_b)
-        buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
+        a_val = cdna4.buffer.load(a_desc, a_offs, mask, soffset=yoff * ystride_a)
+        b_val = cdna4.buffer.load(b_desc, b_offs, mask, soffset=yoff * ystride_b)
+        cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
 
 
 def elementwise(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
@@ -256,9 +256,9 @@ if __name__ == "__main__":
 
 @gluon.jit
 def copy_kernel(src_ptr, dst_ptr, numel, nbytes, BLOCK: gl.constexpr, layout: gl.constexpr):
-    desc = buffer.make_buffer_descriptor(src_ptr, nbytes)
+    desc = cdna4.buffer.make_buffer_descriptor(src_ptr, nbytes)
     offs = gl.arange(0, BLOCK, layout)
-    gl.store(dst_ptr + offs, buffer.load(desc, offs), mask=offs < numel)
+    gl.store(dst_ptr + offs, cdna4.buffer.load(desc, offs), mask=offs < numel)
 
 
 if __name__ == "__main__":

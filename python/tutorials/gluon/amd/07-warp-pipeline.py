@@ -33,7 +33,7 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
+from triton.experimental.gluon.language.amd import cdna5
 
 t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
 
@@ -104,7 +104,7 @@ warp_size = gl.constexpr(32)
 def wmma_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
     layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
     b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
@@ -114,10 +114,10 @@ def wmma_kernel(y_ptr, k):
     for _ in range(0, k, BLOCK_K):
         a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
         b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
-        acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
         a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
         b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
-        acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -134,7 +134,7 @@ def wmma_kernel(y_ptr, k):
 def wmma_2stage_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
     layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
     b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
@@ -148,8 +148,8 @@ def wmma_2stage_kernel(y_ptr, k):
             a1 = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
             b1 = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
         with gl.amd.warp_pipeline_stage("compute", priority=0):
-            acc = wmma_scaled(a0, None, "e4m3", b0, b_scale, "e2m1", acc)
-            acc = wmma_scaled(a1, None, "e4m3", b1, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a0, None, "e4m3", b0, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a1, None, "e4m3", b1, b_scale, "e2m1", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -159,7 +159,7 @@ def wmma_2stage_kernel(y_ptr, k):
 def wmma_4stage_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
     layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
     b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
@@ -171,12 +171,12 @@ def wmma_4stage_kernel(y_ptr, k):
             a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
             b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
         with gl.amd.warp_pipeline_stage("compute0", priority=0):
-            acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
         with gl.amd.warp_pipeline_stage("memory1", priority=1):
             a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
             b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
         with gl.amd.warp_pipeline_stage("compute1", priority=0):
-            acc = wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -317,22 +317,23 @@ if __name__ == "__main__":
 @gluon.jit
 def matmul_ld_gmem(k, pred, slot: gl.constexpr, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
                    BLOCK_K: gl.constexpr):
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
-    ws_desc = tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128], pred=pred,
-                                           clamp_bounds=True)
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
+    w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
+                                                clamp_bounds=True)
+    ws_desc = cdna5.tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128],
+                                                 pred=pred, clamp_bounds=True)
     # Only warps 0-3 copy. tdm.async_wait only waits for the copies of the current
     # warp, and warps 4-7 run one stage behind, so warps 0-3 could read a part
     # copied by warps 4-7 before the copy completes.
-    tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
-    tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
-    tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
 
 
 @gluon.jit
 def matmul_ld_smem(slot: gl.constexpr, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
     HALF_K: gl.constexpr = a_smem.shape[2] // 2
-    ws_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
+    ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
     a = a_smem.index(slot).slice(half * HALF_K, HALF_K, 1).load(layouts.a_reg_layout)
     w = w_smem.index(slot).slice(half * HALF_K // 2, HALF_K // 2, 1).permute([1, 0]).load(layouts.w_reg_layout)
     w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(slot)).slice(half * HALF_K // 32, HALF_K // 32, 1).load(ws_layout)
@@ -355,11 +356,11 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     off_m = pid // num_pid_n * BLOCK_M
     off_n = pid % num_pid_n * BLOCK_N
 
-    a_desc = tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    w_desc = tdm.make_tensor_descriptor(w_ptr, [N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
-                                        layouts.w_smem_layout)
-    ws_desc = tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(N, 128), K // 32 * 128], [stride_scale, 1],
-                                         [BLOCK_N // 128, BLOCK_K // 32 * 128], layouts.ws_smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], layouts.a_smem_layout)
+    w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
+                                              layouts.w_smem_layout)
+    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(N, 128), K // 32 * 128], [stride_scale, 1],
+                                               [BLOCK_N // 128, BLOCK_K // 32 * 128], layouts.ws_smem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
     w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
                                        layouts.w_smem_layout)
@@ -374,33 +375,33 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
     for k in range(0, num_k - num_tail_k, NUM_BUFFERS):
         for i in gl.static_range(NUM_BUFFERS):
             # A wait can't be inside a stage, so we wait before the first stage.
-            tdm.async_wait((NUM_BUFFERS - 2) * 3)
+            cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
             with gl.amd.warp_pipeline_stage("lds_low", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, 0, a_smem, w_smem, ws_smem, layouts)
                 next_k = k + i + NUM_BUFFERS - 1
                 matmul_ld_gmem(next_k, next_k < num_k, (i + NUM_BUFFERS - 1) % NUM_BUFFERS, off_m, off_n, a_desc,
                                w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
             with gl.amd.warp_pipeline_stage("wmma_low", priority=0):
-                acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
             with gl.amd.warp_pipeline_stage("lds_high", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, 1, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
-                acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
     for i in gl.static_range(num_tail_k):
-        tdm.async_wait((num_tail_k - 1 - i) * 3)
+        cdna5.tdm.async_wait((num_tail_k - 1 - i) * 3)
         for half in gl.static_range(2):
             with gl.amd.warp_pipeline_stage("lds", priority=1):
                 a, w, w_scale = matmul_ld_smem(i, half, a_smem, w_smem, ws_smem, layouts)
             with gl.amd.warp_pipeline_stage("wmma", priority=0):
-                acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+                acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
-    y_desc = tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
-    y_desc = tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
-    tdm.async_store(y_desc, src=y_smem)
-    tdm.async_wait(0)
+    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
+    cdna5.tdm.async_store(y_desc, src=y_smem)
+    cdna5.tdm.async_wait(0)
 
 
 def matmul(A, W, W_scale, NUM_BUFFERS=3):

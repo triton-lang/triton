@@ -28,7 +28,6 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd.cdna4 import buffer
 from triton.experimental.gluon.language.amd import cdna4, cdna5
 
 t1 = importlib.import_module("amd.01-buffer-ops")
@@ -159,14 +158,14 @@ def elementwise_async_copy_w_buffer_kernel(  #
 
     for yoff in range(0, ynumel, YBLOCK):
         mask = (yoff + yidx < ynumel)[None, :]
-        buffer.load_to_shared(a_smem, a_desc, a_offs, mask, soffset=yoff * ystride_a)
-        buffer.load_to_shared(b_smem, b_desc, b_offs, mask, soffset=yoff * ystride_b)
+        cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs, mask, soffset=yoff * ystride_a)
+        cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs, mask, soffset=yoff * ystride_b)
         cdna4.async_copy.commit_group()
         cdna4.async_copy.wait_group(0)
 
         a_val = a_smem.load(layout)
         b_val = b_smem.load(layout)
-        buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
+        cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
 
 
 def elementwise_async_copy(A, B, C, kernel, XBLOCK=32, YBLOCK=256, num_warps=4):
@@ -303,8 +302,8 @@ def issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, yidx, 
                 YBLOCK: gl.constexpr, num_buffers: gl.constexpr):
     yoff = copy_idx * YBLOCK
     mask = (yoff + yidx < ynumel)[None, :]
-    buffer.load_to_shared(a_smem.index(copy_idx % num_buffers), a_desc, a_offs, mask, soffset=yoff * ystride_a)
-    buffer.load_to_shared(b_smem.index(copy_idx % num_buffers), b_desc, b_offs, mask, soffset=yoff * ystride_b)
+    cdna4.buffer.load_to_shared(a_smem.index(copy_idx % num_buffers), a_desc, a_offs, mask, soffset=yoff * ystride_a)
+    cdna4.buffer.load_to_shared(b_smem.index(copy_idx % num_buffers), b_desc, b_offs, mask, soffset=yoff * ystride_b)
     cdna4.async_copy.commit_group()
     return copy_idx + 1
 
@@ -316,7 +315,7 @@ def perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, yidx, ynumel, ystride_
     b_val = b_smem.index(read_idx % num_buffers).load(layout)
     yoff = read_idx * YBLOCK
     mask = (yoff + yidx < ynumel)[None, :]
-    buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
+    cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
     return read_idx + 1
 
 

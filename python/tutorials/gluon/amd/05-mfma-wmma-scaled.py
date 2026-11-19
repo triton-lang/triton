@@ -17,9 +17,7 @@ import torch
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.language.amd import cdna4
-from triton.experimental.gluon.language.amd.cdna4 import buffer
-from triton.experimental.gluon.language.amd.cdna5 import tdm, wmma_scaled
+from triton.experimental.gluon.language.amd import cdna4, cdna5
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 t1 = importlib.import_module("amd.01-buffer-ops")
@@ -391,9 +389,9 @@ def get_mx_mfma_layouts(preshuffle):
 @gluon.jit
 def matmul_cdna4_ld_gmem(k, a_desc, w_desc, ws_desc, a_offs, w_offs, ws_offs, a_smem, w_smem, ws_smem,
                          BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr):
-    buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K)
-    buffer.load_to_shared(w_smem.index(k % NUM_BUFFERS), w_desc, w_offs, soffset=k * BLOCK_K // 2)
-    buffer.load_to_shared(ws_smem.index(k % NUM_BUFFERS), ws_desc, ws_offs, soffset=k * ws_smem.shape[2])
+    cdna4.buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K)
+    cdna4.buffer.load_to_shared(w_smem.index(k % NUM_BUFFERS), w_desc, w_offs, soffset=k * BLOCK_K // 2)
+    cdna4.buffer.load_to_shared(ws_smem.index(k % NUM_BUFFERS), ws_desc, ws_offs, soffset=k * ws_smem.shape[2])
     cdna4.async_copy.commit_group()
 
 
@@ -459,7 +457,7 @@ def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
     cols = gl.arange(0, BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
     mask = (off_n + cols < N)[None, :]
-    buffer.store(acc.to(y_ptr.dtype.element_ty), y_desc, rows[:, None] * stride_ym + cols[None, :], mask)
+    cdna4.buffer.store(acc.to(y_ptr.dtype.element_ty), y_desc, rows[:, None] * stride_ym + cols[None, :], mask)
 
 
 def matmul_cdna4(A, W, W_scale, preshuffle=True, NUM_BUFFERS=2):
@@ -557,15 +555,15 @@ def scaled_wmma_kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, c_ptr, M: gl.cons
     b = gl.load(b_ptr + bn[None, :] * B_K + bk[:, None])
     a_scale = None
     if a_scale_ptr is not None:
-        a_scale_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(a_layout, [M, K // 32])
+        a_scale_layout: gl.constexpr = cdna5.get_wmma_scale_layout(a_layout, [M, K // 32])
         a_scale = gl.load(a_scale_ptr + offs_2d(M, K // 32, K // 32, a_scale_layout))
     b_scale = None
     if b_scale_ptr is not None:
-        b_scale_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(b_layout, [N, K // 32])
+        b_scale_layout: gl.constexpr = cdna5.get_wmma_scale_layout(b_layout, [N, K // 32])
         b_scale = gl.load(b_scale_ptr + offs_2d(N, K // 32, K // 32, b_scale_layout))
 
     acc = gl.zeros([M, N], gl.float32, wmma_layout)
-    acc = wmma_scaled(a, a_scale, A_FORMAT, b, b_scale, B_FORMAT, acc)
+    acc = cdna5.wmma_scaled(a, a_scale, A_FORMAT, b, b_scale, B_FORMAT, acc)
     gl.store(c_ptr + offs_2d(M, N, N, wmma_layout), acc)
 
 
@@ -626,7 +624,7 @@ def load_scales_cdna5(scale_ptr, ROWS: gl.constexpr, K_SCALE: gl.constexpr, layo
 def get_partitioned_wmma_layout(M, N, K, packed):
     a_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [M, K], [1, 0])
     b_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [N, K // 2], [1, 0])
-    _, _, acc_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
+    _, _, acc_layout = cdna5.make_partitioned_dot_layouts(  #
         M, N, a_smem_layout, b_smem_layout, 4, [16, 16, 128], b_transposed=True)
     if not packed:
         return acc_layout
@@ -652,15 +650,15 @@ def scaled_wmma_smem_kernel(a_ptr, a_scale_ptr, b_ptr, b_scale_ptr, c_ptr, M: gl
     b = gl.load(b_ptr + bn[None, :] * B_K + bk[:, None])
     a_scale = None
     if a_scale_ptr is not None:
-        a_scale_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(a_layout, [M, K // 32])
+        a_scale_layout: gl.constexpr = cdna5.get_wmma_scale_layout(a_layout, [M, K // 32])
         a_scale = load_scales_cdna5(a_scale_ptr, M, K // 32, a_scale_layout, PRESHUFFLE)
     b_scale = None
     if b_scale_ptr is not None:
-        b_scale_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(b_layout, [N, K // 32])
+        b_scale_layout: gl.constexpr = cdna5.get_wmma_scale_layout(b_layout, [N, K // 32])
         b_scale = load_scales_cdna5(b_scale_ptr, N, K // 32, b_scale_layout, PRESHUFFLE)
 
     acc = gl.zeros([M, N], gl.float32, acc_layout)
-    acc = wmma_scaled(a, a_scale, A_FORMAT, b, b_scale, B_FORMAT, acc)
+    acc = cdna5.wmma_scaled(a, a_scale, A_FORMAT, b, b_scale, B_FORMAT, acc)
     gl.store(c_ptr + offs_2d(M, N, N, acc_layout), acc)
 
 
@@ -709,7 +707,7 @@ def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     # Operand W has shape [BLOCK_N, BLOCK_K // 2] in packed fp4
     a_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_M, BLOCK_K], [1, 0])
     w_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_N, BLOCK_K // 2], [1, 0])
-    a_smem_layout, w_smem_layout, acc_layout = gl.amd.cdna5.make_partitioned_dot_layouts(  #
+    a_smem_layout, w_smem_layout, acc_layout = cdna5.make_partitioned_dot_layouts(  #
         BLOCK_M, BLOCK_N, a_smem_layout, w_smem_layout, num_warps, [16, 16, 128], b_transposed=True)
     # The packed fp4 operand W needs its own parent layout.
     b_parent_layout = gl.amd.AMDWMMALayout(  #
@@ -719,7 +717,7 @@ def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     w_reg_layout = gl.DotOperandLayout(1, b_parent_layout, 16)
 
     ws_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    ws_reg_layout = gl.amd.cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
+    ws_reg_layout = cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
     return MXWmmaLayouts(a_smem_layout, a_reg_layout,  #
                          w_smem_layout, w_reg_layout,  #
                          ws_smem_layout, ws_reg_layout,  #
@@ -730,13 +728,14 @@ def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 def matmul_cdna5_ld_gmem(k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K: gl.constexpr,
                          NUM_BUFFERS: gl.constexpr, GROUP: gl.constexpr):
     i = k % NUM_BUFFERS
-    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    w_desc = tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred, clamp_bounds=True)
-    ws_desc = tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // GROUP, k * BLOCK_K // 32 * GROUP], pred=pred,
-                                           clamp_bounds=True)
-    tdm.async_load(a_desc, dest=a_smem.index(i))
-    tdm.async_load(w_desc, dest=w_smem.index(i))
-    tdm.async_load(ws_desc, dest=ws_smem.index(i))
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
+    w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
+                                                clamp_bounds=True)
+    ws_desc = cdna5.tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // GROUP, k * BLOCK_K // 32 * GROUP],
+                                                 pred=pred, clamp_bounds=True)
+    cdna5.tdm.async_load(a_desc, dest=a_smem.index(i))
+    cdna5.tdm.async_load(w_desc, dest=w_smem.index(i))
+    cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(i))
 
 
 @gluon.jit
@@ -765,11 +764,11 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
     off_m = pid // num_pid_n * BLOCK_M
     off_n = pid % num_pid_n * BLOCK_N
 
-    a_desc = tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    w_desc = tdm.make_tensor_descriptor(w_ptr, [N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
-                                        layouts.w_smem_layout)
-    ws_desc = tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(N, GROUP), K // 32 * GROUP], [stride_scale, 1],
-                                         [BLOCK_N // GROUP, BLOCK_K // 32 * GROUP], layouts.ws_smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], layouts.a_smem_layout)
+    w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
+                                              layouts.w_smem_layout)
+    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(N, GROUP), K // 32 * GROUP], [stride_scale, 1],
+                                               [BLOCK_N // GROUP, BLOCK_K // 32 * GROUP], layouts.ws_smem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
     w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2],
                                        layouts.w_smem_layout)
@@ -786,17 +785,17 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K,  #
         next_k = k + NUM_BUFFERS - 1
         matmul_cdna5_ld_gmem(next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
                              BLOCK_K, NUM_BUFFERS, GROUP)
-        tdm.async_wait((NUM_BUFFERS - 1) * 3)
+        cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 3)
         a, w, w_scale = matmul_cdna5_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS, PRESHUFFLE)
-        acc = wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
-    y_desc = tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
-    y_desc = tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
-    tdm.async_store(y_desc, src=y_smem)
-    tdm.async_wait(0)
+    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
+    cdna5.tdm.async_store(y_desc, src=y_smem)
+    cdna5.tdm.async_wait(0)
 
 
 def matmul_cdna5(A, W, W_scale, preshuffle=True, NUM_BUFFERS=3):
