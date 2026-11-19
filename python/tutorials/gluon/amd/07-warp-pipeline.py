@@ -51,10 +51,9 @@ warp_size = gl.constexpr(32)
 
 # %%
 # All our previous tutorials assume 4 warps. Now we switch to the 8-warp
-# configuration, where 2 warps share a SIMD. Note that the two warps of a SIMD
-# can only run at the same time if they meet the occupancy requirements: the
-# VGPRs of both warps must fit in the 1024 VGPRs of the SIMD, and the shared
-# memory of the CTA must fit in the 320 KB of the WGP.
+# configuration, where 2 warps share a SIMD. All warps of a CTA run at the same
+# time, so the two warps of a SIMD split its 1024 VGPRs: each warp can use at
+# most 512 VGPRs, and the compiler spills registers beyond that.
 #
 # In Gluon, we use `gl.amd.warp_pipeline_stage` to split a loop into stages for
 # 8 warps. Each `with gl.amd.warp_pipeline_stage(...)` groups a region of Gluon
@@ -441,13 +440,13 @@ if __name__ == "__main__":
         ms = triton.testing.do_bench(fn, warmup=100, rep=500)
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
-    bench("4 warp", lambda: t5.matmul_cdna5(A, W, W_scale))
-    bench("8 warp", lambda: matmul(A, W, W_scale))
+    bench("4 warps", lambda: t5.matmul_cdna5(A, W, W_scale))
+    bench("8 warps", lambda: matmul(A, W, W_scale))
 
 # %%
 # ```
-# 4 warp: 7344 TFLOPS
-# 8 warp: 7292 TFLOPS
+# 4 warps: 7344 TFLOPS
+# 8 warps: 7292 TFLOPS
 # ```
 #
 # At this size, all WGPs run a CTA, and the copies from global memory set the
