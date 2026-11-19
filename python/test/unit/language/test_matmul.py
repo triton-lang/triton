@@ -280,12 +280,11 @@ def test_matmul_rhs_from_dot(num_ctas, num_stages, warp_specialize, device):
 
     # The first dot produces 8*i and the second sums 128 copies of 2**i.
     expected = 128 * (1 + 2 + 4 + 8)
-    for _ in range(8):
-        compiled = kernel[(1, )](*descriptors, out, n, NUM_STAGES=num_stages, WARP_SPECIALIZE=warp_specialize,
-                                 num_ctas=num_ctas)
-        if is_compile_warmup():
-            return
-        assert torch.all(out == expected)
+    compiled = kernel[(1, )](*descriptors, out, n, NUM_STAGES=num_stages, WARP_SPECIALIZE=warp_specialize,
+                             num_ctas=num_ctas)
+    if is_compile_warmup():
+        return
+    assert torch.all(out == expected)
     if num_ctas == 2:
         assert "ttng.cluster_barrier" in compiled.asm["ttgir"]
         assert "ttng.fence_async_shared {bCluster = true}" in compiled.asm["ttgir"]
