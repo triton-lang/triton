@@ -26,7 +26,8 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm
-from triton.experimental.gluon.language.amd.cdna5 import async_copy as cp
+from triton.experimental.gluon.language.amd import cdna5
+from triton.experimental.gluon.language.amd.cdna5 import mbarrier
 from triton.experimental.gluon.amd.cdna5 import TensorDescriptor
 
 t1 = importlib.import_module("amd.01-buffer-ops")
@@ -274,10 +275,10 @@ def test_elementwise_warp_hint(xnumel, ynumel, XBLOCK, YBLOCK):
 
 # %%
 # Async copies also work on CDNA5, and they have their own wait counter,
-# `asynccnt`. `cp.wait_group` waits on `asynccnt`, and `tdm.async_wait` waits on
-# `tensorcnt`. Within one counter, copies complete in order. The two counters
-# are independent of each other. A kernel can wait for an async copy without
-# waiting for a TDM copy that it issued earlier.
+# `asynccnt`. `async_copy.wait_group` waits on `asynccnt`, and `tdm.async_wait`
+# waits on `tensorcnt`. Within one counter, copies complete in order. The two
+# counters are independent of each other. A kernel can wait for an async copy
+# without waiting for a TDM copy that it issued earlier.
 #
 # The kernel below loads A with TDM and then B with an async copy. It waits for
 # B and reads it while the TDM copy of A can still be in flight.
@@ -303,10 +304,10 @@ def elementwise_mix_kernel(  #
 
     a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
     tdm.async_load(a_desc, dest=a_smem)
-    cp.global_to_shared(b_smem, b_ptr + offs, mask)
-    cp.commit_group()
+    cdna5.async_copy.global_to_shared(b_smem, b_ptr + offs, mask)
+    cdna5.async_copy.commit_group()
 
-    cp.wait_group(0)
+    cdna5.async_copy.wait_group(0)
     b_val = b_smem.load(layout)
     tdm.async_wait(0)
     a_val = a_smem.load(layout)
@@ -357,6 +358,64 @@ if __name__ == "__main__":
 # `global_load_async_to_lds_b128` for B. `s_wait_asynccnt 0x0` waits only for
 # the async copies, and the reads of B start before `s_wait_tensorcnt 0x0`
 # waits for the TDM copy of A.
+
+# %%
+# TDM copies can also signal an mbarrier, like async copies. `tdm.async_load`
+# takes the barrier as the `mbarrier` argument. Each warp arrives once for each
+# TDM instruction it issues, after the copy of the instruction is complete. In
+# the kernel below, each warp issues one TDM instruction for A and one for B, so
+# we set the count to twice the number of warps.
+
+
+@gluon.jit
+def elementwise_tdm_mbarrier_kernel(  #
+        a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
+        XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
+        smem_layout: gl.constexpr,  #
+):
+    a_desc = tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    b_desc = tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    xoff = gl.program_id(0) * XBLOCK
+    yoff = gl.program_id(1) * YBLOCK
+    xoffs = xoff + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
+    yoffs = yoff + gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
+    offs = xoffs[:, None] * ynumel + yoffs[None, :]
+    mask = (xoffs[:, None] < xnumel) & (yoffs[None, :] < ynumel)
+
+    dtype: gl.constexpr = a_ptr.dtype.element_ty
+    a_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=2 * gl.num_warps())
+
+    a_desc = tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    b_desc = tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
+    tdm.async_load(a_desc, dest=a_smem, mbarrier=bar)
+    tdm.async_load(b_desc, dest=b_smem, mbarrier=bar)
+    mbarrier.wait(bar, 0)
+
+    gl.store(c_ptr + offs, a_smem.load(layout) + b_smem.load(layout), mask)
+
+
+def elementwise_tdm_mbarrier(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
+    xnumel, ynumel = A.shape
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    return elementwise_tdm_mbarrier_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout,
+                                                 num_warps=num_warps)
+
+
+@pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 256), (4, 512)])
+@pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
+def test_elementwise_tdm_mbarrier(xnumel, ynumel, XBLOCK, YBLOCK):
+    a = torch.randn(xnumel, ynumel, device="cuda")
+    b = torch.randn(xnumel, ynumel, device="cuda")
+    c = torch.empty_like(a)
+    elementwise_tdm_mbarrier(a, b, c, XBLOCK, YBLOCK)
+    torch.testing.assert_close(a + b, c, atol=0, rtol=0)
+
 
 # %%
 # Lastly, let's build a pipelined kernel with TDM and compare the performance
@@ -486,8 +545,7 @@ if __name__ == "__main__":
 # ```
 #
 # TDM is 32% faster than global loads, and double buffering adds another 3%.
-# The best kernel reaches 18.07 TB/s, 92% of the 19.6 TB/s peak HBM bandwidth
-# of MI455X.
+# The best kernel reaches 18.07 TB/s.
 
 # %%
 # The main takeaway here is to use TDM on CDNA5 whenever a kernel copies tiles
