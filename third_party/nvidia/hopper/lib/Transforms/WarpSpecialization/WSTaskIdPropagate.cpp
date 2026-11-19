@@ -5,6 +5,7 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -12,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
 #define DEBUG_TYPE "nvgpu-ws-task-id-propagate"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -28,6 +30,27 @@ int doTaskIdPropagate(triton::FuncOp &funcOp) {
   SymbolTableCollection symbolTable;
   Operation *op = funcOp.getOperation();
   DataFlowSolver solver;
+
+  // An op with side effects and no used results has no user to infer a task id
+  // from. Leaving it unannotated drops it when its enclosing region is
+  // specialized. Seed *result-bearing* ops with the producer (default) task
+  // before running the analysis, so the backward propagation assigns the same
+  // task to the values they consume (e.g. the pointer and program id of an
+  // atomic) and to the enclosing control flow. Result-less ops are handled
+  // after the analysis, where their operands' task ids are already known.
+  auto isOrphanSideEffect = [](mlir::Operation *candidate) {
+    auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(candidate);
+    return memoryEffects && !memoryEffects.hasNoEffect() &&
+           !candidate->hasAttr("async_task_id") &&
+           llvm::all_of(candidate->getResults(),
+                        [](Value result) { return result.use_empty(); });
+  };
+  funcOp.walk([&](mlir::Operation *op) {
+    if (op->getNumResults() == 0 || !isOrphanSideEffect(op))
+      return;
+    setAsyncTaskIds(op, {0});
+    labelParentOps(op);
+  });
 
   solver.load<DeadCodeAnalysis>();
   solver.load<SparseConstantPropagation>();
@@ -52,6 +75,13 @@ int doTaskIdPropagate(triton::FuncOp &funcOp) {
           llvm_unreachable("Lattice not found.");
         taskIds = taskIds.meet(taskIds, lattice->getValue());
       }
+    }
+    // A side-effecting op with no results and no annotated operands cannot
+    // infer a task id either. Keep it in the producer (default) task.
+    if (taskIds.isUninitialized() && isOrphanSideEffect(op)) {
+      setAsyncTaskIds(op, {0});
+      labelParentOps(op);
+      return;
     }
     // TODO(Arda): Ideally front-end should not allow constant ops to be
     // annotated. Anchor constants cause problems.

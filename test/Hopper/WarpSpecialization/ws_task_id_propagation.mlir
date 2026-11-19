@@ -53,3 +53,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Side-effecting ops without a used result have no user to infer a task id
+// from. They must still be assigned to the default (producer) task; otherwise
+// they are dropped when the enclosing loop is specialized. The values they
+// consume must inherit the same task so they are not left behind in the
+// original loop body.
+// CHECK-LABEL: @orphan_side_effects
+// CHECK:       scf.for
+// CHECK:         %[[PID:.*]] = tt.get_program_id x {async_task_id = array<i32: 0>}
+// CHECK-NEXT:    %[[PTR:.*]] = tt.addptr %{{.*}}, %[[PID]] {async_task_id = array<i32: 0>}
+// CHECK-NEXT:    %[[ATOMIC:.*]] = tt.atomic_rmw add, relaxed, gpu, %[[PTR]], %{{.*}} {async_task_id = array<i32: 0>}
+// CHECK-NEXT:    tt.grid_dependency_wait {async_task_id = array<i32: 0>}
+// CHECK-NEXT:    tt.grid_dependency_launch_dependents {async_task_id = array<i32: 0>}
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @orphan_side_effects(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: !tt.ptr<i32>, %arg3: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = scf.for %arg4 = %c0_i32 to %arg3 step %c1_i32 iter_args(%arg5 = %cst) -> (tensor<128x256xf32, #mma>) : i32 {
+      %1 = tt.descriptor_load %arg0[%c0_i32, %arg4] {async_task_id = array<i32: 0>} : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+      %2 = ttg.local_alloc %1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %3 = tt.descriptor_load %arg1[%arg4, %c0_i32] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %4 = ttg.local_alloc %3 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %5 = ttng.warp_group_dot %2, %4, %arg5 {async_task_id = array<i32: 1>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      %pid = tt.get_program_id x : i32
+      %ptr = tt.addptr %arg2, %pid : !tt.ptr<i32>, i32
+      %6 = tt.atomic_rmw add, relaxed, gpu, %ptr, %c1_i32 : (!tt.ptr<i32>, i32) -> i32
+      tt.grid_dependency_wait
+      tt.grid_dependency_launch_dependents
+      scf.yield %5 : tensor<128x256xf32, #mma>
+    }
+    tt.return
+  }
+}
