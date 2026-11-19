@@ -1,5 +1,4 @@
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
-#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -15,8 +14,7 @@ using FenceCFG = MembarCFG<AsyncFenceFacts>;
 
 bool mayObserveBarrier(const Node<AsyncFenceFacts> &node,
                        ArrayRef<const BufferRegionFootprint *> barriers) {
-  auto wait = dyn_cast<nvidia_gpu::WaitBarrierOp>(node.op);
-  return wait && (!wait.getPred() || !matchPattern(wait.getPred(), m_Zero())) &&
+  return isa<nvidia_gpu::WaitBarrierOp>(node.op) &&
          llvm::any_of(barriers, [&](const auto *barrier) {
            return mayOverlap(barrier, node.effects.completionBarrier);
          });

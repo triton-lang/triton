@@ -6,9 +6,11 @@
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
@@ -177,6 +179,10 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
     Operation *term = block.getTerminator();
     Block *active = getGuardArm(term);
     for (Operation &op : block) {
+      // A disabled wait only keeps its dependent allocations live.
+      if (auto wait = dyn_cast<nvidia_gpu::WaitBarrierOp>(&op);
+          wait && wait.getPred() && matchPattern(wait.getPred(), m_Zero()))
+        continue;
       FixedSync fixed;
       // A call links to the callee's effects, including its scratch.
       auto effects =
