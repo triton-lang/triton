@@ -14,6 +14,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/bit.h"
 #include <cassert>
 #include <functional>
 
@@ -726,13 +727,6 @@ Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
   return scalar;
 }
 
-uint64_t getLowBitsMask(unsigned bitWidth) {
-  assert(bitWidth > 0 && bitWidth <= 64);
-  if (bitWidth == 64)
-    return ~uint64_t{0};
-  return (uint64_t{1} << bitWidth) - 1;
-}
-
 uint64_t invOddU64(uint64_t a) {
   assert((a & 1) == 1);
   uint64_t x = 2 - a;
@@ -917,83 +911,69 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
 
-struct FpSanCosSin {
-  Value cos;
-  Value sin;
-};
+// Let C(x) + i S(x) = z^x for z = (-3 + 4i)/5 and t = z + 1/z - 2 = -16/5.
+// By Pascal's identity the sums below satisfy f(x+1) - 2f(x) + f(x-1) = t f(x)
+// with the same values at 0 and 1 as the real and imaginary parts of z^x.
+//   C(x) = sum_k t^k (binom(x+k, 2k) + binom(x+k-1, 2k)) / 2
+//   S(x) = (4/5) sum_k t^k binom(x+k, 2k+1)
+// The kth terms vanish modulo 2^w for 4k-1 >= w and 4k+2 >= w respectively.
+// Factoring the binomials gives C(x) = P(x^2) and S(x) = x Q(x^2) in the
+// Newton basis at consecutive squares starting at 0 for P and 1 for Q.
+SmallVector<uint64_t, 17> getTrigCoefficients(int bitWidth, bool isSin) {
+  assert(bitWidth > 0 && bitWidth <= 64);
+  int degree = isSin ? (bitWidth - 3) / 4 : bitWidth / 4;
+  int firstNode = isSin ? 1 : 0;
 
-FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
-                               Value xI) {
-  Type intTy = xI.getType();
-  unsigned bitWidth = getIntBitwidth(intTy);
-  uint64_t mask = getLowBitsMask(bitWidth);
-  uint64_t rcp5 = invOddU64(5) & mask;
-  uint64_t aValue = (uint64_t{0} - ((uint64_t{3} * rcp5) & mask)) & mask;
-  uint64_t bValue = (uint64_t{4} * rcp5) & mask;
+  // The Newton coefficients are t^k/(2k)! for P and (4/5)t^k/(2k+1)! for Q.
+  // Each step multiplies by -16/(5n(n-1)). Track powers of two separately
+  // so we only invert odd denominators.
+  uint64_t odd = isSin ? invOddU64(5) : 1;
+  int shift = isSin ? 2 : 0;
+  SmallVector<uint64_t, 17> coeffs{odd << shift};
+  for (int k = 1; k <= degree; ++k) {
+    int n = 2 * k + firstNode;
+    unsigned denominator = 5 * n * (n - 1);
+    int twos = llvm::countr_zero(denominator);
+    odd *= uint64_t{0} - invOddU64(denominator >> twos);
+    shift += 4 - twos;
+    coeffs.push_back(odd << shift);
+  }
 
-  auto zero = getUIntConstantLike(rewriter, loc, intTy, 0);
-  auto one = getUIntConstantLike(rewriter, loc, intTy, 1);
-  auto two = getUIntConstantLike(rewriter, loc, intTy, 2);
-  auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
-  auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
+  // Expand the nested factors (x^2 - j^2) into powers of x^2 on the host.
+  for (int k = degree - 1; k >= 0; --k) {
+    int j = k + firstNode;
+    for (int i = k; i < degree; ++i)
+      coeffs[i] -= j * j * coeffs[i + 1];
+  }
+  return coeffs;
+}
 
-  auto lower =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(rewriter, loc,
-                                         rewriter.getI32IntegerAttr(bitWidth));
-  auto step =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
-  auto topBit = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
-  SmallVector<Value> initArgs{one, zero};
-  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, initArgs);
-  rewriter.setInsertionPointToStart(loop.getBody());
-
-  Value bit = loop.getInductionVar();
-  Value c = loop.getRegionIterArgs()[0];
-  Value s = loop.getRegionIterArgs()[1];
-  Value cc = arith::MulIOp::create(rewriter, loc, c, c);
-  Value ss = arith::MulIOp::create(rewriter, loc, s, s);
-  Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
-  Value cs = arith::MulIOp::create(rewriter, loc, c, s);
-  Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
-
-  Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
-  Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
-  Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
-  Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
-  Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
-  Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
-
-  Value bitIndex =
-      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, bit);
-  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, intTy);
-  Value bitMask = arith::ShLIOp::create(rewriter, loc, one, shift);
-  auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
-  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                      masked, zero);
-  c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
-  s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
-  scf::YieldOp::create(rewriter, loc, ValueRange{c, s});
-  rewriter.setInsertionPointAfter(loop);
-
-  return {loop.getResult(0), loop.getResult(1)};
+Value fpsanTrig(PatternRewriter &rewriter, Location loc, Value input,
+                bool isSin) {
+  if (!isFloatLike(input.getType()))
+    return Value();
+  Value x = embedToInt(rewriter, loc, input);
+  Value x2 = arith::MulIOp::create(rewriter, loc, x, x);
+  auto coeffs = getTrigCoefficients(getIntBitwidth(x.getType()), isSin);
+  auto constant = [&](uint64_t c) {
+    return getUIntConstantLike(rewriter, loc, x.getType(), c);
+  };
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, x2);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
+  if (isSin)
+    result = arith::MulIOp::create(rewriter, loc, result, x);
+  return unembedToFloat(rewriter, loc, result, input.getType());
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/false);
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/true);
 }
 
 bool hasNumericOperands(ValueRange operands) {
