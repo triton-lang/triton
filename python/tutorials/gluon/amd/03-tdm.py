@@ -26,7 +26,6 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
-from triton.experimental.gluon.amd.cdna5 import TensorDescriptor
 
 t1 = importlib.import_module("amd.01-buffer-ops")
 
@@ -172,44 +171,6 @@ if __name__ == "__main__":
 # `s_barrier_signal`, a warp tells the other warps that it has reached the
 # barrier. With `s_barrier_wait`, it waits until all warps of the CTA have
 # signaled.
-
-# %%
-# The host can also create a tensor descriptor with
-# `TensorDescriptor.from_tensor` and pass it to a kernel as an argument. The
-# kernel then reads the element type, the block shape and the shared memory
-# layout from the descriptor.
-
-
-@gluon.jit
-def copy_kernel(in_desc, out_desc):
-    smem = gl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
-    xoff = gl.program_id(0) * in_desc.block_shape[0]
-    yoff = gl.program_id(1) * in_desc.block_shape[1]
-    in_desc = cdna5.tdm.update_tensor_descriptor(in_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    out_desc = cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[xoff, yoff], clamp_bounds=True)
-    cdna5.tdm.async_load(in_desc, dest=smem)
-    cdna5.tdm.async_wait(0)
-    cdna5.tdm.async_store(out_desc, src=smem)
-    cdna5.tdm.async_wait(0)
-
-
-def copy(A, B, XBLOCK=32, YBLOCK=256, num_warps=4):
-    smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    in_desc = TensorDescriptor.from_tensor(A, [XBLOCK, YBLOCK], smem_layout)
-    out_desc = TensorDescriptor.from_tensor(B, [XBLOCK, YBLOCK], smem_layout)
-    grid = (triton.cdiv(A.shape[0], XBLOCK), triton.cdiv(A.shape[1], YBLOCK))
-    return copy_kernel[grid](in_desc, out_desc, num_warps=num_warps)
-
-
-@pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
-@pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 256), (4, 512)])
-@pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_copy(xnumel, ynumel, XBLOCK, YBLOCK):
-    a = torch.randn(xnumel, ynumel, device="cuda")
-    b = torch.empty_like(a)
-    copy(a, b, XBLOCK, YBLOCK)
-    torch.testing.assert_close(a, b, atol=0, rtol=0)
-
 
 # %%
 # As mentioned above, the compiler splits a TDM copy between all warps of the
