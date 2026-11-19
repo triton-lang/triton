@@ -706,11 +706,11 @@ def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     a_smem_layout, w_smem_layout, acc_layout = cdna5.make_partitioned_dot_layouts(  #
         BLOCK_M, BLOCK_N, a_smem_layout, w_smem_layout, num_warps, [16, 16, 128], b_transposed=True)
     # The packed fp4 operand W needs its own parent layout.
-    b_parent_layout = gl.amd.AMDWMMALayout(  #
+    w_parent_layout = gl.amd.AMDWMMALayout(  #
         version=3, transposed=True, warp_bases=acc_layout.warp_bases, reg_bases=acc_layout.reg_bases,
         instr_shape=[16, 16, 64])
     a_reg_layout = gl.DotOperandLayout(0, acc_layout, 16)
-    w_reg_layout = gl.DotOperandLayout(1, b_parent_layout, 16)
+    w_reg_layout = gl.DotOperandLayout(1, w_parent_layout, 16)
 
     ws_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     ws_reg_layout = cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
