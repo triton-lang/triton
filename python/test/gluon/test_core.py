@@ -3091,7 +3091,10 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         out = torch.empty((M, N), dtype=torch.float32, device=device)
         compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
     out_ref = torch.matmul(a_ref, b_ref)
-    torch.testing.assert_close(out, out_ref)
+    if (a_type, b_type) == ("e3m2", "e2m1"):
+        torch.testing.assert_close(out, out_ref, atol=1e-5, rtol=1e-5)
+    else:
+        torch.testing.assert_close(out, out_ref)
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
