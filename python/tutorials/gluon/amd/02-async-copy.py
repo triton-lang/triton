@@ -50,7 +50,7 @@ if __name__ == "__main__" and not (is_cdna4() or is_cdna5()):
 warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
 # %%
-# CDNA4 async copy
+# CDNA4 Async Copy
 # ----------------
 #
 # Let's first look at some important wait counters:
@@ -454,7 +454,7 @@ if __name__ == "__main__" and is_cdna4():
 # when a CTA has compute to overlap.
 
 # %%
-# CDNA5 async copy
+# CDNA5 Async Copy
 # ----------------
 #
 # CDNA5 also provides async copies from global memory to shared memory. In
@@ -611,9 +611,6 @@ def test_elementwise_async_copy_mbarrier(xnumel, ynumel, XBLOCK, YBLOCK):
     elementwise_async_copy_mbarrier(a, b, c, XBLOCK, YBLOCK)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
 
-
-# %%
-# Next, we measure the bandwidth on an MI455X GPU.
 
 if __name__ == "__main__" and is_cdna5():
     print("Benchmarking elementwise add")

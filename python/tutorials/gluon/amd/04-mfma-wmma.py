@@ -752,10 +752,6 @@ def test_matmul_cdna4_subtiled(M, N, K):
     torch.testing.assert_close(A.float() @ B.float().T, C.float(), atol=1e-1, rtol=1e-2)
 
 
-# %%
-# The benchmark compares the two kernels on an MI355X GPU with
-# M = N = K = 8192.
-
 if __name__ == "__main__" and is_cdna4():
     print("Benchmarking matmul")
     print("===================")
@@ -1144,10 +1140,6 @@ def test_matmul_cdna5(M, N, K, partitioned):
     C, _ = matmul_cdna5(A, B, partitioned)
     torch.testing.assert_close(A.float() @ B.float().T, C.float(), atol=1e-1, rtol=1e-2)
 
-
-# %%
-# We can compare the padded and the partitioned layouts on an MI455X GPU with
-# M = N = K = 8192.
 
 if __name__ == "__main__" and is_cdna5():
     print("Benchmarking matmul")

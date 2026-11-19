@@ -462,13 +462,6 @@ def test_matmul_scatter(E, R, N, K):
     torch.testing.assert_close(ref, Y.float(), atol=1e-1, rtol=1e-2)
 
 
-# %%
-# We will use the following spec for the benchmark: 128 experts, 8192 tokens
-# that each pick 8 experts, and a hidden dimension `H` of 7168. mlp1 multiplies
-# by an `[H, 2 * H]` weight, and a SwiGLU activation would bring its output back
-# to `H` columns. mlp2 multiplies by an `[H, H]` weight. So mlp1 has twice the
-# work of mlp2. All row indices fit into int16.
-
 if __name__ == "__main__":
     print("Benchmarking matmul")
     print("===================")

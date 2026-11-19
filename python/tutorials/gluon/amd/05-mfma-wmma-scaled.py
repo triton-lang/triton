@@ -2,13 +2,13 @@
 Scaled MFMA and WMMA
 ====================
 
-Block scaling quantizes a tensor into low-precision values and one scale
-factor per block of values, as in the OCP microscaling (MX) formats. CDNA4 and
-CDNA5 GPUs support MX formats in hardware, with scaled MFMA and scaled WMMA
-instructions.
+Block scaling is a way to quantize a tensor into low-precision values and one
+scale factor per block, as in the OCP microscaling (MX) formats. CDNA4 and
+CDNA5 GPUs support matrix multiplication for MX formats, with scaled MFMA and
+scaled WMMA instructions.
 
-In this tutorial, we will demonstrate scaled matrix multiplications using an
-MLP-style kernel, where we multiply fp8 activations by mxfp4 weights.
+In this tutorial, we will show to use them in Gluon. And use an MLP-like kernel,
+where we multiply fp8 activations by mxfp4 weights, as an example.
 """
 
 import importlib
@@ -77,8 +77,8 @@ def random_operand(rows, K, kind):
 
 
 # %%
-# CDNA4 MFMA
-# ----------
+# CDNA4 Scaled MFMA
+# -----------------
 #
 # The scaled MFMA instruction we will use is
 # `v_mfma_scale_f32_16x16x128_f8f6f4`. It multiplies a 16x128 tile of A by a
@@ -482,10 +482,6 @@ def test_matmul_cdna4(M, N, K, preshuffle):
     torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
 
-# %%
-# We compare with the fastest bf16 MFMA kernel from `04-mfma-wmma.py` on an
-# MI355X GPU with M = N = K = 8192, with and without preshuffled scales.
-
 if __name__ == "__main__" and is_cdna4():
     print("Benchmarking matmul")
     print("===================")
@@ -512,8 +508,8 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 
 # %%
-# CDNA5 WMMA
-# ----------
+# CDNA5 Scaled WMMA
+# -----------------
 #
 # On CDNA5, the scaled WMMA instruction is
 # `v_wmma_scale_f32_16x16x128_f8f6f4`. It has the same 16x16x128 shape as the
@@ -819,10 +815,6 @@ def test_matmul_cdna5(M, N, K, preshuffle):
     Y = matmul_cdna5(A, W, W_scale, preshuffle)
     torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
-
-# %%
-# On an MI455X GPU, we run the same comparison against the fastest bf16 WMMA
-# kernel from `04-mfma-wmma.py`, which uses the partitioned layouts.
 
 if __name__ == "__main__" and is_cdna5():
     print("Benchmarking matmul")
