@@ -8,6 +8,7 @@ import triton
 import triton.language as tl
 from triton._internal_testing import fp6_values, pack_fp6, is_blackwell_ultra, is_cuda
 from triton.backends.nvidia.compiler import get_ptx_version_from_options
+from triton.backends.nvidia.driver import _contiguous_bytes_at_base
 from triton.language.extra.cuda import to_fp6
 from triton.tools.ragged_tma import create_ragged_descriptor, atomic_add_ragged, load_ragged, store_ragged
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -360,4 +361,5 @@ def test_ragged_tma_contiguous_bytes(rows, row_stride, contiguous_bytes):
     storage = torch.empty((rows, row_stride), dtype=torch.uint8)
     tensor = storage[:, :2048].unsqueeze(0)
     desc = create_ragged_descriptor(tensor, [1, 128, 128], ragged_dim=1)
-    assert desc.contiguous_bytes == contiguous_bytes
+    assert desc.allow_small_alloc
+    assert _contiguous_bytes_at_base(desc.base) == contiguous_bytes
