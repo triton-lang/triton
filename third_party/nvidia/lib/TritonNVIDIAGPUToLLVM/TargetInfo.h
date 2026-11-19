@@ -4,9 +4,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
+namespace mlir {
+class DialectRegistry;
+} // namespace mlir
+
 namespace mlir::triton::NVIDIA {
 
 void registerTargetInfo();
+void registerNVVMDialect(DialectRegistry &registry);
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:

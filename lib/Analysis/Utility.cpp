@@ -9,7 +9,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -25,12 +24,37 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+bool isZeroFillConst(Value v) {
+  if (auto splat = v.getDefiningOp<triton::SplatOp>())
+    return isZeroFillConst(splat.getSrc());
+  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
+    return isZeroFillConst(bitcast.getSrc());
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+    return attr.getValue().isZero();
+  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
+    return attr.getValue().bitcastToAPInt().isZero();
+  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
 bool triton::canUseWarpBallotHistogram(HistogramOp op) {
   int numBins = op.getType().getNumElements();
   // Limit ballot and reduction overhead relative to shared-memory atomics.
   return !hasCrossCTAScratch(op) && numBins <= 2 &&
          numBins * gpu::lookupNumWarps(op) <= 4;
 }
+
+ReduceOpHelper::ReduceOpHelper(triton::ReduceOp op)
+    : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
+      srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
 
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis];

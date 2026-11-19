@@ -32,7 +32,6 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -169,6 +168,29 @@ OpPrintingFlags getOpPrintingFlags() {
   printingFlags.printNameLocAsPrefix(true);
   return printingFlags;
 }
+
+// Owns a top-level ModuleOp returned to Python and erases it when the Python
+// object is destroyed. Holds a reference to the Python MLIRContext object,
+// which is released after the module has been erased.
+struct OwningModuleOp : public ModuleOp {
+  OwningModuleOp(ModuleOp mod, py::object context)
+      : ModuleOp(mod), context(std::move(context)) {}
+  OwningModuleOp(OwningModuleOp &&other) noexcept
+      : ModuleOp(other), context(std::move(other.context)) {
+    static_cast<ModuleOp &>(other) = ModuleOp();
+  }
+  OwningModuleOp(const OwningModuleOp &) = delete;
+  OwningModuleOp &operator=(const OwningModuleOp &) = delete;
+  OwningModuleOp &operator=(OwningModuleOp &&) = delete;
+  ~OwningModuleOp() {
+    if (getOperation() && !getOperation()->getBlock()) {
+      getOperation()->erase();
+    }
+  }
+
+private:
+  py::object context;
+};
 
 py::list getTensorDescMetadata(ModuleOp &mod) {
   TritonSourceMgrDiagnosticHandler handler =
@@ -720,8 +742,7 @@ void init_triton_ir(py::module_ &m) {
              return py::str(s.c_str(), s.size());
            });
 
-  // dynamic_attr is used to transfer ownership of the MLIR context to the
-  // module
+  // dynamic_attr is used to attach attributes such as module.context in Python
   py::class_<ModuleOp, OpState>(m, "module", py::dynamic_attr())
       .def("dump", &ModuleOp::dump)
       .def("str",
@@ -812,6 +833,8 @@ void init_triton_ir(py::module_ &m) {
              self.walk(fn);
            });
 
+  py::class_<OwningModuleOp, ModuleOp>(m, "_owning_module", py::dynamic_attr());
+
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {
     return mlir::cast<Attribute>(DenseIntElementsAttr::get(
         RankedTensorType::get({static_cast<int64_t>(values.size())},
@@ -827,7 +850,7 @@ void init_triton_ir(py::module_ &m) {
             parseSourceFile<ModuleOp>(inputFilename, &context);
         if (!module)
           throw std::runtime_error("Parse MLIR file failed.");
-        return module->clone();
+        return OwningModuleOp(module.release(), py::find(&context));
       },
       ret::move);
 
@@ -925,8 +948,9 @@ void init_triton_ir(py::module_ &m) {
            })
       // getters
       .def("create_module",
-           [](TritonOpBuilder &self) -> ModuleOp {
-             return self.create<ModuleOp>();
+           [](TritonOpBuilder &self) -> OwningModuleOp {
+             return OwningModuleOp(self.create<ModuleOp>(),
+                                   py::find(self.getContext()));
            })
       // insertion block/point
       .def("set_insertion_point_to_start",

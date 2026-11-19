@@ -3,7 +3,6 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {

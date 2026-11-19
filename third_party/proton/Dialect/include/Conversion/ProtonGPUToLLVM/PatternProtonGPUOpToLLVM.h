@@ -1,12 +1,13 @@
 #ifndef PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
 #define PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
 
-#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+namespace mlir {
+class LLVMTypeConverter;
+class PatternBenefit;
+class RewritePatternSet;
 
-namespace mlir::triton {
-namespace proton::gpu {
+namespace triton::proton::gpu {
+class TargetInfoBase;
 
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
@@ -16,7 +17,7 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
 void populateTypeConversions(LLVMTypeConverter &typeConverter,
                              const TargetInfoBase &targetInfo);
 
-} // namespace proton::gpu
-} // namespace mlir::triton
+} // namespace triton::proton::gpu
+} // namespace mlir
 
 #endif // PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H

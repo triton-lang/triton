@@ -1,7 +1,7 @@
 #ifndef TRITON_IR_UTILITY_H_
 #define TRITON_IR_UTILITY_H_
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <algorithm>

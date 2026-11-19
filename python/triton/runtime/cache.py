@@ -7,6 +7,9 @@ import base64
 import hashlib
 import functools
 import sysconfig
+import threading
+import weakref
+from contextlib import contextmanager
 
 from triton import __version__, knobs
 
@@ -33,7 +36,30 @@ class CacheManager(ABC):
         pass
 
 
+_compile_lock_guard = threading.Lock()
+_compile_locks = weakref.WeakValueDictionary()
+_compile_owner = threading.local()
+
+
 class FileCacheManager(CacheManager):
+
+    @contextmanager
+    def _lock_compile(self, filename):
+        if getattr(_compile_owner, "compiling", False):
+            # Backend or frontend code can request another compile on this thread.
+            yield
+            return
+        key = (self.cache_dir, filename)
+        with _compile_lock_guard:
+            lock = _compile_locks.get(key)
+            if lock is None:
+                lock = _compile_locks[key] = threading.Lock()
+        with lock:
+            _compile_owner.compiling = True
+            try:
+                yield
+            finally:
+                _compile_owner.compiling = False
 
     def __init__(self, key, override=False, dump=False):
         self.key = key

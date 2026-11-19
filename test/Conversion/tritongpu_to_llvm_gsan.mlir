@@ -1,5 +1,31 @@
 // RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm | FileCheck %s
 
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @bulk_load_range
+  // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(48 : i32)
+  // CHECK-NOT: llvm.alloca
+  // CHECK: llvm.call @__triton_gsan_load_range(%{{.*}}, %{{.*}}, %[[BYTES]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @bulk_load_range(%src: !tt.ptr<i8>, %pred: i1) {
+    tti.experimental_gsan_load_range %src, 48, %pred : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @bulk_store_range
+  // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(48 : i32)
+  // CHECK-NOT: llvm.alloca
+  // CHECK: llvm.call @__triton_gsan_store_range(%{{.*}}, %{{.*}}, %[[BYTES]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @bulk_store_range(%src: !tt.ptr<i8>, %pred: i1) {
+    tti.experimental_gsan_store_range %src, 48, %pred : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @load_store

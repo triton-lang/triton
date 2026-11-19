@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, cluster, fence_async_shared, gdc, mbarrier
+from ..hopper import async_store, bulk, cluster, fence_async_shared, gdc, mbarrier
 from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -25,6 +25,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "async_store",
+    "bulk",
     "clc",
     "cluster",
     "fence_async_shared",
@@ -703,11 +704,15 @@ def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
 
 
 @builtin
-def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
+def tcgen05_commit(barrier, pred=True, descs=(), *, completion="all", _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
-    of 1 when all async tcgen05 MMA and copy instructions previously issued by
-    the thread are complete.
+    of 1 when prior async tcgen05 operations issued by the thread are complete.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen05 operations. On Rubin, ``completion="a_read"`` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen05 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -718,8 +723,12 @@ def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
             the preceding multiplication inputs. Defaults to ().
+        completion (str): "all" (default) or "a_read" (Rubin only).
     """
     pred = _semantic.to_tensor(pred)
     descs = _unwrap_if_constexpr(descs)
     descs = [d.handle for d in descs]
-    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs)
+    completion = _unwrap_if_constexpr(completion)
+    if completion not in ("all", "a_read"):
+        raise ValueError("completion must be 'all' or 'a_read'")
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs, completion == "a_read")

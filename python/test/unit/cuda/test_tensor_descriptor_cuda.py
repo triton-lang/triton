@@ -137,6 +137,42 @@ def test_tensor_descriptor_device_matches_host(rank, dtype, with_allocator):
 
 
 @requires_tma
+@pytest.mark.parametrize("byte_strides", [
+    ((1 << 36) - 16, ),
+    (1 << 36, (2 << 36) + 16, (7 << 36) + 32, (1 << 40) - 16),
+])
+def test_tma_descriptor_byte_strides(byte_strides):
+    from triton._C.libtriton import gsan_testing
+
+    # Singleton outer dimensions allow large strides with a small allocation.
+    data = torch.empty(16, dtype=torch.uint8, device="cuda")
+    rank = len(byte_strides) + 1
+    shape = (16, ) + (1, ) * (rank - 1)
+    storage = ctypes.create_string_buffer(128 + 127)
+    address = (ctypes.addressof(storage) + 127) & -128
+    encode = ctypes.CDLL("libcuda.so.1").cuTensorMapEncodeTiled
+    # Encode uint8 with no interleave, swizzle, L2 promotion, or OOB fill.
+    status = encode(
+        ctypes.c_void_p(address),
+        0,
+        rank,
+        ctypes.c_void_p(data.data_ptr()),
+        (ctypes.c_uint64 * rank)(*shape),
+        (ctypes.c_uint64 * (rank - 1))(*byte_strides),
+        (ctypes.c_uint32 * rank)(*shape),
+        (ctypes.c_uint32 * rank)(*([1] * rank)),
+        0,
+        0,
+        0,
+        0,
+    )
+    assert status == 0
+    descriptor = ctypes.string_at(address, 128)
+    decoded = gsan_testing.tensor_desc_byte_strides(descriptor, rank, data.element_size())
+    assert decoded == list(reversed(byte_strides)) + [data.element_size()]
+
+
+@requires_tma
 @pytest.mark.parametrize("stride", [16, 32])
 def test_tensor_descriptor_alloc_class_span_threshold(stride, with_allocator):
 
