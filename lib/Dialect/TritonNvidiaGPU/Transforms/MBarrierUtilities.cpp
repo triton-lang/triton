@@ -84,18 +84,8 @@ std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
     return isCrossCTAGatherScatter(atomic.getDst().getType(),
                                    atomic.getValues().getType(),
                                    atomic.getAxis());
-  if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op))
-    return bulk.getMulticast();
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (tma.getMulticast())
-      return true;
-    auto type = cast<ttg::MemDescType>(tma.getResult().getType());
-    auto encoding = type.getEncoding();
-    // Subview offsets can select another CTA.
-    if (ttg::dropPipeliningDim(type.getShape(), encoding) ==
-        ttg::dropPipeliningDim(type.getAllocShape(), encoding))
-      return false;
-  }
+  if (isa<ttng::AsyncLoadOpInterface>(op))
+    return hasCrossCTAAsyncSharedAccess(op);
   return std::nullopt;
 }
 

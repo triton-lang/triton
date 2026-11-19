@@ -10,6 +10,7 @@ class ModuleOp;
 
 namespace mlir::triton::membar {
 
+struct FixedSync;
 struct OpModel;
 
 struct TMemAccess {
@@ -26,7 +27,8 @@ class TMemModel {
 public:
   TMemModel(ModuleOp module, BufferRegionAnalysis &regions);
   ~TMemModel();
-  void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses);
+  void describe(Operation *op, OpModel &model, FixedSync &fixed,
+                ArrayRef<MemoryAccess> accesses);
   // Transfers in one placement graph execute in the same warp role.
   bool isSameWarp(Operation *lhs, Operation *rhs);
 

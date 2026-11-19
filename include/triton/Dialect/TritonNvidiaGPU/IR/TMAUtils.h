@@ -34,6 +34,9 @@ getTMABlockShape(TensorDescInterface ty, bool packedSize, gpu::TMAMode mode) {
       mode);
 }
 
+// CTA-rank bits that the origin of a TMA shared-memory subview may change.
+uint32_t getTMASubviewCTAMask(gpu::MemDescType type);
+
 // Maps message starts, before the descriptor's affine subview translation.
 struct TMAMessageLayouts {
   LinearLayout messageToPackedOffset;

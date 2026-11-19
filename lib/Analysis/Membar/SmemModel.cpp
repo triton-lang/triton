@@ -556,7 +556,7 @@ MembarInfo SMemModel::translateCallSummary(CallOpInterface call,
   return summary;
 }
 
-void SMemModel::describe(Operation *op, OpModel &model,
+void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
                          ArrayRef<MemoryAccess> accesses,
                          std::optional<BarrierStages> clusterStages) {
   bool includeShared = accessMode != AccessMode::SynchronizationOnly;
@@ -566,9 +566,9 @@ void SMemModel::describe(Operation *op, OpModel &model,
       return;
     // The local-memory mask guarantees ordering of local memory accesses.
     if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-      model.fixedAfter = barrier.hasLocal()
-                             ? (barrier.isWarp() ? warpBarrier : fullBarrier)
-                             : bit(Need::WarpConvergence);
+      fixed.after = barrier.hasLocal()
+                        ? (barrier.isWarp() ? warpBarrier : fullBarrier)
+                        : bit(Need::WarpConvergence);
       return;
     }
     if (isa<ttng::TMEMWaitOp>(op)) {
@@ -576,7 +576,7 @@ void SMemModel::describe(Operation *op, OpModel &model,
       // The wait itself converges each warp and adds no memory-order demand.
       if (includeShared)
         model.sharedOut.threadSync.effectIssuer = ThreadIssuer::Unknown;
-      model.fixedAfter = bit(Need::WarpConvergence);
+      fixed.after = bit(Need::WarpConvergence);
       return;
     }
   }
@@ -585,10 +585,9 @@ void SMemModel::describe(Operation *op, OpModel &model,
   bool hasScratch = scratchId != Allocation::InvalidBufferId;
   auto barriers =
       clusterStages ? *clusterStages : getLocalBarrierStages(op, hasScratch);
-  model.fixedBefore = barriers.beforeMemoryEffects ? fullBarrier : 0;
-  model.fixedInside =
-      hasScratch && barriers.betweenMemoryEffects ? fullBarrier : 0;
-  model.fixedAfter = barriers.afterMemoryEffects ? fullBarrier : 0;
+  fixed.before = barriers.beforeMemoryEffects ? fullBarrier : 0;
+  fixed.inside = hasScratch && barriers.betweenMemoryEffects ? fullBarrier : 0;
+  fixed.after = barriers.afterMemoryEffects ? fullBarrier : 0;
   if (!includeShared)
     return;
   if (!clusterStages) {
@@ -613,7 +612,7 @@ void SMemModel::describe(Operation *op, OpModel &model,
         addThreadDemand(effects, op, accesses);
     }
     // TODO: Retire this legacy return demand with MembarAnalysis. The CFG
-    // models function returns in MembarCFGBuilder::describe().
+    // models function returns in MembarModel::describe().
     if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
       addThreadDemand(effects, op, accesses);
   }
@@ -652,7 +651,7 @@ void SMemModel::describe(Operation *op, OpModel &model,
     AllocationSlice scratch(interval);
     scratch.physicalFootprint = footprint;
     model.sharedIn.syncWriteSlices[scratch].insert(op);
-    if (model.fixedInside) {
+    if (fixed.inside) {
       // The internal barrier synchronizes all incoming effects. Do not carry
       // them past the operation; only effects after the barrier are outgoing.
       model.sharedOut.threadSync = model.sharedIn.threadSync;

@@ -1,4 +1,6 @@
 #include "triton/Analysis/Membar/Pass.h"
+#include "triton/Analysis/CallGraph.h"
+#include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "triton/Analysis/Membar/CFGBuilder.h"
 #include "triton/Analysis/Membar/Dependencies.h"
 #include "triton/Analysis/Membar/Solver.h"
@@ -17,17 +19,17 @@
 namespace mlir::triton::membar {
 namespace {
 
-DenseMap<Operation *, unsigned>
-getCalleeWeights(ModuleAllocation &calls,
-                 std::map<Operation *, SMemModel> &models) {
+template <typename T, typename Model>
+DenseMap<Operation *, unsigned> getCalleeWeights(CallGraph<T> &calls,
+                                                 Model &model) {
   DenseMap<Operation *, unsigned> calleeWeights;
   // Each root gets a postorder visit without an incoming call.
   SmallVector<unsigned> pathWeights(calls.getRoots().size(), 1);
   // walk visits each call path. Propagate just this path's contribution.
-  calls.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+  calls.template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
       [&](CallOpInterface call, FunctionOpInterface callee) {
         auto caller = call->getParentOfType<FunctionOpInterface>();
-        const auto &indices = models.at(caller).getBufferIndexAnalysis();
+        const auto &indices = model.getIndices(caller);
         unsigned weight =
             getBlockWeight(call->getBlock(), indices, pathWeights.back());
         pathWeights.push_back(weight);
@@ -40,13 +42,20 @@ getCalleeWeights(ModuleAllocation &calls,
   return calleeWeights;
 }
 
-void emit(const MembarCFG &cfg, const llvm::BitVector &selected) {
+template <typename Facts>
+void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
+          const llvm::BitVector &selected) {
   for (unsigned id : selected.set_bits()) {
-    Operation *before = cfg.nodes[id / ACTIONS.size()].op;
-    Action action = ACTIONS[id % ACTIONS.size()];
+    Operation *before = cfg.nodes[id / actions.size()].op;
+    Action action = actions[id % actions.size()];
     OpBuilder builder(before);
     auto loc = before->getLoc();
     switch (action) {
+    case Action::ProxyCTA:
+    case Action::ProxyCluster:
+      nvidia_gpu::FenceAsyncSharedOp::create(builder, loc,
+                                             action == Action::ProxyCluster);
+      break;
     case Action::WaitLoad:
     case Action::WaitStore:
       nvidia_gpu::TMEMWaitOp::create(builder, loc,
@@ -65,7 +74,51 @@ void emit(const MembarCFG &cfg, const llvm::BitVector &selected) {
   }
 }
 
+template <typename Model, typename Discover>
+LogicalResult placeRegions(FunctionOpInterface function,
+                           MembarCFGBuilder<Model> &builder,
+                           ArrayRef<Action> actions, Discover discover,
+                           bool expandWarpRoles = false) {
+  SmallVector<Region *> bodies{&function.getFunctionBody()};
+  if (!expandWarpRoles)
+    function.walk([&](gpu::WarpSpecializeOp ws) {
+      bodies.push_back(&ws.getDefaultRegion());
+      llvm::append_range(bodies, ws.getPartitionRegions());
+    });
+  for (Region *body : bodies) {
+    auto cfg = builder.build(*body, expandWarpRoles);
+    auto demands = discover(cfg);
+    auto cut = solveMembarCut(cfg, demands, actions);
+    if (!cut)
+      return function.emitError("synchronization demand has no legal cut");
+    LLVM_DEBUG({
+      llvm::dbgs() << function.getName() << ": " << cfg.nodes.size()
+                   << " CFG points, " << demands.size() << " demands, "
+                   << cut->sites.count() << " sites, cost " << cut->cost
+                   << ", lower bound " << cut->lowerBound << "\n";
+    });
+    emit(cfg, actions, cut->sites);
+  }
+  return success();
+}
+
 } // namespace
+
+LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions) {
+  const Action actions[] = {Action::ProxyCluster, Action::ProxyCTA};
+  auto callbacks = getTensorCallbackOps(module);
+  CallGraph<int> calls(module);
+  AsyncFenceModel model(regions, gpu::TritonGPUDialect::getNumCTAs(module));
+  const auto calleeWeights = getCalleeWeights(calls, model);
+  MembarCFGBuilder builder(model, callbacks, calleeWeights);
+  for (auto function : calls.getRoots()) {
+    auto discover = [&](auto &cfg) { return model.discoverDemands(cfg); };
+    if (failed(placeRegions(function, builder, actions, discover,
+                            /*expandWarpRoles=*/true)))
+      return failure();
+  }
+  return success();
+}
 
 LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                             BufferRegionAnalysis &regions,
@@ -88,32 +141,18 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                        regions, sharedMode, completionScope,
                        /*followCalls=*/true);
 
+  MembarModel model(models, tmemModel);
   auto callbacks = getTensorCallbackOps(module);
-  const auto calleeWeights = getCalleeWeights(moduleAllocation, models);
-  MembarCFGBuilder builder(models, tmemModel, callbacks, calleeWeights);
+  const auto calleeWeights = getCalleeWeights(moduleAllocation, model);
+  MembarCFGBuilder builder(model, callbacks, calleeWeights);
   for (auto function : moduleAllocation.getRoots()) {
-    // Callee footprints are in kernel coordinates. Only kernel SSA values
-    // have allocator IDs for target-specific alias checks.
+    // Callee footprints are in kernel coordinates.
     Allocation &allocation = *moduleAllocation.getFuncData(function);
-    SmallVector<Region *> bodies{&function.getFunctionBody()};
-    function.walk([&](gpu::WarpSpecializeOp ws) {
-      bodies.push_back(&ws.getDefaultRegion());
-      llvm::append_range(bodies, ws.getPartitionRegions());
-    });
-    for (Region *body : bodies) {
-      auto cfg = builder.build(*body);
-      auto demands = discoverDemands(cfg, allocation, sharedFilter, tmemModel);
-      auto cut = solveMembarCut(cfg, demands);
-      if (!cut)
-        return function.emitError("synchronization demand has no legal cut");
-      LLVM_DEBUG({
-        llvm::dbgs() << function.getName() << ": " << cfg.nodes.size()
-                     << " CFG points, " << demands.size() << " demands, "
-                     << cut->sites.count() << " sites, cost " << cut->cost
-                     << ", lower bound " << cut->lowerBound << "\n";
-      });
-      emit(cfg, cut->sites);
-    }
+    auto discover = [&](const auto &cfg) {
+      return discoverDemands(cfg, allocation, sharedFilter, tmemModel);
+    };
+    if (failed(placeRegions(function, builder, ACTIONS, discover)))
+      return failure();
   }
   return success();
 }

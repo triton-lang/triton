@@ -13,10 +13,19 @@ constexpr unsigned site(unsigned point, Action action) {
   return point * ACTIONS.size() + unsigned(action);
 }
 
+// Give each point its own gap unless a test explicitly shares one.
+template <typename Facts>
+void addPoints(MembarCFG<Facts> &cfg, unsigned count) {
+  unsigned first = cfg.nodes.size();
+  cfg.nodes.resize(first + count);
+  for (unsigned i = first; i < cfg.nodes.size(); ++i)
+    cfg.nodes[i].gap = i;
+}
+
 // Node zero is entry. A zero insertion cost marks a node with no legal site.
-MembarCFG linearCFG(llvm::ArrayRef<unsigned> costs) {
-  MembarCFG cfg;
-  cfg.nodes.resize(costs.size());
+MembarCFG<OpModel> linearCFG(llvm::ArrayRef<unsigned> costs) {
+  MembarCFG<OpModel> cfg;
+  addPoints(cfg, costs.size());
   for (unsigned i = 1; i < costs.size(); ++i) {
     cfg.nodes[i - 1].next.push_back({i});
     cfg.nodes[i].insertionCost = costs[i];
@@ -32,6 +41,16 @@ TEST(MembarCut, EmptyAndUncuttableDemands) {
   EXPECT_EQ(solution->cost, 0u);
   EXPECT_EQ(solution->lowerBound, 0u);
   EXPECT_FALSE(solveMembarCut(cfg, {{0, 1, Need::RegionOrder}}));
+}
+
+TEST(MembarCut, SiteIndexesUseTheAvailableActions) {
+  auto cfg = linearCFG({0, 1});
+  constexpr Action actions[] = {Action::RegionBarrier, Action::WarpBarrier};
+  auto solution = solveMembarCut(cfg, {{0, 1, Need::WarpOrder}}, actions);
+  ASSERT_TRUE(solution);
+  EXPECT_EQ(solution->sites.size(), 4u);
+  EXPECT_TRUE(solution->sites.test(3));
+  EXPECT_FALSE(solveMembarCut(cfg, {{0, 1, Need::WaitStore}}, actions));
 }
 
 TEST(MembarCut, CompletionAlsoConvergesTheWarp) {
@@ -111,7 +130,7 @@ TEST(MembarCut, OrderedHandoffUsesFirstBFSArrival) {
   cfg.nodes[0].next.push_back({2});
   cfg.nodes[1].next = {{3}};
   cfg.nodes[2].next = {{4}};
-  cfg.nodes[2].effects.fixedAfter = bit(Need::WaitStore);
+  cfg.nodes[2].fixed.after = bit(Need::WaitStore);
   auto solution =
       solveMembarCut(cfg, {{0, 4, Need::WaitStore, Path::WaitThenOrder}});
   ASSERT_TRUE(solution);
@@ -153,24 +172,24 @@ TEST(MembarCut, WeightedSharedSite) {
 }
 
 // Give each original node a separate predecessor for its insertion gap. This
-// preserves the order of gap actions relative to the node's fixedBefore.
-void checkPlacements(
-    const MembarCFG &cfg, Demand demand,
-    llvm::function_ref<bool(const llvm::BitVector &)> covered) {
+// preserves the order of gap actions relative to the node's fixed.before.
+void checkPlacements(const MembarCFG<OpModel> &cfg, Demand demand,
+                     llvm::function_ref<bool(const llvm::BitVector &)> covered,
+                     llvm::ArrayRef<Action> offered = ACTIONS) {
   unsigned points = cfg.nodes.size();
-  llvm::BitVector legal(points * ACTIONS.size());
-  MembarCFG fixed = cfg;
-  fixed.nodes.resize(2 * points);
+  llvm::BitVector legal(points * offered.size());
+  auto fixed = cfg;
+  addPoints(fixed, points);
   for (unsigned i = 0; i < points; ++i) {
     if (cfg.nodes[i].insertionCost)
-      legal.set(i * ACTIONS.size(), (i + 1) * ACTIONS.size());
+      legal.set(i * offered.size(), (i + 1) * offered.size());
     fixed.nodes[i].insertionCost = 0;
     for (auto &edge : fixed.nodes[i].next)
       edge.to += points;
     fixed.nodes[points + i].next.push_back({i});
   }
 
-  auto solution = solveMembarCut(cfg, {demand});
+  auto solution = solveMembarCut(cfg, {demand}, offered);
   ASSERT_EQ(solution.has_value(), covered(legal));
   if (solution) {
     EXPECT_TRUE(covered(solution->sites));
@@ -184,20 +203,20 @@ void checkPlacements(
   for (unsigned mask = 0; mask < (1u << legal.count()); ++mask) {
     SCOPED_TRACE(mask);
     for (unsigned i = 0; i < points; ++i)
-      fixed.nodes[points + i].effects.fixedAfter = 0;
+      fixed.nodes[points + i].fixed.after = 0;
     uint64_t cost = 0;
     llvm::BitVector sites(legal.size());
     for (auto [i, id] : llvm::enumerate(legal.set_bits())) {
       if (!(mask & (1u << i)))
         continue;
       sites.set(id);
-      unsigned point = id / ACTIONS.size();
+      unsigned point = id / offered.size();
       cost += cfg.nodes[point].insertionCost;
-      fixed.nodes[points + point].effects.fixedAfter |=
-          coverage(ACTIONS[id % ACTIONS.size()]);
+      fixed.nodes[points + point].fixed.after |=
+          coverage(offered[id % offered.size()]);
     }
     bool feasible = covered(sites);
-    EXPECT_EQ(solveMembarCut(fixed, {demand}).has_value(), feasible);
+    EXPECT_EQ(solveMembarCut(fixed, {demand}, offered).has_value(), feasible);
     if (feasible)
       optimum = std::min(optimum, cost);
   }
@@ -222,30 +241,114 @@ TEST(MembarCut, OrderedWaitAndBarrier) {
 
   // A fixed barrier after S is too early. A fixed wait before U follows
   // U's insertion gap, and U's internal rendezvous follows the deadline.
-  cfg.nodes[1].effects.fixedAfter = fullBarrier;
-  cfg.nodes[3].effects.fixedBefore = bit(Need::WaitStore);
-  cfg.nodes[3].effects.fixedInside = fullBarrier;
+  cfg.nodes[1].fixed.after = fullBarrier;
+  cfg.nodes[3].fixed.before = bit(Need::WaitStore);
+  cfg.nodes[3].fixed.inside = fullBarrier;
   checkPlacements(cfg, demand, ordered);
 
   // A fixed rendezvous before U also covers a wait inserted at U's gap.
-  cfg.nodes[3].effects.fixedBefore = fullBarrier;
+  cfg.nodes[3].fixed.before = fullBarrier;
   checkPlacements(cfg, demand, [](const llvm::BitVector &s) {
     return s[waitM] || s[waitU];
   });
-  cfg.nodes[3].effects.fixedBefore = 0;
-  cfg.nodes[2].effects.fixedInside = fullBarrier;
-  cfg.nodes[2].effects.fixedAfter = bit(Need::WaitStore);
+  cfg.nodes[3].fixed.before = 0;
+  cfg.nodes[2].fixed.inside = fullBarrier;
+  cfg.nodes[2].fixed.after = bit(Need::WaitStore);
   checkPlacements(cfg, demand, [](const llvm::BitVector &s) {
     return s[waitM] || s[barrierU];
   });
+}
+
+TEST(MembarCut, CTAFenceAfterClusterAcquire) {
+  // Peer store -> CTA fence -> cluster rendezvous -> local TMA reader.
+  // A gap at the rendezvous is still on the writer's side.
+  auto cfg = linearCFG({0, 1, 1, 1});
+  const Action fences[] = {Action::ProxyCluster, Action::ProxyCTA};
+  Demand demand{0, 3, Need::ProxyCTA, Path::ClusterThenProxy};
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCTA);
+
+  // A relaxed cluster barrier leaves the remote store in the cluster window.
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) { return s[2] || s[4] || s[6]; }, fences);
+
+  cfg.nodes[2].fixed.after = bit(Need::ClusterAcquire);
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) {
+        return s[2] || s[4] || s[6] || s[7]; // Cluster at 1/2/3 or CTA at 3.
+      },
+      fences);
+
+  auto alreadyCovered = [](const llvm::BitVector &) { return true; };
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCluster);
+  checkPlacements(cfg, demand, alreadyCovered, fences);
+  cfg.nodes[1].fixed.after = coverage(Action::ProxyCTA);
+  cfg.nodes[3].fixed.before = coverage(Action::ProxyCTA);
+  checkPlacements(cfg, demand, alreadyCovered, fences);
+
+  // On the path bypassing the acquire, the fixed CTA fence at the join still
+  // excludes the producer's remote write.
+  cfg.nodes[1].next.push_back({3});
+  checkPlacements(
+      cfg, demand,
+      [](const llvm::BitVector &s) {
+        return s[2] || s[6]; // Cluster at the fork or the join.
+      },
+      fences);
+}
+
+TEST(MembarCut, WorkerFencesFollowTheirIssuerThroughTheJoin) {
+  // Two launches in sequence. Each default fences before its join.
+  MembarCFG<OpModel> cfg;
+  addPoints(cfg, 7);
+  cfg.nodes[0].next = {{1}, {2, false, WarpEdge::EnterWorker}};
+  cfg.nodes[1].fixed.after = coverage(Action::RegionBarrier);
+  cfg.nodes[1].next = {{3}};
+  cfg.nodes[2].inWorker = true;
+  cfg.nodes[2].next = {{3, false, WarpEdge::ExitWorker}};
+  cfg.nodes[3].next = {{4}, {5, false, WarpEdge::EnterWorker}};
+  cfg.nodes[4].fixed.after = coverage(Action::RegionBarrier);
+  cfg.nodes[4].next = {{6}};
+  cfg.nodes[5].inWorker = true;
+  cfg.nodes[5].next = {{6, false, WarpEdge::ExitWorker}};
+
+  const Action fences[] = {Action::RegionBarrier};
+  // With no legal insertion gaps, a solution exists only for covered demands.
+  auto covered = [&](unsigned from, unsigned to) {
+    return solveMembarCut(cfg, {{from, to, Need::RegionOrder}}, fences)
+        .has_value();
+  };
+  EXPECT_TRUE(covered(0, 3));  // The default orders its own incoming effects.
+  EXPECT_FALSE(covered(0, 2)); // The worker can consume an inherited effect.
+  EXPECT_FALSE(covered(2, 3)); // The worker's own effects escape its launch.
+  EXPECT_FALSE(covered(2, 5)); // They can enter the next launch's worker.
+  EXPECT_TRUE(covered(2, 6));  // They cannot escape that worker again.
+}
+
+TEST(MembarCut, SharedCalleeFenceIsChargedOnce) {
+  MembarCFG<OpModel> cfg;
+  addPoints(cfg, 3);
+  cfg.nodes[0].next = {{1}, {2, false, WarpEdge::EnterWorker}};
+  cfg.nodes[2].inWorker = true;
+  // Both role contexts execute the same physical instruction.
+  cfg.nodes[2].gap = cfg.nodes[1].gap;
+  cfg.nodes[1].insertionCost = cfg.nodes[2].insertionCost = 4;
+  const Action fences[] = {Action::RegionBarrier};
+  auto cut = solveMembarCut(
+      cfg, {{0, 1, Need::RegionOrder}, {0, 2, Need::RegionOrder}}, fences);
+  ASSERT_TRUE(cut);
+  EXPECT_EQ(cut->sites.count(), 1u);
+  EXPECT_EQ(cut->cost, 4u);
+  EXPECT_EQ(cut->lowerBound, cut->cost);
 }
 
 TEST(MembarCut, OrderedPathsThroughAJoin) {
   auto cfg = linearCFG({0, 1, 1, 1, 1});
   cfg.nodes[1].next.push_back({3});
   cfg.nodes[2].next = {{4}};
-  cfg.nodes[2].effects.fixedAfter = bit(Need::WaitStore);
-  cfg.nodes[4].effects.fixedBefore = fullBarrier;
+  cfg.nodes[2].fixed.after = bit(Need::WaitStore);
+  cfg.nodes[4].fixed.before = fullBarrier;
   // The left arm has already waited. The right needs a wait there or at
   // the join, so the two arrivals at the join cannot be conflated.
   checkPlacements(cfg, {1, 4, Need::WaitStore, Path::WaitThenOrder},
@@ -272,13 +375,13 @@ TEST(MembarCut, SelfDependencyAndLoopCarriedPaths) {
   cfg.nodes[3].next.push_back({1, true});
   // Neither endpoint uses the operation's internal synchronization. The
   // cycle must traverse a real edge and either barrier can order the warp.
-  cfg.nodes[1].effects.fixedInside = fullBarrier;
+  cfg.nodes[1].fixed.inside = fullBarrier;
   checkPlacements(cfg, self, [](const llvm::BitVector &s) {
     return s[site(1, Action::WarpBarrier)] ||
            s[site(1, Action::RegionBarrier)] ||
            s[site(3, Action::WarpBarrier)] || s[site(3, Action::RegionBarrier)];
   });
-  cfg.nodes[1].effects.fixedInside = 0;
+  cfg.nodes[1].fixed.inside = 0;
   checkPlacements(cfg, {1, 2, Need::RegionOrder, Path::Any},
                   [](const llvm::BitVector &) { return false; });
   checkPlacements(cfg, {1, 2, Need::RegionOrder, Path::LoopCarried},

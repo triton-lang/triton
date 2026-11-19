@@ -298,6 +298,7 @@ private:
 
 namespace triton::membar {
 
+struct FixedSync;
 struct OpModel;
 
 bool hasRegionLocalUses(Value root, bool followCalls);
@@ -327,7 +328,8 @@ public:
   /// Cluster placement supplies its own stages and tracks only memory slices.
   /// TODO: Remove clusterStages, AllocatorAliasesOnly and MembarSliceFilterFn
   /// when the legacy cluster analysis migrates.
-  void describe(Operation *op, OpModel &model, ArrayRef<MemoryAccess> accesses,
+  void describe(Operation *op, OpModel &model, FixedSync &fixed,
+                ArrayRef<MemoryAccess> accesses,
                 std::optional<BarrierStages> clusterStages = std::nullopt);
   /// TODO: Retire this method and AllocationSlice::translateToCallsite with the
   /// legacy forward-flow summaries.

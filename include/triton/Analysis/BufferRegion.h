@@ -355,8 +355,8 @@ public:
 
   /// Translate callee-local views into the caller's allocation frame, caching
   /// the complete footprint and preserving views already in other frames.
-  /// TODO: Remove this method and callsiteFootprints once legacy Membar and
-  /// proxy fence insertion both stop importing callee summaries.
+  /// TODO: Remove this method and callsiteFootprints once legacy Membar
+  /// stops importing callee summaries.
   const BufferRegionFootprint *
   translateToCallsite(const BufferRegionFootprint *footprint,
                       CallOpInterface call, FunctionOpInterface callee);

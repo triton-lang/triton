@@ -38,17 +38,12 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (auto crossCTA = hasCrossCTASharedAccess(op))
     return *crossCTA;
 
-  if (isa<ttng::CLCTryCancelOp>(op)) {
-    return ttg::lookupNumCTAs(op) > 1;
-  } else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
     return isCrossCTALoadStore(store.getDst().getType(),
                                store.getSrc().getType());
-  } else if (isa<ttng::TMEMCopyOp>(op)) {
-    return ttng::getModuleTwoCTAs(op);
-  } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
     return arrive.isMulticast();
-  }
-  return hasTCGen5CommitCrossCTA(op);
+  return hasCrossCTAAsyncSharedAccess(op) || hasTCGen5CommitCrossCTA(op);
 }
 
 bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,

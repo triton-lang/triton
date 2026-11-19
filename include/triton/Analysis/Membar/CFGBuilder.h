@@ -5,20 +5,31 @@
 #include "triton/Analysis/Membar/TmemModel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <map>
 #include <optional>
+#include <utility>
 
 namespace mlir::triton::membar {
 
-enum class Action { WaitLoad, WaitStore, RegionBarrier, WarpBarrier };
+enum class Action {
+  WaitLoad,
+  WaitStore,
+  RegionBarrier,
+  WarpBarrier,
+  ProxyCluster,
+  ProxyCTA
+};
 
-constexpr unsigned bit(Action action) { return 1u << unsigned(action); }
 enum class Need {
-  WaitLoad = unsigned(Action::WaitLoad),
-  WaitStore = unsigned(Action::WaitStore),
-  RegionOrder = unsigned(Action::RegionBarrier),
-  WarpOrder = unsigned(Action::WarpBarrier),
-  WarpConvergence
+  WaitLoad,
+  WaitStore,
+  RegionOrder,
+  WarpOrder,
+  WarpConvergence,
+  ProxyCTA,
+  ProxyCluster,
+  ClusterAcquire
 };
 
 constexpr unsigned bit(Need need) { return 1u << unsigned(need); }
@@ -27,11 +38,21 @@ constexpr unsigned warpBarrier =
 constexpr unsigned fullBarrier = bit(Need::RegionOrder) | warpBarrier;
 
 constexpr unsigned coverage(Action action) {
-  if (action == Action::RegionBarrier)
+  switch (action) {
+  case Action::WaitLoad:
+    return bit(Need::WaitLoad) | bit(Need::WarpConvergence);
+  case Action::WaitStore:
+    return bit(Need::WaitStore) | bit(Need::WarpConvergence);
+  case Action::RegionBarrier:
     return fullBarrier;
-  if (action == Action::WarpBarrier)
+  case Action::WarpBarrier:
     return warpBarrier;
-  return bit(action) | bit(Need::WarpConvergence);
+  case Action::ProxyCluster:
+    return bit(Need::ProxyCluster) | bit(Need::ProxyCTA);
+  case Action::ProxyCTA:
+    return bit(Need::ProxyCTA);
+  }
+  llvm_unreachable("unknown synchronization action");
 }
 
 enum class Boundary {
@@ -44,7 +65,6 @@ enum class Boundary {
 // Observe the input before the operation and start new producers at its output.
 // A scratch rendezvous lies between those two sets of effects.
 struct OpModel {
-  unsigned fixedBefore = 0, fixedInside = 0, fixedAfter = 0;
   BlockInfo sharedIn, sharedOut;
   SmallVector<TMemAccess, 1> tmemAccesses;
   // Native transfers need a completion wait; descriptor asm needs region order.
@@ -56,24 +76,45 @@ struct OpModel {
   bool operator==(const OpModel &) const = default;
 };
 
+enum class WarpEdge { None, EnterWorker, ExitWorker };
+
 struct Edge {
   unsigned to;
   bool invalidatesIteration = false;
+  WarpEdge warp = WarpEdge::None;
+
+  // A worker exports its own effects. An effect inherited at launch follows
+  // the default warps to the continuation, including on later loop iterations.
+  bool follow(bool &mayExitWorker) const {
+    if (warp != WarpEdge::ExitWorker)
+      return true;
+    return std::exchange(mayExitWorker, false);
+  }
+};
+
+struct FixedSync {
+  unsigned before = 0, inside = 0, after = 0;
+
+  bool operator==(const FixedSync &) const = default;
 };
 
 // Arrival observes incoming effects; departure starts outgoing dependencies.
 // A fixed internal rendezvous orders paths passing through the operation.
-struct Node {
+template <typename Facts> struct Node {
   Operation *op = nullptr;
   // Zero wherever the execution group cannot rendezvous.
   unsigned insertionCost = 0;
   unsigned body = 0;
-  OpModel effects;
+  FixedSync fixed;
+  Facts effects;
   SmallVector<Edge, 2> next;
+  // First CFG point for this operation. Copies in different roles share a gap.
+  unsigned gap = 0;
+  bool inWorker = false;
 };
 
-struct MembarCFG {
-  SmallVector<Node, 0> nodes;
+template <typename Facts> struct MembarCFG {
+  SmallVector<Node<Facts>, 0> nodes;
 
   // A callee entry or loop backedge can rebind SSA values in its own body.
   bool invalidatesIteration(Edge edge, unsigned source) const {
@@ -82,26 +123,42 @@ struct MembarCFG {
   }
 };
 
+class MembarModel {
+public:
+  using Facts = OpModel;
+  MembarModel(std::map<Operation *, SMemModel> &models, TMemModel *tmem)
+      : models(models), tmem(tmem) {}
+
+  const BufferIndexAnalysis &getIndices(FunctionOpInterface function);
+  std::optional<Facts> describe(Operation *op, FixedSync &fixed,
+                                Block *active = nullptr);
+
+private:
+  std::map<Operation *, SMemModel> &models;
+  TMemModel *tmem;
+};
+
 unsigned getBlockWeight(Block *block, const BufferIndexAnalysis &indices,
                         unsigned invocationWeight);
 
-class MembarCFGBuilder {
-public:
-  MembarCFGBuilder(std::map<Operation *, SMemModel> &models, TMemModel *tmem,
-                   const llvm::SetVector<Operation *> &callbacks,
-                   const DenseMap<Operation *, unsigned> &calleeWeights)
-      : models(models), tmem(tmem), callbacks(callbacks),
-        calleeWeights(calleeWeights) {}
+template <typename Model> class MembarCFGBuilder {
+  using Facts = typename Model::Facts;
 
-  /// Build one execution region and link its reachable noinline callees.
-  MembarCFG build(Region &root);
+public:
+  MembarCFGBuilder(Model &model, const llvm::SetVector<Operation *> &callbacks,
+                   const DenseMap<Operation *, unsigned> &calleeWeights)
+      : model(model), callbacks(callbacks), calleeWeights(calleeWeights) {}
+
+  /// Link reachable noinline callees and optionally expand warp-specialized
+  /// roles.
+  MembarCFG<Facts> build(Region &root, bool expandWarpRoles);
 
 private:
-  void addRegion(MembarCFG &cfg, Region &region);
-  OpModel describe(Operation *op, SMemModel &shared);
+  void appendWithCallees(MembarCFG<Facts> &cfg, Region &root,
+                         std::optional<Edge> roleExit = std::nullopt);
+  void addRegion(MembarCFG<Facts> &cfg, Region &region);
 
-  std::map<Operation *, SMemModel> &models;
-  TMemModel *tmem;
+  Model &model;
   const llvm::SetVector<Operation *> &callbacks;
   const DenseMap<Operation *, unsigned> &calleeWeights;
 };
