@@ -1115,6 +1115,100 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("REUSE", [False, True])
+@pytest.mark.parametrize("SYNCHRONIZED", [False, True])
+@pytest.mark.parametrize("SCATTER", [False, True])
+def test_cross_cta_write_visibility(REUSE, SYNCHRONIZED, SCATTER, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_cross_cta_write_visibility,
+                                (REUSE, SYNCHRONIZED, SCATTER, device, False, monkeypatch))
+        if SYNCHRONIZED:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(inp, out, REUSE: ttgl.constexpr, SYNCHRONIZED: ttgl.constexpr, SCATTER: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=((0, 1), ))
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=((0, 1), ))
+        rows = ttgl.arange(0, 2, ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 32, ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 32 + cols[None, :]
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared)
+        if REUSE:
+            smem.store(ttgl.full([2, 32], 0, ttgl.int32, layout))
+            ttgl.barrier(cluster=True)
+        values = ttgl.load(inp + offsets)
+        if SCATTER:
+            smem.scatter(values, cols[None, :] + rows[:, None] * 0, axis=1)
+        else:
+            smem.store(values)
+        if SYNCHRONIZED:
+            ttgl.barrier(cluster=True)
+        else:
+            # Force the write-before-read order without publishing the writes.
+            hopper.cluster.barrier(relaxed=True)
+        peer_cols = (cols ^ 16)[None, :] + rows[:, None] * 0
+        ttgl.store(out + offsets, smem.gather(peer_cols, axis=1))
+        ttgl.barrier(cluster=True)
+
+    inp = torch.arange(64, dtype=torch.int32, device=device).reshape(2, 32)
+    out = torch.empty_like(inp)
+    kernel[(1, )](inp, out, REUSE, SYNCHRONIZED, SCATTER, num_ctas=2)
+    torch.testing.assert_close(out, inp.reshape(2, 2, 16).flip(1).reshape(2, 32))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("SYNCHRONIZED", [False, True])
+def test_cross_cta_scatter_reuse(SYNCHRONIZED, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_cross_cta_scatter_reuse, (SYNCHRONIZED, device, False, monkeypatch))
+        if SYNCHRONIZED:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, SYNCHRONIZED: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=((1, ), ))
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=((1, ), ))
+        offsets = ttgl.arange(0, 256, layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
+        smem.store(ttgl.full([256], 0, ttgl.int32, layout))
+        ttgl.barrier(cluster=True)
+        for phase in range(2):
+            # Both CTAs write identical values, but separate loop iterations
+            # must not be mistaken for the same collective write.
+            smem.scatter(offsets % 128 + phase, offsets % 128, axis=0)
+            if SYNCHRONIZED:
+                ttgl.barrier(cluster=True)
+            else:
+                hopper.cluster.barrier(relaxed=True)
+        ttgl.store(out + offsets, smem.load(layout))
+        ttgl.barrier(cluster=True)
+
+    out = torch.empty(256, dtype=torch.int32, device=device)
+    kernel[(1, )](out, SYNCHRONIZED, num_ctas=2)
+    expected = torch.zeros_like(out)
+    expected[:128] = torch.arange(1, 129, dtype=torch.int32, device=device)
+    torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:

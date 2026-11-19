@@ -156,13 +156,17 @@ public:
                                              Operation *insertPoint,
                                              Value recipientCTAs,
                                              int txCount = 0);
+  // Identify one dynamic collective write without synchronizing its CTAs.
+  Value createNextCollectiveWriteCall(ImplicitLocOpBuilder &b,
+                                      Operation *insertPoint);
   // publishWriteVisibility: publish the writing threads for a buffer and clear
   // its obsolete write tracking, read visibility, and read tracking.
   void createPublishWriteVisibilityCall(ImplicitLocOpBuilder &b,
                                         Value bufferMask, uint64_t threadMask,
                                         Value pred, MemType memType,
                                         Operation *insertPoint,
-                                        Value effectCTAs);
+                                        Value effectCTAs,
+                                        Value collectiveWrite = nullptr);
   // setReadVisibility: record the actual reader in the visibility columns of
   // each observer, including any synthetic peers.
   // bufferIndex is optional and requires a proven one-hot bufferMask.
@@ -203,7 +207,8 @@ public:
                                        Value bufferMask, int thread,
                                        StringRef operandName, Value pred,
                                        MemType memType, Operation *insertPoint,
-                                       Value effectCTAs);
+                                       Value effectCTAs,
+                                       Value collectiveWrite = nullptr);
   // verifyReadVisibility: ensure all reads from the buffer are visible to the
   // thread.
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,

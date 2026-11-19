@@ -1764,9 +1764,46 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
                             "tx-count would become invalid");
 }
 
+Value FunctionBuilder::createNextCollectiveWriteCall(ImplicitLocOpBuilder &b,
+                                                     Operation *insertPoint) {
+  auto it = auxData.collectiveWriteIds.find(insertPoint);
+  if (it == auxData.collectiveWriteIds.end())
+    return {};
+  auto counters = auxData.collectiveWriteCounters.at(insertPoint);
+  auto type = cast<RankedTensorType>(counters.type);
+  Value index = arith::ConstantIntOp::create(b, it->second, 32);
+  return createCallToCachedFunction(
+      b, "next_collective_write", {counters.value, index},
+      AssertInfo{"", b.getI64Type()}, {type},
+      [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value ptr = entryBlock->getArgument(0);
+        Value index = entryBlock->getArgument(1);
+        Value mask = createDimMask(fb, index, type, 1);
+        Value ctaMask = createCTASetMask(fb, type, 0, createCurrentCTAMask(fb));
+        mask = arith::AndIOp::create(fb, mask, ctaMask);
+        Value counters =
+            tti::createLoadScratchMemory(fb, fb.getLoc(), ptr, type);
+        Value one = tti::createConstIntTensor(fb, fb.getLoc(), 1, type);
+        Value next = arith::AddIOp::create(fb, counters, one);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), ptr, next, type,
+                                      /*currentCTAOnly=*/false, mask);
+        Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, type);
+        Value selected = arith::SelectOp::create(fb, mask, next, zero);
+        Value epoch = reduceAll<arith::AddIOp>(fb, selected);
+        Value stride = arith::ConstantIntOp::create(fb, type.getShape()[1], 64);
+        Value token = arith::MulIOp::create(fb, epoch, stride);
+        Value index64 = arith::ExtUIOp::create(fb, fb.getI64Type(), index);
+        token = arith::AddIOp::create(fb, token, index64);
+        triton::ReturnOp::create(fb, token);
+      },
+      /*emitAssert=*/false);
+}
+
 void FunctionBuilder::createPublishWriteVisibilityCall(
     ImplicitLocOpBuilder &b, Value bufferMask, uint64_t threadMask, Value pred,
-    MemType memType, Operation *insertPoint, Value effectCTAs) {
+    MemType memType, Operation *insertPoint, Value effectCTAs,
+    Value collectiveWrite) {
+  const bool isCollectiveWrite = static_cast<bool>(collectiveWrite);
   const bool publishWrite = !auxData.writeVisibility[(int)memType].empty();
   const bool clearWrites = !auxData.writeTracking[(int)memType].empty();
   const bool clearReads = !auxData.readVisibility[(int)memType].empty();
@@ -1774,7 +1811,6 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   const bool clearCopies = memType == MemType::SHARED_MEM &&
                            auxData.hasAsyncCopyMbarriers &&
                            !auxData.commits[CommitKind::AsyncCp].empty();
-  const bool unpublishedWrite = threadMask == 0;
   if (!publishWrite && !clearWrites && !clearReads && !clearReadTracking)
     return;
 
@@ -1788,7 +1824,7 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   specializationArgs.append(static_cast<uint64_t>(clearReads));
   specializationArgs.append(static_cast<uint64_t>(clearReadTracking));
   specializationArgs.append(static_cast<uint64_t>(clearCopies));
-  specializationArgs.append(static_cast<uint64_t>(unpublishedWrite));
+  specializationArgs.append(static_cast<uint64_t>(isCollectiveWrite));
 
   RankedTensorType writeVisibilityType;
   if (publishWrite) {
@@ -1831,39 +1867,86 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
     specializationArgs.append(copiesType);
   }
 
+  RankedTensorType originsType;
+  if (memType == MemType::SHARED_MEM && !auxData.writeOrigins.empty()) {
+    auto origins = auxData.writeOrigins.at(insertPoint);
+    originsType = cast<RankedTensorType>(origins.type);
+    if (!collectiveWrite)
+      collectiveWrite = arith::ConstantIntOp::create(b, 0, 64);
+    args.append({origins.value, collectiveWrite});
+    specializationArgs.append(originsType);
+  }
+
   createCallToCachedFunction(
       b, "publish_write_visibility", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
       [publishWrite, clearWrites, clearReads, clearReadTracking, clearCopies,
-       unpublishedWrite, copiesType, writeVisibilityType, writeTrackingType,
-       readVisibilityType,
-       readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+       copiesType, writeVisibilityType, writeTrackingType, readVisibilityType,
+       readTrackingType, originsType,
+       isCollectiveWrite](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadMaskVal = entryBlock->getArgument(2);
         Value effectCTAs = entryBlock->getArgument(3);
         unsigned nextArg = 4;
 
+        if (isCollectiveWrite) {
+          // Reads and checks cover every writer lane; a collective write only
+          // replaces its own lane, preserving the other CTAs' frontiers.
+          auto maskType = cast<RankedTensorType>(bufferMask.getType());
+          auto indexType = maskType.clone(fb.getI32Type());
+          Value index = createDimIndices(fb, indexType, 0);
+          Value lowBits = tti::createConstIntTensor(
+              fb, fb.getLoc(), ttg::lookupNumCTAs(fb) - 1, indexType);
+          Value owner = arith::AndIOp::create(fb, index, lowBits);
+          Value cta = tti::ExperimentalClusterCTAIdOp::create(fb);
+          cta = triton::SplatOp::create(fb, indexType, cta);
+          Value ownerMask =
+              arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, owner, cta);
+          bufferMask = arith::AndIOp::create(fb, bufferMask, ownerMask);
+        }
+
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
+
+        if (originsType) {
+          unsigned originArg = entryBlock->getNumArguments() - 2;
+          Value originsPtr = entryBlock->getArgument(originArg);
+          Value token = entryBlock->getArgument(originArg + 1);
+          Value mask = convertAndBroadcast(fb, bufferMask, {1}, originsType);
+          Value ctaMask = createCTASetMask(fb, originsType, 0, effectCTAs);
+          mask = arith::AndIOp::create(fb, mask, ctaMask);
+          Value origins = triton::SplatOp::create(fb, originsType, token);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), originsPtr, origins,
+                                        originsType, /*currentCTAOnly=*/false,
+                                        mask);
+        }
 
         if (publishWrite) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
           Value visibilityMask =
               convertAndBroadcast(fb, bufferMask, {1}, writeVisibilityType);
-          Value relationMask =
-              unpublishedWrite
-                  ? createCTASetMask(fb, writeVisibilityType, 0, effectCTAs)
-                  : createLeadCTAEffectMask(fb, writeVisibilityType,
-                                            effectCTAs);
+          Value bufferCTAMask =
+              createCTASetMask(fb, writeVisibilityType, 0, effectCTAs);
           visibilityMask =
-              arith::AndIOp::create(fb, visibilityMask, relationMask);
+              arith::AndIOp::create(fb, visibilityMask, bufferCTAMask);
           auto elemType =
               cast<IntegerType>(writeVisibilityType.getElementType());
           Value threadMaskElem =
               adjustIntegerWidth(fb, threadMaskVal, elemType);
           Value threadMaskTensor =
               triton::SplatOp::create(fb, writeVisibilityType, threadMaskElem);
+          if (writeVisibilityType.getShape()[2] > 1) {
+            // A new write replaces the frontier for every observer CTA. Only
+            // its issuer starts with visibility; peer bits from an earlier
+            // write must not grant access to this generation.
+            Value issuerMask = createCTASetMask(fb, writeVisibilityType, 2,
+                                                createCurrentCTAMask(fb));
+            Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0,
+                                                   writeVisibilityType);
+            threadMaskTensor =
+                arith::SelectOp::create(fb, issuerMask, threadMaskTensor, zero);
+          }
           tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
                                         threadMaskTensor, writeVisibilityType,
                                         /*currentCTAOnly=*/false,
@@ -2787,7 +2870,7 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
 void FunctionBuilder::createVerifyWriteVisibilityCall(
     ImplicitLocOpBuilder &b, Value bufferMask, int thread,
     StringRef operandName, Value pred, MemType memType, Operation *insertPoint,
-    Value effectCTAs) {
+    Value effectCTAs, Value collectiveWrite) {
   if (auxData.writeVisibility[(int)memType].empty()) {
     return;
   }
@@ -2804,9 +2887,18 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
   AssertInfo assertInfo{message, b.getI1Type()};
   SmallVector<Value> args = {bufferMask, pred, threadVal, writeVisibilityVal,
                              effectCTAs};
+  RankedTensorType originsType;
+  ManglingArgs specializationArgs{writeVisibilityType};
+  if (collectiveWrite) {
+    auto origins = auxData.writeOrigins.at(insertPoint);
+    originsType = cast<RankedTensorType>(origins.type);
+    args.append({origins.value, collectiveWrite});
+    specializationArgs.append(originsType);
+  }
   createCallToCachedFunction(
-      b, "verify_write_visibility", args, assertInfo, {writeVisibilityType},
-      [writeVisibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      b, "verify_write_visibility", args, assertInfo, specializationArgs,
+      [writeVisibilityType, originsType](ImplicitLocOpBuilder &fb,
+                                         Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
@@ -2822,8 +2914,17 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
         bufferMask = arith::AndIOp::create(fb, bufferMask, relationMask);
         Value writeVisibilityZero =
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
-        Value noOneIsWriting = arith::CmpIOp::create(
-            fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
+        // An empty observer column means this CTA has not seen the write, not
+        // that the buffer has no writer. Check the whole frontier for that.
+        Value anyWriteVisibility = writeVisibility;
+        if (writeVisibilityType.getShape()[2] > 1) {
+          anyWriteVisibility = reduceLastDim<arith::OrIOp>(fb, writeVisibility);
+          anyWriteVisibility = convertAndBroadcast(fb, anyWriteVisibility,
+                                                   {0, 1}, writeVisibilityType);
+        }
+        Value noOneIsWriting =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                  anyWriteVisibility, writeVisibilityZero);
         auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
         Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
         Value threadMask =
@@ -2838,6 +2939,20 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
             fb, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
         Value writeVisible =
             arith::OrIOp::create(fb, noOneIsWriting, bufferHasVisibility);
+        if (originsType) {
+          // Multiple CTAs can contribute to the same scatter. This exemption
+          // applies only to writes in that dynamic invocation, never to reads
+          // or to a later iteration of the same instruction.
+          Value origins = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), entryBlock->getArgument(5), originsType);
+          Value token = triton::SplatOp::create(fb, originsType,
+                                                entryBlock->getArgument(6));
+          Value sameWrite = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                  origins, token);
+          auto maskType = cast<RankedTensorType>(writeVisible.getType());
+          sameWrite = convertAndBroadcast(fb, sameWrite, {0, 1}, maskType);
+          writeVisible = arith::OrIOp::create(fb, writeVisible, sameWrite);
+        }
         Value allWritesVisible = reduceAll<arith::AndIOp>(fb, writeVisible);
 
         Value vTrue =

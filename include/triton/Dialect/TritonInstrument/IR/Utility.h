@@ -42,6 +42,9 @@ enum Kind {
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
+// writeOrigins + collectiveWriteCounters for cross-CTA scatters.
+constexpr int kCollectiveWriteCaptures = 2;
+
 // proxyAccessVisibility, plus proxyAccessTracking when mbarriers are present.
 constexpr int kProxyFenceBaseCaptures = 1;
 constexpr int kProxyFenceBarrierCaptures = 1;
@@ -68,7 +71,8 @@ constexpr int kCaptureSizeBytes = 8;
 inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
                                       bool hasClusterBarriers,
                                       int numCommitKinds,
-                                      bool hasAsyncProxyFenceTracking) {
+                                      bool hasAsyncProxyFenceTracking,
+                                      bool hasCollectiveWrites) {
   int perMemType = kCapturesPerMemType * numActiveMemTypes;
   int barrierCaptures =
       hasMBarriers || hasClusterBarriers ? kBarrierBaseCaptures : 0;
@@ -80,8 +84,10 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
                 (hasMBarriers ? kProxyFenceBarrierCaptures : 0)
           : 0;
   return perMemType + barrierCaptures + proxyFenceCaptures + kFixedCaptures +
-         numCommitKinds;
+         numCommitKinds + (hasCollectiveWrites ? kCollectiveWriteCaptures : 0);
 }
+
+bool isConSanCollectiveWrite(Operation *op, const ConSanTargetHooks &hooks);
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
@@ -207,7 +213,8 @@ struct AuxDataMap {
   //   C = CTAs in the cluster.
   //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
   //       threads, and thread masks respectively. Each has extent C.
-  //   B = tracked buffers for one memory type, power-of-two padded.
+  //   B = buffer-state lanes for one memory type, power-of-two padded. Shared
+  //       memory uses a lane per contributing CTA when scatters are present.
   //   K = tracked mbarriers and virtual cluster rendezvous slots,
   //       power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
@@ -237,6 +244,15 @@ struct AuxDataMap {
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
+
+  // Shared-memory writes from one dynamic scatter invocation may overlap.
+  // Track their identity separately from visibility: matching writers are
+  // allowed, but subsequent reads still require synchronization.
+  // Counters: scratch <C x number-of-scatter-instructions x i64>.
+  // Origins: scratch <Cbuf x B x i64>, zero for non-collective writes.
+  RegionToValueMap collectiveWriteCounters;
+  RegionToValueMap writeOrigins;
+  DenseMap<Operation *, unsigned> collectiveWriteIds;
 
   // scratch, <Cbuf x B x Cbar x K x F x i8>
   // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.

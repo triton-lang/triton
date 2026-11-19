@@ -523,10 +523,21 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
   return nullptr;
 }
 
+bool isConSanCollectiveWrite(Operation *op, const ConSanTargetHooks &hooks) {
+  return lookupNumCTAs(op) > 1 && hooks.supportsCrossCTASharedMemory() &&
+         isa<LocalScatterOp, LocalAtomicScatterRMWOp>(op);
+}
+
 LogicalResult
 AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             FunctionBuilder &fb,
                                             const ConSanTargetHooks &hooks) {
+  entryPoint.walk([&](Operation *op) {
+    if (isConSanCollectiveWrite(op, hooks)) {
+      unsigned id = collectiveWriteIds.size();
+      collectiveWriteIds.try_emplace(op, id);
+    }
+  });
   SmallVector<BufferRegion> barrierRegions;
   if (failed(getBuffersAndBarriers(module, entryPoint, barrierRegions, hooks)))
     return failure();
@@ -601,6 +612,20 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
       passValueToWarpSpecialize(proxyAccessVisibility.at(entryRegion),
                                 proxyAccessVisibility);
     }
+  }
+
+  if (!collectiveWriteIds.empty()) {
+    int numBufs = llvm::NextPowerOf2(
+        bufferStatePlans[(int)MemType::SHARED_MEM].numLanes - 1);
+    int numWrites = llvm::NextPowerOf2(collectiveWriteIds.size() - 1);
+    writeOrigins.insert(
+        entryRegion, createZeroInitStateTensor(b, {numCTAs, numBufs}, 64, fb));
+    passValueToWarpSpecialize(writeOrigins.at(entryRegion), writeOrigins);
+    collectiveWriteCounters.insert(
+        entryRegion,
+        createZeroInitStateTensor(b, {numCTAs, numWrites}, 64, fb));
+    passValueToWarpSpecialize(collectiveWriteCounters.at(entryRegion),
+                              collectiveWriteCounters);
   }
 
   if (numTrackedBarriers > 0) {
@@ -716,7 +741,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
       numCommitKinds += !commits[i].empty();
     int expected = estimateConSanCaptureCount(
         numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
-        numCommitKinds, hasAsyncProxyFenceTracking);
+        numCommitKinds, hasAsyncProxyFenceTracking,
+        !collectiveWriteIds.empty());
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");
@@ -940,6 +966,25 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     bufferRegions[iMemType] = regions;
     bufferStatePlans[iMemType] =
         triton::createBufferStatePlan(bufferRegions[iMemType], hasUnknown);
+
+    if (memType == MemType::SHARED_MEM && !collectiveWriteIds.empty()) {
+      // Keep each contributing CTA's write frontier. A later access must see
+      // every contributor, not just whichever CTA issued the scatter last.
+      // Replicating state lanes lets all synchronization paths retain that
+      // writer dimension without changing the physical buffer footprints.
+      auto &plan = bufferStatePlans[iMemType];
+      auto expand = [&](llvm::SmallBitVector &mask) {
+        llvm::SmallBitVector expanded(mask.size() * numCTAs);
+        for (unsigned bit : mask.set_bits())
+          for (unsigned cta = 0; cta < numCTAs; ++cta)
+            expanded.set(bit * numCTAs + cta);
+        mask = std::move(expanded);
+      };
+      plan.numLanes *= numCTAs;
+      expand(plan.unknownMask);
+      for (auto &mask : plan.regionMasks)
+        expand(mask);
+    }
 
     if (memType == MemType::SHARED_MEM) {
       for (const BufferRegion &barrier : barrierRegions) {
