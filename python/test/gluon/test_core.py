@@ -8613,9 +8613,9 @@ def test_tma_validcheck(report_validity):
 @pytest.mark.parametrize("num_stages", [2, 4])
 @pytest.mark.parametrize("num_blocks", [3, 8, 13])
 def test_tma_validcheck_multi_stage(num_stages, num_blocks):
-    # Like CuTeDSL's PipelineTmaUmmaRetry, give the initial producer and retry
-    # controller separate warps. Both the consumer and retry warp release each
-    # stage, so the producer cannot reuse it before its validity was observed.
+    # Use a dedicated "retry warp" for checking data validity and re-issuing TMA.
+    # The TMA warp is unchanged from the ordinary form while the retry protocol
+    # remains fully non-blocking.
 
     @gluon.jit
     def tuple_replace(values, index: ttgl.constexpr, value, size: ttgl.constexpr):
@@ -8695,8 +8695,6 @@ def test_tma_validcheck_multi_stage(num_stages, num_blocks):
                             num_copied += 1
                             blocks_copied_by_stage = tuple_replace(blocks_copied_by_stage, stage, blocks_copied,
                                                                    num_stages)
-                            # This arrival and the consumer's arrival are both
-                            # required before the producer can reuse the stage.
                             rubin.mbarrier.arrive(bar_empty.index(stage), count=1)
                         else:
                             request_tma_validcheck_data_update(need_update_ptr)
@@ -8791,6 +8789,10 @@ def test_tma_validcheck_multi_stage(num_stages, num_blocks):
 
         for i in range(num_stages):
             rubin.mbarrier.init(bar_full.index(i), count=1)
+            # Both retry and MMA warps arrive. The retry warp consumes the TMA
+            # completion and validity report. The TMA warp cannot reuse the stage
+            # until the MMA warp finishes reading and the retry warp records a
+            # successful, valid completion.
             rubin.mbarrier.init(bar_empty.index(i), count=2)
 
         ttgl.warp_specialize(
