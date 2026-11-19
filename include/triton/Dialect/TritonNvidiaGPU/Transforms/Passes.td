@@ -188,14 +188,10 @@ def TritonNvidiaGPUInsertRemoteSharedStoreBarriersPass : Pass<"triton-nvidia-gpu
   let summary = "Synchronize Triton-generated stores to peer shared memory";
 
   let description = [{
-    Run at the end of the Triton frontend's TTGIR pipeline. This pass
-    synchronizes `ttg.local_store` and initialized `ttg.local_alloc`
-    when they write to a peer CTA. Inside a warp-specialized region, the
-    barriers synchronize the same role across CTAs. The schedule supplies
-    handoffs between roles and completion waits before buffer reuse.
-
-    Gluon uses explicit cluster synchronization and exposes additional remote
-    writes, including `ttg.local_scatter` and `ttg.local_atomic_scatter_rmw`.
+    In Triton kernels, synchronize `ttg.local_store` and initialized
+    `ttg.local_alloc` that write to a peer CTA. Inside `ttg.warp_specialize`,
+    the barrier synchronizes the warps executing that region across all CTAs
+    in the cluster. Gluon uses explicit cluster synchronization.
   }];
 
   let dependentDialects = [
