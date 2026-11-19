@@ -194,6 +194,9 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
   ADD_PASS_WRAPPER_0("add_optimize_mbarrier_arrivals",
                      ttng::createTritonNvidiaGPUOptimizeMBarrierArrivalsPass);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_insert_remote_shared_store_barriers",
+      ttng::createTritonNvidiaGPUInsertRemoteSharedStoreBarriersPass, int32_t);
   ADD_PASS_WRAPPER_0(
       "add_cluster_barrier_mbar_allocator",
       ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);

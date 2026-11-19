@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-insert-remote-shared-store-barriers | FileCheck %s --check-prefix=REMOTE
 
 // -----
 
@@ -11,6 +12,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @tma_payload_generic_store
   // CHECK: ttng.wait_barrier
   // CHECK-NEXT: ttg.local_store
+  // REMOTE-LABEL: @tma_payload_generic_store
+  // REMOTE-NOT: ttng.cluster_barrier
+  // REMOTE-NOT: ttng.fence_async_shared
+  // REMOTE: tt.return
   tt.func @tma_payload_generic_store(%desc: !tt.tensordesc<16x64xf16, #shared>, %value: tensor<16x64xf16, #blocked>) -> tensor<16x64xf16, #blocked> {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
@@ -425,6 +430,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttg.local_alloc
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_load
+  // REMOTE-LABEL: @cluster_barrier_for_remote_local_store(
+  // REMOTE: ttng.cluster_barrier{{$}}
+  // REMOTE-NEXT: ttg.local_store
+  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
+  // REMOTE-NEXT: ttng.cluster_barrier{{$}}
   tt.func @cluster_barrier_for_remote_local_store(
       %values: tensor<2x32xi32, #subviewBlocked>) -> tensor<4x32xi32, #subviewOwnerBlocked> {
     %parent = ttg.local_alloc : () -> !ttg.memdesc<4x32xi32, #subviewShared, #smem, mutable>
@@ -442,6 +452,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttg.local_alloc
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_load
+  // REMOTE-LABEL: @cluster_barrier_for_remote_source_alloc(
+  // REMOTE: ttng.cluster_barrier{{$}}
+  // REMOTE-NEXT: ttg.local_alloc %
+  // REMOTE-NEXT: ttng.fence_async_shared {bCluster = true}
+  // REMOTE-NEXT: ttng.cluster_barrier{{$}}
   tt.func @cluster_barrier_for_remote_source_alloc(
       %values: tensor<4x32xi32, #subviewBlocked>) -> tensor<4x32xi32, #subviewOwnerBlocked> {
     %remote = ttg.local_alloc %values : (tensor<4x32xi32, #subviewBlocked>) -> !ttg.memdesc<4x32xi32, #subviewShared, #smem, mutable>
