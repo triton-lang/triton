@@ -54,10 +54,9 @@ def test_wait(mbarrier, phase, pred=True, phase_type="primary", _semantic=None):
     """
     Test an mbarrier phase once without blocking.
 
-    This operation is supported only when ``num_ctas == 1``. ``pred`` must be
-    uniform among the participating threads. If the current warp-specialized
-    partition contains multiple warps, all of them must execute this operation
-    convergently.
+    This operation is supported only when ``num_ctas == 1``. If the current
+    warp-specialized partition contains multiple warps, all of them must
+    execute this operation convergently.
 
     Args:
         mbarrier (shared_memory_descriptor): The barrier object to test.
