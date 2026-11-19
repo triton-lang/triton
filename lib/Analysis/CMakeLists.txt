@@ -9,6 +9,7 @@ add_triton_library(TritonAnalysis
   Membar/ClusterBarrierModel.cpp
   Membar/Solver.cpp
   Membar/Dependencies.cpp
+  Membar/MBarrierArrivals.cpp
   Membar/Pass.cpp
   Membar/SmemModel.cpp
   Membar/TmemModel.cpp

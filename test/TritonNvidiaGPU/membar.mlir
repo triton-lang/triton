@@ -1,7 +1,5 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck %s --check-prefixes=PREP,FOLD,CLEANUP
-// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' --triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck %s --check-prefixes=FOLD,CLEANUP
-// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck %s --check-prefix=WARP
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -283,51 +281,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<512xi32, #load>
   }
 
-  // A following CTA barrier covers both warp barriers across pure arithmetic.
-  // WARP-LABEL: @warp_barrier_before_cta
-  // WARP-NEXT: %[[SUM:.*]] = arith.addi
-  // WARP-NEXT: ttg.barrier local
-  // WARP-NEXT: tt.return %[[SUM]]
-  tt.func @warp_barrier_before_cta(%data: tensor<512xi32, #store>) -> tensor<512xi32, #store> {
-    ttg.barrier warp local
-    %sum = arith.addi %data, %data : tensor<512xi32, #store>
-    ttg.barrier warp local
-    ttg.barrier local
-    tt.return %sum : tensor<512xi32, #store>
-  }
-
-  // Explicit memory effects and implicit shared scratch stop subsumption.
-  // WARP-LABEL: @warp_barrier_before_cta_with_effects
-  // WARP-NEXT: ttg.barrier warp local
-  // WARP-NEXT: tt.store
-  // WARP-NEXT: ttg.barrier local
-  // WARP-NEXT: tt.store
-  // WARP-NEXT: ttg.barrier warp local
-  // WARP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
-  // WARP-NEXT: ttg.barrier local
-  // WARP-NEXT: tt.return %[[CONVERTED]]
-  tt.func @warp_barrier_before_cta_with_effects(%out: !tt.ptr<i32>, %value: i32, %data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
-    ttg.barrier warp local
-    tt.store %out, %value : !tt.ptr<i32>
-    ttg.barrier local
-    tt.store %out, %value : !tt.ptr<i32>
-    ttg.barrier warp local
-    %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
-    ttg.barrier local
-    tt.return %converted : tensor<512xi32, #load>
-  }
-
-  // A CTA rendezvous without local-memory ordering cannot cover warp local.
-  // WARP-LABEL: @warp_barrier_before_cta_none
-  // WARP-NEXT: ttg.barrier warp local
-  // WARP-NEXT: ttg.barrier none
-  // WARP-NEXT: tt.return
-  tt.func @warp_barrier_before_cta_none() {
-    ttg.barrier warp local
-    ttg.barrier none
-    tt.return
-  }
-
   // Initialized allocations still write shared memory before publication.
   // Counts divisible by the warp count need no scaling.
   // CLEANUP-LABEL: @arrival_after_initialized_shared_alloc
@@ -350,24 +303,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // A pure layout conversion can access shared scratch after the CTA barrier.
+  // The first arrival needs a warp barrier to publish the scratch reads.
+  // The store-to-load CTA barrier covers both arrivals around the pure add.
   // CLEANUP-LABEL: @arrival_after_scratch_conversion
   // CLEANUP: ttg.barrier local
   // CLEANUP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
   // CLEANUP-NEXT: ttg.barrier warp local
   // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // CLEANUP-NEXT: ttg.local_store
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // CLEANUP-NEXT: %{{.*}} = arith.addi %[[CONVERTED]], %[[CONVERTED]]
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // CLEANUP-NEXT: %{{.*}} = ttg.local_load
+  // CLEANUP-NEXT: %[[RESULT:.*]] = arith.addi
   // CLEANUP-NEXT: ttng.wait_barrier
   // CLEANUP: ttng.inval_barrier
-  // CLEANUP-NEXT: tt.return %[[CONVERTED]]
+  // CLEANUP-NEXT: tt.return %[[RESULT]]
   tt.func @arrival_after_scratch_conversion(%data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.init_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 12 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttg.barrier local
     %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
     ttng.arrive_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.local_store %data, %mem : tensor<512xi32, #store> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %sum = arith.addi %converted, %converted : tensor<512xi32, #load>
+    ttng.arrive_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %loaded = ttg.local_load %mem : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> tensor<512xi32, #load>
+    %result = arith.addi %sum, %loaded : tensor<512xi32, #load>
     ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    tt.return %converted : tensor<512xi32, #load>
+    tt.return %result : tensor<512xi32, #load>
   }
 
   // CLEANUP-LABEL: @store_before_arrival
@@ -577,24 +546,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Descriptor joins are rejected as a whole, including their direct users.
+  // The first counter escapes to the helper. Its select can target either
+  // counter even though only the second has a buffer ID in the helper.
   // FOLD-LABEL: @arrival_with_selected_barrier
   // FOLD: ttng.init_barrier {{.*}}, 1 :
-  // FOLD: ttng.init_barrier {{.*}}, 1 :
-  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
-  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
-  // FOLD: arith.select
   // FOLD: ttng.arrive_barrier {{.*}}, 1 :
   tt.func @arrival_with_selected_barrier(%condition: i1, %out: !tt.ptr<i32>, %value: i32) {
-    %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
     %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttg.barrier local
     tt.store %out, %value : !tt.ptr<i32>
     ttng.arrive_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.call @select_and_arrive(%first, %condition, %out, %value) : (!ttg.memdesc<1xi64, #shared, #smem, mutable>, i1, !tt.ptr<i32>, i32) -> ()
+    tt.return
+  }
+
+  // FOLD-LABEL: @select_and_arrive
+  // FOLD: ttng.init_barrier {{.*}}, 1 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  // FOLD: arith.select
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func private @select_and_arrive(%first: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %condition: i1, %out: !tt.ptr<i32>, %value: i32) attributes {noinline = true} {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
     ttng.arrive_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>

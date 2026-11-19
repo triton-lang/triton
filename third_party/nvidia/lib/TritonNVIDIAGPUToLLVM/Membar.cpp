@@ -6,11 +6,11 @@
 
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Membar/MBarrierArrivals.h"
 #include "triton/Analysis/Membar/Pass.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/OptimizeMBarrierArrivals.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 namespace mlir::triton {
@@ -43,7 +43,7 @@ struct TritonNvidiaGPUMembar
     // Synchronization insertion and arrival attributes preserve this geometry.
     if (failed(membar::placeClusterBarriers(allocation, *regions)))
       return signalPassFailure();
-    if (failed(ttng::placeBarriersAndArrivals(
+    if (failed(membar::placeBarriersAndArrivals(
             allocation, *regions, NVIDIA::canSkipBarSync, computeCapability)))
       signalPassFailure();
   }

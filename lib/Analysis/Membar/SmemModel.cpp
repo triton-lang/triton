@@ -487,12 +487,13 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   return stages;
 }
 
-bool SMemModel::hasThreadEffects(Operation *op) {
+static bool hasThreadEffects(Operation *op) {
   // A handoff only accesses its private scratch, modeled separately below.
   // Assumptions issue no memory access.
   if (isa<triton::gpu::ThreadHandoffOp, LLVM::AssumeOp>(op))
     return false;
   auto effects = getEffectsRecursively(op);
+  // Shared-memory lifetime markers do not issue memory accesses.
   return !effects || llvm::any_of(*effects, [](const auto &effect) {
     return !isa<triton::gpu::SharedMemory, ttng::TensorMemory>(
                effect.getResource()) ||

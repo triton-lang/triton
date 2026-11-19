@@ -331,8 +331,6 @@ public:
   MembarInfo translateCallSummary(CallOpInterface call,
                                   FunctionOpInterface callee,
                                   MembarInfo summary);
-  /// Shared-memory lifetime markers do not issue memory accesses.
-  static bool hasThreadEffects(Operation *operation);
   const BufferIndexAnalysis &getBufferIndexAnalysis() const {
     return bufferIndexAnalysis;
   }

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-membar='compute-capability=103 ptx-version=87' --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-membar='compute-capability=103 ptx-version=87' --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region -allow-unregistered-dialect -verify-diagnostics=only-expected -o /dev/null
 
 

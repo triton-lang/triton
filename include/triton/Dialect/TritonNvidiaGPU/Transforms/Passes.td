@@ -153,20 +153,6 @@ def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mb
   ];
 }
 
-def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimize-mbarrier-arrivals", "mlir::ModuleOp"> {
-  let summary = "Clean up redundant explicit warp barriers";
-
-  let description = [{
-    Fold redundant warp barriers in standalone pipelines. Input `per_warp`
-    flags have finalized counts, as produced by NVIDIA Membar.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-}
-
 def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
   let summary = "Insert barriers to order tensor-memory reuse";
 
