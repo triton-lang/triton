@@ -247,6 +247,14 @@ public:
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
 
+      auto accArg = dyn_cast<BlockArgument>(accUse);
+      if (zeroInitOp && accArg &&
+          !forOp.getResult(accArg.getArgNumber() - 1).use_empty()) {
+        // The loop-carried accumulator is conditionally reset to zero by an
+        // if/select, and its final value is used after the loop.
+        zeroInitOp = std::nullopt;
+      }
+
       if (!zeroInitOp && !loopArgIsZero) {
         continue;
       }
