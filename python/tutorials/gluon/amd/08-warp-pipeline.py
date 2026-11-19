@@ -101,24 +101,43 @@ warp_size = gl.constexpr(32)
 # we run it without stages, with 4 and 8 warps.
 
 
+@gluon.aggregate
+class WmmaLayouts:
+    a_smem_layout: gl.constexpr
+    a_reg_layout: gl.constexpr
+    b_smem_layout: gl.constexpr
+    b_reg_layout: gl.constexpr
+    acc_layout: gl.constexpr
+
+
+@gluon.constexpr_function
+def get_wmma_layouts(BLOCK_K, num_warps):
+    # A and B are 256 x BLOCK_K fp8 tiles in the partitioned layouts of
+    # `05-mfma-wmma-scaled.py`.
+    smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [256, BLOCK_K], [1, 0])
+    a_smem_layout, b_smem_layout, acc_layout = cdna5.make_partitioned_dot_layouts(  #
+        256, 256, smem_layout, smem_layout, num_warps, [16, 16, 128], b_transposed=True)
+    return WmmaLayouts(a_smem_layout, gl.DotOperandLayout(0, acc_layout, 16),  #
+                       b_smem_layout, gl.DotOperandLayout(1, acc_layout, 16),  #
+                       acc_layout)
+
+
 @gluon.jit
 def wmma_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    layouts: gl.constexpr = get_wmma_layouts(BLOCK_K, gl.num_warps())
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.b_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
-    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
-    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K, 256], 0.0, gl.float8e4nv, layouts.b_reg_layout))
     acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
     for _ in range(0, k, BLOCK_K):
         a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-        b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
-        acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        b = b_smem.slice(0, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", b, None, "e4m3", acc)
         a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-        b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
-        acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+        b = b_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
+        acc = cdna5.wmma_scaled(a, None, "e4m3", b, None, "e4m3", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -134,23 +153,21 @@ def wmma_kernel(y_ptr, k):
 @gluon.jit
 def wmma_2stage_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    layouts: gl.constexpr = get_wmma_layouts(BLOCK_K, gl.num_warps())
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.b_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
-    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
-    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K, 256], 0.0, gl.float8e4nv, layouts.b_reg_layout))
     acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
     for _ in range(0, k, BLOCK_K):
         with gl.amd.warp_pipeline_stage("memory", priority=1):
             a0 = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-            b0 = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+            b0 = b_smem.slice(0, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
             a1 = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-            b1 = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+            b1 = b_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
         with gl.amd.warp_pipeline_stage("compute", priority=0):
-            acc = cdna5.wmma_scaled(a0, None, "e4m3", b0, b_scale, "e2m1", acc)
-            acc = cdna5.wmma_scaled(a1, None, "e4m3", b1, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a0, None, "e4m3", b0, None, "e4m3", acc)
+            acc = cdna5.wmma_scaled(a1, None, "e4m3", b1, None, "e4m3", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -159,25 +176,23 @@ def wmma_2stage_kernel(y_ptr, k):
 @gluon.jit
 def wmma_4stage_kernel(y_ptr, k):
     BLOCK_K: gl.constexpr = 256
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(256, 256, BLOCK_K, gl.num_warps())
-    bs_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [256, 4])
+    layouts: gl.constexpr = get_wmma_layouts(BLOCK_K, gl.num_warps())
     a_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(gl.uint8, [256, BLOCK_K // 2], layouts.w_smem_layout)
+    b_smem = gl.allocate_shared_memory(gl.float8e4nv, [256, BLOCK_K], layouts.b_smem_layout)
     a_smem.store(gl.full([256, BLOCK_K], 0.0, gl.float8e4nv, layouts.a_reg_layout))
-    b_smem.permute([1, 0]).store(gl.full([BLOCK_K // 2, 256], 0, gl.uint8, layouts.w_reg_layout))
-    b_scale = gl.full([256, 4], 127, gl.uint8, bs_layout)
+    b_smem.permute([1, 0]).store(gl.full([BLOCK_K, 256], 0.0, gl.float8e4nv, layouts.b_reg_layout))
     acc = gl.zeros([256, 256], gl.float32, layouts.acc_layout)
     for _ in range(0, k, BLOCK_K):
         with gl.amd.warp_pipeline_stage("memory0", priority=1):
             a = a_smem.slice(0, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-            b = b_smem.slice(0, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+            b = b_smem.slice(0, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
         with gl.amd.warp_pipeline_stage("compute0", priority=0):
-            acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", b, None, "e4m3", acc)
         with gl.amd.warp_pipeline_stage("memory1", priority=1):
             a = a_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).load(layouts.a_reg_layout)
-            b = b_smem.slice(BLOCK_K // 4, BLOCK_K // 4, 1).permute([1, 0]).load(layouts.w_reg_layout)
+            b = b_smem.slice(BLOCK_K // 2, BLOCK_K // 2, 1).permute([1, 0]).load(layouts.b_reg_layout)
         with gl.amd.warp_pipeline_stage("compute1", priority=0):
-            acc = cdna5.wmma_scaled(a, None, "e4m3", b, b_scale, "e2m1", acc)
+            acc = cdna5.wmma_scaled(a, None, "e4m3", b, None, "e4m3", acc)
     m = gl.arange(0, 256, gl.SliceLayout(1, layouts.acc_layout))
     n = gl.arange(0, 256, gl.SliceLayout(0, layouts.acc_layout))
     gl.store(y_ptr + m[:, None] * 256 + n[None, :], acc)
@@ -205,8 +220,8 @@ if __name__ == "__main__":
 #     %b1_13 = ttg.local_load %b1_12
 #   } {priority = 1, stage = "memory"}
 #   %acc_7 = scf.execute_region
-#     %acc_8 = tt.dot_scaled %acc_6#0 scale %cst, %acc_6#1 scale %cst_2, %acc_5
-#     %acc_9 = tt.dot_scaled %acc_6#2 scale %cst, %acc_6#3 scale %cst_2, %acc_8
+#     %acc_8 = tt.dot_scaled %acc_6#0 scale %cst_0, %acc_6#1 scale %cst, %acc_5
+#     %acc_9 = tt.dot_scaled %acc_6#2 scale %cst_0, %acc_6#3 scale %cst, %acc_8
 #   } {priority = 0, stage = "compute"}
 # } {pipelined_for}
 # ```
@@ -229,13 +244,13 @@ if __name__ == "__main__":
 # s_setprio 1
 #
 # ; loop
-# ds_load_b128 ... (x64)          ; "memory" stage, without a wait
+# ds_load_b128 ... (x96)          ; "memory" stage, without a wait
 # s_setprio 0
 # s_barrier_signal -1             ; stage boundary
 # s_barrier_wait -1
-# s_wait_dscnt 0x2e               ; "compute" stage, waits for the first WMMA
-# v_wmma_scale_f32_16x16x128_f8f6f4 ...
-# s_wait_dscnt 0x2c               ; waits for the second WMMA
+# s_wait_dscnt 0x3e               ; "compute" stage, waits for the first WMMAs
+# v_wmma_scale_f32_16x16x128_f8f6f4 ... (x3)
+# s_wait_dscnt 0x1c               ; waits for the next WMMA
 # v_wmma_scale_f32_16x16x128_f8f6f4 ...
 # ...
 # s_setprio 1
@@ -276,19 +291,19 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# wmma_w4: 4.95 ms
-# wmma_w8: 6.39 ms
-# wmma_w8_s2: 12.04 ms
-# wmma_w8_s4: 4.61 ms
+# wmma_w4: 5.32 ms
+# wmma_w8: 6.75 ms
+# wmma_w8_s2: 147.98 ms
+# wmma_w8_s4: 4.69 ms
 # ```
 #
 # With 8 warps and no stages, each warp computes a 64 x 128 part of the block
-# instead of 128 x 128, so the CTA reads 256 KB from shared memory per iteration
-# instead of 192 KB, and the two warps of a SIMD often read shared memory at the
+# instead of 128 x 128, so the CTA reads 384 KB from shared memory per iteration
+# instead of 256 KB, and the two warps of a SIMD often read shared memory at the
 # same time. `wmma_w8_s2` holds the operands of both halves in registers at the
 # same time. It needs more than the 512 VGPRs that a warp can use with 8 warps,
 # so the compiler spills some registers to scratch memory inside the loop.
-# `wmma_w8_s4` holds the operands of only one half and uses 424 VGPRs. Each
+# `wmma_w8_s4` holds the operands of only one half and uses 456 VGPRs. Each
 # "compute" stage of one group runs next to a "memory" stage of the other group,
 # so the matrix core stays busy while the shared memory reads of the other group
 # arrive.
@@ -296,23 +311,16 @@ if __name__ == "__main__":
 # So the size of the stages matters. A stage should be large enough to overlap
 # with the stage of the other group, but small enough that the registers of the
 # two warps of a SIMD still fit.
-#
+
+# %%
 # Here we only show the overlap of memory accesses and compute. In practice, we
 # can also overlap different types of compute. For example, in attention, we can
 # overlap the vector instructions of the softmax with the WMMAs of the QK and PV
 # matmuls.
 
 # %%
-# Now we apply warp pipeline to the fp8 x mxfp4 matmul of `07-multicta.py`, with
-# the same cluster layouts. The kernel uses 8 warps, and each K block runs in
-# four stages. The first stage reads the first half of the K block from shared
-# memory, and the second stage runs its WMMAs. The third and fourth stages do
-# the same for the second half. The first stage also refills the buffer slot of
-# the previous K block, which both groups have finished reading. So while one
-# group runs a "wmma" stage, the other group reads shared memory or copies.
-#
-# We give the stages that access memory priority 1, so their instructions issue
-# next to the WMMAs of the other group.
+# Now we apply warp pipeline to the final matmul kernel from previous tutorial,
+# with the same cluster layouts. The kernel uses 8 warps and 4 stages.
 
 
 @gluon.jit
@@ -427,10 +435,6 @@ def test_matmul(M, N, K, CTAS_M, CTAS_N, warp_pipeline):
     torch.testing.assert_close(A.float() @ W_ref.T, Y.float(), atol=1e-1, rtol=1e-2)
 
 
-# %%
-# We can compare this kernel with the kernel of `07-multicta.py`, and with the
-# same kernel without warp pipeline, all with 4x4 clusters.
-
 if __name__ == "__main__":
     print("Benchmarking matmul")
     print("===================")
@@ -449,9 +453,9 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# 4 warps: 8379 TFLOPS
-# 8 warps: 7843 TFLOPS
-# 8 warps, warp pipeline: 8839 TFLOPS
+# 4 warps: 8424 TFLOPS
+# 8 warps: 7860 TFLOPS
+# 8 warps, warp pipeline: 8842 TFLOPS
 # ```
 #
 # We can see the 8-warp version with warp pipeline is much better than the
