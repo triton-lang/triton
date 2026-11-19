@@ -21,8 +21,10 @@ struct TensorDescInfo {
   GSAN_DEVICE uintptr_t byteStride(int dim) const {
     if (dim + 1 == rank)
       return bytesPerElem;
-    return static_cast<uintptr_t>(words[kStrideWordBase + rank - 2 - dim]) *
-           kStrideUnitBytes;
+    int index = rank - 2 - dim;
+    uintptr_t low = words[kStrideWordBase + index];
+    uintptr_t high = (words[7] >> (4 * index)) & 0xf;
+    return (low | (high << 32)) * kStrideUnitBytes;
   }
 };
 

@@ -84,6 +84,8 @@ std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
     return isCrossCTAGatherScatter(atomic.getDst().getType(),
                                    atomic.getValues().getType(),
                                    atomic.getAxis());
+  if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op))
+    return bulk.getMulticast();
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (tma.getMulticast())
       return true;
@@ -113,7 +115,7 @@ bool hasCrossCTAMBarrierUse(ttg::MBarrierOpInterface barrier) {
   int numCTAs = ttg::lookupNumCTAs(op);
   if (numCTAs == 1)
     return false;
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+  if (auto tma = dyn_cast<ttng::AsyncLoadOpInterface>(op))
     return tma.getMulticast();
   if (isa<ttng::CLCTryCancelOp>(op))
     return true;

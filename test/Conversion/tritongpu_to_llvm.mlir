@@ -35,6 +35,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @clmul_i32
+  tt.func @clmul_i32(%x: i32, %y: i32, %out: !tt.ptr<i32>) {
+    // CHECK: llvm.intr.clmul(%arg0, %arg1) : (i32, i32) -> i32
+    %product = tt.clmul %x, %y : i32
+    tt.store %out, %product : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @clmul_i64
+  tt.func @clmul_i64(%x: i64, %y: i64, %out: !tt.ptr<i64>) {
+    // CHECK: llvm.intr.clmul(%arg0, %arg1) : (i64, i64) -> i64
+    %product = tt.clmul %x, %y : i64
+    tt.store %out, %product : !tt.ptr<i64>
+    tt.return
+  }
+
   // CHECK-LABEL: llvm.func @umulhi_truncated_input
   tt.func @umulhi_truncated_input(%seed: i64, %out: !tt.ptr<i32>) {
     // CHECK: %[[X:.*]] = llvm.trunc %arg0 : i64 to i32

@@ -537,7 +537,7 @@ class InterpreterBuilder:
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
 
     def get_bf16(self, value):
-        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
+        return self.create_fp_trunc(self.get_fp64(value), tl.bfloat16)
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
@@ -713,6 +713,19 @@ class InterpreterBuilder:
         lhs = TensorHandle(lhs_data, lhs.dtype)
         rhs = TensorHandle(rhs_data, rhs.dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
+
+    def create_clmul(self, lhs, rhs):
+        if lhs.dtype.scalar.is_int1():
+            return self.binary_op(lhs, rhs, np.bitwise_and)
+        dtype = lhs.data.dtype
+        bits = dtype.itemsize * 8
+        unsigned_dtype = getattr(np, f"uint{bits}")
+        x = lhs.data.view(unsigned_dtype)
+        y = rhs.data.view(unsigned_dtype)
+        result = np.zeros_like(x)
+        for bit in range(bits):
+            result ^= np.where((y >> bit) & 1, x << bit, 0)
+        return TensorHandle(result.view(dtype), lhs.dtype.scalar)
 
     def create_umulhi(self, lhs, rhs):
         # umulhi multiplies the operands as unsigned integers, so signed inputs

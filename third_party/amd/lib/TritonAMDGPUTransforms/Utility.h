@@ -13,6 +13,14 @@
 
 using namespace mlir;
 
+namespace mlir::triton::amdgpu {
+// Returns failure when the mask cannot be represented by a scheduling barrier.
+LogicalResult createSchedBarrier(OpBuilder &builder, Location loc,
+                                 uint32_t mask);
+void createWarpPipelineBorder(OpBuilder &builder, Location loc,
+                              StringRef marker, int priority);
+} // namespace mlir::triton::amdgpu
+
 inline void dumpScheduleDebug(triton::CoarseSchedule &schedule,
                               const char *debugType, llvm::StringRef msg) {
   DEBUG_WITH_TYPE(debugType, {

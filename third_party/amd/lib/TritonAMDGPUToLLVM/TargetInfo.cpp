@@ -4,6 +4,8 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -15,6 +17,10 @@ void registerTargetInfo() {
   TargetInfoBase::registerFactory("hip", [](ModuleOp moduleOp) {
     return std::make_unique<TargetInfo>(getAMDArch(moduleOp));
   });
+}
+
+void registerROCDLDialect(DialectRegistry &registry) {
+  registry.insert<ROCDL::ROCDLDialect>();
 }
 
 namespace {
