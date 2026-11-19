@@ -285,6 +285,36 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanLoadRangeOp
+    : TTI_Op<"experimental_gsan_load_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory read for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanStoreRangeOp
+    : TTI_Op<"experimental_gsan_store_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory write for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
              [FoldTruePredicate, TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
@@ -436,8 +466,12 @@ def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
@@ -449,8 +483,12 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];

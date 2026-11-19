@@ -698,6 +698,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Value isCTA0 =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
   auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  lockInitialization = lockRelease;
   if (numCTAs > 1)
     startupClusterBarrierAnchor = lockRelease;
   else

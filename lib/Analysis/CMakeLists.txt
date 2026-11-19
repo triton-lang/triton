@@ -4,6 +4,14 @@ add_triton_library(TritonAnalysis
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
   Membar.cpp
+  Membar/AsyncFenceModel.cpp
+  Membar/CFGBuilder.cpp
+  Membar/ClusterBarrierModel.cpp
+  Membar/Solver.cpp
+  Membar/Dependencies.cpp
+  Membar/Pass.cpp
+  Membar/SmemModel.cpp
+  Membar/TmemModel.cpp
   Alias.cpp
   Utility.cpp
 
@@ -19,5 +27,6 @@ add_triton_library(TritonAnalysis
   TritonIR
   TritonGPUIR
   GluonIR
+  TritonInstrumentIR
   TritonNvidiaGPUIR
 )

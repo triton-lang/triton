@@ -147,13 +147,6 @@ public:
     return bufferIds;
   }
 
-  /// Returns the current function's entry arguments aliased by a value.
-  ArrayRef<unsigned> getAliasedArgumentIndices(Value value) const {
-    auto it = argumentAliases.find(value);
-    return it == argumentAliases.end() ? ArrayRef<unsigned>{}
-                                       : it->second.getArrayRef();
-  }
-
   /// Returns the scratch buffer id of the given value.
   BufferId getBufferId(Operation *operation) const {
     if (opScratch.contains(operation)) {
@@ -168,11 +161,6 @@ public:
   /// Returns if the given buffer is a virtual buffer.
   bool isVirtualBuffer(BufferId bufferId) const {
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
-  }
-
-  /// Returns if the given buffer is an explicit buffer.
-  bool isExplicitBuffer(BufferId bufferId) const {
-    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Explicit;
   }
 
   /// Returns the size of total shared memory allocated
@@ -260,7 +248,6 @@ private:
   OpScratchMapT opVirtual;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
-  DenseMap<Value, llvm::SmallSetVector<unsigned, 2>> argumentAliases;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
 

@@ -1,5 +1,6 @@
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "llvm/ADT/TypeSwitch.h"

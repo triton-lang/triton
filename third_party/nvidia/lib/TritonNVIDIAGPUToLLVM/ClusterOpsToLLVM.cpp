@@ -21,13 +21,16 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -111,8 +114,19 @@ static Value getClusterBarrierMbarPtr(Location loc, RewriterBase &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
                                           targetInfo.getSharedAddressSpace());
-  return b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func),
-               b.i32_val(offset));
+  Value base = LLVM::AddressOfOp::create(rewriter, loc, ptrTy, "global_smem");
+  Value ptr = b.gep(ptrTy, i8_ty, base, b.i32_val(offset));
+  if (!triton::isKernel(func)) {
+    // Map channel 0 to slot 0 and worker channels 2, 3, ... to slots 1, 2, ...
+    Value id = triton::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+    Value role = LLVM::USubSat::create(
+        rewriter, loc, id,
+        b.i32_val(LLVM::NVIDIA::kWarpSpecializeCTABarrierId));
+    auto slotTy = LLVM::LLVMArrayType::get(
+        i8_ty, triton::nvidia_gpu::kClusterBarrierMbarAllocationSize);
+    ptr = b.gep(ptrTy, slotTy, ptr, role);
+  }
+  return ptr;
 }
 
 struct ClusterBarrierOpConversion

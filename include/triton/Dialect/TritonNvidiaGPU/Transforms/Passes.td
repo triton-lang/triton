@@ -114,7 +114,8 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
 
   let description = [{
     Insert shared-memory fences between generic and asynchronous proxy
-    operations using fine-grained physical buffer-region alias analysis.
+    operations using fine-grained physical buffer-region alias analysis and
+    CFG placement. Run convert-scf-to-cf before this pass.
   }];
 
   let dependentDialects = [

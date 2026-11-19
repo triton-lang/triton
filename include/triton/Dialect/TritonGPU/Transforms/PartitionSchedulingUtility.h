@@ -1,6 +1,7 @@
 #ifndef TRITON_TRITONGPU_TRANSFORMS_PARTITION_SCHEDULING_UTILITY_H_
 #define TRITON_TRITONGPU_TRANSFORMS_PARTITION_SCHEDULING_UTILITY_H_
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"

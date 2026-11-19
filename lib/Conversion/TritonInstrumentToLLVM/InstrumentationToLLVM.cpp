@@ -168,6 +168,14 @@ struct LockAcquireOpConversion
     Type elType = cast<PointerType>(lock.getType()).getPointeeType();
     assert(elType == b.getI32Type() && "Expected i32 lock element type");
 
+    if (targetInfo.isCuda() && op.getUncontended()) {
+      triton::gpu::BarrierOp::create(b, loc,
+                                     triton::gpu::AddrSpace::GlobalRead |
+                                         triton::gpu::AddrSpace::GlobalWrite);
+      b.eraseOp(op);
+      return success();
+    }
+
     // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
     // != 0);
     Block *prevBlock2 = b.getInsertionBlock();
@@ -191,10 +199,10 @@ struct LockAcquireOpConversion
 
     if (targetInfo.isCuda()) {
       // PTX acquire also applies when the comparison fails.
+      auto scope = op.getCtaLocal() ? MemSyncScope::CTA : MemSyncScope::GPU;
       Value result = LLVM::AtomicCmpXchgOp::create(
           b, loc, adaptor.getLock(), zero, one, LLVM::AtomicOrdering::acquire,
-          LLVM::AtomicOrdering::acquire,
-          targetInfo.getAtomicSyncScope(MemSyncScope::GPU));
+          LLVM::AtomicOrdering::acquire, targetInfo.getAtomicSyncScope(scope));
       Value acquired = TritonLLVMOpBuilder(loc, b).extract_val(result, 1);
       LLVM::CondBrOp::create(b, loc, acquired, endBlock, whileBlock);
     } else {
@@ -245,6 +253,11 @@ struct LockReleaseOpConversion
                                    triton::gpu::AddrSpace::GlobalRead |
                                        triton::gpu::AddrSpace::GlobalWrite);
 
+    if (targetInfo.isCuda() && op.getUncontended()) {
+      b.eraseOp(op);
+      return success();
+    }
+
     auto i32 = b.getI32Type();
     Value zero =
         arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 0));
@@ -256,7 +269,11 @@ struct LockReleaseOpConversion
       auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
       auto *valOpr = ptx.newOperand(zero, "r");
       auto &atom = *ptx.create("atom");
-      atom.global().o("release").o("gpu").o("exch").o("b32");
+      atom.global()
+          .o("release")
+          .o(op.getCtaLocal() ? "cta" : "gpu")
+          .o("exch")
+          .o("b32");
       atom(dstOpr, ptrOpr, valOpr).predicate(elect);
       ptx.launch(b, loc, i32);
     } else {

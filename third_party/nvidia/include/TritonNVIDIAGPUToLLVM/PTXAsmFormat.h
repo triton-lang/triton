@@ -1,19 +1,27 @@
 #ifndef TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
 #define TRITON_CONVERSION_TRITON_GPU_TO_LLVM_PTX_ASM_FORMAT_H_
 
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Value.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace mlir {
 class ConversionPatternRewriter;
 class Location;
+class OpBuilder;
 
 namespace triton {
 using llvm::StringRef;
+
+enum class CacheModifier : uint32_t;
 
 struct PTXInstr;
 struct PTXInstrCommon;
@@ -332,13 +340,7 @@ struct PTXInstrExecution {
 // PTX code with some trivial C++ code.
 
 struct PTXCpAsyncLoadInstr : PTXInstrBase<PTXCpAsyncLoadInstr> {
-  explicit PTXCpAsyncLoadInstr(PTXBuilder *builder,
-                               triton::CacheModifier modifier)
-      : PTXInstrBase(builder, "cp.async") {
-    o(triton::stringifyCacheModifier(modifier).str());
-    o("shared");
-    o("global");
-  }
+  explicit PTXCpAsyncLoadInstr(PTXBuilder *builder, CacheModifier modifier);
 };
 
 } // namespace triton

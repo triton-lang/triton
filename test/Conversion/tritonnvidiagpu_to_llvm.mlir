@@ -1084,15 +1084,15 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: module attributes {
-  // CHECK-DAG: ttg.shared = 72 : i32
-  // CHECK-DAG: ttg.ws_cluster_barrier_count = 2 : i32
+  // CHECK-DAG: ttg.shared = 104 : i32
+  // CHECK-DAG: ttg.ws_cluster_barrier_count = 3 : i32
   // CHECK-LABEL: @cluster_barrier_inside_warp_specialize_reuses_slots
-  // CHECK-COUNT-4: mbarrier.init.shared::cta.b64
+  // CHECK-COUNT-6: mbarrier.init.shared::cta.b64
   // CHECK-COUNT-1: fence.mbarrier_init.release.cluster
   // CHECK-COUNT-1: nvvm.cluster.arrive.relaxed
   // CHECK-COUNT-3: mbarrier.arrive.release.cluster.shared::cluster.b64
   tt.func @cluster_barrier_inside_warp_specialize_reuses_slots() {
-    ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4, 8>}
     default {
       ttng.cluster_barrier
       ttng.cluster_barrier
@@ -1100,8 +1100,25 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     }
     partition0() num_warps(4) {
       ttng.cluster_barrier
+      tt.call @sync() : () -> ()
+      ttg.warp_return
+    }
+    partition1() num_warps(4) {
+      tt.call @sync() : () -> ()
       ttg.warp_return
     } : () -> ()
+    tt.return
+  }
+
+  // Both workers call the same function, which indexes the calling role's slots.
+  // CHECK-LABEL: llvm.func internal @sync
+  // CHECK: llvm.mlir.addressof @global_smem
+  // CHECK: %[[ID:.*]] = nvg.warp_group_barrier_id
+  // CHECK: %[[ROLE:.*]] = llvm.intr.usub.sat(%[[ID]]
+  // CHECK: llvm.getelementptr {{.*}}[%[[ROLE]]]
+  // CHECK: mbarrier.arrive.release.cluster.shared::cluster
+  tt.func private @sync() attributes {noinline = true} {
+    ttng.cluster_barrier
     tt.return
   }
 }
