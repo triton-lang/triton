@@ -597,7 +597,8 @@ static CUresult tensorMapHasBackingWindow(CUdeviceptr ptr,
   int minBytes;
   status = cuDeviceGetAttribute(
       &minBytes, CU_DEVICE_ATTRIBUTE_TENSOR_MAP_LARGE_TENSOR_MIN_SIZE, device);
-  if (status == CUDA_ERROR_INVALID_VALUE || status == CUDA_ERROR_NOT_SUPPORTED) {
+  if (status == CUDA_ERROR_INVALID_VALUE ||
+      status == CUDA_ERROR_NOT_SUPPORTED) {
     int major;
     status = cuDeviceGetAttribute(
         &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
@@ -625,8 +626,8 @@ static CUresult tensorMapHasBackingWindow(CUdeviceptr ptr,
   CUdeviceptr base;
   size_t bytes;
   status = cuMemGetAddressRange(&base, &bytes, ptr);
-  if (status == CUDA_ERROR_INVALID_VALUE || status == CUDA_ERROR_NOT_SUPPORTED ||
-      status == CUDA_ERROR_NOT_FOUND)
+  if (status == CUDA_ERROR_INVALID_VALUE ||
+      status == CUDA_ERROR_NOT_SUPPORTED || status == CUDA_ERROR_NOT_FOUND)
     return CUDA_SUCCESS;
   if (status != CUDA_SUCCESS)
     return status;
