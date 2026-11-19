@@ -225,10 +225,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// The wait's token is read in this block and is also a block argument, so the
-// conversion has to give it a value. Without one it materializes the token and
-// the branch operand from each other, which no ordering satisfies.
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
