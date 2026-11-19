@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.bulk.async\_store
+==================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.bulk
+
+.. autofunction:: async_store

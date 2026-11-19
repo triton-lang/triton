@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.nvidia.hopper.bulk.store\_wait
+=================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.nvidia.hopper.bulk
+
+.. autofunction:: store_wait

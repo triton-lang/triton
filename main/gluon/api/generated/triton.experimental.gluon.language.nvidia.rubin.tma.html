@@ -78,6 +78,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../nvidia.blackwell.html">Blackwell</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../nvidia.rubin.html">Rubin</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.async_copy.html">triton.experimental.gluon.language.nvidia.rubin.async_copy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.bulk.html">triton.experimental.gluon.language.nvidia.rubin.bulk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.clc.html">triton.experimental.gluon.language.nvidia.rubin.clc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.cluster.html">triton.experimental.gluon.language.nvidia.rubin.cluster</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.gdc.html">triton.experimental.gluon.language.nvidia.rubin.gdc</a></li>
@@ -198,7 +199,7 @@
 <td><p>Store data from shared memory to global memory using TMA.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_wait</span></code></p></td>
-<td><p>Wait for pending TMA stores.</p></td>
+<td><p>Wait for pending bulk and TMA stores in their shared completion queue.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_tensor_descriptor</span></code></p></td>
 <td><p></p></td>

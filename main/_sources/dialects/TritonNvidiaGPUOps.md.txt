@@ -67,6 +67,106 @@ Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`
 
 
 
+### `ttng.async_bulk_copy_global_to_local` (triton::nvidia_gpu::AsyncBulkCopyGlobalToLocalOp)
+
+_Copy a linear global-memory range to shared memory asynchronously_
+
+Syntax:
+
+```
+operation ::= `ttng.async_bulk_copy_global_to_local` $src `,` $dst `,` $numBytes `,` $barrier `,` $pred attr-dict `:`
+              type($src) `,` qualified(type($dst)) `,` qualified(type($barrier))
+```
+
+Copies numBytes bytes in total, guarded by the scalar predicate, using
+cp.async.bulk with mbarrier completion. The total is divided equally among
+the distinct CTA tiles of the destination; replicated CTAs do not increase
+the total. Each per-CTA count must be a positive multiple of 16 and fit in
+the contiguous destination view. With multiple CTAs, including replicated
+layouts, the copy must fill the entire destination view. Partial copies
+are supported only with one CTA. Source and destination addresses must be
+16-byte aligned.
+
+Source tiles are packed in increasing CTA-id order, omitting broadcast
+bits, with a stride of numBytes / numTiles.
+This is a raw physical byte copy: a swizzled destination is supported, but
+the source must already have the desired physical ordering. With multicast,
+only the representative CTA issues a copy to the destination replicas.
+The CGA layout may partition, replicate, or combine both; it need not be
+the identity layout. Each CTA must have its own completion barrier.
+
+The destination effect conservatively covers the entire view. Completion
+decrements each barrier's transaction count by numBytes / numTiles; users
+must wait on the barrier before consuming or reusing the memory.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `AsyncLoadOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numBytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>multicast</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `src` | ptr |
+| `barrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 1-bit signless integer |
+
+
+
+### `ttng.async_bulk_copy_local_to_global` (triton::nvidia_gpu::AsyncBulkCopyLocalToGlobalOp)
+
+_Copy a linear shared-memory range to global memory asynchronously_
+
+Syntax:
+
+```
+operation ::= `ttng.async_bulk_copy_local_to_global` $dst `,` $src `,` $numBytes `,` $pred attr-dict `:`
+              type($dst) `,` qualified(type($src))
+```
+
+Copies numBytes bytes in total, guarded by the scalar predicate, using
+cp.async.bulk with bulk async-group completion. The size and physical
+layout requirements match async_bulk_copy_global_to_local. Source tiles
+are packed into global memory in increasing CTA-id order, omitting
+broadcast bits. Only the representative of each replicated tile issues
+the store. This is a raw physical byte copy without unswizzling.
+
+Each executed store commits one group to the same queue as TMA stores.
+A false predicate neither copies nor commits a group. Wait using
+async_tma_store_wait before reusing shared memory or accessing the global
+destination; global visibility requires a wait without read_only.
+The source effect conservatively covers the entire view.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `AsyncStoreOpInterface`, `PredicatedOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numBytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `dst` | ptr |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 1-bit signless integer |
+
+
+
 ### `ttng.async_copy_mbarrier_arrive` (triton::nvidia_gpu::AsyncCopyMbarrierArriveOp)
 
 _Arrive on mbarrier once all previously issued copies are completed_
@@ -166,7 +266,7 @@ The tensor mode is determined by the descriptor type:
 
 Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterface`, `TMAOpInterface`
+Interfaces: `AsyncLoadOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterface`, `TMAOpInterface`
 
 #### Attributes:
 
@@ -213,7 +313,7 @@ explicit detailed policies, including `evict_normal`, are preserved.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
+Interfaces: `AsyncStoreOpInterface`, `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 #### Attributes:
 
@@ -253,7 +353,7 @@ explicit detailed policies, including `evict_normal`, are preserved.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterface`, `TMAOpInterface`
+Interfaces: `AsyncLoadOpInterface`, `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterface`, `TMAOpInterface`
 
 #### Attributes:
 
@@ -294,7 +394,7 @@ semantics are implied.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `AtomicOpInterface`, `TMAOpInterface`, `TMAStoreLikeOpInterface`
+Interfaces: `AsyncStoreOpInterface`, `AtomicOpInterface`, `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 #### Attributes:
 
@@ -336,7 +436,7 @@ explicit detailed policies, including `evict_normal`, are preserved.
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
+Interfaces: `AsyncStoreOpInterface`, `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 #### Attributes:
 
@@ -358,7 +458,7 @@ Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
 
 ### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
 
-_Wait for pending TMA store operations._
+_Wait for pending bulk and TMA store operations._
 
 Syntax:
 

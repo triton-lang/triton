@@ -541,6 +541,37 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 
 
+### `tti.experimental_gsan_load_range` (triton::instrument::ExperimentalGSanLoadRangeOp)
+
+_Instrument a contiguous global-memory read for GSan_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_load_range` $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+```
+
+Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+The runtime processes the range as one row using the TMA shadow walker.
+
+Traits: `FoldTruePredicate`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numBytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr |
+| `pred` | 1-bit signless integer |
+
+
+
 ### `tti.experimental_gsan_mbarrier_arrive` (triton::instrument::ExperimentalGSanMBarrierArriveOp)
 
 _Record an mbarrier arrival in GSan_
@@ -685,6 +716,37 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 
 
 
+### `tti.experimental_gsan_store_range` (triton::instrument::ExperimentalGSanStoreRangeOp)
+
+_Instrument a contiguous global-memory write for GSan_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_store_range` $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+```
+
+Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+The runtime processes the range as one row using the TMA shadow walker.
+
+Traits: `FoldTruePredicate`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>numBytes</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr |
+| `pred` | 1-bit signless integer |
+
+
+
 ### `tti.experimental_gsan_tensor_access` (triton::instrument::ExperimentalGSanTensorAccessOp)
 
 _Instrument a tensor load/store access for GSan_
@@ -798,12 +860,23 @@ operation ::= `tti.experimental_lock_acquire` $lock (`,` $pred^)? attr-dict `:` 
 ```
 
 Enter a critical section by acquiring a lock with single thread.
+`uncontended` records that only one software group can enter the critical
+section. Collective synchronization still orders its memory accesses.
+`ctaLocal` records that every contender for this lock is in the same CTA.
 
 Traits: `FoldTruePredicate`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>uncontended</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>ctaLocal</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
 
 #### Operands:
 
@@ -825,12 +898,23 @@ operation ::= `tti.experimental_lock_release` $lock (`,` $pred^)? attr-dict `:` 
 ```
 
 Leave a critical section by releasing a lock with single thread.
+`uncontended` records that only one software group can enter the critical
+section. Collective synchronization still orders its memory accesses.
+`ctaLocal` records that every contender for this lock is in the same CTA.
 
 Traits: `FoldTruePredicate`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>uncontended</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>ctaLocal</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
 
 #### Operands:
 
