@@ -1337,6 +1337,9 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+// Check whether large-K fp8 dot can fall back to the scaled WMMA with unit
+// scales. Used in gfx1250-strict.
+// Only checks for eligibility, does not rewrite to fallback instruction.
 static bool shouldUseUnitScaledWmma(tt::DotOp dotOp, int wmmaVersion,
                                     ArrayRef<StringRef> unsupportedFeatures) {
   constexpr unsigned kScaledKDim = 128;
