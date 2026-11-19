@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <map>
 
@@ -19,19 +20,21 @@ namespace mlir::triton::membar {
 namespace {
 
 template <typename Facts>
-void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
+void emit(const MembarCFG<Facts> &cfg, ArrayRef<SyncKind> actions,
           const llvm::BitVector &selected) {
   for (unsigned id : selected.set_bits()) {
     const auto &node = cfg.nodes[id / actions.size()];
     Operation *before = node.op;
-    Action action = actions[id % actions.size()];
+    SyncKind action = actions[id % actions.size()];
     OpBuilder builder(before);
     auto loc = before->getLoc();
     switch (action) {
-    case Action::ClusterBarrier:
-    case Action::ClusterInit: {
+    case SyncKind::WarpConvergence:
+      llvm_unreachable("warp convergence is only a demand");
+    case SyncKind::ClusterBarrier:
+    case SyncKind::ClusterFenceMbarInit: {
       // The specialized release must run on the thread that issued the init.
-      bool init = action == Action::ClusterInit && node.body == 0;
+      bool init = action == SyncKind::ClusterFenceMbarInit && node.body == 0;
       if (init)
         nvidia_gpu::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
       // An existing rendezvous at a selected site is a relaxed barrier.
@@ -41,22 +44,22 @@ void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
         nvidia_gpu::ClusterBarrierOp::create(builder, loc, /*relaxed=*/init);
       break;
     }
-    case Action::ProxyCTA:
-    case Action::ProxyCluster:
-      nvidia_gpu::FenceAsyncSharedOp::create(builder, loc,
-                                             action == Action::ProxyCluster);
+    case SyncKind::CTAProxyFence:
+    case SyncKind::ClusterProxyFence:
+      nvidia_gpu::FenceAsyncSharedOp::create(
+          builder, loc, action == SyncKind::ClusterProxyFence);
       break;
-    case Action::WaitLoad:
-    case Action::WaitStore:
+    case SyncKind::WaitLoad:
+    case SyncKind::WaitStore:
       nvidia_gpu::TMEMWaitOp::create(builder, loc,
-                                     action == Action::WaitLoad
+                                     action == SyncKind::WaitLoad
                                          ? nvidia_gpu::TMEMWaitKind::LOAD
                                          : nvidia_gpu::TMEMWaitKind::STORE);
       break;
-    case Action::RegionBarrier:
-    case Action::WarpBarrier:
+    case SyncKind::RegionBarrier:
+    case SyncKind::WarpBarrier:
       gpu::BarrierOp::create(builder, loc, gpu::AddrSpace::Local,
-                             action == Action::WarpBarrier
+                             action == SyncKind::WarpBarrier
                                  ? gpu::BarrierScope::Warp
                                  : gpu::BarrierScope::CTA);
       break;
@@ -67,7 +70,7 @@ void emit(const MembarCFG<Facts> &cfg, ArrayRef<Action> actions,
 template <typename Model, typename Discover>
 LogicalResult placeRegions(FunctionOpInterface function,
                            MembarCFGBuilder<Model> &builder,
-                           ArrayRef<Action> actions, Discover discover,
+                           ArrayRef<SyncKind> actions, Discover discover,
                            bool expandWarpRoles = false) {
   SmallVector<Region *> bodies{&function.getFunctionBody()};
   if (!expandWarpRoles)
@@ -94,7 +97,7 @@ LogicalResult placeRegions(FunctionOpInterface function,
 
 template <typename T, typename Model>
 LogicalResult placeAcrossRoles(const CallGraph<T> &calls, Model &model,
-                               ArrayRef<Action> actions) {
+                               ArrayRef<SyncKind> actions) {
   MembarCFGBuilder builder(model, calls.getModuleOp());
   for (auto function : calls.getRoots()) {
     auto discover = [&](auto &cfg) { return model.discoverDemands(cfg); };
@@ -109,8 +112,9 @@ LogicalResult placeAcrossRoles(const CallGraph<T> &calls, Model &model,
 
 LogicalResult placeProxyFences(ModuleOp module, BufferRegionAnalysis &regions) {
   AsyncFenceModel model(regions, gpu::TritonGPUDialect::getNumCTAs(module));
-  return placeAcrossRoles(CallGraph<int>(module), model,
-                          {Action::ProxyCluster, Action::ProxyCTA});
+  return placeAcrossRoles(
+      CallGraph<int>(module), model,
+      {SyncKind::ClusterProxyFence, SyncKind::CTAProxyFence});
 }
 
 LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
@@ -130,8 +134,9 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
       }
     });
   ClusterBarrierModel model(regions);
-  return placeAcrossRoles(allocation, model,
-                          {Action::ClusterBarrier, Action::ClusterInit});
+  return placeAcrossRoles(
+      allocation, model,
+      {SyncKind::ClusterBarrier, SyncKind::ClusterFenceMbarInit});
 }
 
 LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,

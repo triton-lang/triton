@@ -12,7 +12,7 @@ namespace {
 using ClusterNode = Node<ClusterBarrierFacts>;
 using ClusterCFG = MembarCFG<ClusterBarrierFacts>;
 using instrument::ExperimentalGSanMBarrierArriveOp;
-constexpr unsigned cluster = coverage(Action::ClusterBarrier);
+constexpr unsigned cluster = coverage(SyncKind::ClusterBarrier);
 constexpr unsigned live = 1, reallocated = 2, carried = 4;
 
 bool overlapsWithinAllocation(const SharedAccess &src,
@@ -136,19 +136,19 @@ ClusterBarrierModel::describe(Operation *op, FixedSync &fixed, Block *) {
   fixed = FixedSync::fromStages(getClusterBarrierStages(op), cluster);
   Facts facts;
   if (isa<gpu::WarpSpecializeOp, ClusterBarrierOp>(op) || hasOpaqueSync(op))
-    facts.initDeadline = Need::ClusterInit;
+    facts.initDeadline = SyncKind::ClusterFenceMbarInit;
   // Peer arrivals need the owner's shadow counter published in global memory.
   if (auto arrive = dyn_cast<ExperimentalGSanMBarrierArriveOp>(op);
       arrive &&
       (arrive.getMulticast() || hasCGABroadcast(arrive.getBarrier().getType())))
-    facts.initDeadline = Need::ClusterAcquire;
+    facts.initDeadline = SyncKind::ClusterBarrier;
   for (const MemoryAccess &access : getMemoryAccesses(op)) {
     if (!access.isShared())
       continue;
     facts.accesses.push_back(getSharedAccess(op, access));
     // A signal on one counter can let a sibling use another.
     if (access.isShared(gpu::SharedKind::Barrier))
-      facts.initDeadline = Need::ClusterInit;
+      facts.initDeadline = SyncKind::ClusterFenceMbarInit;
     else if (access.isWrite)
       facts.payloadWrite = access.value;
     facts.async |= access.isShared(gpu::SharedKind::Async);
@@ -195,15 +195,15 @@ ClusterBarrierModel::discoverDemands(MembarCFG<Facts> &cfg) {
       membar::discoverDemands(
           cfg, demands, start, initial,
           [](unsigned state, unsigned fixed) {
-            return fixed & bit(Need::ClusterAcquire) ? 0u : state;
+            return fixed & bit(SyncKind::ClusterBarrier) ? 0u : state;
           },
           [&](const auto &node, unsigned state) -> Conflict {
             Path path = state & carried ? Path::LoopCarried : Path::Any;
             if (node.next.empty() && access.crossCTA)
-              return {Need::ClusterAcquire, path, true};
+              return {SyncKind::ClusterBarrier, path, true};
             for (const auto &other : node.effects.accesses)
               if (conflicts(access, other, state & reallocated))
-                return {Need::ClusterAcquire, path, true};
+                return {SyncKind::ClusterBarrier, path, true};
             if (init && node.effects.initDeadline) {
               if (auto arrive =
                       dyn_cast<ExperimentalGSanMBarrierArriveOp>(node.op);
@@ -212,7 +212,7 @@ ClusterBarrierModel::discoverDemands(MembarCFG<Facts> &cfg) {
                                         AllocationOrigin::Same))
                 return {};
               return {producer.body == 0 ? *node.effects.initDeadline
-                                         : Need::ClusterAcquire,
+                                         : SyncKind::ClusterBarrier,
                       path};
             }
             return {};

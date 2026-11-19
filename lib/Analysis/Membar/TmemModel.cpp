@@ -220,8 +220,8 @@ void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
   if (isa<MapElementwiseOp>(op))
     return;
   if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
-    Action kind = wait.getKind() == TMEMWaitKind::LOAD ? Action::WaitLoad
-                                                       : Action::WaitStore;
+    SyncKind kind = wait.getKind() == TMEMWaitKind::LOAD ? SyncKind::WaitLoad
+                                                         : SyncKind::WaitStore;
     fixed.after |= coverage(kind);
     return;
   }
@@ -238,10 +238,11 @@ void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
     return;
   if (isa<TMEMLoadOp, TMEMStoreOp, TMEMAllocOp>(op)) {
     const auto &access = llvm::getSingleElement(model.tmemAccesses);
-    model.tmemProducerNeed = access.isWrite ? Need::WaitStore : Need::WaitLoad;
+    model.tmemProducerNeed =
+        access.isWrite ? SyncKind::WaitStore : SyncKind::WaitLoad;
     model.privateTMem = isPrivate(access.footprint);
   } else {
-    model.tmemProducerNeed = Need::RegionOrder;
+    model.tmemProducerNeed = SyncKind::RegionBarrier;
   }
 }
 

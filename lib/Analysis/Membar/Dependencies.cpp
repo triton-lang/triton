@@ -6,7 +6,7 @@
 namespace mlir::triton::membar {
 namespace {
 
-auto stopAt(Need need) {
+auto stopAt(SyncKind need) {
   // A TMEM wait can still need a later cross-warp rendezvous.
   return [mask = bit(need) & fullBarrier](unsigned state, unsigned fixed) {
     return fixed & mask ? 0u : state;
@@ -87,9 +87,9 @@ SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
       constexpr unsigned fresh = 1, carried = 2;
       std::optional<BlockInfo> carriedOut;
       discoverDemands(
-          cfg, demands, source, fresh, stopAt(Need::RegionOrder),
+          cfg, demands, source, fresh, stopAt(SyncKind::RegionBarrier),
           [&](const auto &sink, unsigned state) -> Conflict {
-            return {Need::RegionOrder,
+            return {SyncKind::RegionBarrier,
                     sharedNeed(shared, sink.effects, state == carried,
                                carriedOut, allocation, sharedFilter),
                     /*stopOnMatch=*/true};
@@ -100,8 +100,9 @@ SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
           });
     }
 
-    Need producerNeed = out.tmemProducerNeed.value_or(Need::RegionOrder);
-    bool needsWait = producerNeed != Need::RegionOrder;
+    SyncKind producerNeed =
+        out.tmemProducerNeed.value_or(SyncKind::RegionBarrier);
+    bool needsWait = producerNeed != SyncKind::RegionBarrier;
     if (out.tmemProducerNeed)
       discoverDemands(cfg, demands, source, 1, stopAt(producerNeed),
                       [&](const auto &sink, unsigned) -> Conflict {
@@ -111,9 +112,9 @@ SmallVector<Demand> discoverDemands(const MembarCFG<OpModel> &cfg,
 
     // A completion wait leaves an outgoing issuer but has no input to order.
     if (needsWarp && shared.hasEffects()) {
-      Need warpNeed = needsWait || !out.sharedIn.hasEffects()
-                          ? Need::WarpConvergence
-                          : Need::WarpOrder;
+      SyncKind warpNeed = needsWait || !out.sharedIn.hasEffects()
+                              ? SyncKind::WarpConvergence
+                              : SyncKind::WarpBarrier;
       discoverDemands(cfg, demands, source, 1, stopAt(warpNeed),
                       [&](const auto &sink, unsigned) -> Conflict {
                         return {warpNeed, sink.effects.needsWarp

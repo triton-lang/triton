@@ -10,8 +10,9 @@
 namespace mlir::triton::membar {
 
 // Site IDs follow emission order so waits precede barriers at the same gap.
-inline constexpr std::array ACTIONS{Action::WaitLoad, Action::WaitStore,
-                                    Action::RegionBarrier, Action::WarpBarrier};
+inline constexpr std::array ACTIONS{SyncKind::WaitLoad, SyncKind::WaitStore,
+                                    SyncKind::RegionBarrier,
+                                    SyncKind::WarpBarrier};
 
 struct CutSolution {
   llvm::BitVector sites;
@@ -24,7 +25,7 @@ struct CutSolution {
 template <typename Facts>
 std::optional<CutSolution> solveMembarCut(const MembarCFG<Facts> &cfg,
                                           ArrayRef<Demand> demands,
-                                          ArrayRef<Action> actions = ACTIONS);
+                                          ArrayRef<SyncKind> actions = ACTIONS);
 
 } // namespace mlir::triton::membar
 

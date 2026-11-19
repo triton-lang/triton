@@ -65,9 +65,9 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
 
   namespace mb = triton::membar;
   auto applyFixed = [&](unsigned mask) {
-    if (mask & mb::bit(mb::Need::RegionOrder))
+    if (mask & mb::bit(mb::SyncKind::RegionBarrier))
       membarInfo->sync();
-    else if (mask & mb::bit(mb::Need::WarpOrder))
+    else if (mask & mb::bit(mb::SyncKind::WarpBarrier))
       membarInfo->syncWarps();
   };
   mb::OpModel model;
