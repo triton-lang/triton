@@ -195,7 +195,6 @@ if __name__ == "__main__":
 #   tensor_load_to_lds s[28:31], s[4:11], s[20:23], s[24:27]
 #   tensor_load_to_lds s[28:31], s[4:11], s[36:39], s[40:43]
 #   tensor_load_to_lds s[28:31], s[4:11], s[44:47], s[48:51]
-# Benchmarking gather
 # ```
 #
 # As we can see, with int16 indices, a tile of 64 rows needs only 1
@@ -351,8 +350,8 @@ def matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFER
 
 
 @gluon.jit
-def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N: gl.constexpr, stride_ym: gl.constexpr, off_m, off_n,
-                   y_smem_layout: gl.constexpr, SCATTER: gl.constexpr):
+def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N, stride_ym, off_m, off_n, y_smem_layout: gl.constexpr,
+                   SCATTER: gl.constexpr):
     BLOCK_M: gl.constexpr = acc.shape[0]
     BLOCK_N: gl.constexpr = acc.shape[1]
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
@@ -370,9 +369,8 @@ def matmul_st_gmem(acc, y_ptr, scatter_idx_ptr, rows, M, N: gl.constexpr, stride
 
 @gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr,  #
-                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
-                  stride_am: gl.constexpr, stride_wn: gl.constexpr, stride_scale: gl.constexpr,
-                  stride_ym: gl.constexpr,  #
+                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N, K,  #
+                  stride_am, stride_wn, stride_scale, stride_ym,  #
                   NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr, SCATTER: gl.constexpr):
     BLOCK_M: gl.constexpr = 256
     BLOCK_N: gl.constexpr = 256
