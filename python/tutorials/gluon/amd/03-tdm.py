@@ -503,11 +503,6 @@ def test_elementwise_tdm_pipelined(xnumel, ynumel, XBLOCK, YBLOCK, num_buffers):
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
 
 
-# %%
-# On an MI455X GPU, we compare the TDM kernels with the global load kernel on
-# 16K x 16K fp32 tensors with 4x512 tiles.
-
-
 def elementwise(A, B, C, XBLOCK=32, YBLOCK=256, num_warps=4):
     xnumel, ynumel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
@@ -537,13 +532,117 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# global load: 13.20 TB/s
-# tdm: 17.48 TB/s
-# tdm pipelined (double buffer): 18.07 TB/s
+# global load: 13.49 TB/s
+# tdm: 17.67 TB/s
+# tdm pipelined (double buffer): 18.22 TB/s
 # ```
 #
-# TDM is 32% faster than global loads, and double buffering adds another 3%.
-# The best kernel reaches 18.07 TB/s.
+# TDM is 31% faster than global loads, and double buffering adds another 3%.
+# The best kernel reaches 18.22 TB/s.
+
+# %%
+# TDM can also prefetch a block into the L2 cache with `tdm.prefetch`, which is
+# also called L2 prefetch. On CDNA5 GPUs, Each workgroup processor (WGP) has its
+# own data cache, which shares the same SRAM with the shared memory. Behind the
+# WGP caches is the L2 cache, which sits on the two Fabric and Cache Dies (FCDs)
+# on one GPU. When there is data in L2 cache, later loads can cached instead of
+# going all the way to the HBM.
+#
+# Gluon's `tdm.prefetch` takes a descriptor and the offsets of a block, just
+# like a TDM load, but it doesn't write anything into shared memory. It can be
+# treated a memory access without destination in shared memory. The compiler
+# splits the block into chunks of 256 bytes, spreads them over the lanes, warps
+# and CTAs, and issues one `global_prefetch_b8` instruction for each piece.
+#
+# By default, a prefetch is non-speculative. The hardware translates the address
+# even if the translation is not cached, and the compiler keeps the addresses
+# within the tensor. With `speculative=True`, the compiler skips this bounds
+# check, and the hardware will drop the prefetch if the address translation is
+# not cached.
+#
+# Let's show the effect of L2 prefetch with a simple elementwise kernel, where
+# each program walks through the column blocks of its rows with a single buffer,
+# so the copy of the next block only starts after the current block is done.
+
+
+@gluon.jit
+def elementwise_tdm_prefetch_kernel(  #
+        a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
+        XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
+        smem_layout: gl.constexpr, PREFETCH: gl.constexpr,  #
+):
+    xoff = gl.program_id(0) * XBLOCK
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+    c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [xnumel, ynumel], [ynumel, 1], [XBLOCK, YBLOCK], smem_layout)
+
+    dtype: gl.constexpr = a_ptr.dtype.element_ty
+    a_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    b_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+    c_smem = gl.allocate_shared_memory(dtype, [XBLOCK, YBLOCK], layout=smem_layout)
+
+    for yoff in range(0, ynumel, YBLOCK):
+        cdna5.tdm.async_load(cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[xoff, yoff], clamp_bounds=True),
+                             dest=a_smem)
+        cdna5.tdm.async_load(cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[xoff, yoff], clamp_bounds=True),
+                             dest=b_smem)
+        if PREFETCH:
+            # Bring the next column block into L2 while this one is loaded and added.
+            pred = yoff + YBLOCK < ynumel
+            cdna5.tdm.prefetch(a_desc, [xoff, yoff + YBLOCK], pred=pred)
+            cdna5.tdm.prefetch(b_desc, [xoff, yoff + YBLOCK], pred=pred)
+        cdna5.tdm.async_wait(0)
+
+        c_smem.store(a_smem.load(layout) + b_smem.load(layout))
+        cdna5.tdm.async_store(cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[xoff, yoff], clamp_bounds=True),
+                              src=c_smem)
+    cdna5.tdm.async_wait(0)
+
+
+def elementwise_tdm_prefetch(A, B, C, prefetch, XBLOCK=64, YBLOCK=256, num_warps=4):
+    xnumel, ynumel = A.shape
+    layout = gl.BlockedLayout([1, 4], [1, warp_size], [num_warps, 1], [1, 0])
+    smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    grid = (triton.cdiv(xnumel, XBLOCK), )
+    return elementwise_tdm_prefetch_kernel[grid](A, B, C, xnumel, ynumel, XBLOCK, YBLOCK, layout, smem_layout, prefetch,
+                                                 num_warps=num_warps)
+
+
+@pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("XBLOCK, YBLOCK", [(64, 256), (4, 512)])
+@pytest.mark.parametrize("prefetch", [False, True])
+@pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
+def test_elementwise_tdm_prefetch(xnumel, ynumel, XBLOCK, YBLOCK, prefetch):
+    a = torch.randn(xnumel, ynumel, device="cuda")
+    b = torch.randn(xnumel, ynumel, device="cuda")
+    c = torch.empty_like(a)
+    elementwise_tdm_prefetch(a, b, c, prefetch, XBLOCK, YBLOCK)
+    torch.testing.assert_close(a + b, c, atol=0, rtol=0)
+
+
+if __name__ == "__main__":
+    print("Benchmarking prefetch")
+    print("=====================")
+    xnumel, ynumel = 16 * 1024, 16 * 1024
+    A = torch.randn(xnumel, ynumel, device="cuda")
+    B = torch.randn(xnumel, ynumel, device="cuda")
+    C = torch.empty_like(A)
+
+    for name, prefetch in [("no prefetch", False), ("prefetch", True)]:
+        ms = triton.testing.do_bench(lambda: elementwise_tdm_prefetch(A, B, C, prefetch), warmup=200, rep=1000)
+        print(f"{name}: {t1.get_throughput(ms, C):.2f} TB/s")
+
+# %%
+# ```
+# no prefetch: 15.89 TB/s
+# prefetch: 17.64 TB/s
+# ```
+#
+# We can see prefetch makes the kernel 11% faster. In practice, L2 prefetch
+# may not always be helpful - we can also do double buffering to hide memory
+# latency. Moreover, L2 prefetch may compete with TDM for memory bandwidth.
+# But it can still be helpful in cases where we may not be able to use shared
+# memory to buffer another future requests.
 
 # %%
 # The main takeaway here is to use TDM on CDNA5 whenever a kernel copies tiles
