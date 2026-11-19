@@ -57,7 +57,7 @@ Completion getCompletion(const ClusterNode &issuer, const ClusterNode &node) {
   if (hasOpaqueSync(op) || isa<gpu::WarpYieldOp, gpu::WarpReturnOp>(op) ||
       (node.body && isa<WaitBarrierOp>(op)))
     return Completion::Possible;
-  if (isa<TMAStoreLikeOpInterface>(issuer.op)) {
+  if (isa<AsyncStoreOpInterface>(issuer.op)) {
     if (auto wait = dyn_cast<TMAStoreWaitOp>(op))
       return wait.getPendings() ? Completion::Possible : Completion::Complete;
   } else if (isa<WarpGroupDotOp>(issuer.op)) {
@@ -66,9 +66,9 @@ Completion getCompletion(const ClusterNode &issuer, const ClusterNode &node) {
     if (auto dot = dyn_cast<WarpGroupDotOp>(op); dot && !dot.getIsAsync())
       return Completion::Complete;
   } else if (isa<WaitBarrierOp>(op)) {
-    // TMA loads, CLC and st.async name the counter on the payload write.
+    // Bulk loads, CLC and st.async name the counter on the payload write.
     // Copies and tcgen05 operations can signal a later commit's counter.
-    if (!isa<TMALoadLikeOpInterface, CLCTryCancelOp, AsyncSharedStoreOp>(
+    if (!isa<AsyncLoadOpInterface, CLCTryCancelOp, AsyncSharedStoreOp>(
             issuer.op) ||
         llvm::any_of(issuer.effects.accesses, [&](const auto &access) {
           return overlapsWithinAllocation(node.effects.accesses.front(),
@@ -167,9 +167,9 @@ ClusterBarrierModel::describe(Operation *op, FixedSync &fixed, Block *) {
     facts.sources.emplace_back(
         SharedAccess{scratch, /*isWrite=*/false, /*crossCTA=*/true}, live);
   } else {
-    // Only the lead CTA waits on a paired TMA completion barrier. Its
+    // Only the lead CTA waits on a paired load completion barrier. Its
     // peer must rendezvous before reusing even a CTA-local destination.
-    auto tma = dyn_cast<TMALoadLikeOpInterface>(op);
+    auto tma = dyn_cast<AsyncLoadOpInterface>(op);
     bool pairedWait =
         tma &&
         hasCGABroadcast(cast<gpu::MemDescType>(tma.getBarrier().getType()));
