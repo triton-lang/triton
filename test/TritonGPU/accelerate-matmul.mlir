@@ -1559,37 +1559,70 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// A row of the B operand must span at least 128 bits in tcgen05 shared memory,
-// so 8-bit dots whose N per CTA is 8 fall back to MMAv2.
-// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+// tcgen05.mma takes an MN-major 8-bit B only with N >= 16 per CTA, and B keeps
+// its register order in shared memory. So a row-major 8-bit B with N = 8 per CTA
+// gets a K-major layout, while a B that is already K-major, or has N = 16, keeps
+// its order. The layouts come from tl.dot kernels compiled from Python.
+// CHECK-DAG: #[[$MN_I8:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+// CHECK-DAG: #[[$K_I8:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: i8_n8_mmav2_fallback
-  // CHECK-NOT: ttng.tc_gen5_mma
-  // CHECK: tt.dot {{.*}} -> tensor<64x8xi32, #[[$MMA]]>
-  tt.func public @i8_n8_mmav2_fallback(
-      %a: tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
-      %b: tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<64x8xi32, #blocked> {
-    %zero = arith.constant dense<0> : tensor<64x8xi32, #blocked>
-    %d = tt.dot %a, %b, %zero : tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x8xi32, #blocked>
+  // CHECK-LABEL: @i8_n8_row_major_b
+  // CHECK: %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<32x8xi8, #{{.*}}>) -> !ttg.memdesc<32x8xi8, #[[$K_I8]], #smem>
+  // CHECK: ttng.tc_gen5_mma %{{.*}}, %[[B]],
+  tt.func public @i8_n8_row_major_b(%a: tensor<64x32xi8, #blocked2>, %b: tensor<32x8xi8, #blocked1>) -> tensor<64x8xi32, #blocked> {
+    %c = arith.constant dense<0> : tensor<64x8xi32, #blocked>
+    %a_op = ttg.convert_layout %a : tensor<64x32xi8, #blocked2> -> tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b_op = ttg.convert_layout %b : tensor<32x8xi8, #blocked1> -> tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %a_op, %b_op, %c, inputPrecision = tf32 : tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x8xi32, #blocked>
     tt.return %d : tensor<64x8xi32, #blocked>
+  }
+
+  // CHECK-LABEL: @i8_n8_k_major_b
+  // CHECK: %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<32x8xi8, #{{.*}}>) -> !ttg.memdesc<32x8xi8, #[[$K_I8]], #smem>
+  // CHECK: ttng.tc_gen5_mma %{{.*}}, %[[B]],
+  tt.func public @i8_n8_k_major_b(%a: tensor<64x32xi8, #blocked2>, %bt: tensor<8x32xi8, #blocked2>) -> tensor<64x8xi32, #blocked> {
+    %c = arith.constant dense<0> : tensor<64x8xi32, #blocked>
+    %b = tt.trans %bt {order = array<i32: 1, 0>} : tensor<8x32xi8, #blocked2> -> tensor<32x8xi8, #blocked3>
+    %a_op = ttg.convert_layout %a : tensor<64x32xi8, #blocked2> -> tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b_op = ttg.convert_layout %b : tensor<32x8xi8, #blocked3> -> tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %a_op, %b_op, %c, inputPrecision = tf32 : tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x8xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x8xi32, #blocked>
+    tt.return %d : tensor<64x8xi32, #blocked>
+  }
+
+  // CHECK-LABEL: @i8_n16_row_major_b
+  // CHECK: %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<32x16xi8, #{{.*}}>) -> !ttg.memdesc<32x16xi8, #[[$MN_I8]], #smem>
+  // CHECK: ttng.tc_gen5_mma %{{.*}}, %[[B]],
+  tt.func public @i8_n16_row_major_b(%a: tensor<64x32xi8, #blocked2>, %b: tensor<32x16xi8, #blocked5>) -> tensor<64x16xi32, #blocked4> {
+    %c = arith.constant dense<0> : tensor<64x16xi32, #blocked4>
+    %a_op = ttg.convert_layout %a : tensor<64x32xi8, #blocked2> -> tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked4}>>
+    %b_op = ttg.convert_layout %b : tensor<32x16xi8, #blocked5> -> tensor<32x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked4}>>
+    %d = tt.dot %a_op, %b_op, %c, inputPrecision = tf32 : tensor<64x32xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked4}>> * tensor<32x16xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked4}>> -> tensor<64x16xi32, #blocked4>
+    tt.return %d : tensor<64x16xi32, #blocked4>
   }
 }
 
 // -----
 
-// Same rule for FP8 operands: an N = 8 tile has no 128-bit shared-memory rows.
-// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: fp8_n8_mmav2_fallback
-  // CHECK-NOT: ttng.tc_gen5_mma
-  // CHECK: tt.dot {{.*}} -> tensor<128x8xf32, #[[$MMA]]>
-  tt.func public @fp8_n8_mmav2_fallback(
-      %a: tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
-      %b: tensor<64x8xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x8xf32, #blocked> {
-    %zero = arith.constant dense<0.000000e+00> : tensor<128x8xf32, #blocked>
-    %d = tt.dot %a, %b, %zero : tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x8xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x8xf32, #blocked>
-    tt.return %d : tensor<128x8xf32, #blocked>
+// The rule is per CTA: N = 16 split over 2 CTAs leaves 8 per CTA.
+// CHECK-DAG: #[[$K_F8_CGA:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8, CGALayout = {{\[\[0, 1\]\]}}}>
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @fp8_n8_per_cta_row_major_b
+  // CHECK: %[[B:.+]] = ttg.local_alloc %{{.*}} : (tensor<32x16xf8E5M2, #{{.*}}>) -> !ttg.memdesc<32x16xf8E5M2, #[[$K_F8_CGA]], #smem>
+  // CHECK: ttng.tc_gen5_mma %{{.*}}, %[[B]],
+  tt.func public @fp8_n8_per_cta_row_major_b(%a: tensor<64x32xf8E5M2, #blocked2>, %b: tensor<32x16xf8E5M2, #blocked1>) -> tensor<64x16xf32, #blocked> {
+    %c = arith.constant dense<0.000000e+00> : tensor<64x16xf32, #blocked>
+    %a_op = ttg.convert_layout %a : tensor<64x32xf8E5M2, #blocked2> -> tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b_op = ttg.convert_layout %b : tensor<32x16xf8E5M2, #blocked1> -> tensor<32x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %a_op, %b_op, %c, inputPrecision = tf32 : tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x16xf32, #blocked>
+    tt.return %d : tensor<64x16xf32, #blocked>
   }
 }
