@@ -1198,10 +1198,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.clc_try_cancel
   // CHECK-NEXT: ttng.tc_gen5_commit
-  // CHECK: tt.return
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.wait_barrier {{.*}}, %false deps
+  // CHECK-NEXT: ttng.inval_barrier
+  // CHECK-NEXT: tt.return
   tt.func @cluster_clc_with_per_cta_barrier() {
     %phase = arith.constant 0 : i32
     %true = arith.constant true
+    %false = arith.constant false
     %result = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     ttng.init_barrier %barrier, 2 : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
@@ -1212,6 +1217,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true :
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     ttng.wait_barrier %barrier, %phase deps %result : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>, !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %barrier, %phase, %false deps %result : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>, !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>
+    ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     tt.return
   }
 }
