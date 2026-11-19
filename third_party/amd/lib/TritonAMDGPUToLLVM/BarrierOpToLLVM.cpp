@@ -109,9 +109,8 @@ struct WaitBarrierOpConversion
     // Sleep for the minimum number of clocks. 64*SIMM16[6:0] = 64 * 1 = 64
     // clocks.
     ROCDL::SSleepOp::create(rewriter, loc, 1);
-    // Other waves update the barrier state while this one spins, so the load
-    // is atomic: LLVM hoists a plain load of statically allocated LDS out of
-    // the loop, which then never observes the phase change.
+    // The barrier state is updated concurrently by arrivals, so the load must
+    // be atomic.
     Value curState =
         targetInfo.loadRelaxed(rewriter, loc, smemObj.getBase(), i64_ty,
                                /*pred=*/Value(), MemSyncScope::CTA);
