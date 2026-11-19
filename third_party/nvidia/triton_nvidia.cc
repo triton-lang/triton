@@ -139,11 +139,15 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
                             mlir::triton::createTritonNvidiaGPUMembar, int32_t,
                             int32_t);
-  m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
-          pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion));
-        });
+  m.def(
+      "add_to_llvmir",
+      [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
+         bool conSan) {
+        pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
+            capability, ptxVersion, conSan));
+      },
+      py::arg("pm"), py::arg("capability"), py::arg("ptx_version"),
+      py::arg("consan") = false);
 }
 
 std::unique_ptr<mlir::Pass>
@@ -196,8 +200,13 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      ttng::createTritonNvidiaGPURemoveTMEMTokensPass);
   ADD_PASS_WRAPPER_0("add_check_matmul_two_cta",
                      ttng::createTritonNvidiaGPUCheckMatmulTwoCTAPass);
-  ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::createConvertNVGPUToLLVM);
+  m.def(
+      "add_nvgpu_to_llvm",
+      [](mlir::PassManager &pm, bool conSan) {
+        pm.addPass(mlir::triton::createConvertNVGPUToLLVM(
+            mlir::triton::ConvertNVGPUToLLVMOptions{conSan}));
+      },
+      py::arg("pm"), py::arg("consan") = false);
   ADD_PASS_WRAPPER_2("add_initialize_ws_cluster_barriers",
                      createInitializeWSClusterBarriersWrapper, int32_t,
                      int32_t);
