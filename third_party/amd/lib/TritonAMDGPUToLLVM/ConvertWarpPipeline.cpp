@@ -1140,4 +1140,15 @@ std::unique_ptr<OperationPass<ModuleOp>>
 createConvertWarpPipelinePass(StringRef gfxArch) {
   return std::make_unique<ConvertWarpPipeline>(gfxArch);
 }
+
+bool hasWarpPipeline(ModuleOp module) {
+  // Every warp pipeline that this pass converts, inside a loop or not,
+  // consists of stage regions that the warp pipeliner created.
+  return module
+      .walk([](scf::ExecuteRegionOp exec) {
+        return isPipelineStage(exec) ? WalkResult::interrupt()
+                                     : WalkResult::advance();
+      })
+      .wasInterrupted();
+}
 } // namespace mlir::triton::AMD
