@@ -41,6 +41,69 @@ def test_kwargs(use_cuda_graph: bool, device: str):
     assert len(_kernel.cache) == 2
 
 
+@pytest.mark.parametrize("hook", ["reset_to_zero", "restore_value"])
+def test_hooks_include_optional_default(hook, fresh_knobs):
+    fresh_knobs.runtime.interpret = True
+    seen = []
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        return [1., 1., 1.]
+
+    def pre_hook(args):
+        seen.append(args["optional"])
+
+    @triton.autotune(
+        configs=[triton.Config({"BLOCK": 1}, pre_hook=pre_hook),
+                 triton.Config({"BLOCK": 2}, pre_hook=pre_hook)], key=[], do_bench=do_bench, **{hook: ["optional"]})
+    @triton.jit
+    def kernel(BLOCK: tl.constexpr, optional=None):
+        pass
+
+    kernel[(1, )]()
+    kernel[(1, )](optional=None)
+    assert seen == [None] * 4
+
+
+def test_key_includes_default_argument(fresh_knobs):
+    fresh_knobs.runtime.interpret = True
+    benchmarked = []
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append(1)
+        return [1., 1., 1.]
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": 1}), triton.Config({"BLOCK": 2})], key=["MODE"],
+                     do_bench=do_bench)
+    @triton.jit
+    def kernel(BLOCK: tl.constexpr, MODE: tl.constexpr = 7):
+        pass
+
+    kernel[(1, )]()
+    kernel[(1, )](MODE=7)
+    assert len(benchmarked) == 2
+    kernel[(1, )](MODE=9)
+    assert len(benchmarked) == 4
+
+
+def test_heuristics_include_default_arguments(fresh_knobs):
+    fresh_knobs.runtime.interpret = True
+
+    @triton.heuristics({"BLOCK": lambda args: triton.next_power_of_2(args["N"])})
+    @triton.jit
+    def kernel(output, N: tl.constexpr = 3, BLOCK: tl.constexpr = 1):
+        tl.store(output, BLOCK)
+
+    output = torch.empty((), dtype=torch.int32)
+    kernel[(1, )](output)
+    assert output.item() == 4
+    kernel[(1, )](output, N=3)
+    assert output.item() == 4
+    kernel[(1, )](output, N=5)
+    assert output.item() == 8
+
+
 def test_no_do_bench(device: str):
     M, N = 1024, 16
     src = torch.randn(M * N, device=device)
