@@ -1,11 +1,63 @@
 import numpy as np
 import pytest
+import torch
 import itertools
 
 from triton._C.libtriton import interpreter as _interpreter
 from triton._C.libtriton import ir
 import triton.language as tl
 from triton.runtime import interpreter
+
+_CAPTURED = tl.constexpr(3)
+
+
+def test_captured_constexpr(monkeypatch):
+
+    def make_kernel(_CAPTURED):
+
+        @interpreter.InterpretedFunction
+        def kernel(out):
+            tl.store(out, _CAPTURED)
+
+        def update(value):
+            nonlocal _CAPTURED
+            _CAPTURED = tl.constexpr(value)
+
+        return kernel, update
+
+    @interpreter.InterpretedFunction
+    def control(out):
+        tl.store(out, _CAPTURED)
+
+    first, update = make_kernel(tl.constexpr(7))
+    second, _ = make_kernel(tl.constexpr(11))
+    module_names = set(globals())
+    out = torch.empty((), dtype=torch.int32)
+    for kernel, expected in [(first, 7), (second, 11), (first, 7), (control, 3)]:
+        kernel[(1, )](out)
+        assert out.item() == expected
+
+    update(13)
+    monkeypatch.setitem(globals(), "_CAPTURED", tl.constexpr(5))
+    for kernel, expected in [(control, 5), (first, 13), (second, 11)]:
+        kernel[(1, )](out)
+        assert out.item() == expected
+    assert set(globals()) == module_names
+
+
+def test_captured_constexpr_with_default():
+    interpreter_semantic = tl.constexpr(7)
+    step = tl.constexpr(3)
+
+    @interpreter.InterpretedFunction
+    def kernel(out, offset: tl.constexpr = step):
+        value = interpreter_semantic
+        tl.store(out, value + offset)
+
+    interpreter_semantic = tl.constexpr(11)
+    out = torch.empty((), dtype=torch.int32)
+    kernel[(1, )](out)
+    assert out.item() == 14
 
 
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
