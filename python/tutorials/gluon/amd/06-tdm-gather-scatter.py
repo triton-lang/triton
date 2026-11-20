@@ -286,10 +286,10 @@ if __name__ == "__main__":
 # %%
 # ```
 # global load: 13.9 TB/s
-# tdm gather: 19.1 TB/s
+# tdm gather: 19.2 TB/s
 # ```
 #
-# The TDM gather is 37% faster than the global load kernel.
+# The TDM gather is 38% faster than the global load kernel.
 
 # %%
 # Now let's use gather and scatter to implement an MoE-style grouped matmul. An
@@ -392,8 +392,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
 
     num_k = gl.cdiv(K, BLOCK_K)
     for k in gl.static_range(NUM_BUFFERS - 1):
-        matmul_ld_gmem(k, True, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
-                       NUM_BUFFERS, GATHER)
+        matmul_ld_gmem(k, k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
+                       BLOCK_K, NUM_BUFFERS, GATHER)
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
         next_k = k + NUM_BUFFERS - 1
@@ -478,6 +478,6 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# mlp1: 6522 TFLOPS
-# mlp2: 6043 TFLOPS
+# mlp1: 6475 TFLOPS
+# mlp2: 6014 TFLOPS
 # ```

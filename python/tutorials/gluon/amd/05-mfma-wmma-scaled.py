@@ -502,9 +502,9 @@ if __name__ == "__main__" and is_cdna4():
 
 # %%
 # ```
-# bf16: 1130 TFLOPS
-# fp8 x mxfp4: 1984 TFLOPS
-# fp8 x mxfp4, preshuffled scales: 2103 TFLOPS
+# bf16: 1061 TFLOPS
+# fp8 x mxfp4: 1829 TFLOPS
+# fp8 x mxfp4, preshuffled scales: 1890 TFLOPS
 # ```
 
 # %%
@@ -834,7 +834,7 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# bf16: 2287 TFLOPS
-# fp8 x mxfp4: 7700 TFLOPS
-# fp8 x mxfp4, preshuffled scales: 7841 TFLOPS
+# bf16: 2323 TFLOPS
+# fp8 x mxfp4: 7679 TFLOPS
+# fp8 x mxfp4, preshuffled scales: 7809 TFLOPS
 # ```

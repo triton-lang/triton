@@ -417,14 +417,14 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# no cluster: 7746 TFLOPS
-# 2x1 cluster: 7962 TFLOPS
-# 1x2 cluster: 8091 TFLOPS
-# 2x2 cluster: 8128 TFLOPS
-# 2x4 cluster: 8282 TFLOPS
-# 4x4 cluster: 8364 TFLOPS
+# no cluster: 7690 TFLOPS
+# 2x1 cluster: 7917 TFLOPS
+# 1x2 cluster: 8047 TFLOPS
+# 2x2 cluster: 8111 TFLOPS
+# 2x4 cluster: 8247 TFLOPS
+# 4x4 cluster: 8358 TFLOPS
 # ```
 #
 # As we can see, multicast makes the kernel faster, and the more CTAs share a
-# tile, the faster the kernel gets. With 4x4 clusters, the kernel is 8% faster
+# tile, the faster the kernel gets. With 4x4 clusters, the kernel is 9% faster
 # than without a cluster.

@@ -307,8 +307,9 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def matmul_ld_gmem(k, pred, slot, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
-                   BLOCK_K: gl.constexpr):
+def matmul_ld_gmem(k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K: gl.constexpr,
+                   NUM_BUFFERS: gl.constexpr):
+    i = k % NUM_BUFFERS
     a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
     w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
                                                 clamp_bounds=True)
@@ -317,13 +318,14 @@ def matmul_ld_gmem(k, pred, slot, off_m, off_n, a_desc, w_desc, ws_desc, a_smem,
     # Only warps 0-3 copy. tdm.async_wait only waits for the copies of the current
     # warp, and warps 4-7 run one stage behind, so warps 0-3 could read a part
     # copied by warps 4-7 before the copy completes.
-    cdna5.tdm.async_load(a_desc, dest=a_smem.index(slot), warp_used_hint=0b1111)
-    cdna5.tdm.async_load(w_desc, dest=w_smem.index(slot), warp_used_hint=0b1111)
-    cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(slot), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(a_desc, dest=a_smem.index(i), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(w_desc, dest=w_smem.index(i), warp_used_hint=0b1111)
+    cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(i), warp_used_hint=0b1111)
 
 
 @gluon.jit
-def matmul_ld_smem(slot, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
+def matmul_ld_smem(k, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFERS: gl.constexpr):
+    slot = k % NUM_BUFFERS
     HALF_K: gl.constexpr = a_smem.shape[2] // 2
     ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [w_smem.shape[1], HALF_K // 32])
     a = a_smem.index(slot).slice(half * HALF_K, HALF_K, 1).load(layouts.a_reg_layout)
@@ -360,30 +362,30 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                         layouts.ws_smem_layout)
 
     num_k = gl.cdiv(K, BLOCK_K)
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        matmul_ld_gmem(i, i < num_k, i, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K)
+    for k in gl.static_range(NUM_BUFFERS - 1):
+        matmul_ld_gmem(k, k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
+                       NUM_BUFFERS)
+
     acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
         cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
         next_k = k + NUM_BUFFERS - 1
+        matmul_ld_gmem(next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem, BLOCK_K,
+                       NUM_BUFFERS)
         if WARP_PIPELINE:
             with gl.amd.warp_pipeline_stage("memory0", priority=1):
-                a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 0, a_smem, w_smem, ws_smem, layouts)
-                matmul_ld_gmem(next_k, next_k < num_k, next_k % NUM_BUFFERS, off_m, off_n, a_desc, w_desc, ws_desc,
-                               a_smem, w_smem, ws_smem, BLOCK_K)
+                a, w, w_scale = matmul_ld_smem(k, 0, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
             with gl.amd.warp_pipeline_stage("compute0", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
             with gl.amd.warp_pipeline_stage("memory1", priority=1):
-                a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 1, a_smem, w_smem, ws_smem, layouts)
+                a, w, w_scale = matmul_ld_smem(k, 1, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
             with gl.amd.warp_pipeline_stage("compute1", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
         else:
             # The same loop without stages.
-            a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 0, a_smem, w_smem, ws_smem, layouts)
-            matmul_ld_gmem(next_k, next_k < num_k, next_k % NUM_BUFFERS, off_m, off_n, a_desc, w_desc, ws_desc, a_smem,
-                           w_smem, ws_smem, BLOCK_K)
+            a, w, w_scale = matmul_ld_smem(k, 0, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
             acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-            a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 1, a_smem, w_smem, ws_smem, layouts)
+            a, w, w_scale = matmul_ld_smem(k, 1, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
             acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
 
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], layouts.y_smem_layout)
@@ -436,9 +438,9 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# 4 warps: 8411 TFLOPS
-# 8 warps: 7877 TFLOPS
-# 8 warps, warp pipeline: 8758 TFLOPS
+# 4 warps: 8380 TFLOPS
+# 8 warps: 7565 TFLOPS
+# 8 warps, warp pipeline: 8637 TFLOPS
 # ```
 #
 # We can see the 8-warp version with warp pipeline is much better than the
