@@ -5771,7 +5771,7 @@ def test_nv_tma_descriptor_store_kernel(target):
         )
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
         tma.async_store(input_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=(smem, ))
         tma.store_wait(0, read_only=True)
 
     ptr = MockTensor(ttgl.float32)
@@ -5791,7 +5791,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_1 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %1 : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
   }
@@ -6207,7 +6207,7 @@ def _bulk_store_codegen_kernel(src, out, pred):
     values = ttgl.load(src + ttgl.arange(0, 4096, layout))
     smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
     hopper.bulk.async_store(out, smem, 2560, pred=pred)
-    hopper.bulk.store_wait(0, read_only=False)
+    hopper.bulk.store_wait(0, read_only=False, deps=(smem, ))
 
 
 @pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])

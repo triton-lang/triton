@@ -3,6 +3,7 @@
 from ..._core import builtin, uint64, _unwrap_if_constexpr
 from ... import _core as ttgl
 from ..._semantic import _check
+from .tma import store_wait
 
 __all__ = ["async_load", "async_store", "store_wait"]
 
@@ -128,19 +129,3 @@ def async_store(pointer, smem, num_elements, pred=True, _semantic=None):
         ttgl.device_assert(disabled.__or__(aligned, _semantic=_semantic),
                            "bulk.async_store destination must be 16-byte aligned", _semantic=_semantic)
     _semantic.builder.create_async_bulk_copy_local_to_global(pointer.handle, smem.handle, num_bytes, pred.handle)
-
-
-@builtin
-def store_wait(pendings, read_only=True, _semantic=None):
-    """Wait for committed bulk and TMA store groups in the current region.
-
-    Args:
-        pendings: Maximum number of committed groups allowed to remain pending.
-        read_only: If True, wait only for shared-memory reads to complete, so
-            the source can be reused. If False, also wait for global writes
-            to complete before accessing or publishing the destination.
-            Defaults to True.
-    """
-    pendings = _unwrap_if_constexpr(pendings)
-    read_only = _unwrap_if_constexpr(read_only)
-    _semantic.builder.create_async_tma_store_wait(pendings, read_only)

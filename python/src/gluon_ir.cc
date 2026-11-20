@@ -1217,8 +1217,9 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
            })
       .def("create_async_tma_store_wait",
-           [](GluonOpBuilder &self, int pendings, bool readOnly) {
-             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly);
+           [](GluonOpBuilder &self, int pendings, bool readOnly,
+              std::vector<Value> &deps) {
+             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly, deps);
            })
       .def(
           "create_async_tma_gather",
