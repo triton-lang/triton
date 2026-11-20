@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
@@ -297,10 +298,9 @@ struct AuxDataMap {
   // The initial release stores zero before any warp group can acquire the lock.
   Operation *lockInitialization = nullptr;
 
-  // Cluster barriers that ConSan inserts for its own checks during
-  // instrumentation. They do not synchronize the program, so do not instrument
-  // them.
-  SmallVector<Operation *> internalClusterBarriers;
+  // Snapshot the original operations before instrumentation splits blocks
+  // for cluster rendezvous and introduces sanitizer-internal barriers.
+  SmallVector<std::pair<Operation *, BarrierStages>> operations;
 
   // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
   // barriers outside warp specialization share the entry-region slot; each
