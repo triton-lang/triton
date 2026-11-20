@@ -1020,6 +1020,23 @@ void init_gluon_ir(py::module_ &m) {
                                                   value.value_or(Value{}));
           },
           py::arg("resultTy"), py::arg("value").none())
+      .def("create_fpsan_probability_cast",
+           [](GluonOpBuilder &self, Type ty, Type residualTy, Value src) {
+             auto cast = self.create<
+                 triton::instrument::ExperimentalFPSanProbabilityCastOp>(
+                 ty, residualTy, src);
+             return py::make_tuple(Value(cast.getRounded()),
+                                   Value(cast.getResidual()));
+           })
+      .def(
+          "create_fpsan_store_probability",
+          [](GluonOpBuilder &self, Value dst, Value src, Value residual,
+             std::optional<Value> pred) {
+            self.create<ttng::FPSanStoreProbabilityOp>(dst, src, residual,
+                                                       pred.value_or(Value{}));
+          },
+          py::arg("dst"), py::arg("src"), py::arg("residual"),
+          py::arg("pred").none())
       .def("create_tmem_store",
            [](GluonOpBuilder &self, Value memDesc, Value value, Value pred) {
              self.create<ttng::TMEMStoreOp>(memDesc, value, pred);

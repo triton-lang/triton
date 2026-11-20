@@ -93,6 +93,14 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalLocalAddressesOp : TTI_Op<"experimental_local_addresses", [Pure]> {
+  let summary = "Physical CTA-local byte addresses of a shared tile at logical offsets";
+  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
+  let results = (outs RankedTensorOf<[I32]>:$result);
+  let assemblyFormat = "$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def TTI_ExperimentalLocalGatherOp
     : TTI_Op<"experimental_local_gather"> {
   let summary = "Gather elements from shared memory with logical base offsets";
@@ -522,6 +530,15 @@ def TTI_DotI8Op : TTI_Op<"dot_i8", [
     attr-dict `:` type($a) `*` type($b) `->` type($d)
   }];
   let hasVerifier = 1;
+}
+
+def TTI_ExperimentalFPSanProbabilityCastOp : TTI_Op<"experimental_fpsan_probability_cast", [
+  Pure, Elementwise, SameOperandsAndResultShape, SameOperandsAndResultEncoding
+]> {
+  let summary = "Cast FP32 probabilities to tagged FP8 values and their FPSan residuals";
+  let arguments = (ins RankedTensorOf<[F32]>:$src);
+  let results = (outs RankedTensorOf<[F8E4M3FN, F8E5M2]>:$rounded, RankedTensorOf<[I32]>:$residual);
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
 }
 
 def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [

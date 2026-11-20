@@ -598,3 +598,58 @@ FpSan is a poor fit when you want to check:
 
 In short, rely on FpSan for structure-preserving kernel validation, and rely on
 ordinary numerical tests for IEEE behavior.
+
+FP8 probability casts in Gluon
+==============================
+
+Online softmax can center the same scores at different running maxima when
+KV shard boundaries change. To compare the resulting PV products, mark the
+FP32-to-FP8 cast of the P operand.
+
+.. code-block:: python
+
+   p = gl.exp2(centered_scores)
+   value_to_store = gl.fpsan.probability_cast(p, dtype=p_tile.dtype, expect_zero=masked)
+   rounded = p_tile.store(value_to_store)
+   # After the usual producer/consumer synchronization
+   tcgen05_mma(p_tile, v_tile, acc, use_acc=use_acc, mbarriers=[done])
+
+``probability_cast`` rounds the FP32 tile to the requested FP8 format
+(E4M3 or E5M2). The optional ``expect_zero`` mask applies at the cast.
+Debug execution asserts that the indicated values round to zero. FPSan
+produces a tagged byte and residual together, zeroing both in masked positions.
+
+The cast returns one opaque Gluon value that can pass through helpers and
+control flow. Pass it to a two-dimensional SMEM or TMEM descriptor with
+the same shape and dtype. Its ``store`` method writes the tile and returns
+the rounded FP8 tensor. In FPSan the store takes both cast results as
+explicit operands. For TMEM the store predicate guards both writes.
+
+In single-CTA FPSan kernels using this operation, each stored probability
+byte has a 32-bit residual in global scratch. An unscaled FP8 MMA with an FP32
+accumulator reconstructs a tagged FP32 payload from the byte and residual
+at its operand address. The format-specific odd multiplier distinguishes
+the rounding operation and commutes with online softmax rescaling. This
+also permits other compensating scale changes across the cast, so numerical
+tests are needed to check underflow and overflow.
+
+Reading the tile into registers gives the tagged narrow payload. An ordinary
+store, including a store of those same bytes, clears the residuals it
+overwrites. Stage selection and descriptor views determine the addresses
+of both data and residuals. Use the usual synchronization for the destination
+memory space, including the async proxy fence for SMEM.
+
+For SMEM, FPSan uses shared-memory alias analysis to identify the allocation
+backing the destination. Each access must resolve to a single allocation.
+The FP8 bytes reside in SMEM. The byte offset within the allocation, including
+the swizzle and view offsets, indexes its residual array. Either MMA operand
+can read these residuals. FPSan supports ordinary stores through views of
+the allocation and diagnoses unsupported accesses such as asynchronous
+copies into it.
+
+For packed TMEM probabilities, scratch for each physical column holds
+128 data words and four planes of 128 residual words. A QK write that
+reuses P storage for FP32 scores clears the corresponding residuals.
+The physical emulation requires whole-cell TMEM writes, including full
+instruction widths for MMA destinations. It reports unsupported descriptor
+operations during compilation.

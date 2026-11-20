@@ -3657,3 +3657,304 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
     # Encode the integer results as FP16/BF16 bits and compare the bits.
     expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
     _assert_payload_equal(out.view(torch.int16), expected)
+
+
+@gluon.jit
+def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constexpr, MUTATION: gl.constexpr,
+                              SHARED: gl.constexpr):
+    M: gl.constexpr = 128
+    N: gl.constexpr = 32
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    rows = gl.arange(0, M, layout=gl.SliceLayout(1, layout))
+    keys = gl.arange(0, WIDTH, layout=gl.SliceLayout(0, layout))
+    cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
+    shard = gl.program_id(0)
+    score = gl.load(Scores + shard * WIDTH + keys)
+    maximum = gl.max(score, 0)
+    centered = (score - maximum)[None, :].broadcast_to((M, WIDTH))
+    p = gl.exp2(centered)
+    mask = ((shard * WIDTH + keys) % 11 == 2)[None, :]
+    if MUTATION == "drop_token":
+        mask = mask | ((shard * WIDTH + keys)[None, :] == 0)
+
+    if SHARED:
+        playout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([M, WIDTH], gl.float8e5)
+        pmem = gl.allocate_shared_memory(gl.float8e5, (M, WIDTH), playout)
+        dst = pmem.permute((1, 0))
+        p = p.permute(1, 0)
+        mask = mask.broadcast_to((M, WIDTH)).permute(1, 0)
+    else:
+        score_layout: gl.constexpr = TensorMemoryLayout((M, WIDTH // 2), col_stride=1)
+        score_mem = allocate_tensor_memory(gl.float32, (M, WIDTH // 2), score_layout)
+        packed = score_mem.reinterpret(gl.float8e5, (M, WIDTH * 2), TensorMemoryLayout((M, WIDTH), col_stride=1))
+        dst = packed.slice(WIDTH, WIDTH)
+        p = gl.convert_layout(p, dst.get_reg_layout())
+        mask = gl.convert_layout(mask.broadcast_to((M, WIDTH)), dst.get_reg_layout())
+    if MUTATION == "ordinary_cast":
+        dst.store(gl.expect_zero(p.to(gl.float8e5), mask))
+    else:
+        if MUTATION == "narrow_math":
+            p = p.to(gl.float8e5).to(gl.float32)
+        value_to_store = gl.fpsan.probability_cast(p, dst.dtype, expect_zero=mask)
+        rounded = dst.store(value_to_store)
+        if MUTATION == "restore_byte":
+            dst.store(rounded)
+    if SHARED:
+        if MUTATION == "overwrite":
+            pmem.store(gl.full((M, WIDTH), 0, gl.float8e5, layout=layout))
+    else:
+        # Write through the score view adjacent to P, or over P itself.
+        col: gl.constexpr = WIDTH // 4 if MUTATION == "overwrite" else 0
+        score_tile = score_mem.slice(col, WIDTH // 4)
+        score_tile.store(gl.full((M, WIDTH // 4), 0, gl.float32, layout=score_tile.get_reg_layout()))
+        pmem = packed.slice(WIDTH, WIDTH)
+    vrows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))
+    v = gl.load(Values + vrows[:, None] * 128 + shard * WIDTH + keys[None, :])
+    vlayout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([N, WIDTH], gl.float8e5)
+    vmem = gl.allocate_shared_memory(gl.float8e5, (N, WIDTH), vlayout, v)
+    acc = allocate_tensor_memory(gl.float32, (M, N), TensorMemoryLayout((M, N), col_stride=1))
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    hopper.fence_async_shared()
+    tcgen05_mma(pmem, vmem.permute((1, 0)), acc, use_acc=False, mbarriers=[bar])
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    out = gl.convert_layout(acc.load(), layout)
+    gl.store(Partial + (shard * M + rows[:, None]) * N + cols[None, :], out)
+    gl.store(Maxima + shard, maximum)
+
+
+@gluon.jit
+def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
+    cols = gl.arange(0, 32, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    maximum = gl.load(Maxima)
+    acc = gl.load(Partial + gl.program_id(0) * 32 + cols)
+    for shard in gl.static_range(1, SHARDS):
+        next_max = gl.load(Maxima + shard)
+        merged = gl.maximum(maximum, next_max)
+        alpha = gl.exp2(maximum - merged)
+        if MUTATION == "missing_alpha":
+            alpha = gl.exp2(maximum - maximum)
+        elif MUTATION == "reversed_alpha":
+            alpha = gl.exp2(merged - maximum)
+        rhs = gl.load(Partial + (shard * 128 + gl.program_id(0)) * 32 + cols)
+        acc = gl.fma(acc, alpha, rhs * gl.exp2(next_max - merged))
+        maximum = merged
+    gl.store(Out + gl.program_id(0) * 32 + cols, acc)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("shared", [False, True], ids=["tmem", "smem"])
+def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, shared):
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    # Increasing maxima make both omitted and reversed alpha observable.
+    scores = np.arange(128, dtype=np.uint64)
+    score_bits = _unmix_payload_to_float_bits(scores, "f32")
+    _, s = _as_float_bits_tensor(score_bits, "f32")
+    rng = np.random.default_rng(2037)
+    v = rng.integers(-8, 9, size=(32, 128), dtype=np.int8)
+    v[-1, :] = 1  # The last PV column is the unnormalized denominator.
+    vbits = _unmix_payload_to_float_bits(v.astype(np.uint64), "e5m2")
+    _, vals = _as_float_bits_tensor(vbits, "e5m2")
+    weights = [pow(257, int(i) - 127, 2**32) if i % 11 != 2 else 0 for i in scores]
+    expected = np.array([sum(w * int(x) for w, x in zip(weights, row)) % 2**32 for row in v], dtype=np.uint64)
+    unmarked_bits = _unmix_payload_to_float_bits(expected, "f32").view(np.uint32)
+    # Full-width unchunked reference with one E5M2 cast marker per live weight.
+    expected_bits = _unmix_payload_to_float_bits(expected * np.uint64(0x71b39a53), "f32").view(np.uint32)
+    for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite",
+                     "restore_byte", "ordinary_cast"):
+        for shards in ((1, 2, 4) if mutation == "none" else (4, )):
+            partial = torch.empty((shards, 128, 32), device=device, dtype=torch.float32)
+            maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
+            out = torch.empty_like(partial[0])
+            _probability_cast_partial[(shards, )](s, vals, partial, maxima, 128 // shards, mutation, shared)
+            _probability_cast_merge[(128, )](partial, maxima, out, shards, mutation)
+            actual = out.view(torch.int32).cpu().numpy().view(np.uint32)
+            if mutation == "overwrite":
+                assert np.all(actual == 0)
+            if mutation == "none":
+                np.testing.assert_array_equal(actual, np.broadcast_to(expected_bits, actual.shape))
+                assert np.any(actual[:, :-1] != unmarked_bits[:-1])
+                assert np.all(actual[:, -1] != unmarked_bits[-1])
+            else:
+                assert np.any(actual[:, :-1] != expected_bits[:-1])
+                assert np.all(actual[:, -1] != expected_bits[-1])
+
+
+@gluon.jit
+def _probability_stage(Out, X, Y, count, overwrite, WRITER: gl.constexpr):
+    layout: gl.constexpr = TensorMemoryLayout((128, 32), col_stride=1)
+    reg: gl.constexpr = gl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    SHARED: gl.constexpr = WRITER == "smem" or WRITER == "smem_rhs"
+    if SHARED:
+        playout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 128], gl.float8e5)
+        stages = gl.allocate_shared_memory(gl.float8e5, (2, 128, 128), playout)
+    else:
+        stages = allocate_tensor_memory(gl.float32, (2, 128, 32), layout)
+    for i in range(2):
+        if SHARED:
+            dst = stages.index(i)
+            src_layout: gl.constexpr = reg
+        else:
+            dst = stages.index(i).reinterpret(gl.float8e5, (128, 128), TensorMemoryLayout((128, 128), col_stride=1))
+            src_layout: gl.constexpr = dst.get_reg_layout()
+        x = gl.full((128, 128), X, gl.int32, layout=src_layout)
+        y = gl.full((128, 128), Y, gl.int32, layout=src_layout)
+        px = gl.fpsan.probability_cast(gl.fpsan.unembed(x, gl.float32), gl.float8e5)
+        py = gl.fpsan.probability_cast(gl.fpsan.unembed(y, gl.float32), gl.float8e5, expect_zero=False)
+        if SHARED:
+            if i == 0:
+                value = px
+            else:
+                value = py
+            dst.store(value)
+        else:
+            dst.store(px)
+            dst.store(py, pred=i == 1)
+
+    stage = stages.index(0)
+    for i in range(count):
+        stage = stages.index((i + 1) % 2)
+    if SHARED:
+        if overwrite:
+            flayout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 32], gl.float32)
+            alias = stage.reinterpret(gl.float32, (128, 32), flayout)
+            alias.slice(64, 64, dim=0).store(gl.full((64, 32), 0, gl.float32, layout=reg))
+        p = stage
+    else:
+        half = stage.slice(0, 16)
+        if WRITER == "qk":
+            # A predicated QK writes 16 FP32 columns over the first 64 P columns.
+            qlayout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 32], gl.float8e5)
+            klayout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([16, 32], gl.float8e5)
+            q = gl.allocate_shared_memory(gl.float8e5, (128, 32), qlayout, gl.full((128, 32), 0, gl.float8e5,
+                                                                                   layout=reg))
+            k = gl.allocate_shared_memory(gl.float8e5, (16, 32), klayout, gl.full((16, 32), 0, gl.float8e5, layout=reg))
+            done = mbarrier.allocate_mbarrier()
+            mbarrier.init(done, count=1)
+            hopper.fence_async_shared()
+            tcgen05_mma(q, k.permute((1, 0)), half, use_acc=False, pred=overwrite, mbarriers=[done])
+            mbarrier.wait(done, phase=0, pred=overwrite)
+            mbarrier.invalidate(done)
+        elif WRITER == "tmem_64_rows":
+            view = stage.reinterpret(gl.float8e5, (64, 128), TensorMemoryLayout((64, 128), col_stride=1))
+            row = gl.arange(0, 64, layout=gl.SliceLayout(1, view.get_reg_layout()))
+            data = (row[:, None] + 1).broadcast_to((64, 128))
+            view.store(gl.fpsan.probability_cast(gl.fpsan.unembed(data, gl.float32), gl.float8e5), pred=overwrite)
+        else:
+            # Each row gets a different low byte so a column-major bitcast fails.
+            row = gl.arange(0, 128, layout=gl.SliceLayout(1, half.get_reg_layout()))
+            data = row[:, None].broadcast_to((128, 16))
+            half.store(gl.fpsan.unembed(data, gl.float32), pred=overwrite)
+        p = stage.reinterpret(gl.float8e5, (128, 128), TensorMemoryLayout((128, 128), col_stride=1))
+    vrows: gl.constexpr = 128 if WRITER == "smem_rhs" else 32
+    ones = gl.full((vrows, 128), 1, gl.int8, layout=reg)
+    smem: gl.constexpr = gl.NVMMASharedLayout.get_default_for([vrows, 128], gl.float8e5)
+    v = gl.allocate_shared_memory(gl.float8e5, (vrows, 128), smem, gl.fpsan.unembed(ones, gl.float8e5))
+    acc = allocate_tensor_memory(gl.float32, (128, 32), layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    hopper.fence_async_shared()
+    if WRITER == "smem_rhs":
+        tcgen05_mma(v, p.slice(64, 32, dim=0).permute((1, 0)), acc, use_acc=False, mbarriers=[bar])
+    else:
+        tcgen05_mma(p, v.permute((1, 0)), acc, use_acc=False, mbarriers=[bar])
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    rows = gl.arange(0, 128, layout=gl.SliceLayout(1, reg))
+    cols = gl.arange(0, 32, layout=gl.SliceLayout(0, reg))
+    gl.store(Out + rows[:, None] * 32 + cols[None, :], gl.fpsan.embed(gl.convert_layout(acc.load(), reg)))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("writer", ["tmem", "tmem_64_rows", "qk", "smem", "smem_rhs"])
+def test_fpsan_probability_cast_stage(device, fresh_knobs, writer):
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    # Both stages have identical narrow bytes but different residuals.
+    payloads = np.arange(2048, dtype=np.uint64)
+    x, y = map(int, payloads[_cast_float_payload_u64(payloads, 32, 8) == 1][:2])
+    out = torch.empty((128, 32), device=device, dtype=torch.int32)
+    for count, value in enumerate((x, y, x)):
+        for overwrite in (False, True):
+            _probability_stage[(1, )](out, x, y, count, overwrite, writer)
+            cols = 64 if overwrite and writer in ("qk", "tmem") else 128
+            expected = np.full((128, 32), value * 0x71b39a53 * cols, dtype=np.uint64)
+            if overwrite and writer == "smem_rhs":
+                expected[:] = 0
+            if overwrite and writer == "smem":
+                expected[64:] = 0
+            if overwrite and writer == "tmem":
+                expected += np.arange(128, dtype=np.uint64)[:, None] * 16
+            if overwrite and writer == "tmem_64_rows":
+                # Each warp writes its first 16 rows. The other 16 retain the original probability.
+                payload = np.arange(1, 65, dtype=np.uint64)[:, None]
+                expected[np.arange(128) % 32 < 16] = payload * 0x71b39a53 * cols
+            np.testing.assert_array_equal(out.cpu().numpy().view(np.uint32), expected.astype(np.uint32))
+
+
+@gluon.jit
+def _cast_probability(value, dtype: gl.constexpr, mask):
+    return gl.fpsan.probability_cast(value, dtype=dtype, expect_zero=mask)
+
+
+@gluon.jit
+def _probability_bytes(Src, Returned, Stored, DTYPE: gl.constexpr, SHARED: gl.constexpr):
+    if SHARED:
+        playout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 32], DTYPE)
+        dst = gl.allocate_shared_memory(DTYPE, (128, 32), playout)
+        reg: gl.constexpr = gl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    else:
+        dst = allocate_tensor_memory(DTYPE, (128, 32), TensorMemoryLayout((128, 32), col_stride=1))
+        reg: gl.constexpr = dst.get_reg_layout()
+    rows = gl.arange(0, 128, layout=gl.SliceLayout(1, reg))
+    cols = gl.arange(0, 32, layout=gl.SliceLayout(0, reg))
+    idx = rows[:, None] * 32 + cols[None, :]
+    x = gl.load(Src + idx)
+    value = _cast_probability(x, DTYPE, idx == 0)
+    p = dst.store(value)
+    gl.store(Returned + idx, p)
+    gl.store(Stored + idx, dst.load(reg))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dst,tag", [("e5m2", 0x53), ("e4m3", 0x23)])
+@pytest.mark.parametrize("shared", [False, True], ids=["tmem", "smem"])
+def test_fpsan_probability_cast_bytes(device, fresh_knobs, dst, tag, shared):
+    src = torch.linspace(-1., 1., 4096, device=device)
+    src[0] = 2.0**-30  # The debug assertion must check the rounded value.
+    dtype = torch.float8_e5m2 if dst == "e5m2" else torch.float8_e4m3fn
+    returned = torch.empty_like(src, dtype=dtype)
+    stored = torch.empty_like(returned)
+    for mode in ("", "fpsan"):
+        fresh_knobs.compilation.instrumentation_mode = mode
+        _probability_bytes[(1, )](src, returned, stored, _float_dtype_info(dst)[5], shared, debug=True)
+        assert torch.equal(returned.view(torch.uint8), stored.view(torch.uint8))
+        if mode:
+            payload = _mix_float_bits(src.view(torch.int32).cpu().numpy(), "f32")
+            expected = (_cast_float_payload_u64(payload, 32, 8) * tag) & 255
+            expected[0] = 0
+            np.testing.assert_array_equal(_mix_float_bits(stored.view(torch.uint8).cpu().numpy(), dst), expected)
+        else:
+            assert torch.equal(stored.view(torch.uint8), src.to(dtype).view(torch.uint8))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_fpsan_probability_cast_rejects_shared_scatter(device, fresh_knobs, capfd):
+
+    @gluon.jit
+    def kernel(Out):
+        reg: gl.constexpr = gl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 32], gl.float8e5)
+        dst = gl.allocate_shared_memory(gl.float8e5, (128, 32), layout)
+        x = gl.full((128, 32), 1, gl.float32, layout=reg)
+        narrow = dst.store(gl.fpsan.probability_cast(x, gl.float8e5))
+        cols = gl.arange(0, 32, layout=gl.SliceLayout(0, reg))
+        dst.scatter(narrow, cols[None, :], axis=1)
+        rows = gl.arange(0, 128, layout=gl.SliceLayout(1, reg))
+        gl.store(Out + rows[:, None] * 32 + cols[None, :], dst.load(reg))
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    out = torch.empty((128, 32), device=device, dtype=torch.float8_e5m2)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        kernel[(1, )](out)
+    assert "unsupported access to shared probability_cast allocation" in capfd.readouterr().err

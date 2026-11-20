@@ -1,10 +1,14 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Analysis/Alias.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -176,10 +180,14 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
                                        threadsPerWarp, base.getCGALayout());
 }
 
+bool isPhysicalTmem(Type ty);
+Value cellBase(PatternRewriter &rewriter, Location loc, Value desc);
+
 struct ScratchInfo {
   Value ptr;
   RankedTensorType tensorType;
   ttg::MemDescType scaleSourceType;
+  ttg::MemDescType physicalType{};
 };
 
 struct MmaOperandSource {
@@ -188,6 +196,10 @@ struct MmaOperandSource {
   RankedTensorType tileType;
   int64_t rowStride;
   int64_t stride;
+
+  ttg::MemDescType physicalType{};
+  bool readResidual = false;
+  Value sharedShadow{};
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -280,8 +292,8 @@ static FpSanMmaKind getFpSanMmaKind(ttng::TCGen5MMAOp mma) {
 
 class TmemScratchManager {
 public:
-  explicit TmemScratchManager(bool sharedClusterState)
-      : sharedClusterState(sharedClusterState) {}
+  TmemScratchManager(bool sharedClusterState, bool physicalCells)
+      : physicalCells(physicalCells), sharedClusterState(sharedClusterState) {}
 
   bool usesSharedClusterState() const { return sharedClusterState; }
 
@@ -335,6 +347,14 @@ public:
 
   std::optional<ScratchInfo>
   getOrCreate(Value memdesc, PatternRewriter &rewriter, Region *scope) {
+    if (physicalCells && isPhysicalTmem(memdesc.getType())) {
+      auto ty = cast<ttg::MemDescType>(memdesc.getType());
+      auto tensor =
+          RankedTensorType::get(ty.getShape(), ty.getElementType(),
+                                getScratchEncoding(rewriter, memdesc, ty));
+      return ScratchInfo{
+          cellBase(rewriter, memdesc.getLoc(), memdesc), tensor, {}, ty};
+    }
     if (isa<BlockArgument>(memdesc)) {
       if (Value source = getFpSanTmemSource(memdesc))
         return getOrCreate(source, rewriter, scope);
@@ -505,7 +525,6 @@ public:
     return std::nullopt;
   }
 
-private:
   Value remapToScope(Value value, PatternRewriter &rewriter, Region *scope,
                      Location loc) {
     if (!scope || isValueAvailableInScope(value, scope))
@@ -536,6 +555,8 @@ private:
     return scope->getArgument(captureIdx);
   }
 
+private:
+  bool physicalCells;
   DenseMap<Value, ScratchState> scratchMap;
   bool sharedClusterState;
 };
@@ -1054,6 +1075,358 @@ Value fpsanVariadicTagged(PatternRewriter &rewriter, Location loc,
   return unembedToFloat(rewriter, loc, outI, resultTy);
 }
 
+// Scratch layout per physical TMEM column: 128 data words followed by
+// four planes of 128 residuals (one plane for each byte position).
+constexpr int kRows = 128;
+constexpr int kPlaneBytes = kRows * 4;
+constexpr int kColumnBytes = 5 * kPlaneBytes;
+
+bool isPhysicalTmem(Type ty) {
+  auto desc = dyn_cast<ttg::MemDescType>(ty);
+  return desc && isa<ttng::TensorMemoryEncodingAttr>(desc.getEncoding());
+}
+
+// Physical emulation writes one residual per logical byte. Require the
+// destination to cover every byte of the cells written by the instruction.
+bool writesWholeCells(ttg::MemDescType desc) {
+  if (desc.getRank() != 2)
+    return false;
+  auto bits = desc.getElementTypeBitWidth();
+  if (bits == 32)
+    return true;
+  if (bits != 8 && bits != 16)
+    return false;
+  auto layout = ttg::toLinearLayout(desc);
+  auto col = StringAttr::get(desc.getContext(), "col");
+  for (unsigned bit = 0; (bits << bit) < 32; ++bit)
+    if (bit >= static_cast<unsigned>(layout.getInDimSizeLog2(col)) ||
+        layout.getBasis(col, bit) == ArrayRef{0, 0})
+      return false;
+  return true;
+}
+
+Type bytePointer(MLIRContext *ctx) {
+  return tt::getPointerType(IntegerType::get(ctx, 8));
+}
+
+Value cellBase(PatternRewriter &rewriter, Location loc, Value desc) {
+  return UnrealizedConversionCastOp::create(
+             rewriter, loc, bytePointer(rewriter.getContext()), desc)
+      .getResult(0);
+}
+
+struct CellPointers {
+  Value data;
+  Value residual;
+};
+
+CellPointers cellPointers(PatternRewriter &rw, Location loc, Value base,
+                          ttg::MemDescType desc, RankedTensorType tile,
+                          Value row = {}, Value col = {}) {
+  // The descriptor verifier requires at least blockM rows. In single-CTA
+  // TMEM layouts both blockM=64 and blockM=128 therefore use distinct rows
+  // across all four warps. A zero row-16 basis is an unallocated half-warp
+  // of rows, which the pseudoinverse skips.
+  auto layout = ttg::toLinearLayout(desc);
+  assert(!(layout.getFreeVariableMasks().lookup(rw.getStringAttr("row")) &
+           (32 | 64)) &&
+         "physical TMEM emulation requires distinct rows across warps");
+  auto inv = layout.pseudoinvert();
+  auto dims = llvm::to_vector(inv.getInDimNames());
+  auto offsetsTy = tile.clone(rw.getI32Type());
+  auto constant = [&](int n) {
+    return getIntConstantLike(rw, loc, offsetsTy, n);
+  };
+  auto mul = [&](Value v, int n) -> Value {
+    return arith::MulIOp::create(rw, loc, v, constant(n));
+  };
+  auto add = [&](Value a, Value b) -> Value {
+    return arith::AddIOp::create(rw, loc, a, b);
+  };
+  int bytes = desc.getElementTypeBitWidth() / 8;
+  Value address = constant(0);
+  for (int axis = 0; axis < 2; ++axis) {
+    auto rangeTy = getSlicedTensorType(offsetsTy, {axis}, rw.getI32Type());
+    Value index =
+        tt::MakeRangeOp::create(rw, loc, rangeTy, 0, tile.getDimSize(axis));
+    if (Value start = axis ? col : row)
+      index = arith::AddIOp::create(
+          rw, loc, index, tt::SplatOp::create(rw, loc, rangeTy, start));
+    index = reshapeAndBroadcast(rw, loc, index, {axis}, offsetsTy);
+    // Coalesce basis bits with the same shift to keep address arithmetic
+    // small inside the MMA emulation loops.
+    llvm::MapVector<int, int> shiftMasks;
+    for (int bit = 0; bit < inv.getInDimSizeLog2(dims[axis]); ++bit) {
+      auto basis = inv.getBasis(dims[axis], bit);
+      int columnByte = basis[1] * bytes;
+      unsigned offset =
+          columnByte / 4 * kPlaneBytes + basis[0] * 4 + columnByte % 4;
+      while (offset) {
+        shiftMasks[llvm::countr_zero(offset) - bit] |= 1 << bit;
+        offset &= offset - 1;
+      }
+    }
+    for (auto [shift, mask] : shiftMasks) {
+      Value part = arith::AndIOp::create(rw, loc, index, constant(mask));
+      if (shift > 0)
+        part = arith::ShLIOp::create(rw, loc, part, constant(shift));
+      if (shift < 0)
+        part = arith::ShRUIOp::create(rw, loc, part, constant(-shift));
+      address = arith::XOrIOp::create(rw, loc, address, part);
+    }
+  }
+  Value column =
+      arith::AndIOp::create(rw, loc, address, constant(-kPlaneBytes));
+  Value dataOffset = add(address, mul(column, 4));
+  Value byte = arith::AndIOp::create(rw, loc, address, constant(3));
+  Value residualOffset =
+      add(dataOffset, add(mul(byte, kPlaneBytes - 1), constant(kPlaneBytes)));
+  auto ptrTy = tile.clone(base.getType());
+  Value ptr = tt::SplatOp::create(rw, loc, ptrTy, base);
+  auto pointer = [&](Value off, Type elem) -> Value {
+    Value p = tt::AddPtrOp::create(rw, loc, ptrTy, ptr, off);
+    return tt::BitcastOp::create(rw, loc, tile.clone(tt::getPointerType(elem)),
+                                 p);
+  };
+  return {
+      pointer(dataOffset, getScratchStorageElementType(desc.getElementType())),
+      pointer(residualOffset, rw.getI32Type())};
+}
+
+void writeCells(PatternRewriter &rw, Location loc, CellPointers ptrs,
+                Value value, Value pred = {}, Value residual = {}) {
+  auto ty = cast<RankedTensorType>(value.getType());
+  auto wide = ty.clone(rw.getI32Type());
+  Value mask;
+  if (pred)
+    mask = tt::SplatOp::create(rw, loc, ty.clone(rw.getI1Type()), pred);
+  tt::StoreOp::create(rw, loc, ptrs.data, embedToInt(rw, loc, value), mask);
+  if (!residual)
+    residual = getIntConstantLike(rw, loc, wide, 0);
+  for (unsigned b = 0; b < ty.getElementTypeBitWidth() / 8; ++b) {
+    Value dst =
+        tt::AddPtrOp::create(rw, loc, ptrs.residual.getType(), ptrs.residual,
+                             getIntConstantLike(rw, loc, wide, b * kRows));
+    tt::StoreOp::create(rw, loc, dst, residual, mask);
+  }
+}
+
+Value sharedResidualPointers(PatternRewriter &rw, Location loc, Value shadow,
+                             Value desc, RankedTensorType tile,
+                             ValueRange offsets) {
+  auto ptrTy = tile.clone(shadow.getType());
+  Value addresses = ExperimentalLocalAddressesOp::create(
+      rw, loc, tile.clone(rw.getI32Type()), desc, offsets);
+  Value base = tt::SplatOp::create(rw, loc, ptrTy, shadow);
+  return tt::AddPtrOp::create(rw, loc, ptrTy, base, addresses);
+}
+
+void writeSharedResidual(PatternRewriter &rw, Location loc, Value shadow,
+                         Value desc, RankedTensorType tile,
+                         Value residual = {}) {
+  Value zero = arith::ConstantIntOp::create(rw, loc, 0, 32);
+  SmallVector<Value> offsets(tile.getRank(), zero);
+  auto ptrs = sharedResidualPointers(rw, loc, shadow, desc, tile, offsets);
+  auto wide = tile.clone(rw.getI32Type());
+  if (!residual)
+    residual = getIntConstantLike(rw, loc, wide, 0);
+  for (unsigned b = 0; b < tile.getElementTypeBitWidth() / 8; ++b) {
+    Value p = tt::AddPtrOp::create(rw, loc, ptrs.getType(), ptrs,
+                                   getIntConstantLike(rw, loc, wide, b));
+    tt::StoreOp::create(rw, loc, p, residual);
+  }
+  createGlobalScratchBarrier(rw, loc);
+}
+
+Value reconstructProbability(PatternRewriter &rw, Location loc, Value data,
+                             Value ptr) {
+  Value residual = tt::LoadOp::create(rw, loc, ptr);
+  Value decoded = arith::ExtSIOp::create(rw, loc, residual.getType(),
+                                         embedToInt(rw, loc, data));
+  return arith::AddIOp::create(rw, loc, decoded, residual);
+}
+
+struct ProbabilityCastPattern
+    : OpRewritePattern<ExperimentalFPSanProbabilityCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ExperimentalFPSanProbabilityCastOp op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    auto ty = op.getRounded().getType();
+    Value wide = embedToInt(rw, loc, op.getSrc());
+    // Odd format tags distinguish the rounding sites while commuting with
+    // alpha.
+    int tag =
+        isa<Float8E5M2Type>(ty.getElementType()) ? 0x71b39a53 : 0x5b7a9d23;
+    Value tagged = arith::MulIOp::create(
+        rw, loc, wide, getIntConstantLike(rw, loc, wide.getType(), tag));
+    Value byte = castFloatPayloadToType(rw, loc, wide, getIntTypeLike(ty));
+    byte = arith::MulIOp::create(
+        rw, loc, byte, getIntConstantLike(rw, loc, byte.getType(), tag & 255));
+    Value decoded = arith::ExtSIOp::create(rw, loc, wide.getType(), byte);
+    Value residual = arith::SubIOp::create(rw, loc, tagged, decoded);
+    Value rounded = unembedToFloat(rw, loc, byte, ty);
+    rw.replaceOp(op, {rounded, residual});
+    return success();
+  }
+};
+
+struct StoreProbabilityPattern
+    : OpRewritePattern<ttng::FPSanStoreProbabilityOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ttng::FPSanStoreProbabilityOp op,
+                                PatternRewriter &rw) const override {
+    return rewrite(op, rw, {});
+  }
+
+  static LogicalResult rewrite(ttng::FPSanStoreProbabilityOp op,
+                               PatternRewriter &rw, Value shadow) {
+    auto loc = op.getLoc();
+    if (!shadow && !writesWholeCells(op.getDst().getType()))
+      return op.emitOpError("probability_cast requires packed TMEM cells");
+    auto rounded = op.getSrc();
+    auto residual = op.getResidual();
+    auto ty = rounded.getType();
+    if (shadow) {
+      ttg::LocalStoreOp::create(rw, loc, rounded, op.getDst());
+      writeSharedResidual(rw, loc, shadow, op.getDst(), ty, residual);
+    } else {
+      Value base = cellBase(rw, loc, op.getDst());
+      auto ptrs = cellPointers(rw, loc, base, op.getDst().getType(), ty);
+      writeCells(rw, loc, ptrs, rounded, op.getPred(), residual);
+      createGlobalScratchBarrier(rw, loc);
+    }
+    rw.eraseOp(op);
+    return success();
+  }
+};
+
+void clearResiduals(PatternRewriter &rw, Location loc, Value base, int groups,
+                    int width, int stride) {
+  OpBuilder::InsertionGuard guard(rw);
+  auto i32 = rw.getI32Type();
+  auto constant = [&](int n) {
+    return arith::ConstantOp::create(rw, loc, rw.getI32IntegerAttr(n));
+  };
+  auto loop =
+      scf::ForOp::create(rw, loc, constant(0), constant(groups), constant(1));
+  rw.setInsertionPointToStart(loop.getBody());
+  Value offset =
+      arith::MulIOp::create(rw, loc, loop.getInductionVar(), constant(stride));
+  Value ptr = tt::AddPtrOp::create(rw, loc, base.getType(), base, offset);
+  auto encoding = getOptimizedBlockedEncoding(rw, {width}, i32);
+  auto ty = RankedTensorType::get({width}, i32, encoding);
+  Value indices = tt::MakeRangeOp::create(rw, loc, ty, 0, width);
+  auto ptrTy = ty.clone(ptr.getType());
+  Value ptrs = tt::SplatOp::create(rw, loc, ptrTy, ptr);
+  ptrs = tt::AddPtrOp::create(rw, loc, ptrTy, ptrs, indices);
+  tt::StoreOp::create(rw, loc, ptrs, getIntConstantLike(rw, loc, ty, 0));
+}
+
+// After memory operations have been emulated, lower descriptor construction
+// locally. Structural operations forward the same scalar cell pointer as
+// their original descriptor (including a dynamically selected loop yield).
+LogicalResult lowerCellDescriptors(ModuleOp module) {
+  PatternRewriter rw(module.getContext());
+  Type ptrTy = bytePointer(module.getContext());
+
+  auto walk = module.walk([&](Operation *op) -> WalkResult {
+    if (!llvm::any_of(op->getOperandTypes(), isPhysicalTmem) &&
+        !llvm::any_of(op->getResultTypes(), isPhysicalTmem))
+      return WalkResult::advance();
+    rw.setInsertionPoint(op);
+    auto loc = op->getLoc();
+    auto constant = [&](int n) {
+      return arith::ConstantOp::create(rw, loc, rw.getI32IntegerAttr(n));
+    };
+    Value ptr;
+    if (auto alloc = dyn_cast<ttng::TMEMAllocOp>(op)) {
+      auto ty = alloc.getType();
+      if (alloc.getSrc() && !writesWholeCells(ty)) {
+        alloc.emitOpError(
+            "unsupported TMEM initializer in a probability_cast kernel");
+        return WalkResult::interrupt();
+      }
+      auto size = ttng::getTmemAllocSizes(ty);
+      ptr = createThirdPartyScratchAlloc(
+          rw, loc, ptrTy, size.numCols * kColumnBytes, 16, false);
+      Value start =
+          tt::AddPtrOp::create(rw, loc, ptrTy, ptr, constant(kPlaneBytes));
+      start = tt::BitcastOp::create(rw, loc,
+                                    tt::getPointerType(rw.getI32Type()), start);
+      clearResiduals(rw, loc, start, size.numCols, 4 * kRows, kColumnBytes / 4);
+      createGlobalScratchBarrier(rw, loc);
+      if (Value init = alloc.getSrc()) {
+        auto ptrs = cellPointers(rw, loc, ptr, ty,
+                                 cast<RankedTensorType>(init.getType()));
+        writeCells(rw, loc, ptrs, init);
+        createGlobalScratchBarrier(rw, loc);
+      }
+      if (alloc.getToken())
+        alloc.getToken().replaceAllUsesWith(
+            ttg::AsyncCommitGroupOp::create(rw, loc, ValueRange{}).getResult());
+    } else if (auto slice = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
+      uint32_t offset = ttng::getTMemSubSliceOffset(
+          slice.getSrc().getType(), slice.getOffset(), slice.getDim());
+      Value bytes =
+          constant((offset >> 16) * 4 + (offset & 0xffff) * kColumnBytes);
+      ptr = tt::AddPtrOp::create(rw, loc, ptrTy,
+                                 cellBase(rw, loc, slice.getSrc()), bytes);
+    } else if (auto index = dyn_cast<ttg::MemDescIndexOp>(op)) {
+      int columns = ttng::getTmemAllocSizes(index.getType()).numCols;
+      Value offset = arith::MulIOp::create(rw, loc, index.getIndex(),
+                                           constant(columns * kColumnBytes));
+      ptr = tt::AddPtrOp::create(rw, loc, ptrTy,
+                                 cellBase(rw, loc, index.getSrc()), offset);
+    } else if (auto view = dyn_cast<ttg::MemDescReinterpretOp>(op);
+               view && isPhysicalTmem(view.getSrc().getType()) &&
+               isPhysicalTmem(view.getType())) {
+      ptr = cellBase(rw, loc, view.getSrc());
+    } else if (isa<UnrealizedConversionCastOp, scf::ForOp, scf::IfOp,
+                   scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+                   arith::SelectOp, ttg::WarpSpecializePartitionsOp,
+                   ttg::WarpSpecializeOp, ttg::WarpYieldOp>(op)) {
+      return WalkResult::advance();
+    } else if (auto wait = dyn_cast<ttng::WaitBarrierOp>(op)) {
+      // Dependencies keep hardware allocations live. Scratch accesses are
+      // synchronous and the barrier itself still orders the partitions.
+      SmallVector<Value> deps;
+      for (Value dep : wait.getDeps())
+        if (!isPhysicalTmem(dep.getType()))
+          deps.push_back(dep);
+      wait.getDepsMutable().assign(deps);
+      return WalkResult::advance();
+    } else {
+      op->emitOpError(
+          "unsupported TMEM operation in a probability_cast kernel");
+      return WalkResult::interrupt();
+    }
+    auto result = op->getResult(0);
+    Value bridge =
+        UnrealizedConversionCastOp::create(rw, loc, result.getType(), ptr)
+            .getResult(0);
+    result.replaceAllUsesWith(bridge);
+    op->erase();
+    return WalkResult::advance();
+  });
+  if (walk.wasInterrupted())
+    return failure();
+  // Only structural forwarding and temporary casts still carry descriptors.
+  // Retype region arguments and results together, then remove identity casts.
+  AttrTypeReplacer replacer;
+  replacer.addReplacement([&](ttg::MemDescType ty) -> Type {
+    return isPhysicalTmem(ty) ? ptrTy : Type(ty);
+  });
+  replacer.recursivelyReplaceElementsIn(module, /*replaceAttrs=*/false,
+                                        /*replaceLocs=*/false,
+                                        /*replaceTypes=*/true);
+  module.walk([&](UnrealizedConversionCastOp op) {
+    if (op.getOperandTypes() == op.getResultTypes())
+      rw.replaceOp(op, op.getOperands());
+  });
+  return success();
+}
+
 static Value createPointerTensorStrided2D(PatternRewriter &rewriter,
                                           Location loc, Value base,
                                           RankedTensorType resultTy,
@@ -1131,8 +1504,12 @@ createMmaOperandSource(PatternRewriter &rewriter, TmemScratchManager &scratch,
   auto info = scratch.getOrCreate(memdesc, rewriter, scope);
   if (!info || info->scaleSourceType)
     return std::nullopt;
-  return MmaOperandSource{info->ptr, Value(), tileTy, rowStride,
-                          info->tensorType.getShape().front()};
+  return MmaOperandSource{info->ptr,
+                          Value(),
+                          tileTy,
+                          rowStride,
+                          info->tensorType.getShape().front(),
+                          info->physicalType};
 }
 
 std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
@@ -1171,6 +1548,18 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
   if (!source.isShared()) {
     Value rowOffset = isLhs ? tileOffset : kOffset;
     Value colOffset = isLhs ? kOffset : tileOffset;
+    if (source.physicalType) {
+      auto ptrs =
+          cellPointers(rewriter, loc, source.scratchPtr, source.physicalType,
+                       resultTy, rowOffset, colOffset);
+      Value data = tt::LoadOp::create(rewriter, loc, ptrs.data);
+      if (source.readResidual &&
+          source.physicalType.getElementTypeBitWidth() == 8)
+        return reconstructProbability(rewriter, loc, data, ptrs.residual);
+      return isFloatLike(resultTy)
+                 ? unembedToFloat(rewriter, loc, data, resultTy)
+                 : data;
+    }
     Value rowStride = arith::ConstantOp::create(
         rewriter, loc, rewriter.getI32IntegerAttr(source.rowStride));
     Value stride = arith::ConstantOp::create(
@@ -1193,17 +1582,18 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                                  rewriter.getI32Type());
   Value indices =
       tt::MakeRangeOp::create(rewriter, loc, kTy, 0, loadShape[kAxis]);
-  Value kSplat = tt::SplatOp::create(rewriter, loc, kTy, kOffset);
-  indices = arith::AddIOp::create(rewriter, loc, indices, kSplat);
   indices = reshapeAndBroadcast(rewriter, loc, indices,
                                 {static_cast<int>(kAxis)}, indicesTy);
-  Value zero =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  SmallVector<Value> offsets(2, zero);
+  SmallVector<Value> offsets(2, kOffset);
   offsets[tileAxis] = tileOffset;
-  return ExperimentalLocalGatherOp::create(rewriter, loc, resultTy, shared,
-                                           indices, offsets,
-                                           rewriter.getI32IntegerAttr(kAxis));
+  Value raw = ExperimentalLocalGatherOp::create(
+      rewriter, loc, resultTy, shared, indices, offsets,
+      rewriter.getI32IntegerAttr(kAxis));
+  if (!source.sharedShadow || resultTy.getElementTypeBitWidth() != 8)
+    return raw;
+  Value ptr = sharedResidualPointers(rewriter, loc, source.sharedShadow, shared,
+                                     resultTy, offsets);
+  return reconstructProbability(rewriter, loc, raw, ptr);
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -1720,7 +2110,10 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     int64_t k, int64_t tileM, int64_t tileN, RankedTensorType accTileTy,
     ttg::DistributedEncodingTrait accLayout, IntegerType accElem, Value useDInt,
     Value predInt, int64_t dStride, const DotScaleConfig &scale = {},
-    int64_t dRowStride = 1) {
+    int64_t dRowStride = 1, ttg::MemDescType dPhysical = {}) {
+  if (dPhysical && (!writesWholeCells(dPhysical) ||
+                    ttng::getMMAv5InstructionN(dPhysical) > n))
+    return std::nullopt;
   if ((m % tileM) != 0 || (n % tileN) != 0)
     return std::nullopt;
 
@@ -1778,9 +2171,16 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     accTileTy = accTileTy.cloneWithEncoding(mmaLayout);
   }
   auto accTileITy = getScratchStorageType(accTileTy);
-  Value accTile = loadScratchStrided2D(rewriter, loc, dTilePtr, accTileTy,
-                                       dRowStride, dStride);
-  Value accTileI = embedToInt(rewriter, loc, accTile);
+  CellPointers dCells;
+  Value accTileI;
+  if (dPhysical) {
+    dCells = cellPointers(rewriter, loc, dPtr, dPhysical, accTileTy, mIdxI32,
+                          nIdxI32);
+    accTileI = tt::LoadOp::create(rewriter, loc, dCells.data);
+  } else {
+    accTileI = loadScratchStrided2D(rewriter, loc, dTilePtr, accTileITy,
+                                    dRowStride, dStride);
+  }
   if (canUseI8Decomposition) {
     auto workElem = accElem.getWidth() == 64 ? accElem : rewriter.getI32Type();
     accTileI = castSignedIntValueToType(rewriter, loc, accTileI,
@@ -1888,8 +2288,13 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
                   ? unembedToFloat(rewriter, loc, outSelI, accTileTy)
                   : outSelI;
   createGlobalScratchBarrier(rewriter, loc);
-  storeScratchStrided2D(rewriter, loc, dTilePtr, out, accTileTy, dRowStride,
-                        dStride);
+  if (dPhysical) {
+    Value pred =
+        arith::TruncIOp::create(rewriter, loc, rewriter.getI1Type(), predInt);
+    writeCells(rewriter, loc, dCells, outSelI, pred);
+  } else
+    storeScratchStrided2D(rewriter, loc, dTilePtr, out, accTileTy, dRowStride,
+                          dStride);
   return mLoop;
 }
 
@@ -2567,7 +2972,13 @@ struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
       return emitFpSanUnsupported(op.getOperation());
 
     Value result;
-    if (info->scaleSourceType) {
+    if (info->physicalType) {
+      auto ptrs =
+          cellPointers(rewriter, loc, info->ptr, info->physicalType, resultTy);
+      result = tt::LoadOp::create(rewriter, loc, ptrs.data);
+      if (isFloatLike(resultTy))
+        result = unembedToFloat(rewriter, loc, result, resultTy);
+    } else if (info->scaleSourceType) {
       auto scaleMemTy = info->scaleSourceType;
       auto physicalMemTy = cast<ttg::MemDescType>(op.getSrc().getType());
       auto scaleShape = scaleMemTy.getShape();
@@ -2681,18 +3092,26 @@ struct TMEMStorePattern : public OpRewritePattern<ttng::TMEMStoreOp> {
     if (!srcTy.getEncoding())
       return emitFpSanUnsupported(op.getOperation());
     auto storageTy = getScratchStorageType(srcTy);
-    int64_t stride = info->tensorType.getShape().front();
-    Value stored = embedToInt(rewriter, loc, op.getSrc());
-    if (!matchPattern(op.getPred(), m_One())) {
-      Value previous =
-          loadScratchStrided2D(rewriter, loc, info->ptr, storageTy, stride);
-      Value pred = castScalarIntToIntLike(
-          rewriter, loc, op.getPred(), storageTy.clone(rewriter.getI1Type()));
-      stored = arith::SelectOp::create(rewriter, loc, pred, stored, previous);
+    if (info->physicalType && !writesWholeCells(info->physicalType))
+      return emitFpSanUnsupported(op.getOperation());
+    if (info->physicalType) {
+      auto ptrs =
+          cellPointers(rewriter, loc, info->ptr, info->physicalType, srcTy);
+      writeCells(rewriter, loc, ptrs, op.getSrc(), op.getPred());
+    } else {
+      int64_t stride = info->tensorType.getShape().front();
+      Value stored = embedToInt(rewriter, loc, op.getSrc());
+      if (!matchPattern(op.getPred(), m_One())) {
+        Value previous =
+            loadScratchStrided2D(rewriter, loc, info->ptr, storageTy, stride);
+        Value pred = castScalarIntToIntLike(
+            rewriter, loc, op.getPred(), storageTy.clone(rewriter.getI1Type()));
+        stored = arith::SelectOp::create(rewriter, loc, pred, stored, previous);
+      }
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, stored, storageTy,
+                                 /*stride0=*/1, stride, /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
     }
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, stored, storageTy,
-                               /*stride0=*/1, stride, /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
@@ -2746,10 +3165,19 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
       Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
                                               op.getSrc(), Value())
                          .getResult();
-      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                                 /*stride0=*/1,
-                                 info->tensorType.getShape().front(),
-                                 /*ignoreCTA=*/true))
+      if (info->physicalType) {
+        if (!writesWholeCells(dstMemTy) ||
+            srcMemTy.getShape() != dstMemTy.getShape() ||
+            srcMemTy.getElementTypeBitWidth() !=
+                dstMemTy.getElementTypeBitWidth())
+          return emitFpSanUnsupported(op.getOperation());
+        auto ptrs = cellPointers(rewriter, loc, info->ptr, info->physicalType,
+                                 srcRegTy);
+        writeCells(rewriter, loc, ptrs, srcReg);
+      } else if (!storeScratchStrided2D(
+                     rewriter, loc, info->ptr, srcReg, srcRegTy,
+                     /*stride0=*/1, info->tensorType.getShape().front(),
+                     /*ignoreCTA=*/true))
         return emitFpSanCodegenError(op.getOperation());
     }
 
@@ -2885,6 +3313,11 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
 
   LogicalResult matchAndRewrite(ttng::TCGen5MMAOp op,
                                 PatternRewriter &rewriter) const override {
+    return rewrite(op, rewriter, {}, {});
+  }
+
+  LogicalResult rewrite(ttng::TCGen5MMAOp op, PatternRewriter &rewriter,
+                        Value aShadow, Value bShadow) const {
     auto aMemTy = cast<ttg::MemDescType>(op.getA().getType());
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
@@ -2956,6 +3389,10 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 
+    aSource->sharedShadow = aShadow;
+    bSource->sharedShadow = bShadow;
+    aSource->readResidual = bSource->readResidual =
+        dMemTy.getElementType().isF32();
     // TMEM and D scratch are written cooperatively. In two-CTA mode, the
     // cluster barrier also makes both CTAs' shared operands visible before the
     // first direct load.
@@ -2965,7 +3402,8 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, *aSource, *bSource, dInfo->ptr, m, n, k, tileM, tileN,
         accTileTy, accTileLayout, accElem, useDInt, predInt,
-        /*dStride=*/dInfo->tensorType.getShape().front());
+        /*dStride=*/dInfo->tensorType.getShape().front(), {}, 1,
+        dInfo->physicalType);
     if (!mLoop)
       return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
@@ -3144,7 +3582,8 @@ struct TCGen5MMAScaledPattern
     auto mLoop = emitMmaEmulationLoops(
         rewriter, loc, *aSource, *bSource, dInfo->ptr, m, n, k, tileM, tileN,
         accTileTy, accTileLayout, accElem, useDInt, predInt,
-        /*dStride=*/dInfo->tensorType.getShape().front(), scale);
+        /*dStride=*/dInfo->tensorType.getShape().front(), scale, 1,
+        dInfo->physicalType);
     if (!mLoop)
       return emitFpSanUnsupported(op.getOperation());
     rewriter.setInsertionPointAfter(*mLoop);
@@ -3328,6 +3767,8 @@ struct ElementwiseInlineAsmPattern
 static SmallVector<Value> getFpSanTmemOperands(Operation *op) {
   if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
     return {load.getSrc()};
+  if (auto store = dyn_cast<ttng::FPSanStoreProbabilityOp>(op))
+    return {store.getDst()};
   if (auto store = dyn_cast<ttng::TMEMStoreOp>(op))
     return {store.getDst()};
   if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op))
@@ -3412,6 +3853,163 @@ getFpSanCallsRequiringInlining(ModuleOp module) {
   return calls;
 }
 
+struct SharedProbabilityAccess {
+  Operation *op;
+  Value root;
+  Value rhsRoot;
+};
+
+// Only the allocation identity is static. Views, stages and operand
+// coordinates are resolved at runtime by the shared memory lowering.
+FailureOr<SmallVector<SharedProbabilityAccess>>
+collectSharedProbabilityAccesses(ModuleOp module) {
+  auto solver = createDataFlowSolver();
+  auto *analysis = solver->load<SharedMemoryAliasAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return failure();
+  auto aliases = [&](Value value) -> const DenseSet<Value> & {
+    return analysis->getLatticeElement(value)->getValue().getAllocs();
+  };
+  DenseSet<Value> probabilityRoots;
+  auto roots =
+      module.walk([&](ttng::FPSanStoreProbabilityOp store) -> WalkResult {
+        if (isPhysicalTmem(store.getDst().getType()))
+          return WalkResult::advance();
+        const auto &allocs = aliases(store.getDst());
+        if (allocs.size() != 1 ||
+            !(*allocs.begin()).getDefiningOp<ttg::LocalAllocOp>()) {
+          store.emitOpError(
+              "requires a dedicated shared probability allocation");
+          return WalkResult::interrupt();
+        }
+        probabilityRoots.insert(*allocs.begin());
+        return WalkResult::advance();
+      });
+  if (roots.wasInterrupted())
+    return failure();
+
+  // Check every use of a marked allocation before rewriting. Reject writers
+  // (e.g. TMA) whose completion we cannot mirror. Register loads consume the
+  // narrow bytes, just like a TMEM register load.
+  DominanceInfo dom(module);
+  SmallVector<SharedProbabilityAccess> accesses;
+  auto uses = module.walk([&](Operation *op) -> WalkResult {
+    if (op->hasTrait<OpTrait::MemDescViewTrait>() ||
+        op->hasTrait<OpTrait::LocalLoadTrait>() ||
+        isa<ttg::LocalDeallocOp, ttg::WarpSpecializePartitionsOp,
+            ttg::WarpYieldOp, scf::ForOp, scf::WhileOp, scf::YieldOp,
+            scf::ConditionOp, arith::SelectOp>(op))
+      return WalkResult::advance();
+    auto mma = dyn_cast<ttng::TCGen5MMAOp>(op);
+    SharedProbabilityAccess access{op, {}, {}};
+    for (auto &operand : op->getOpOperands()) {
+      auto desc = dyn_cast<ttg::MemDescType>(operand.get().getType());
+      if (!desc || !isa<ttg::SharedMemorySpaceAttr>(desc.getMemorySpace()))
+        continue;
+      const auto &allocs = aliases(operand.get());
+      if (!llvm::any_of(allocs,
+                        [&](Value v) { return probabilityRoots.contains(v); }))
+        continue;
+      // Only the first operand is the barrier, the other descriptors
+      // extend allocation lifetimes or specify multicast groups.
+      if (isa<ttng::WaitBarrierOp, ttng::TCGen5CommitOp>(op) &&
+          operand.getOperandNumber() != 0)
+        continue;
+      Value root = *allocs.begin();
+      auto rootTy = cast<ttg::MemDescType>(root.getType());
+      if (allocs.size() != 1 || !dom.dominates(root, op) ||
+          isa<ttg::PartitionedSharedEncodingAttr>(rootTy.getEncoding()) ||
+          isa<ttg::PartitionedSharedEncodingAttr>(desc.getEncoding()) ||
+          desc.getElementTypeBitWidth() < 8) {
+        op->emitOpError("requires a dedicated byte-addressable shared "
+                        "probability allocation");
+        return WalkResult::interrupt();
+      }
+      if (isa<ttng::FPSanStoreProbabilityOp, ttg::LocalStoreOp>(op)) {
+        access.root = root;
+      } else if (mma && getFpSanMmaKind(mma) == FpSanMmaKind::Floating &&
+                 mma.getD().getType().getElementType().isF32() &&
+                 (&operand == &mma.getAMutable() ||
+                  &operand == &mma.getBMutable())) {
+        if (&operand == &mma.getAMutable())
+          access.root = root;
+        else
+          access.rhsRoot = root;
+      } else {
+        op->emitOpError(
+            "unsupported access to shared probability_cast allocation");
+        return WalkResult::interrupt();
+      }
+    }
+    if (access.root || access.rhsRoot)
+      accesses.push_back(access);
+    return WalkResult::advance();
+  });
+  if (uses.wasInterrupted())
+    return failure();
+  return accesses;
+}
+
+Value createSharedProbabilityShadow(PatternRewriter &rw,
+                                    TmemScratchManager &scratch, Value root) {
+  OpBuilder::InsertionGuard guard(rw);
+  auto ty = cast<ttg::MemDescType>(root.getType());
+  auto ptrTy = tt::getPointerType(rw.getI32Type());
+  int elements = ttg::getAllocationElems(ty.getEncoding(), ty.getAllocShape());
+  if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
+    elements = padded.getPaddedSize({elements});
+  int bytes = elements * ty.getElementTypeBitWidth() / 8;
+  auto loc = root.getLoc();
+  rw.setInsertionPointAfter(root.getDefiningOp());
+  Value base = scratch.createScratchAlloc(rw, loc, ptrTy, bytes * 4, 16);
+  int width = std::min(512, bytes & -bytes);
+  clearResiduals(rw, loc, base, bytes / width, width, width);
+  createGlobalScratchBarrier(rw, loc);
+  // Bias the global pointer once, so adding a physical SMEM byte address
+  // indexes the corresponding i32 entry, even across partition captures.
+  Value origin = ExperimentalMemDescToI32Op::create(rw, loc, root);
+  Value zero = arith::ConstantIntOp::create(rw, loc, 0, 32);
+  Value bias = arith::SubIOp::create(rw, loc, zero, origin);
+  return tt::AddPtrOp::create(rw, loc, ptrTy, base, bias);
+}
+
+LogicalResult instrumentSharedProbabilities(ModuleOp module,
+                                            TmemScratchManager &scratch) {
+  auto accesses = collectSharedProbabilityAccesses(module);
+  if (failed(accesses))
+    return failure();
+
+  PatternRewriter rw(module.getContext());
+  DenseMap<Value, Value> shadows;
+  TCGen5MMAPattern mmaPattern(module.getContext(), &scratch);
+  for (auto [op, root, rhsRoot] : *accesses) {
+    rw.setInsertionPoint(op);
+    auto shadow = [&](Value v) -> Value {
+      if (!v)
+        return {};
+      Value &ptr = shadows[v];
+      if (!ptr)
+        ptr = createSharedProbabilityShadow(rw, scratch, v);
+      return scratch.remapToScope(ptr, rw, getScratchScopeRegion(op),
+                                  op->getLoc());
+    };
+    Value ptr = shadow(root);
+    if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      if (failed(mmaPattern.rewrite(mma, rw, ptr, shadow(rhsRoot))))
+        return failure();
+    } else if (auto store = dyn_cast<ttng::FPSanStoreProbabilityOp>(op)) {
+      if (failed(StoreProbabilityPattern::rewrite(store, rw, ptr)))
+        return failure();
+    } else {
+      auto ordinary = cast<ttg::LocalStoreOp>(op);
+      rw.setInsertionPointAfter(ordinary);
+      writeSharedResidual(rw, op->getLoc(), ptr, ordinary.getDst(),
+                          ordinary.getSrc().getType());
+    }
+  }
+  return success();
+}
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3446,7 +4044,23 @@ public:
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
-    TmemScratchManager scratch(sharedClusterState);
+    bool physicalCells = false;
+    bool sharedProbabilities = false;
+    getOperation().walk([&](ttng::FPSanStoreProbabilityOp op) {
+      if (isPhysicalTmem(op.getDst().getType()))
+        physicalCells = true;
+      else
+        sharedProbabilities = true;
+    });
+    if ((physicalCells || sharedProbabilities) && sharedClusterState) {
+      getOperation().emitError(
+          "probability_cast requires single-CTA FPSan emulation");
+      return signalPassFailure();
+    }
+    TmemScratchManager scratch(sharedClusterState, physicalCells);
+    if (sharedProbabilities &&
+        failed(instrumentSharedProbabilities(getOperation(), scratch)))
+      return signalPassFailure();
     RewritePatternSet patterns(&getContext());
     patterns
         .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
@@ -3479,6 +4093,8 @@ public:
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
+    patterns.add<ProbabilityCastPattern, StoreProbabilityPattern>(
+        &getContext());
     patterns.add<WarpGroupDotPattern>(&getContext());
     patterns.add<TCGen5CommitPattern>(&getContext(), sharedClusterState);
 
@@ -3489,6 +4105,9 @@ public:
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();
     }
+    if (physicalCells && succeeded(result) && !fpSanErrorEmitted &&
+        failed(lowerCellDescriptors(getOperation())))
+      return signalPassFailure();
     if (fpSanErrorEmitted)
       signalPassFailure();
 

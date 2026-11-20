@@ -1158,6 +1158,15 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   }];
 }
 
+def TTNG_FPSanStoreProbabilityOp : TTNG_Op<"fpsan_store_probability", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Store an FP8 probability tile and its FPSan residuals";
+  let arguments = (ins TTG_MemDescType:$dst, RankedTensorOf<[F8E4M3FN, F8E5M2]>:$src,
+                       RankedTensorOf<[I32]>:$residual, Optional<I1>:$pred);
+  let assemblyFormat = "$dst `,` $src `,` $residual (`,` $pred^)? attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
