@@ -1,13 +1,13 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=88" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=88" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
 // RUN: split-file %s %t
 // RUN: triton-opt %t/scalar-atomics.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | FileCheck %t/scalar-atomics.mlir --implicit-check-not=llvm.cond_br
 // RUN: triton-opt %t/scalar-atomics.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %t/scalar-atomics.mlir --check-prefix=PTX
 // RUN: triton-opt %t/async-copy-intrinsics.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck %t/async-copy-intrinsics.mlir --check-prefix=PTX
-// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
-// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=89 ptx-version=81' --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefix=SM89
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=89 ptx-version=81' --triton-nvidia-gpu-membar --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefix=SM89
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -35,6 +35,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @clmul_i32
+  tt.func @clmul_i32(%x: i32, %y: i32, %out: !tt.ptr<i32>) {
+    // CHECK: llvm.intr.clmul(%arg0, %arg1) : (i32, i32) -> i32
+    %product = tt.clmul %x, %y : i32
+    tt.store %out, %product : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @clmul_i64
+  tt.func @clmul_i64(%x: i64, %y: i64, %out: !tt.ptr<i64>) {
+    // CHECK: llvm.intr.clmul(%arg0, %arg1) : (i64, i64) -> i64
+    %product = tt.clmul %x, %y : i64
+    tt.store %out, %product : !tt.ptr<i64>
+    tt.return
+  }
+
   // CHECK-LABEL: llvm.func @umulhi_truncated_input
   tt.func @umulhi_truncated_input(%seed: i64, %out: !tt.ptr<i32>) {
     // CHECK: %[[X:.*]] = llvm.trunc %arg0 : i64 to i32

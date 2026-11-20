@@ -1,5 +1,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -462,6 +464,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::PreciseSqrtOp>,
       GenericOpPattern<triton::PreciseDivFOp>,
       GenericOpPattern<triton::ApproxDivFOp>,
+      GenericOpPattern<triton::ClMulOp>,
       GenericOpPattern<triton::MulhiUIOp>,
       GenericOpPattern<triton::ElementwiseInlineAsmOp>,
       TritonReducePattern,

@@ -251,6 +251,21 @@ def TT_ApproxDivFOp
   let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_ClMulOp : TT_Op<"clmul", [Elementwise, Commutative,
+                                 SameOperandsAndResultType, Pure]> {
+  let summary = "Low N bits of the carry-less product of two N-bit integers";
+
+  let description = [{
+        Multiplies the operands as binary polynomials over GF(2), replacing
+        addition with XOR, and returns the low N bits. Signed operands are
+        interpreted by their bit patterns. Tensor operands operate elementwise.
+    }];
+
+  let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+  let results = (outs TT_IntLike:$result);
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
                                      SameOperandsAndResultType,
                                      Pure]> {

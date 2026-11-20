@@ -59,6 +59,17 @@ def test_bf16_to_fp16_rounding_and_overflow():
     np.testing.assert_array_equal(result.data.view(np.uint16), expected)
 
 
+@pytest.mark.parametrize("method, value, expected", [
+    # Just above a tie between two 16-bit values: rounding to fp32 first drops
+    # the 2**-30 that breaks the tie, and the tie rounds down.
+    ("get_fp16", 1 + 2**-11 + 2**-30, 0x3C01),
+    ("get_bf16", 1 + 2**-8 + 2**-30, 0x3F81),
+])
+def test_16bit_float_constant_rounded_once(method, value, expected):
+    result = getattr(interpreter.InterpreterBuilder(), method)(value)
+    assert result.data.view(np.uint16)[0] == expected
+
+
 def test_fp16_to_bf16_exact_values():
     bits = np.array([0x0000, 0x8000, 0x3C00, 0xBC00, 0x3C08, 0x0001, 0x7C00, 0xFC00, 0x7E00], dtype=np.uint16)
     expected = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x3F81, 0x3380, 0x7F80, 0xFF80, 0x7FC0], dtype=np.uint16)

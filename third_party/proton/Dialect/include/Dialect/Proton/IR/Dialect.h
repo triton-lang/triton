@@ -1,10 +1,10 @@
 #ifndef DIALECT_PROTON_IR_DIALECT_H_
 #define DIALECT_PROTON_IR_DIALECT_H_
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "proton/Dialect/include/Dialect/Proton/IR/Dialect.h.inc"
 #include "proton/Dialect/include/Dialect/Proton/IR/OpsEnums.h.inc"
 

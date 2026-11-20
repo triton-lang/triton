@@ -82,6 +82,28 @@ def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
 
 
 @core.builtin
+def clmul(x, y, _semantic=None):
+    """
+    Computes the element-wise carry-less product of :code:`x` and :code:`y`.
+
+    The operands are interpreted as binary polynomials over GF(2), so additions
+    in the multiplication are replaced by XORs. The result contains the low N
+    bits of the product, where N is the bit width after integer type promotion.
+    Signed operands are interpreted by their bit patterns. The inputs must be
+    integers and follow the usual broadcasting and type promotion rules.
+
+    :param x: the first input
+    :param y: the second input
+    """
+    x = core._unwrap_if_constexpr(x)
+    y = core._unwrap_if_constexpr(y)
+    x, y = core.binary_op_type_legalization(x, y, _semantic)
+    if not x.dtype.is_int():
+        raise ValueError("clmul requires integer operands")
+    return core.tensor(_semantic.builder.create_clmul(x.handle, y.handle), x.type)
+
+
+@core.builtin
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
 @_add_math_2arg_docstr("most significant N bits of the 2N-bit product")
 def umulhi(x, y, _semantic=None):

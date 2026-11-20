@@ -638,10 +638,11 @@ cleanup:
   return NULL;
 }
 
+// On AMD, Triton allocates all shared memory (LDS) statically in the kernel
+// binary, so every launch below requests 0 bytes of dynamic shared memory.
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
-                    int num_ctas, int launch_cooperative_grid,
-                    int shared_memory, int warp_size, hipStream_t stream,
-                    hipFunction_t function, void **params) {
+                    int num_ctas, int launch_cooperative_grid, int warp_size,
+                    hipStream_t stream, hipFunction_t function, void **params) {
   if (gridX * gridY * gridZ == 0)
     return;
   if (num_ctas > 1) {
@@ -666,7 +667,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
     HIP_LAUNCH_CONFIG config = {
         gridX * num_ctas,      gridY,  gridZ,        // Grid size
         warp_size * num_warps, 1,      1,            // Block size
-        shared_memory,         stream, attributes, 2 // Number of attributes
+        /*sharedMemBytes=*/0,  stream, attributes, 2 // Number of attributes
     };
     HIP_CHECK(
         hipSymbolTable.hipDrvLaunchKernelEx(&config, function, params, 0));
@@ -674,12 +675,12 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
   } else if (launch_cooperative_grid) {
     HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(
         function, gridX, gridY, gridZ, warp_size * num_warps, 1, 1,
-        shared_memory, stream, params, 0));
+        /*sharedMemBytes=*/0, stream, params, 0));
     return;
   } else {
     HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(
         function, gridX, gridY, gridZ, warp_size * num_warps, 1, 1,
-        shared_memory, stream, params, 0));
+        /*sharedMemBytes=*/0, stream, params, 0));
   }
 }
 
@@ -1108,9 +1109,10 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
     goto cleanup;
   }
 
+  // `shared_memory` is not forwarded: on AMD all shared memory is allocated
+  // statically, so it is not requested as dynamic shared memory at launch.
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid,
-          shared_memory, warp_size, (hipStream_t)_stream,
-          (hipFunction_t)_function, params);
+          warp_size, (hipStream_t)_stream, (hipFunction_t)_function, params);
 
   if (!launchHook(launch_exit_hook, launch_metadata)) {
     goto cleanup;

@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -48,6 +49,9 @@ public:
     Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
                           op.getPredicate());
+    // Both CTAs must observe completion
+    if (op.getTwoCtas())
+      ClusterBarrierOp::create(rewriter, loc);
     InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
@@ -133,6 +137,9 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
+      // Do not merge or reorder early A release.
+      if (commit.getEarlyARelease())
+        break;
       // If the mma predicate is true, or mma and commit ops use the same
       // predicate, it is safe to merge them. Otherwise, keep commit order by
       // not merging later commits across this one.

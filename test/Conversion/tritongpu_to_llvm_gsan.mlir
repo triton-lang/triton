@@ -1,4 +1,30 @@
-// RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm | FileCheck %s
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @bulk_load_range
+  // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(48 : i32)
+  // CHECK-NOT: llvm.alloca
+  // CHECK: llvm.call @__triton_gsan_load_range(%{{.*}}, %{{.*}}, %[[BYTES]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @bulk_load_range(%src: !tt.ptr<i8>, %pred: i1) {
+    tti.experimental_gsan_load_range %src, 48, %pred : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @bulk_store_range
+  // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(48 : i32)
+  // CHECK-NOT: llvm.alloca
+  // CHECK: llvm.call @__triton_gsan_store_range(%{{.*}}, %{{.*}}, %[[BYTES]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  tt.func @bulk_store_range(%src: !tt.ptr<i8>, %pred: i1) {
+    tti.experimental_gsan_store_range %src, 48, %pred : !tt.ptr<i8>
+    tt.return
+  }
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -369,6 +395,8 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[INIT_OFFSET:.*]] = llvm.and %[[INIT_ADDRESS]], %[[OFFSET_MASK]] : i32
   // CHECK: %[[INIT_TABLE:.*]] = llvm.addrspacecast %{{.*}} : !llvm.ptr<1> to !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_mbarrier_init(%[[INIT_TABLE]], %[[INIT_OFFSET]], %{{.*}}, %[[INIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: nvvm.cluster.arrive aligned
+  // CHECK-NEXT: nvvm.cluster.wait aligned
   // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[ARRIVE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[LEADER_RANK:.*]] = llvm.and %[[ARRIVE_CTA]], %{{.*}} : i32
@@ -389,6 +417,49 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
     ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
     ttng.wait_barrier %barrier, %phase, %pred : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#mbarrier_local = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+!counter = !ttg.memdesc<2xi64, #mbarrier_local, #smem, mutable>
+!slots = !ttg.memdesc<2x2xi64, #mbarrier_local, #smem, mutable>
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // Publish the first slot before its remote shadow arrival. While the second
+  // slot is pending, local arrivals and peer arrivals on the first slot only
+  // need the ordinary hardware init ordering.
+  // CHECK-LABEL: llvm.func @gsan_publish_matching_peer_slot
+  // CHECK-COUNT-2: llvm.call @__triton_gsan_mbarrier_init(
+  // CHECK: nvvm.cluster.arrive aligned
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(
+  // CHECK: llvm.call @__triton_gsan_mbarrier_init(
+  // CHECK-NOT: nvvm.cluster.arrive aligned
+  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(
+  // CHECK: nvvm.cluster.arrive aligned
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(
+  tt.func @gsan_publish_matching_peer_slot() {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %slots = ttg.local_alloc : () -> !slots
+    %published = ttg.memdesc_index %slots[%zero] : !slots -> !counter
+    %pending = ttg.memdesc_index %slots[%one] : !slots -> !counter
+    %local = ttg.local_alloc : () -> !counter
+    ttng.init_barrier %local, 1 : !counter
+    ttng.init_barrier %published, 2 : !counter
+    ttng.arrive_barrier %published, 1 {fromCTA = 0 : i32} : !counter
+    ttng.init_barrier %pending, 2 : !counter
+    ttng.arrive_barrier %local, 1 : !counter
+    ttng.arrive_barrier %pending, 1 : !counter
+    ttng.arrive_barrier %published, 1 {fromCTA = 0 : i32} : !counter
+    ttng.wait_barrier %published, %zero : !counter
+    ttng.cluster_barrier
+    ttng.arrive_barrier %pending, 1 {fromCTA = 0 : i32} : !counter
+    ttng.wait_barrier %pending, %zero : !counter
+    ttng.wait_barrier %local, %zero : !counter
     tt.return
   }
 }
