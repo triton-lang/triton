@@ -18,6 +18,8 @@ enum class ISAFamily {
   CDNA3,
   CDNA4,
   CDNA5,
+  RDNA1,
+  RDNA2,
   RDNA3,
   RDNA4m,
   RDNA4,
@@ -57,6 +59,7 @@ public:
   bool isCDNA4() const;
   bool isCDNA5() const;
   bool isGFX1250Strict() const;
+  bool hasVDotInsts() const;
 
   int getWarpSize() const;
   bool supportsWaveId() const;
