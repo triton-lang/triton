@@ -666,8 +666,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_gather_shared, #local_gather_scatter_smem, mutable>
     %dst = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>
 
-    // Indexing the sharded axis can target either CTA row.
-    // CHECK: %[[GATHER_CTAS:.*]] = arith.constant 3 : i32
+    // Determine which CTA rows are reached from the indices.
+    // CHECK: %[[GATHER_CTAS:.*]] = tti.experimental_indexed_access_ctas
     // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
@@ -676,7 +676,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %gathered = ttg.local_gather %src[%indices] {axis = 1 : i32} : !ttg.memdesc<8x32xi32, #local_gather_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked> -> tensor<8x32xi32, #local_gather_scatter_blocked>
 
     // Indexing the unsharded axis leaves the scatter local to the issuing CTA.
-    // CHECK: %[[SCATTER_CTAS:.*]] = arith.shli {{.*}} : i32
+    // CHECK: %[[SCATTER_CTAS:.*]] = tti.experimental_indexed_access_ctas
     // CHECK: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
@@ -718,15 +718,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %dst = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>
     %proxy = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
 
-    // Runtime indices along the sharded axis can target either CTA row.
-    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[ATOMIC_CTAS:.*]] = tti.experimental_indexed_access_ctas
     // CHECK: arith.constant dense<[true, false, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
-    // The existing destination reaches both CTAs, while independent result
-    // staging remains private to the issuer's shared-memory frame.
+    // Result staging remains private to the issuer's shared-memory frame.
     // CHECK: arith.constant dense<[false, false, true, false]> : tensor<4xi1
     // CHECK: %[[ATOMIC_SCRATCH_CTA_ID:.*]] = tti.experimental_cluster_cta_id
     // CHECK: %[[ATOMIC_SCRATCH_CTA:.*]] = arith.shli {{.*}}, %[[ATOMIC_SCRATCH_CTA_ID]] : i32
@@ -2821,11 +2819,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[STORE_CTAS]])
     // CHECK: ttg.local_store
     ttg.local_store %values, %remote : tensor<2x32xi32, #blocked> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
-    // CHECK: %[[GATHER_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tti.experimental_indexed_access_ctas
+    // CHECK: arith.ori
+    // CHECK: %[[GATHER_CTAS:.*]] = arith.ori
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]])
     // CHECK: ttg.local_gather
     %g = ttg.local_gather %remote[%indices] {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked> -> tensor<2x32xi32, #blocked>
-    // CHECK: %[[SCATTER_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tti.experimental_indexed_access_ctas
+    // CHECK: arith.ori
+    // CHECK: %[[SCATTER_CTAS:.*]] = arith.ori
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
     // CHECK-NOT: ttg.global_scratch_alloc
@@ -2835,7 +2837,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NEXT: tt.call @__triton_consan_verify_local_scatter_destinations
     // CHECK-NEXT: ttng.cluster_barrier
     ttg.local_scatter %remote[%indices], %values {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>
-    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 2 : i32
+    // CHECK: tti.experimental_indexed_access_ctas
+    // CHECK: arith.ori
+    // CHECK: %[[ATOMIC_CTAS:.*]] = arith.ori
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK-NOT: tt.call @__triton_consan_verify_local_scatter_destinations

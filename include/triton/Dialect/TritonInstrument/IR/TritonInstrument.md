@@ -240,11 +240,10 @@ from the same block-local register-to-shared layout conversion used by
 lowering. This covers `ttg.local_load`, `ttg.local_store`, and source-backed
 `ttg.local_alloc`. For `ttg.local_gather`, `ttg.local_scatter`, and
 `ttg.local_atomic_scatter_rmw`, the runtime index replaces one logical
-coordinate, so ConSan additionally spans that index's layout bases. In each
-case the issuing CTA is fixed while the other input bases are spanned,
-producing a static conservative recipient set for the full buffer without
-defaulting every access to the whole cluster. Cross-CTA affine subslices are
-rejected as unsupported by BufferRegion analysis.
+coordinate. On NVIDIA, ConSan computes the target CTA for each active element
+when the index or atomic mask affects the recipient set. A predicate reduction
+over the issuing warp group collects these targets. The descriptor's affine
+CTA offset maps the resulting set to physical CTA rows.
 
 ## Barrier Synchronization
 
