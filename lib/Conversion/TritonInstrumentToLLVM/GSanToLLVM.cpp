@@ -516,7 +516,7 @@ public:
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
     if (isIm2Col) {
       if constexpr (std::is_same_v<AccessOp,
-                                  tti::ExperimentalGSanTensorDescAccessOp>) {
+                                   tti::ExperimentalGSanTensorDescAccessOp>) {
         auto dst = op.getResult();
         if (!dst || op.getIsStore() || rank < 3 || rank > 5 ||
             op.getOffsets().size() != rank - 2)
@@ -527,7 +527,8 @@ public:
         blockShape = ttng::getTMABlockShape(descTy, /*packedSize=*/true,
                                             ttg::TMAMode::Im2Col);
       } else {
-        return rewriter.notifyMatchFailure(op, "im2col atomics are unsupported");
+        return rewriter.notifyMatchFailure(op,
+                                           "im2col atomics are unsupported");
       }
     } else if (blockShape.empty() || blockShape.size() > 5 ||
                blockShape.size() != rank) {
@@ -588,15 +589,17 @@ public:
     }
     auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
-    SmallVector<Value> args{*gsanGlobalStatePtr,
-                            castToGenericPointer(rewriter, loc, adaptor.getDesc()),
-                            coords, b.i32_val(rank), shape};
+    SmallVector<Value> args{
+        *gsanGlobalStatePtr,
+        castToGenericPointer(rewriter, loc, adaptor.getDesc()), coords,
+        b.i32_val(rank), shape};
     if constexpr (std::is_same_v<AccessOp,
-                                tti::ExperimentalGSanTensorDescAccessOp>) {
+                                 tti::ExperimentalGSanTensorDescAccessOp>) {
       if (isIm2Col) {
         auto offsetsTy = array_ty(i16_ty, rank - 2);
-        Value offsets = LLVM::AllocaOp::create(
-            rewriter, loc, ptr_ty(ctx), offsetsTy, b.i32_val(1), /*alignment=*/0);
+        Value offsets =
+            LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), offsetsTy,
+                                   b.i32_val(1), /*alignment=*/0);
         for (auto [dim, offset] : llvm::enumerate(adaptor.getOffsets())) {
           Value slot = b.gep(ptr_ty(ctx), offsetsTy, offsets,
                              ValueRange{b.i32_val(0), b.i32_val(dim)});

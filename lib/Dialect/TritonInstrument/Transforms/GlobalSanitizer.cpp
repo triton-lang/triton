@@ -60,7 +60,8 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType())) {
     result = op.getResult();
     if (op.getMulticast()) {
-      auto layout = ttg::toLinearLayoutIgnoringPadding(op.getResult().getType());
+      auto layout =
+          ttg::toLinearLayoutIgnoringPadding(op.getResult().getType());
       auto mask =
           layout.getFreeVariableMasks().lookup(b.getStringAttr("block"));
       Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());

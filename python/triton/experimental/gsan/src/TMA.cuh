@@ -41,7 +41,8 @@ struct TensorDescInfo {
 
   GSAN_DEVICE int im2colCorner(int dim, bool upper) const {
     // Word 14 packs the W/H/D lower corners in its low half and the upper
-    // corners in its high half. Each signed field has 16/8/5 bits at rank 3/4/5.
+    // corners in its high half. Each signed field has 16/8/5 bits at rank
+    // 3/4/5.
     int bits = rank == 3 ? 16 : rank == 4 ? 8 : 5;
     int shift = bits * (rank - 2 - dim) + (upper ? 16 : 0);
     int field = (words[14] >> shift) & ((1u << bits) - 1);
@@ -71,8 +72,9 @@ GSAN_DEVICE void forEachIm2ColRow(const void *descriptor, const int *coords,
   if (elementType == TensorDescInfo::ElementType::B4x16P64)
     channels /= 2;
   // FP6 coordinates count logical six-bit values packed into global bytes.
-  int channelBits =
-      elementType == TensorDescInfo::ElementType::B6x16P32 ? 6 : bytesPerElem * 8;
+  int channelBits = elementType == TensorDescInfo::ElementType::B6x16P32
+                        ? 6
+                        : bytesPerElem * 8;
   int64_t firstChannel = coords[channelDim] > 0 ? coords[channelDim] : 0;
   int64_t endChannel = static_cast<int64_t>(coords[channelDim]) + blockShape[1];
   endChannel = endChannel < channels ? endChannel : channels;
@@ -92,7 +94,8 @@ GSAN_DEVICE void forEachIm2ColRow(const void *descriptor, const int *coords,
   }
 
   int64_t firstByte = firstChannel * channelBits / 8;
-  int rowBytes = static_cast<int>((endChannel * channelBits + 7) / 8 - firstByte);
+  int rowBytes =
+      static_cast<int>((endChannel * channelBits + 7) / 8 - firstByte);
   for (int row = 0; row < blockShape[0]; ++row) {
     if (row % numWarps == warpId) {
       bool inBounds = pixel[0] >= 0 && pixel[0] < desc.shape(0);

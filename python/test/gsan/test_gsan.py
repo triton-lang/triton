@@ -2011,8 +2011,7 @@ def test_tma_im2col_gsan_fp4_padded_load(with_gsan, with_allocator):
     # The first message reads the final 64 packed bytes. The second is out of bounds.
     storage = torch.arange(1, 129, dtype=torch.uint8, device="cuda").reshape(1, 1, 128)
     layout = gl.NVMMASharedLayout(128, 8, rank=2, fp4_padded=True)
-    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(storage, [8, 128], layout,
-                                                                  pixel_box_lower_corner=[0],
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(storage, [8, 128], layout, pixel_box_lower_corner=[0],
                                                                   pixel_box_upper_corner=[0])
     output = storage.new_zeros(desc.block_shape)
     coords = (0, 0, 64)
