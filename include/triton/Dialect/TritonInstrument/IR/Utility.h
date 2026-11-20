@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <array>
@@ -143,6 +144,14 @@ struct BufferStateCandidates {
   SmallVector<BufferStateCandidate, 2> cases;
   bool unknown = false;
 };
+
+struct SharedMemoryAccess {
+  Value buffer;
+  LinearLayout conversion;
+  uint32_t multicastMask;
+};
+
+std::optional<SharedMemoryAccess> getSharedMemoryAccess(Operation *op);
 
 struct BufferAccessRegion {
   uint32_t candidateCTAs;
@@ -337,7 +346,7 @@ struct AuxDataMap {
   int getClusterBarrierSlot(Operation *op) const;
 
   // Resolve a registered access to its candidate index and shared state mask.
-  std::pair<unsigned, const llvm::SmallBitVector &>
+  std::pair<unsigned, llvm::SmallBitVector>
   getBufferAccessState(const BufferAccessRegion &access,
                        const BufferStateCandidates &candidates) const;
 

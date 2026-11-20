@@ -33,6 +33,8 @@ enum class SharedKind : uint32_t;
 
 namespace mlir::triton {
 
+class LinearLayout;
+
 //===----------------------------------------------------------------------===//
 // Exact physical address sets
 //===----------------------------------------------------------------------===//
@@ -123,6 +125,11 @@ struct BufferRegion {
 
 /// A physical region and the provenance required to compose descriptor views.
 struct BufferRegionView {
+  /// Enumerate a single CTA's access using its mapping to shared memory.
+  llvm::SmallVector<BufferRegion::CTAAddresses, 2>
+  getAccessAddresses(gpu::MemDescType type, const LinearLayout &conversion,
+                     unsigned issuer, bool includeCTAReplicas) const;
+
   const BufferRegion region;
   const uint32_t storageBase;
   const uint32_t affineOffset;
@@ -192,6 +199,7 @@ private:
 /// indexed by the input region order and all have numLanes bits.
 struct BufferStatePlan {
   unsigned numLanes = 0;
+  llvm::SmallVector<AddressSet> laneAddresses;
   llvm::SmallVector<llvm::SmallBitVector> regionMasks;
   llvm::SmallBitVector unknownMask;
 };
