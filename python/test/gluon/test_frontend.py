@@ -6142,6 +6142,21 @@ def test_bulk_prefetch_codegen(target, mode):
     assert len(re.findall(r"@%?\w+\s+cp\.async\.bulk\.prefetch\.L2\.global\s", ptx)) == (1 if mode == "scalar" else 2)
 
 
+def test_bulk_prefetch_noinline_consan():
+
+    @gluon.jit(noinline=True)
+    def prefetch(src):
+        hopper.bulk.prefetch(src, 64)
+
+    @gluon.jit
+    def kernel(src):
+        prefetch(src)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {})
+    compiled = triton.compile(source, target=HOPPER_TARGET, options={"instrumentation_mode": "consan"})
+    assert "cp.async.bulk.prefetch.L2.global" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("num_bytes", [-16, 15, 1 << 32])
 def test_bulk_prefetch_invalid_byte_count(num_bytes):
 
