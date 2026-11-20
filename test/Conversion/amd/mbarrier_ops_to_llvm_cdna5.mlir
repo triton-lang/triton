@@ -25,7 +25,7 @@ module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.
   // GFX1250-LABEL: wait_barrier
   tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %phase: i32) {
     // GFX1250: rocdl.s.sleep {{.*}}
-    // GFX1250: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+    // GFX1250: llvm.load {{.*}} atomic syncscope("workgroup") monotonic {{.*}} : !llvm.ptr<3> -> i64
     // GFX1250: llvm.icmp "ne" {{%arg1, %.*|%.*, %arg1}} : i32
     amdg.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
