@@ -959,7 +959,8 @@ private:
         }
         if (func == entryPoint)
           return WalkResult::advance();
-        if (isa<CallOpInterface>(op))
+        // Bulk prefetch only changes L2 residency and has no ConSan state.
+        if (isa<CallOpInterface, ttng::PrefetchBulkOp>(op))
           return WalkResult::advance();
 
         bool hasUnsupportedAllocation =
