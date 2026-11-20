@@ -12,6 +12,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
@@ -69,6 +70,17 @@ using mlir::triton::tools::ScopedLLVMOptions;
 
 constexpr uint32_t codegenABIVersion = 2;
 
+// C ABI status contract for the exported compilation/assembly functions.
+// Returned as int; independent of PassManager::run's IR-modification boolean.
+// Keep these values stable and synchronized with compiler.py.
+enum CodegenStatus : int {
+  Success = 0,
+  // Invalid arguments/options, target setup, or allocation failure.
+  SetupFailure = 1,
+  // Reported native IR parsing, LLVM codegen, or assembly error.
+  CompilationFailure = 2,
+};
+
 struct CodegenOptions {
   uint32_t abiVersion;
   const char *triple;
@@ -98,10 +110,10 @@ char *copyString(llvm::StringRef value) {
   return result;
 }
 
-int fail(const std::string &message, char **error) {
+int fail(const std::string &message, char **error, int status = SetupFailure) {
   if (error)
     *error = copyString(message);
-  return 1;
+  return status;
 }
 
 void initializeTarget() {
@@ -142,7 +154,7 @@ int validateOptions(const CodegenOptions *options, char **error) {
   if (!options->triple || !options->processor || !options->features ||
       !options->abi)
     return fail("incomplete AMD code-generation target options", error);
-  return 0;
+  return Success;
 }
 
 std::vector<ScopedLLVMOptions::Setting>
@@ -233,7 +245,7 @@ int prepareModule(const char *llvmIR, size_t llvmIRSize,
     std::string message;
     llvm::raw_string_ostream stream(message);
     diagnostic.print("triton-amd-codegen", stream);
-    return fail(message, error);
+    return fail(message, error, CompilationFailure);
   }
 
   // LLVM no longer supports globally enabling FP contraction through
@@ -244,7 +256,7 @@ int prepareModule(const char *llvmIR, size_t llvmIRSize,
 
   machine = createTargetMachine(*module, options, error);
   if (!machine)
-    return 1;
+    return SetupFailure;
 
   for (llvm::Function &function : module->functions())
     if (!function.hasFnAttribute(llvm::Attribute::NoInline))
@@ -267,18 +279,23 @@ int prepareModule(const char *llvmIR, size_t llvmIRSize,
     cleanup.run(*module);
   }
 
-  return 0;
+  return Success;
 }
 
 // Hand `value` back to the caller through a malloc'd buffer it frees with
-// triton_amdgpu_free.
+// triton_amdgpu_free. Reject recorded codegen errors before allocating output.
 int publish(llvm::StringRef value, char **out, size_t *outSize,
-            const char *what, char **error) {
+            const char *what, char **error,
+            const llvm::LLVMContext *context = nullptr) {
+  // LLVM records ordinary errors and prints their diagnostics to stderr.
+  if (context && context->getDiagHandlerPtr()->HasErrors)
+    return fail("AMD LLVM codegen failed; see diagnostic output", error,
+                CompilationFailure);
   *out = copyString(value);
   if (!*out)
     return fail(std::string("failed to allocate ") + what, error);
   *outSize = value.size();
-  return 0;
+  return Success;
 }
 
 // Drain the -time-passes report enableTiming asked for. LLVM accumulates into
@@ -334,7 +351,8 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   }
 
   reportTimings(options);
-  return publish(assembly, amdgcn, amdgcnSize, "AMDGCN assembly result", error);
+  return publish(assembly, amdgcn, amdgcnSize, "AMDGCN assembly result", error,
+                 &context);
 }
 
 // Emit the pre-machine-scheduler MIR for `llvmIR`, together with the scheduling
@@ -399,7 +417,8 @@ extern "C" TRITON_AMD_EXPORT int triton_amdgpu_translate_to_mir(
 
   reportTimings(options);
 
-  if (int status = publish(mirText, mir, mirSize, "MIR result", error))
+  if (int status =
+          publish(mirText, mir, mirSize, "MIR result", error, &context))
     return status;
   if (int status =
           publish(dagText, dag, dagSize, "scheduling DAG result", error)) {
@@ -408,7 +427,7 @@ extern "C" TRITON_AMD_EXPORT int triton_amdgpu_translate_to_mir(
     *mirSize = 0;
     return status;
   }
-  return 0;
+  return Success;
 }
 
 // Resume code generation from `mirText`, which must be MIR this library
@@ -453,12 +472,12 @@ triton_amdgpu_translate_mir_to_asm(const char *mirText, size_t mirTextSize,
 
   std::unique_ptr<llvm::Module> module = mirParser->parseIRModule();
   if (!module)
-    return fail("failed to parse MIR IR module", error);
+    return fail("failed to parse MIR IR module", error, CompilationFailure);
 
   std::unique_ptr<llvm::TargetMachine> machine =
       createTargetMachine(*module, options, error);
   if (!machine)
-    return 1;
+    return SetupFailure;
 
   llvm::legacy::PassManager pass;
 
@@ -486,14 +505,15 @@ triton_amdgpu_translate_mir_to_asm(const char *mirText, size_t mirTextSize,
       return fail("AMD target cannot emit code from MIR", error);
 
     if (mirParser->parseMachineFunctions(*module, MMIWP->getMMI()))
-      return fail("failed to parse machine functions from MIR", error);
+      return fail("failed to parse machine functions from MIR", error,
+                  CompilationFailure);
 
     pass.run(*module);
   }
 
   reportTimings(options);
   return publish(result, output, outputSize, "MIR code-generation result",
-                 error);
+                 error, &context);
 }
 
 extern "C" TRITON_AMD_EXPORT int
@@ -568,7 +588,8 @@ triton_amdgpu_assemble(const char *assembly, size_t assemblySize,
 
   parser->setTargetParser(*targetParser);
   if (parser->Run(/*NoInitialTextSection=*/false))
-    return fail("AMD assembler rejected generated AMDGCN", error);
+    return fail("AMD assembler rejected generated AMDGCN", error,
+                CompilationFailure);
 
   return publish(llvm::StringRef(result.data(), result.size()), object,
                  objectSize, "AMD object result", error);
