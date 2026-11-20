@@ -1611,8 +1611,10 @@ private:
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
-          if (effect.rw == RW::Write && auxData.hasAsyncCopyMbarriers &&
-              opInfo->commitKind == CommitKind::AsyncCp)
+          if (effect.rw == RW::Write &&
+              opInfo->commitKind == CommitKind::AsyncCp &&
+              (auxData.hasAsyncCopyMbarriers ||
+               auxData.hasAsyncProxyFenceTracking))
             funcBuilder.createPublishWriteVisibilityCall(
                 b, bufferMask, 0, pred, memType, op, effectCTAs);
           funcBuilder.createStageAccessForCommitCall(
