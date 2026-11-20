@@ -176,7 +176,8 @@ def _download_file(url: str, path: str, label: str):
 
 def _get_archive_path(download_dir: str, url: str):
     archive_name = os.path.basename(urllib.parse.urlparse(url).path)
-    return os.path.join(download_dir, archive_name)
+    url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return os.path.join(download_dir, url_hash, archive_name)
 
 
 def _format_byte_count(num_bytes: int) -> str:
