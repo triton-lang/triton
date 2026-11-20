@@ -17,8 +17,8 @@ from triton._internal_testing import (is_blackwell, is_cuda, is_ampere_or_newer,
 from triton.experimental.gsan import configure, create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock
 from triton.experimental.gsan._testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
-from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, shadow_tensor_for,
-                                                     store_one_i32, thread_state_from_smid)
+from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
+                                                     thread_state_from_smid)
 
 
 @pytest.fixture()
@@ -1938,20 +1938,30 @@ def tma_im2col_gsan_kernel(desc, out, pred, COORDS: gl.constexpr, OFFSETS: gl.co
         gl.store(out + rows[:, None] * desc.block_shape[1] + cols[None, :], values)
 
 
-def _check_tma_im2col_shadow(storage, desc, coords, offsets, pred=True, multicast=False, num_ctas=1, num_warps=4):
-    output = storage.new_zeros(desc.block_shape)
-    shadow = shadow_tensor_for(storage).reshape(storage.numel(), -1)
-    before = shadow.cpu()
-    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, offsets, multicast, num_ctas=num_ctas,
-                                             num_warps=num_warps)
-    assert "__triton_gsan_load_im2col_tensor_desc" in compiled.asm["llir"]
-    changed = (shadow.cpu() != before).any(dim=1)
-    # Each nonzero output identifies the physical storage element TMA read.
-    loaded = output.cpu().flatten()
-    expected = torch.zeros(storage.numel(), dtype=torch.bool)
-    expected[loaded[loaded > 0].long() - 1] = True
-    assert expected.any().item() == pred
-    torch.testing.assert_close(changed, expected)
+def _im2col_reference(desc, coords, offsets, pred, rows_per_cta):
+    source = desc.base.cpu()
+    expected = source.new_zeros(desc.block_shape)
+    if not pred:
+        return expected
+
+    # Each pixel-split CTA starts a separate TMA traversal at its own W coordinate.
+    for first_row in range(0, desc.block_shape[0], rows_per_cta):
+        pixel = list(coords[:-1])
+        pixel[-1] += first_row
+        for row in range(first_row, first_row + rows_per_cta):
+            index = (pixel[0], *(p + offset for p, offset in zip(pixel[1:], offsets)))
+            if all(0 <= i < size for i, size in zip(index, source.shape)):
+                channels = source[index][coords[-1]:coords[-1] + desc.block_shape[1]]
+                expected[row, :channels.numel()] = channels
+
+            for dim in reversed(range(1, len(pixel))):
+                pixel[dim] += desc.element_strides[dim]
+                if pixel[dim] < source.shape[dim] + desc.pixel_box_upper_corner[dim - 1]:
+                    break
+                pixel[dim] = desc.pixel_box_lower_corner[dim - 1]
+            else:
+                pixel[0] += desc.element_strides[0]
+    return expected
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -1963,7 +1973,7 @@ def _check_tma_im2col_shadow(storage, desc, coords, offsets, pred=True, multicas
     pytest.param([[1, 0]], id="split-pixels"),
     pytest.param([[0, 1]], id="split-channels"),
 ])
-def test_tma_im2col_gsan_shadow(with_gsan, with_allocator, rank, num_warps, pred, cga_layout):
+def test_tma_im2col_gsan_load(with_gsan, with_allocator, rank, num_warps, pred, cga_layout):
     num_ctas = 2**len(cga_layout)
     skip_if_unsupported_cluster_size(num_ctas)
     # A pixel split shifts the second CTA's starting W coordinate by eight.
@@ -1983,19 +1993,33 @@ def test_tma_im2col_gsan_shadow(with_gsan, with_allocator, rank, num_warps, pred
                                                                   element_strides=[2] * (rank - 1) + [1],
                                                                   pixel_box_lower_corner=lower,
                                                                   pixel_box_upper_corner=upper)
-    _check_tma_im2col_shadow(storage, desc, coords, offsets, pred, cga_layout == [[0, 0]], num_ctas, num_warps)
+    output = storage.new_zeros(desc.block_shape)
+    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, offsets, cga_layout == [[0, 0]],
+                                             num_ctas=num_ctas, num_warps=num_warps)
+    assert "__triton_gsan_load_im2col_tensor_desc" in compiled.asm["llir"]
+    rows_per_cta = desc.block_shape[0] // (num_ctas if cga_layout == [[1, 0]] else 1)
+    expected = _im2col_reference(desc, coords, offsets, pred, rows_per_cta)
+    torch.testing.assert_close(output.cpu(), expected)
+    first_pixel = (0, ) + (1, ) * (rank - 2)
+    assert bool(shadow_cell_from_address(source[first_pixel + (4, )].data_ptr()).num_reads) == pred
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell FP4 TMA")
 @pytest.mark.parametrize("shadow_granularity", [1], indirect=True)
-def test_tma_im2col_gsan_fp4_padded_shadow(with_gsan, with_allocator):
+def test_tma_im2col_gsan_fp4_padded_load(with_gsan, with_allocator):
     # The first message reads the final 64 packed bytes. The second is out of bounds.
     storage = torch.arange(1, 129, dtype=torch.uint8, device="cuda").reshape(1, 1, 128)
     layout = gl.NVMMASharedLayout(128, 8, rank=2, fp4_padded=True)
     desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(storage, [8, 128], layout,
                                                                   pixel_box_lower_corner=[0],
                                                                   pixel_box_upper_corner=[0])
-    _check_tma_im2col_shadow(storage, desc, (0, 0, 64), (0, ))
+    output = storage.new_zeros(desc.block_shape)
+    tma_im2col_gsan_kernel[(1, )](desc, output, True, (0, 0, 64), (0, ), False)
+    expected = torch.zeros(desc.block_shape, dtype=storage.dtype)
+    expected[0, :64] = storage.cpu()[0, 0, 64:]
+    torch.testing.assert_close(output.cpu(), expected)
+    assert shadow_cell_from_address(storage.data_ptr() + 63).num_reads == 0
+    assert shadow_cell_from_address(storage.data_ptr() + 64).num_reads != 0
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
