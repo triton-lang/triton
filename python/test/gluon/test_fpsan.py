@@ -3657,3 +3657,156 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
     # Encode the integer results as FP16/BF16 bits and compare the bits.
     expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
     _assert_payload_equal(out.view(torch.int16), expected)
+
+
+@gluon.jit
+def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constexpr, MUTATION: gl.constexpr,
+                              STORAGE: gl.constexpr):
+    M: gl.constexpr = 128
+    N: gl.constexpr = 128
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    rows = gl.arange(0, M, layout=gl.SliceLayout(1, layout))
+    keys = gl.arange(0, WIDTH, layout=gl.SliceLayout(0, layout))
+    cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
+    shard = gl.program_id(0)
+    score = gl.load(Scores + shard * WIDTH + keys)
+    maximum = gl.max(score, 0)
+    centered = (score - maximum)[None, :].broadcast_to((M, WIDTH))
+    p = gl.exp2(centered)
+    mask = ((shard * WIDTH + keys) % 11 == 2)[None, :]
+    if MUTATION == "drop_token":
+        mask = mask | ((shard * WIDTH + keys)[None, :] == 0)
+
+    if MUTATION == "narrow_math":
+        p = p.to(gl.float8e5).to(gl.float32)
+    if MUTATION == "ordinary_cast":
+        p = gl.expect_zero(p.to(gl.float8e5), mask)
+    else:
+        p = gl.fpsan.probability_cast(p, gl.float8e5, expect_zero=mask)
+    smem: gl.constexpr = gl.NVMMASharedLayout.get_default_for([M, WIDTH], gl.float8e5)
+    if STORAGE == "tmem":
+        tmem: gl.constexpr = TensorMemoryLayout((M, WIDTH), col_stride=1)
+        scores = allocate_tensor_memory(gl.float32, (M, WIDTH), tmem)
+        pmem = scores.reinterpret(gl.float8e5, (M, WIDTH), tmem)
+        pmem.store(gl.convert_layout(p, pmem.get_reg_layout()))
+        if MUTATION == "overwrite":
+            scores.store(gl.full((M, WIDTH), 0, gl.float32, layout=scores.get_reg_layout()))
+    else:
+        pmem = gl.allocate_shared_memory(gl.float8e5, (M, WIDTH), smem)
+        pmem.store(p)
+        if MUTATION == "overwrite":
+            pmem.store(gl.full((M, WIDTH), 0, gl.float8e5, layout=layout))
+    vrows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))
+    v = gl.load(Values + vrows[:, None] * 128 + shard * WIDTH + keys[None, :])
+    vmem = gl.allocate_shared_memory(gl.float8e5, (N, WIDTH), smem, v)
+    acc = allocate_tensor_memory(gl.float32, (M, N), TensorMemoryLayout((M, N), col_stride=1))
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    hopper.fence_async_shared()
+    fmt: gl.constexpr = None if MUTATION == "missing_tag" else "fpsan_probability"
+    if STORAGE == "smem_rhs":
+        tcgen05_mma(vmem, pmem.permute((1, 0)), acc, b_type=fmt, use_acc=False, mbarriers=[bar])
+    else:
+        tcgen05_mma(pmem, vmem.permute((1, 0)), acc, a_type=fmt, use_acc=False, mbarriers=[bar])
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    out = gl.convert_layout(acc.load(), layout)
+    if STORAGE == "smem_rhs":
+        out = gl.convert_layout(out.permute(1, 0), layout)
+    gl.store(Partial + (shard * M + rows[:, None]) * N + cols[None, :], out)
+    gl.store(Maxima + shard, maximum)
+
+
+@gluon.jit
+def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
+    cols = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    maximum = gl.load(Maxima)
+    acc = gl.load(Partial + gl.program_id(0) * 128 + cols)
+    for shard in gl.static_range(1, SHARDS):
+        next_max = gl.load(Maxima + shard)
+        merged = gl.maximum(maximum, next_max)
+        alpha = gl.exp2(maximum - merged)
+        if MUTATION == "missing_alpha":
+            alpha = gl.exp2(maximum - maximum)
+        elif MUTATION == "reversed_alpha":
+            alpha = gl.exp2(merged - maximum)
+        rhs = gl.load(Partial + (shard * 128 + gl.program_id(0)) * 128 + cols)
+        acc = gl.fma(acc, alpha, rhs * gl.exp2(next_max - merged))
+        maximum = merged
+    gl.store(Out + gl.program_id(0) * 128 + cols, acc)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("storage", ["tmem", "smem_lhs", "smem_rhs"])
+def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.fpsan_compact_exp2 = True
+    # Successive maxima differ by 33, so alpha and its inverse differ.
+    scores = np.arange(128, dtype=np.uint64)
+    scores += scores // 32
+    score_bits = _unmix_payload_to_float_bits(scores, "f32")
+    _, s = _as_float_bits_tensor(score_bits, "f32")
+    rng = np.random.default_rng(2037)
+    v = rng.integers(-8, 9, size=(128, 128), dtype=np.int8)
+    v[-1, :] = 1  # The last PV column is the unnormalized denominator.
+    vbits = _unmix_payload_to_float_bits(v.astype(np.uint64), "e5m2")
+    _, vals = _as_float_bits_tensor(vbits, "e5m2")
+    weights = [pow(1 + 2**25, int(s) - int(scores[-1]), 2**32) if i % 11 != 2 else 0 for i, s in enumerate(scores)]
+    expected = np.array([sum(w * int(x) for w, x in zip(weights, row)) % 2**32 for row in v], dtype=np.uint64)
+    unmarked_bits = _unmix_payload_to_float_bits(expected, "f32").view(np.uint32)
+    # Full-width unchunked reference with one E5M2 cast marker per live weight.
+    expected_bits = _unmix_payload_to_float_bits(expected * np.uint64(0x71b39a53), "f32").view(np.uint32)
+    for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite", "missing_tag",
+                     "ordinary_cast"):
+        for shards in ((1, 2, 4) if mutation == "none" else (4, )):
+            partial = torch.empty((shards, 128, 128), device=device, dtype=torch.float32)
+            maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
+            out = torch.empty_like(partial[0])
+            _probability_cast_partial[(shards, )](s, vals, partial, maxima, 128 // shards, mutation, storage)
+            _probability_cast_merge[(128, )](partial, maxima, out, shards, mutation)
+            actual = out.view(torch.int32).cpu().numpy().view(np.uint32)
+            if mutation == "overwrite":
+                assert np.all(actual == 0)
+            if mutation == "none":
+                np.testing.assert_array_equal(actual, np.broadcast_to(expected_bits, actual.shape))
+                assert np.any(actual[:, :-1] != unmarked_bits[:-1])
+                assert np.all(actual[:, -1] != unmarked_bits[-1])
+            else:
+                assert np.any(actual[:, :-1] != expected_bits[:-1])
+                assert np.all(actual[:, -1] != expected_bits[-1])
+
+
+@gluon.jit
+def _probability_roundtrip(X, Out, DST: gl.constexpr, TAGGED: gl.constexpr, WARP: gl.constexpr):
+    i = gl.arange(0, 256, layout=gl.BlockedLayout([2], [WARP], [4], [0]))
+    x = gl.exp2(gl.load(X + i))
+    if TAGGED:
+        p = gl.fpsan.probability_cast(x, DST, expect_zero=i == 0)
+        wide = gl.fpsan.probability_cast(p, gl.float32)
+    else:
+        wide = x.to(DST).to(gl.float32)
+    gl.store(Out + i, wide)
+
+
+@pytest.mark.parametrize("dst, tag", [(gl.float8e5, 0x71b39a53), (gl.float8e4nv, 0x5b7a9d23)])
+def test_fpsan_probability_roundtrip(device, fresh_knobs, dst, tag):
+    _require_cuda_backend(device)
+    if dst == gl.float8e4nv and is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("E4M3 requires SM90 or newer")
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.fpsan_compact_exp2 = True
+    scores = np.arange(-128, 128, dtype=np.int32)
+    bits = _unmix_payload_to_float_bits(scores.astype(np.uint64), "f32")
+    _, x = _as_float_bits_tensor(bits, "f32")
+    out = torch.empty((256, ), dtype=torch.float32, device=device)
+    _probability_roundtrip[(1, )](x, out, dst, True, THREADS_PER_WARP)
+    expected = np.array([tag * pow(1 + 2**25, int(s), 2**32) % 2**32 for s in scores], dtype=np.uint64)
+    expected[0] = 0
+    np.testing.assert_array_equal(_mix_float_bits(out.cpu().numpy().view(np.uint32), "f32"), expected)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    x = torch.linspace(-20, 4, 256, device=device)
+    ordinary = torch.empty_like(out)
+    _probability_roundtrip[(1, )](x, out, dst, True, THREADS_PER_WARP, debug=True)
+    _probability_roundtrip[(1, )](x, ordinary, dst, False, THREADS_PER_WARP)
+    assert torch.equal(out, ordinary)

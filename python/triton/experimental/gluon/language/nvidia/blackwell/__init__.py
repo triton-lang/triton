@@ -6,6 +6,7 @@ from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
+from triton.experimental.gluon.language.fpsan import _compact_exp2_enabled
 
 from . import tma
 from . import clc
@@ -590,6 +591,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
+            Use "fpsan_probability" for an FP8 operand from gl.fpsan.probability_cast.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -614,10 +616,23 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     multicast = _unwrap_if_constexpr(multicast)
     a_type = _unwrap_if_constexpr(a_type)
     b_type = _unwrap_if_constexpr(b_type)
-    a_type = _semantic._str_to_fp_type(a_type) if a_type is not None else None
-    b_type = _semantic._str_to_fp_type(b_type) if b_type is not None else None
-    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast, a_type, b_type)
+
+    def operand_type(fmt, operand):
+        if fmt == "fpsan_probability":
+            _check(operand.dtype in (ttgl.float8e4nv, ttgl.float8e5) and acc.dtype == ttgl.float32,
+                   lambda: "fpsan_probability requires E4M3 or E5M2 and an FP32 accumulator")
+            return None
+        return _semantic._str_to_fp_type(fmt) if fmt is not None else None
+
+    builder = _semantic.builder
+    mma = builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
+                                     mbarrier_preds, acc.layout.two_ctas, multicast, operand_type(a_type, a),
+                                     operand_type(b_type, b))
+    if _compact_exp2_enabled(builder.options):
+        if a_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_a", builder.get_unit_attr())
+        if b_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_b", builder.get_unit_attr())
 
 
 @builtin

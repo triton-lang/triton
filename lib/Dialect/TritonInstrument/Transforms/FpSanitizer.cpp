@@ -64,6 +64,8 @@ constexpr int64_t kI8MmaN = 8;
 constexpr int64_t kI8MmaK = 32;
 constexpr llvm::StringLiteral kHomomorphicCastsAttr =
     "triton.instrument.fpsan_homomorphic_casts";
+constexpr llvm::StringLiteral kCompactExp2Attr =
+    "triton.instrument.fpsan_compact_exp2";
 
 bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
@@ -188,6 +190,7 @@ struct MmaOperandSource {
   RankedTensorType tileType;
   int64_t rowStride;
   int64_t stride;
+  Type probabilityFormat{};
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -870,7 +873,7 @@ SmallVector<uint64_t, 8> getExp2Coefficients(uint64_t base, unsigned stride,
   return coeffs;
 }
 
-// Use 3^x modulo 2^w at every width. Its period is 2^(w-2), maximal
+// By default use 3^x modulo 2^w. Its period is 2^(w-2), maximal
 // for an odd base, and truncating the payload commutes with exponentiation.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
@@ -879,6 +882,15 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
   auto constant = [&](uint64_t value) {
     return getUIntConstantLike(rewriter, loc, xI.getType(), value);
   };
+
+  auto module =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  if (bitWidth == 32 && module->hasAttr(kCompactExp2Attr)) {
+    // (1 + 2^25)^x = 1 + (x << 25) modulo 2^32.
+    Value high = arith::ShLIOp::create(rewriter, loc, xI, constant(25));
+    Value result = arith::AddIOp::create(rewriter, loc, high, constant(1));
+    return unembedToFloat(rewriter, loc, result, floatTy);
+  }
 
   // Split off the low s bits r. For stride = 2^s, base = 3^stride is
   // 1 mod 2^(s+2) since each squaring after 3^2 = 9 adds one trailing
@@ -1165,9 +1177,63 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
-Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
-                     const MmaOperandSource &source, RankedTensorType resultTy,
-                     bool isLhs, Value tileOffset, Value kOffset) {
+// 0 encodes a masked weight. 128..255 encode the 128 compact powers.
+// Keep other inputs in a disjoint range so a perturbation that leaves the
+// family is observable even when it preserves the top seven bits.
+Value packProbability(PatternRewriter &rw, Location loc, Value payload) {
+  auto ty = cast<RankedTensorType>(payload.getType());
+  auto constant = [&](uint32_t n) {
+    return getUIntConstantLike(rw, loc, ty, n);
+  };
+  Value low = arith::AndIOp::create(rw, loc, payload, constant((1u << 25) - 1));
+  Value compact = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, low,
+                                        constant(1));
+  Value power = arith::ShRUIOp::create(rw, loc, payload, constant(25));
+  Value encoded = arith::OrIOp::create(rw, loc, power, constant(128));
+  Value hash = arith::RemUIOp::create(rw, loc, payload, constant(127));
+  Value other = arith::AddIOp::create(rw, loc, hash, constant(1));
+  Value zero = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, payload,
+                                     constant(0));
+  other = arith::SelectOp::create(rw, loc, zero, constant(0), other);
+  Value code = arith::SelectOp::create(rw, loc, compact, encoded, other);
+  return arith::TruncIOp::create(rw, loc, ty.clone(rw.getI8Type()), code);
+}
+
+Value expandProbability(PatternRewriter &rw, Location loc, Value byte,
+                        Type format) {
+  auto ty = cast<RankedTensorType>(byte.getType()).clone(rw.getI32Type());
+  Value code = arith::ExtUIOp::create(rw, loc, ty, byte);
+  Value live =
+      arith::ShRUIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 7));
+  Value exponent =
+      arith::ShLIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 25));
+  Value payload = arith::OrIOp::create(rw, loc, exponent, live);
+  // An odd format marker commutes with rescaling and preserves all 128
+  // powers of the compact exponential.
+  int tag = isa<Float8E5M2Type>(format) ? 0x71b39a53 : 0x5b7a9d23;
+  return arith::MulIOp::create(rw, loc, payload,
+                               getIntConstantLike(rw, loc, ty, tag));
+}
+
+struct ProbabilityCastPattern
+    : OpRewritePattern<ExperimentalFPSanProbabilityCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ExperimentalFPSanProbabilityCastOp op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value payload = embedToInt(rw, loc, op.getSrc());
+    Type format = op.getSrc().getType().getElementType();
+    payload = format.isF32() ? packProbability(rw, loc, payload)
+                             : expandProbability(rw, loc, payload, format);
+    rw.replaceOp(op, unembedToFloat(rw, loc, payload, op.getType()));
+    return success();
+  }
+};
+
+Value loadRawMmaOperand(PatternRewriter &rewriter, Location loc,
+                        const MmaOperandSource &source,
+                        RankedTensorType resultTy, bool isLhs, Value tileOffset,
+                        Value kOffset) {
   if (!source.isShared()) {
     Value rowOffset = isLhs ? tileOffset : kOffset;
     Value colOffset = isLhs ? kOffset : tileOffset;
@@ -1204,6 +1270,17 @@ Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
   return ExperimentalLocalGatherOp::create(rewriter, loc, resultTy, shared,
                                            indices, offsets,
                                            rewriter.getI32IntegerAttr(kAxis));
+}
+
+Value loadMmaOperand(PatternRewriter &rw, Location loc,
+                     const MmaOperandSource &source, RankedTensorType resultTy,
+                     bool isLhs, Value tileOffset, Value kOffset) {
+  Value raw =
+      loadRawMmaOperand(rw, loc, source, resultTy, isLhs, tileOffset, kOffset);
+  if (source.probabilityFormat)
+    return expandProbability(rw, loc, embedToInt(rw, loc, raw),
+                             source.probabilityFormat);
+  return raw;
 }
 
 Value unpackPackedFp4Slice(PatternRewriter &rewriter, Location loc,
@@ -2956,6 +3033,16 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
 
+    if (op->hasAttr("tti.fpsan_probability_a"))
+      aSource->probabilityFormat = aMemTy.getElementType();
+    if (op->hasAttr("tti.fpsan_probability_b"))
+      bSource->probabilityFormat = bMemTy.getElementType();
+    for (Type format : {aSource->probabilityFormat, bSource->probabilityFormat})
+      if (format && (!isa<Float8E4M3FNType, Float8E5M2Type>(format) ||
+                     !dMemTy.getElementType().isF32()))
+        return op.emitOpError(
+            "expected FP8 probability operand and FP32 accumulator");
+
     // TMEM and D scratch are written cooperatively. In two-CTA mode, the
     // cluster barrier also makes both CTAs' shared operands visible before the
     // first direct load.
@@ -3443,6 +3530,8 @@ public:
                             BoolAttr::get(&getContext(), twoCTAs));
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
+    if (compactExp2)
+      getOperation()->setAttr(kCompactExp2Attr, UnitAttr::get(&getContext()));
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
@@ -3473,7 +3562,8 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
                                                    UnaryOpId::Barrier);
-    patterns.add<FpSanHomomorphicCastPattern>(&getContext());
+    patterns.add<FpSanHomomorphicCastPattern, ProbabilityCastPattern>(
+        &getContext());
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
@@ -3485,6 +3575,7 @@ public:
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
     getOperation()->removeAttr(kHomomorphicCastsAttr);
+    getOperation()->removeAttr(kCompactExp2Attr);
     if (failed(result)) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();

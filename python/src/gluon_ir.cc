@@ -769,6 +769,13 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
+      .def(
+          "create_fpsan_probability_cast",
+          [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+            return self
+                .create<triton::instrument::ExperimentalFPSanProbabilityCastOp>(
+                    dstType, src);
+          })
       .def("create_experimental_fpsan_embed",
            [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
              return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
@@ -1139,14 +1146,18 @@ void init_gluon_ir(py::module_ &m) {
              std::optional<tt::ScaleDotElemType> bType) {
             Value accDep;
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-            self.create<ttng::TCGen5MMAOp>(
-                tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
-                mbarriers, mbarrier_preds,
-                /*isAsync=*/true, /*isUnsigned=*/false,
-                aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *aType)
-                      : tt::ScaleDotElemTypeAttr{},
-                bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
-                      : tt::ScaleDotElemTypeAttr{});
+            return self
+                .create<ttng::TCGen5MMAOp>(
+                    tokType, a, b, acc, accDep, useAcc, pred, two_ctas,
+                    multicast, mbarriers, mbarrier_preds,
+                    /*isAsync=*/true, /*isUnsigned=*/false,
+                    aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(),
+                                                          *aType)
+                          : tt::ScaleDotElemTypeAttr{},
+                    bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(),
+                                                          *bType)
+                          : tt::ScaleDotElemTypeAttr{})
+                ->getResult(0);
           },
           py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
           py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),

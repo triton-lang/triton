@@ -52,7 +52,9 @@ def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::Mo
 
   let options = [
     Option<"homomorphicCasts", "homomorphic-casts", "bool", /*default*/"false",
-           "Use truncating FPSan payload downcasts">
+           "Use truncating FPSan payload downcasts">,
+    Option<"compactExp2", "compact-exp2", "bool", /*default*/"false",
+           "Use the period-128 FP32 exp2 for FP8 probability transport">
   ];
 }
 

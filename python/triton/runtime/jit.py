@@ -745,6 +745,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
         kwargs["fpsan_homomorphic_casts"] = knobs.compilation.fpsan_homomorphic_casts
+        kwargs.setdefault("fpsan_compact_exp2", knobs.compilation.fpsan_compact_exp2)
 
         # parse options
         device = driver.active.get_current_device()

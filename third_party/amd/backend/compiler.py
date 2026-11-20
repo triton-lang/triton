@@ -397,6 +397,7 @@ class HIPOptions:
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    fpsan_compact_exp2: bool = False
     # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
     wgp_cu_mode: str = "wgp"
 
@@ -630,7 +631,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts, options.fpsan_compact_exp2)
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
@@ -656,7 +657,7 @@ class HIPBackend(BaseBackend):
 
         if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts, options.fpsan_compact_exp2)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
