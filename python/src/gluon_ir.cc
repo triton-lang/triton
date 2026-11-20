@@ -361,6 +361,11 @@ void init_gluon_ir(py::module_ &m) {
       .value("MAX", ttng::TMEMLoadReduceModifier::MAX)
       .export_values();
 
+  py::enum_<ttng::MBarrierPhaseType>(m, "MBARRIER_PHASE_TYPE")
+      .value("PRIMARY", ttng::MBarrierPhaseType::PRIMARY)
+      .value("CONDITIONAL", ttng::MBarrierPhaseType::CONDITIONAL)
+      .export_values();
+
   py::class_<GluonOpBuilder, TritonOpBuilder>(m, "GluonOpBuilder",
                                               py::dynamic_attr())
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
@@ -1090,10 +1095,23 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("memDesc"), py::arg("bytes"), py::arg("pred"),
           (py::arg("from_cta").none() = py::none()))
-      .def("create_mbarrier_wait",
-           [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
-              std::vector<Value> &deps) {
-             self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, deps);
+      .def(
+          "create_mbarrier_wait",
+          [](GluonOpBuilder &self, Value memDesc, Value phase, Value pred,
+             std::vector<Value> &deps, ttng::MBarrierPhaseType phaseType) {
+            self.create<ttng::WaitBarrierOp>(memDesc, phase, pred, phaseType,
+                                             deps);
+          },
+          py::arg("memDesc"), py::arg("phase"), py::arg("pred"),
+          py::arg("deps"),
+          py::arg("phase_type") = ttng::MBarrierPhaseType::PRIMARY)
+      .def("create_mbarrier_test_wait_report",
+           [](GluonOpBuilder &self, Value memDesc, Value phase,
+              Value pred) -> std::pair<Value, Value> {
+             auto op = self.create<ttng::BarrierTestWaitReportOp>(memDesc,
+                                                                  phase, pred);
+             return std::make_pair(op.getWaitComplete(),
+                                   op.getReportPredicate());
            })
       .def(
           "create_mbarrier_arrive",
@@ -1194,18 +1212,20 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
              Value barrier, Value result, Value pred, bool multicast,
-             std::optional<std::vector<Value>> offsets, Attribute cachePolicy) {
+             std::optional<std::vector<Value>> offsets, Attribute cachePolicy,
+             triton::ReportValidity reportValidity) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
             ValueRange offsetsRange =
                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
                 descPtr, coord, offsetsRange, barrier, result, pred, multicast,
-                cachePolicy, false);
+                cachePolicy, false, reportValidity);
           },
           py::arg("descPtr"), py::arg("coord"), py::arg("barrier"),
           py::arg("result"), py::arg("pred"), py::arg("multicast"),
-          py::arg("offsets").none(), py::arg("cachePolicy") = Attribute())
+          py::arg("offsets").none(), py::arg("cachePolicy") = Attribute(),
+          py::arg("report_validity") = triton::ReportValidity::NONE)
       .def(
           "create_async_tma_copy_local_to_global",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,

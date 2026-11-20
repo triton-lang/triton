@@ -52,6 +52,42 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
 }
 
 namespace {
+constexpr int kMaxMbarV1InitCount = (1 << 9) - 1;
+
+bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
+  return targetInfo.getTargetFeatures().supportsMbarV1Layout() &&
+         targetInfo.getPtxVersion() >= 93;
+}
+
+Value reduceMbarrierTestCompletion(Operation *op, Value complete,
+                                   ConversionPatternRewriter &rewriter) {
+  auto loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned numWarps = ttg::lookupNumWarps(op);
+  if (numWarps == 1)
+    return NVVM::VoteSyncOp::create(rewriter, loc, rewriter.getI1Type(),
+                                    b.i32_val(-1), complete,
+                                    NVVM::VoteSyncKind::all);
+
+  // Warp-specialization lowering assigns this handle to the calling partition,
+  // including when this query is in an outlined helper. Use an explicit count
+  // and the non-aligned form: the other partitions need not reach this query.
+  Value barrierId = triton::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+  unsigned numThreads = numWarps * ttg::lookupThreadsPerWarp(rewriter);
+  // Model convergence and memory ordering just like a barrier intrinsic.
+  // NVVM's barrier reduction intrinsic does not accept a participant count.
+  auto reduce = LLVM::InlineAsmOp::create(
+      rewriter, loc, rewriter.getI1Type(), ValueRange{barrierId, complete},
+      "barrier.cta.red.and.pred $0, $1, " + std::to_string(numThreads) +
+          ", $2;",
+      "=b,r,b,~{memory}", /*has_side_effects=*/true, /*is_align_stack=*/false,
+      LLVM::TailCallKind::None, /*convergent=*/true,
+      LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                LLVM::AsmDialect::AD_ATT),
+      ArrayAttr{});
+  return reduce.getRes();
+}
+
 template <typename OpTy>
 struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
@@ -194,8 +230,18 @@ struct InitBarrierOpConversion
     initCount *= numCTAs / barrierTy.getNumElements();
 
     ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(initCount) + ";";
+    std::string ptx;
+    // The expected arrival count has only 9 bits in the v1 layout. Preserve
+    // v0 for barriers whose count cannot be represented by v1.
+    // The v1 layout is only needed when the conditonal phase is queried.
+    // But for simplicity we always use it when possible.
+    if (supportsMbarV1Layout(*targetInfo) && initCount <= kMaxMbarV1InitCount) {
+      ptx = "@$0 mbarrier.init.layout::v1.shared::cta.b64 [$1], " +
+            std::to_string(initCount) + ";";
+    } else {
+      ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
+            std::to_string(initCount) + ";";
+    }
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -363,12 +409,19 @@ struct WaitBarrierOpConversion
 )";
       }
     } else {
+      std::string phaseType;
+      if (supportsMbarV1Layout(*targetInfo) &&
+          op.getPhaseType() ==
+              triton::nvidia_gpu::MBarrierPhaseType::CONDITIONAL)
+        phaseType = ".phase_type::conditional";
+
       if (!predicated) {
         ptx = R"(
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              phaseType + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 }
 )";
@@ -378,7 +431,8 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              phaseType + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }
@@ -396,6 +450,77 @@ struct WaitBarrierOpConversion
     waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
     ptxBuilder.launch(rewriter, loc, void_ty(ctx));
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct BarrierTestWaitReportOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::BarrierTestWaitReportOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  BarrierTestWaitReportOpConversion(LLVMTypeConverter &typeConverter,
+                                    PatternBenefit benefit,
+                                    NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::BarrierTestWaitReportOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!supportsMbarV1Layout(*targetInfo))
+      return op.emitError(
+          "primary mbarrier report requires mbarrier v1 layout support");
+
+    auto barrierTy = op.getAlloc().getType();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getAlloc(),
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto pred = adaptor.getPred();
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
+    bool predicated = pred && !matchPattern(pred, m_NonZero());
+
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    SmallVector<::mlir::triton::PTXBuilder::Operand *, 5> operands = {
+        ptxBuilder.newOperand("=b"), ptxBuilder.newOperand("=b"),
+        ptxBuilder.newOperand(smemObj.getBase(), "r"),
+        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
+
+    std::string ptx;
+    if (predicated) {
+      ptx = R"(
+{
+	mov.pred $0, 0;
+	mov.pred $1, 0;
+	@$4 mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
+}
+)";
+      operands.push_back(ptxBuilder.newOperand(pred, "b"));
+    } else {
+      ptx = R"(
+{
+	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
+}
+)";
+    }
+
+    auto &test = *ptxBuilder.create(ptx);
+    test(operands, /*onlyAttachMLIRArgs=*/true);
+    SmallVector<Type> resultTypes(2, rewriter.getI1Type());
+    Value packed = ptxBuilder.launch(rewriter, loc, struct_ty(resultTypes));
+    SmallVector<Value> results = {
+        b.extract_val(rewriter.getI1Type(), packed, 0),
+        b.extract_val(rewriter.getI1Type(), packed, 1)};
+    results[0] = reduceMbarrierTestCompletion(op, results[0], rewriter);
+    // Force the report to false until all threads observe completion,
+    // since PTX leaves it undefined for incomplete queries.
+    results[1] = b.and_(results[0], results[1]);
+    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -645,7 +770,8 @@ struct CLCGetProgramIdOpConversion
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
-  bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
+  bool supportsMBarrierMulticast =
+      targetInfo.getTargetFeatures().supportsMbarMulticast();
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<
       GridDependencyOpConversion<triton::GridDependencyWaitOp>,
@@ -656,6 +782,8 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<BarrierTestWaitReportOpConversion>(typeConverter, benefit,
+                                                  targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit,
                                         supportsMBarrierMulticast);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit,

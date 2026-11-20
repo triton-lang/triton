@@ -1563,6 +1563,19 @@ struct AsyncTMACopyGlobalToLocalOpConversion
                                                              : "cta") +
           ".global" + (isIm2Col ? ".im2col" : "") +
           ".mbarrier::complete_tx::bytes";
+      if (op.getReportValidity() == ReportValidity::PER_16B_FP32) {
+        tmaInst += ".mbarrier::report::validity::per_16bytes::80000000";
+      } else if (op.getReportValidity() == ReportValidity::PER_16B_FP16) {
+        tmaInst += ".mbarrier::report::validity::per_16bytes::8000";
+      } else if (op.getReportValidity() == ReportValidity::PER_16B_FP8) {
+        tmaInst += ".mbarrier::report::validity::per_16bytes::80";
+      } else if (op.getReportValidity() == ReportValidity::PER_16B_FP4) {
+        tmaInst += ".mbarrier::report::validity::per_16bytes::8";
+      } else if (op.getReportValidity() == ReportValidity::PER_ELEM_1B) {
+        tmaInst += ".mbarrier::report::validity::per_element::ff";
+      } else if (op.getReportValidity() != ReportValidity::NONE) {
+        llvm_unreachable("unsupported TMA report-validity mode");
+      }
       if (multicast)
         tmaInst += ".multicast::cluster";
       if (l2PolicyReg)

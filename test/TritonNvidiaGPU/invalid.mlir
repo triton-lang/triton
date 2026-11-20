@@ -1,5 +1,35 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @barrier_test_wait_report_multicta(
+      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %phase: i32) {
+    // expected-error @below {{is only supported when ttg.num-ctas is 1}}
+    %done, %reported = ttng.barrier_test_wait_report %barrier, %phase : !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> (i1, i1)
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
+  tt.func @tma_report_validity_two_ctas(
+      %desc: !tt.tensordesc<128x128xf16, #shared>,
+      %result: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>,
+      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %coord: i32,
+      %pred: i1) {
+    // expected-error @below {{reportValidity does not support two-CTA TMA mode}}
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %result, %barrier, %pred reportValidity = per_16B_fp16 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @below {{twoCTAs layout requires the first CGALayout block basis to be [1, 0]}}
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, twoCTAs = true>
 

@@ -79,6 +79,7 @@ public:
     return supportsTcgen05();
   }
   bool supportsReuseB() const { return computeCapability == 107; }
+  bool supportsMbarV1Layout() const { return computeCapability >= 90; }
   bool supportsMbarMulticast() const { return computeCapability == 107; }
   bool supportsEarlyARelease() const { return computeCapability == 107; }
 

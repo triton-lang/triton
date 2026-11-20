@@ -369,10 +369,14 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 
   let description = [{
     Blocks the program progress until the mbarrier object in `alloc` completes
-    its current phase.
+    the requested phase.
 
     This lowers a waitloop using PTX instruction
     mbarrier.try_wait.parity.shared::cta.b64.
+
+    `phase` is the phase/parity value to wait for. `phaseType` selects either
+    the barrier's primary phase or its conditional phase. In particular, the latter
+    is used by TMA report-validity operations.
 
     Accepts an optional list of memory dependencies. If present, it is assumed
     that any of the dependencies may be accessed until the barrier completes.
@@ -385,28 +389,65 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase,
     Optional<I1>:$pred,
+    DefaultValuedAttr<TTNG_MBarrierPhaseTypeAttr,
+                      "::mlir::triton::nvidia_gpu::MBarrierPhaseType::PRIMARY">:$phaseType,
     Variadic<TTG_MemDescType>:$deps
   );
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "Value":$phase),
     [{
-    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), /*deps=*/{});
+    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
+          /*phaseType=*/MBarrierPhaseType::PRIMARY, /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "Value":$pred),
     [{
-    build($_builder, $_state, alloc, phase, pred, /*deps=*/{});
+    build($_builder, $_state, alloc, phase, pred,
+          /*phaseType=*/MBarrierPhaseType::PRIMARY,
+          /*deps=*/{});
     }]>,
     OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
     [{
-    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
+    build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr),
+          /*phaseType=*/MBarrierPhaseType::PRIMARY, deps);
     }]>,
   ];
 
   let assemblyFormat = [{
-    $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
+    $alloc `,` $phase (`,` $pred^)? (`,` $phaseType^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
   }];
+}
+
+def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+  let summary = "test primary mbarrier completion and retrieve its report";
+
+  let description = [{
+    Performs a single non-blocking test of the requested primary mbarrier phase
+    and returns both its completion predicate and report predicate as scalar
+    `i1` values.
+
+    This operation is supported only when `ttg.num-ctas` is 1. Its predicate
+    must be uniform among the participating threads. Completion is reduced
+    across the execution region and is true only when every participating
+    thread observes completion. The report predicate is zero unless completion
+    is true. Participating warps must execute convergently.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
+    I32:$phase,
+    Optional<I1>:$pred
+  );
+  let results = (outs I1:$waitComplete, I1:$reportPredicate);
+
+  let assemblyFormat = [{
+    $alloc `,` $phase (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+    `->` `(` type($waitComplete) `,` type($reportPredicate) `)`
+  }];
+  let hasVerifier = 1;
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
@@ -657,6 +698,20 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
         - General rule: number of offsets = coord.size() - 2
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-im2col-mode
 
+    `reportValidity` selects an optional TMA validity-reporting mechanism and
+    does not support two-CTA TMA mode. The conditonal phase in the provided barrier is
+    flipped when the loaded data is deemed to be valid - when a bit pattern encoding an
+    invalid value does not match none of sampled elements in the loaded data.
+    The supported modes inspect:
+    - `per_16B_fp32`: one sampled FP32 element per aligned 16-byte chunk,
+      matching the `-0` bit pattern `0x80000000`.
+    - `per_16B_fp16`: one sampled FP16 element per aligned 16-byte chunk,
+      matching the `-0` bit pattern `0x8000`.
+    - `per_16B_fp8`: one sampled FP8 element per aligned 16-byte chunk,
+      matching `0x80`.
+    - `per_16B_fp4`: one sampled FP4 element per aligned 16-byte chunk,
+      matching `0x8`.
+    - `per_elem_1B`: every byte, matching `0xff`.
   }];
 
   let hasVerifier = 1;
@@ -669,7 +724,8 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     I1:$pred,
     UnitAttr:$multicast,
     OptionalAttr<AnyAttr>:$cachePolicy,
-    DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+    DefaultValuedAttr<TT_ReportValidityAttr, "triton::ReportValidity::NONE">:$reportValidity
   );
 
   let builders = [
@@ -678,17 +734,19 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
                    "Value":$result, "Value":$pred,
                    CArg<"bool", "false">:$multicast,
                    CArg<"Attribute", "{}">:$cachePolicy,
-                   CArg<"bool", "false">:$isVolatile), [{
+                   CArg<"bool", "false">:$isVolatile,
+                   CArg<"triton::ReportValidity", "triton::ReportValidity::NONE">:$reportValidity), [{
       multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
                                    ::mlir::cast<::mlir::triton::gpu::MemDescType>(
                                        result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, multicast, cachePolicy, isVolatile);
+            result, pred, multicast, cachePolicy, isVolatile, reportValidity);
     }]>
   ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
+    oilist(`reportValidity` `=` $reportValidity)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 
