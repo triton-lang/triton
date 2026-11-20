@@ -85,7 +85,7 @@ ValueType createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder,
 
 ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
                                 ArrayRef<int64_t> shape, int bitWidth,
-                                int64_t initialValue,
+                                ArrayRef<int64_t> initialValues,
                                 FunctionBuilder &funcBuilder) {
   auto type =
       getIntTensorType(b.getInsertionBlock()->getParent(), shape, bitWidth);
@@ -99,7 +99,6 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes,
                                             /*alignment=*/16,
                                             /*sharedClusterState=*/true);
-  Value cstInit = arith::ConstantIntOp::create(b, initialValue, bitWidth);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value zero = arith::ConstantIntOp::create(b, 0, 32);
   Value isCTA0 =
@@ -114,7 +113,19 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
   cf::CondBranchOp::create(b, isCTA0, ifBlock, ValueRange{}, thenBlock,
                            ValueRange{});
   b.setInsertionPointToStart(ifBlock);
-  funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstInit);
+  // The last dimension is the slowest-varying in scratch memory.
+  int64_t count = numEls / initialValues.size();
+  auto typePerValue =
+      getIntTensorType(b.getInsertionBlock()->getParent(), {count}, bitWidth);
+  for (auto [idx, initial] : llvm::enumerate(initialValues)) {
+    Value ptr = alloc;
+    if (idx) {
+      Value offset = arith::ConstantIntOp::create(b, idx * count, 32);
+      ptr = triton::AddPtrOp::create(b, ptrType, alloc, offset);
+    }
+    Value val = arith::ConstantIntOp::create(b, initial, bitWidth);
+    funcBuilder.createFillGlobalTensorCall(b, ptr, typePerValue, val);
+  }
   b.setInsertionPointToStart(thenBlock);
   return {alloc, type};
 }
@@ -122,7 +133,7 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
 ValueType createZeroInitStateTensor(ImplicitLocOpBuilder &b,
                                     ArrayRef<int64_t> shape, int bitWidth,
                                     FunctionBuilder &funcBuilder) {
-  return createInitStateTensor(b, shape, bitWidth, 0, funcBuilder);
+  return createInitStateTensor(b, shape, bitWidth, {0}, funcBuilder);
 }
 
 bool hasCpAsync(ModuleOp module) {
@@ -524,6 +535,10 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
   return nullptr;
 }
 
+bool tracksLoadSeparately(Operation *op) {
+  return isa<AsyncLoadOpInterface>(op) && lookupNumCTAs(op) > 1;
+}
+
 LogicalResult
 AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             FunctionBuilder &fb,
@@ -536,7 +551,9 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   if (failed(layout))
     return failure();
   threadLayout = *layout;
+  bool hasClusterLoads = false;
   entryPoint.walk([&](Operation *op) {
+    hasClusterLoads |= tracksLoadSeparately(op);
     std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
     if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
           return barrier.trackingMode ==
@@ -582,9 +599,15 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
 
     int numBufs = llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
 
+    SmallVector<int64_t> shape{numCTAs, numBufs, numCTAs};
+    SmallVector<int64_t> initial{0};
+    if (hasClusterLoads && memType == MemType::SHARED_MEM) {
+      shape.push_back(2);
+      initial.push_back(-1); // No outstanding load before the first issue.
+    }
     writeVisibility[iMemType].insert(
-        entryRegion, createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs},
-                                               frontierBitWidth, fb));
+        entryRegion,
+        createInitStateTensor(b, shape, frontierBitWidth, initial, fb));
     passValueToWarpSpecialize(writeVisibility[iMemType].at(entryRegion),
                               writeVisibility[iMemType]);
     readVisibility[iMemType].insert(
@@ -632,7 +655,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     passValueToWarpSpecialize(waiting.at(entryRegion), waiting);
 
     activeMasks.insert(entryRegion,
-                       createInitStateTensor(b, {numCTAs}, 32, 1, fb));
+                       createInitStateTensor(b, {numCTAs}, 32, {1}, fb));
     passValueToWarpSpecialize(activeMasks.at(entryRegion), activeMasks);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
@@ -642,10 +665,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
               ? 0
               : llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
       if (numMBarriers > 0 && numBufs > 0) {
+        SmallVector<int64_t> shape{numCTAs, numBufs, numCTAs, numBarriers, 2};
+        if (hasClusterLoads && memType == MemType::SHARED_MEM)
+          shape.push_back(2);
         writeTracking[iMemType].insert(
-            entryRegion,
-            createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers, 2}, 8, fb));
+            entryRegion, createZeroInitStateTensor(b, shape, 8, fb));
         passValueToWarpSpecialize(writeTracking[iMemType].at(entryRegion),
                                   writeTracking[iMemType]);
         readTracking[iMemType].insert(
