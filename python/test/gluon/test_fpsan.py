@@ -3684,7 +3684,7 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constex
     else:
         p = gl.fpsan.probability_cast(p, gl.float8e5, expect_zero=mask)
     smem: gl.constexpr = gl.NVMMASharedLayout.get_default_for([M, WIDTH], gl.float8e5)
-    if STORAGE == "tmem":
+    if STORAGE == "tmem" or STORAGE == "scaled_tmem":
         tmem: gl.constexpr = TensorMemoryLayout((M, WIDTH), col_stride=1)
         scores = allocate_tensor_memory(gl.float32, (M, WIDTH), tmem)
         pmem = scores.reinterpret(gl.float8e5, (M, WIDTH), tmem)
@@ -3704,7 +3704,17 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constex
     mbarrier.init(bar, count=1)
     hopper.fence_async_shared()
     fmt: gl.constexpr = None if MUTATION == "missing_tag" else "fpsan_probability"
-    if STORAGE == "smem_rhs":
+    if STORAGE == "scaled_tmem":
+        p_scale = allocate_tensor_memory(gl.uint8, (M, 4), TensorMemoryScalesLayout())
+        v_scale = allocate_tensor_memory(gl.uint8, (N, 4), TensorMemoryScalesLayout())
+        groups = gl.arange(0, 4, layout=gl.SliceLayout(0, layout))
+        scales = (127 + (shard * (WIDTH // 32) + groups) % 2).to(gl.uint8)
+        p_scale.store(gl.convert_layout(scales[None, :].broadcast_to((M, 4)), p_scale.get_reg_layout()))
+        v_scale.store(gl.full((N, 4), 127, gl.uint8, layout=v_scale.get_reg_layout()))
+        tcgen05_mma_scaled(pmem, vmem.permute(
+            (1, 0)), acc, p_scale.slice(0, WIDTH // 32), v_scale.slice(0, WIDTH // 32), "e5m2" if fmt is None else fmt,
+                           "e5m2", use_acc=False, mbarriers=[bar])
+    elif STORAGE == "smem_rhs":
         tcgen05_mma(vmem, pmem.permute((1, 0)), acc, b_type=fmt, use_acc=False, mbarriers=[bar])
     else:
         tcgen05_mma(pmem, vmem.permute((1, 0)), acc, a_type=fmt, use_acc=False, mbarriers=[bar])
@@ -3739,7 +3749,7 @@ def _probability_cast_merge(Partial, Maxima, Out, SHARDS: tl.constexpr, MUTATION
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("storage", ["tmem", "smem_lhs", "smem_rhs"])
+@pytest.mark.parametrize("storage", ["tmem", "smem_lhs", "smem_rhs", "scaled_tmem"])
 def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     # Successive maxima differ by 33, so alpha and its inverse differ.
@@ -3753,6 +3763,10 @@ def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     vbits = _unmix_payload_to_float_bits(v.astype(np.uint64), "e5m2")
     _, vals = _as_float_bits_tensor(vbits, "e5m2")
     weights = [pow(1 + 2**25, int(s) - int(scores[-1]), 2**32) if i % 11 != 2 else 0 for i, s in enumerate(scores)]
+    if storage == "scaled_tmem":
+        scales = [_dot_scaled_scale_payload(np.uint64(raw), "bf16") for raw in (127, 128)]
+        scales = np.array(scales, dtype=np.uint16).view(np.int16)
+        weights = [w * int(scales[(i // 32) % 2]) for i, w in enumerate(weights)]
     expected = np.array([sum(w * int(x) for w, x in zip(weights, row)) % 2**32 for row in v], dtype=np.uint64)
     unmarked_bits = _unmix_payload_to_float_bits(expected, "f32").view(np.uint32)
     # Full-width unchunked reference with one E5M2 cast marker per live weight.

@@ -408,6 +408,11 @@ it. Each consumer decodes the byte it reads. Copies preserve the code.
 The decoder multiplies the recovered payload by an odd, format-specific
 constant, making the FP8 conversion observable while commuting with alpha.
 Packing other nonzero inputs yields a disjoint set of lossy codes.
+The same operand tags work on ``tcgen05_mma_scaled``. FPSan expands the
+probability before multiplying it by the block scale in the FP32 payload
+ring. The shard identity assumes each token retains the same scale and
+that the value at the cast is a compact power or zero. Computing a scale
+from shard-dependent probabilities can change the quantization itself.
 Keep arithmetic on the expanded values. Native execution uses the ordinary
 exponential, cast and MMA.
 

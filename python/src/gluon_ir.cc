@@ -1146,18 +1146,15 @@ void init_gluon_ir(py::module_ &m) {
              std::optional<tt::ScaleDotElemType> bType) {
             Value accDep;
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-            return self
-                .create<ttng::TCGen5MMAOp>(
-                    tokType, a, b, acc, accDep, useAcc, pred, two_ctas,
-                    multicast, mbarriers, mbarrier_preds,
-                    /*isAsync=*/true, /*isUnsigned=*/false,
-                    aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(),
-                                                          *aType)
-                          : tt::ScaleDotElemTypeAttr{},
-                    bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(),
-                                                          *bType)
-                          : tt::ScaleDotElemTypeAttr{})
-                ->getResult(0);
+            auto mma = self.create<ttng::TCGen5MMAOp>(
+                tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
+                mbarriers, mbarrier_preds,
+                /*isAsync=*/true, /*isUnsigned=*/false,
+                aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *aType)
+                      : tt::ScaleDotElemTypeAttr{},
+                bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
+                      : tt::ScaleDotElemTypeAttr{});
+            return mma->getResult(0);
           },
           py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
           py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
@@ -1171,10 +1168,11 @@ void init_gluon_ir(py::module_ &m) {
               bool two_ctas, bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAScaledOp>(
+             auto mma = self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
                  useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
                  /*isAsync=*/true, multicast);
+             return mma->getResult(0);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,

@@ -576,6 +576,24 @@ def tcgen05_copy(src, dst, pred=True, _semantic=None):
     _semantic.builder.create_tmem_copy(src.handle, dst.handle, pred.handle)
 
 
+def _mma_operand_format(fmt, operand, acc, *, scaled=False):
+    if fmt != "fpsan_probability":
+        return fmt
+    _check(operand.dtype in (ttgl.float8e4nv, ttgl.float8e5) and acc.dtype == ttgl.float32,
+           lambda: "fpsan_probability requires E4M3 or E5M2 and an FP32 accumulator")
+    if scaled:
+        return "e4m3" if operand.dtype == ttgl.float8e4nv else "e5m2"
+    return None
+
+
+def _tag_probability_operands(builder, mma, a_type, b_type):
+    if is_enabled(builder.options, "fpsan"):
+        if a_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_a", builder.get_unit_attr())
+        if b_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_b", builder.get_unit_attr())
+
+
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
                 a_type=None, b_type=None, _semantic=None):
@@ -617,22 +635,14 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     a_type = _unwrap_if_constexpr(a_type)
     b_type = _unwrap_if_constexpr(b_type)
 
-    def operand_type(fmt, operand):
-        if fmt == "fpsan_probability":
-            _check(operand.dtype in (ttgl.float8e4nv, ttgl.float8e5) and acc.dtype == ttgl.float32,
-                   lambda: "fpsan_probability requires E4M3 or E5M2 and an FP32 accumulator")
-            return None
-        return _semantic._str_to_fp_type(fmt) if fmt is not None else None
-
+    lhs_format = _mma_operand_format(a_type, a, acc)
+    rhs_format = _mma_operand_format(b_type, b, acc)
+    lhs_type = _semantic._str_to_fp_type(lhs_format) if lhs_format is not None else None
+    rhs_type = _semantic._str_to_fp_type(rhs_format) if rhs_format is not None else None
     builder = _semantic.builder
     mma = builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                     mbarrier_preds, acc.layout.two_ctas, multicast, operand_type(a_type, a),
-                                     operand_type(b_type, b))
-    if is_enabled(builder.options, "fpsan"):
-        if a_type == "fpsan_probability":
-            mma.set_attr("tti.fpsan_probability_a", builder.get_unit_attr())
-        if b_type == "fpsan_probability":
-            mma.set_attr("tti.fpsan_probability_b", builder.get_unit_attr())
+                                     mbarrier_preds, acc.layout.two_ctas, multicast, lhs_type, rhs_type)
+    _tag_probability_operands(builder, mma, a_type, b_type)
 
 
 @builtin
@@ -648,8 +658,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_scale (tensor): Scale factor for operand A.
         b_scale (tensor): Scale factor for operand B.
-        a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
-        b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}.
+        a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "fpsan_probability"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "fpsan_probability"}.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
@@ -673,14 +683,20 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}
-    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
-    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
-    a_type = _semantic._str_to_fp_type(a_type.value)
-    b_type = _semantic._str_to_fp_type(b_type.value)
+    a_type = _unwrap_if_constexpr(a_type)
+    b_type = _unwrap_if_constexpr(b_type)
+    lhs_format = _mma_operand_format(a_type, a, acc, scaled=True)
+    rhs_format = _mma_operand_format(b_type, b, acc, scaled=True)
+    assert lhs_format in allowed_formats, f"Unsupported lhs_format: {lhs_format}"
+    assert rhs_format in allowed_formats, f"Unsupported rhs_format: {rhs_format}"
+    lhs_type = _semantic._str_to_fp_type(lhs_format)
+    rhs_type = _semantic._str_to_fp_type(rhs_format)
     multicast = _unwrap_if_constexpr(multicast)
-    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
-                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast)
+    builder = _semantic.builder
+    mma = builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, lhs_type,
+                                            rhs_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                            acc.layout.two_ctas, multicast)
+    _tag_probability_operands(builder, mma, a_type, b_type)
 
 
 @constexpr_function
