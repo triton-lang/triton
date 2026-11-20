@@ -157,21 +157,28 @@ bool isConstantZeroTensor(Value v) {
 std::optional<std::pair<Operation *, int>>
 findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
+  // Only the MMA sees its use-accumulator flag. To fold a loop-carried reset
+  // into that flag, we require this use pattern:
+  //
+  //   ret = for (arg = init) {          // ret is unused after the loop
+  //     acc = mma(a, b, arg)            // arg only feeds the MMA accumulator
+  //     v = select(reset, zero, acc)
+  //     yield v                         // the yield is the only use of v
+  //   }
+  //
+  // For a reset before the MMA, v feeds the MMA accumulator directly and
+  // must have no other uses.
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
     unsigned index = arg.getArgNumber() - 1;
     if (isConstantZeroTensor(forOp.getInitArgs()[index])) {
       loopArgIsZero = true;
     }
-    // Preserve the conditional reset if another user observes the loop argument
-    // on the next iteration or the accumulator's final value after the loop.
     if (!arg.hasOneUse() || !forOp.getResult(index).use_empty())
       return std::nullopt;
     v = forOp.getBody()->getTerminator()->getOperand(index);
   }
 
-  // Only the MMA sees the use-accumulator flag. Other users of the reset
-  // result still need the conditionally zeroed tensor.
   if (!v.hasOneUse())
     return std::nullopt;
 
