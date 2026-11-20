@@ -1655,3 +1655,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#fp6 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_downcast_fp6_format(%input: tensor<1x2048xf32, #fp6>, %scale: tensor<1x64xi8, #scale>) {
+    // expected-error @+1 {{format must be e2m3 or e3m2}}
+    %0 = amdg.scaled_downcast_fp6 %input scale %scale {axis = 1 : i32, format = 0 : i32} : tensor<1x2048xf32, #fp6>, tensor<1x64xi8, #scale> -> tensor<1x2048xi8, #fp6>
+    tt.return
+  }
+}
+
+// -----
+
+#fp6 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_downcast_fp6_scale_block(%input: tensor<1x2048xf32, #fp6>, %scale: tensor<1x128xi8, #scale>) {
+    // expected-error @+1 {{each scale block along the scaled axis must cover a multiple of 32 elements}}
+    %0 = amdg.scaled_downcast_fp6 %input scale %scale {axis = 1 : i32, format = 2 : i32} : tensor<1x2048xf32, #fp6>, tensor<1x128xi8, #scale> -> tensor<1x2048xi8, #fp6>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_fp6_packed_partial_group(%arg0: !tt.ptr<i8>, %offsets: tensor<8x64xi32, #blocked>) {
+    // expected-error @+1 {{requires a multiple of 16 unique values per thread}}
+    %0 = amdg.buffer_load %arg0[%offsets] {fp6Packed} : !tt.ptr<i8> -> tensor<8x64xi8, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_fp6_packed_f16(%arg0: !tt.ptr<f16>, %offsets: tensor<8x128xi32, #blocked>) {
+    // expected-error @+1 {{fp6Packed requires an i8 result, no other value and a scalar soffset}}
+    %0 = amdg.buffer_load %arg0[%offsets] {fp6Packed} : !tt.ptr<f16> -> tensor<8x128xf16, #blocked>
+    tt.return
+  }
+}

@@ -913,6 +913,11 @@ std::optional<LinearLayout> ScaledDowncastFp8Op::computeScaleLayout(
   return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
 }
 
+std::optional<LinearLayout> ScaledDowncastFp6Op::computeScaleLayout(
+    const LinearLayout &outputLayout, int64_t axis, int64_t elementsPerScale) {
+  return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
+}
+
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
   auto srcTypeVal = getSource().getType();
@@ -1347,6 +1352,44 @@ LogicalResult ScaledDowncastFp8Op::verify() {
       /*blockDescription=*/"a multiple of 8 elements");
 }
 
+LogicalResult ScaledDowncastFp6Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  if (getFormat() != ScaleDotElemType::E2M3 &&
+      getFormat() != ScaleDotElemType::E3M2)
+    return emitError() << "format must be e2m3 or e3m2";
+  if (inputTy.getShape() != outputTy.getShape())
+    return emitError() << "input and output must have the same shape";
+  if (inputTy.getEncoding() != outputTy.getEncoding())
+    return emitError() << "input and output must have the same encoding";
+  if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
+    return failure();
+  return verifyScaledDowncastScaleLayout(
+      *this, /*groupSize=*/32,
+      /*groupDescription=*/"32 elements",
+      /*blockDescription=*/"a multiple of 32 elements");
+}
+
+Attribute ScaledDowncastFp6Op::inferDstEncoding(unsigned opIdx,
+                                                Attribute srcEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, srcEnc))
+      return *scaleEnc;
+    return {};
+  }
+  return srcEnc;
+}
+
+Attribute ScaledDowncastFp6Op::inferSrcEncoding(unsigned opIdx,
+                                                Attribute dstEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, dstEnc))
+      return *scaleEnc;
+  }
+  return dstEnc;
+}
+
 Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,
                                                 Attribute srcEnc) {
   if (opIdx == 1) {
@@ -1525,6 +1568,16 @@ LogicalResult BufferLoadOp::verify() {
   if (failed(
           verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
     return failure();
+  if (getFp6Packed()) {
+    auto resultTy = cast<RankedTensorType>(getType());
+    if (!resultTy.getElementType().isInteger(8) || getOther() ||
+        (getSoffset() && isa<RankedTensorType>(getSoffset().getType())))
+      return emitOpError("fp6Packed requires an i8 result, no other value and "
+                         "a scalar soffset");
+    if (failed(verifyRegisterConsecutiveGroups(getOperation(), resultTy,
+                                               /*groupSize=*/16)))
+      return failure();
+  }
   return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                   getScope(),
                                   triton::CachePolicyOperation::Load);
@@ -1535,6 +1588,14 @@ LogicalResult BufferLoadToLocalOp::verify() {
                                       getScope(),
                                       triton::CachePolicyOperation::Load)))
     return failure();
+  if (getFp6Packed()) {
+    auto dstTy = getDest().getType();
+    if (!dstTy.getElementType().isInteger(8) || getOther())
+      return emitOpError("fp6Packed requires i8 storage and no other value");
+    if (dstTy.getDimSize(triton::gpu::getOrder(dstTy).front()) % 16 != 0)
+      return emitOpError("fp6Packed requires whole 16-byte groups along the "
+                         "contiguous dimension");
+  }
 
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   if (!mod)

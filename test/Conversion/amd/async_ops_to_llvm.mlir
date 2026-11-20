@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefix=GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --verify-diagnostics | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -411,6 +411,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: %[[PRED_ADDR:.*]] = llvm.select {{.*}}, {{.*}}, %[[OOB_PTR]] : i1, !llvm.ptr<3>
     // CHECK: rocdl.global.load.async.lds {{.*}}, %[[PRED_ADDR]], {{.*}}
     %0 = ttg.async_copy_global_to_local %src, %lds : tensor<64x1x!tt.ptr<f32>, #bcast> -> <64x1xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// amdg.fp6_packed (set by fp6_packed of Gluon's CDNA4 global_load_to_shared)
+// copies 12 bytes per 16-byte group even though the pointers are not known to
+// be contiguous, and uses one mask bit per group.
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: @async_copy_fp6_packed
+  tt.func @async_copy_fp6_packed(%src: tensor<32x128x!tt.ptr<i8>, #blocked>, %mask: tensor<32x128xi1, #blocked>, %lds: !ttg.memdesc<32x128xi8, #shared, #smem, mutable>) {
+    // GFX950: rocdl.global.load.async.lds {{.*}} 12
+    // GFX950-NOT: rocdl.global.load.async.lds
+
+    // GFX942 has no 96-bit direct-to-LDS copy.
+    // expected-error@+2 {{amdg.fp6_packed requires CDNA4}}
+    // expected-error@+1 {{failed to legalize operation 'ttg.async_copy_global_to_local' that was explicitly marked illegal}}
+    %0 = ttg.async_copy_global_to_local %src, %lds mask %mask {amdg.fp6_packed} : tensor<32x128x!tt.ptr<i8>, #blocked> -> <32x128xi8, #shared, #smem, mutable>
     tt.return
   }
 }

@@ -2966,10 +2966,13 @@ def test_amd_mfma_small_k(M, N, K, instr_shape, k_width, cdna4_only, block_k_div
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
-@pytest.mark.parametrize("a_type, b_type, cd_regclass",
-                         [(a_type, b_type, None)
-                          for a_type in ["e2m1", "e4m3", "e5m2"]
-                          for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"), ("e2m1", "e2m1", "v")])
+@pytest.mark.parametrize(
+    "a_type, b_type, cd_regclass", [(a_type, b_type, None)
+                                    for a_type in ["e2m1", "e4m3", "e5m2"]
+                                    for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"),
+                                                                               ("e2m1", "e2m1", "v")] +
+    [(a_type, b_type, None)
+     for a_type, b_type in [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2"), ("e4m3", "e2m3"), ("e3m2", "e2m1")]])
 @pytest.mark.parametrize("has_scale", [True, False])
 def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device='cuda'):
 
@@ -2981,6 +2984,9 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         DIV_FACTOR_B: tl.constexpr = 2 if b_type == "e2m1" else 1
         K_A: tl.constexpr = K // DIV_FACTOR_A
         K_B: tl.constexpr = K // DIV_FACTOR_B
+        # FP6 operands feed 32 consecutive values (two 16-byte groups) per lane.
+        K_WIDTH_A: tl.constexpr = 32 if a_type == "e2m3" or a_type == "e3m2" else 16
+        K_WIDTH_B: tl.constexpr = 32 if b_type == "e2m3" or b_type == "e3m2" else 16
 
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
                                                              warps_per_cta=[2, 2])
@@ -2988,13 +2994,13 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         a_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
         a_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [4, 1], [1, 0])
         a_load_layout: ttgl.constexpr = a_packed_layout if a_type == "e2m1" else a_unpacked_layout
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16)
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=K_WIDTH_A)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [M, K // 32])
 
         b_unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [32, 2], [4, 1], [1, 0])
         b_packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0])
         b_load_layout: ttgl.constexpr = b_packed_layout if b_type == "e2m1" else b_unpacked_layout
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=K_WIDTH_B)
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [N, K // 32])
 
         a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, a_load_layout))[:, None]
@@ -3035,6 +3041,14 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         elif dtype == 'e5m2':
             v = torch.randint(20, 40, size, dtype=torch.uint8)
             v_ref = v.view(torch.float8_e5m2).to(torch.float32)
+        elif dtype in ('e2m3', 'e3m2'):
+            # Packed along K: each 16-byte group holds 16 codes in 12 bytes followed by 4 padding bytes.
+            k_dim = 1 if operand == 0 else 0
+            codes = torch.randint(8, 24, size, dtype=torch.int32).movedim(k_dim, -1)
+            groups = pack_fp6(codes).reshape(*codes.shape[:-1], -1, 12)
+            v = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(codes.shape)
+            v = v.movedim(-1, k_dim).contiguous()
+            v_ref = fp6_values(dtype, codes.movedim(-1, k_dim)).float()
         else:
             assert dtype == 'e2m1'
             pack_dim = 1 if operand == 0 else 0
@@ -3059,12 +3073,14 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
         out = torch.empty((M, N), dtype=torch.float32, device=device)
         compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
-        out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
-        torch.testing.assert_close(out, out_ref)
+        a_ref, b_ref = a_ref * a_scale_ref, b_ref * b_scale_ref
     else:
         out = torch.empty((M, N), dtype=torch.float32, device=device)
         compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
-        out_ref = torch.matmul(a_ref, b_ref)
+    out_ref = torch.matmul(a_ref, b_ref)
+    if (a_type, b_type) == ("e3m2", "e2m1"):
+        torch.testing.assert_close(out, out_ref, atol=1e-5, rtol=1e-5)
+    else:
         torch.testing.assert_close(out, out_ref)
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
@@ -3074,7 +3090,8 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 256)])
 @pytest.mark.parametrize("instr_shape", [[16, 16, 128], [32, 32, 64]])
-@pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3")])
+@pytest.mark.parametrize("a_type, b_type", [("e2m1", "e2m1"), ("e4m3", "e4m3"), ("e5m2", "e2m1"), ("e2m1", "e4m3"),
+                                            ("e2m3", "e3m2"), ("e3m2", "e2m1"), ("e4m3", "e2m3")])
 @pytest.mark.parametrize("block_k_div", [2, 4])
 def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_div):
     BLOCK_K = instr_shape[2] // block_k_div
@@ -3089,8 +3106,10 @@ def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_d
         load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=instr_shape, transposed=True,
                                                              warps_per_cta=[2, 2])
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width=16)
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width=16)
+        K_WIDTH_A: ttgl.constexpr = 32 if a_type == "e2m3" or a_type == "e3m2" else 16
+        K_WIDTH_B: ttgl.constexpr = 32 if b_type == "e2m3" or b_type == "e3m2" else 16
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, k_width=K_WIDTH_A)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, k_width=K_WIDTH_B)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [N, BLOCK_K // 32])
 
@@ -3127,6 +3146,13 @@ def test_amd_mfma_scaled_small_k(M, N, K, instr_shape, a_type, b_type, block_k_d
         if dtype == "e2m1":
             v = MXFP4Tensor(size=(m, n)).random()
             return v.to_packed_tensor(1 if operand == 0 else 0), v.to(torch.float32)
+        if dtype in ("e2m3", "e3m2"):
+            # Packed along K: each 16-byte group holds 16 codes in 12 bytes followed by 4 padding bytes.
+            k_dim = 1 if operand == 0 else 0
+            codes = torch.randint(8, 24, (m, n), dtype=torch.int32).movedim(k_dim, -1)
+            groups = pack_fp6(codes).reshape(*codes.shape[:-1], -1, 12)
+            v = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(codes.shape)
+            return v.movedim(-1, k_dim).contiguous(), fp6_values(dtype, codes.movedim(-1, k_dim)).float()
         v = torch.randint(20, 40, (m, n), dtype=torch.uint8)
         torch_dtype = torch.float8_e4m3fn if dtype == "e4m3" else torch.float8_e5m2
         return v, v.view(torch_dtype).to(torch.float32)
@@ -4749,6 +4775,117 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
     if lane_bytes == 16:
         amdgcn = compiled.asm["amdgcn"]
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
+
+
+@gluon.constexpr_function
+def _fp6_packed_copy_layout(shared, num_warps):
+    # One 16-byte group per lane, and each warp copies one 1 KiB padding interval
+    # in offset order, so the direct-to-LDS writes stay coalesced.
+    bases = shared.offset_bases
+    lanes = 6
+    warps = num_warps.bit_length() - 1
+    return ttgl.DistributedLinearLayout(reg_bases=bases[:4] + bases[4 + lanes + warps:], lane_bases=bases[4:4 + lanes],
+                                        warp_bases=bases[4 + lanes:4 + lanes + warps], block_bases=[],
+                                        shape=shared.shape)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
+@pytest.mark.parametrize("src, dest", [("buffer", "registers")] + [(src, dest)
+                                                                   for src in ["buffer", "global"]
+                                                                   for dest in ["unswizzled", "swizzled", "padded"]])
+def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
+
+    @gluon.jit
+    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, K, a_type: ttgl.constexpr, b_type: ttgl.constexpr,
+               SMEM: ttgl.constexpr, GLOBAL: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+               BLOCK_K: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=32)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=32)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
+        # Each lane loads one 16-value group: 12 global bytes into 16 bytes of registers or LDS.
+        # Swizzling and padding move whole 16-byte groups, so they keep each group intact.
+        if SMEM == "padded":
+            a_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+                a_layout, [BLOCK_M, BLOCK_K], ttgl.uint8)
+            b_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
+                b_layout, [BLOCK_K, BLOCK_N], ttgl.uint8)
+            a_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(a_shared, ttgl.num_warps())
+            b_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(b_shared, ttgl.num_warps())
+        else:
+            PHASE: ttgl.constexpr = 8 if SMEM == "swizzled" else 1
+            a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [1, 0])
+            b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
+            a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
+            b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
+        if SMEM != "registers":
+            a_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_M, BLOCK_K], a_shared)
+            b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_K, BLOCK_N], b_shared)
+        row_bytes = K // 4 * 3
+        a_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(a_ptr, (BLOCK_M * row_bytes).to(ttgl.uint32))
+        b_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(b_ptr, (BLOCK_N * row_bytes).to(ttgl.uint32))
+
+        a_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_load_layout))[:, None]
+        a_offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, a_load_layout))[None, :]
+        b_offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, b_load_layout))[:, None]
+        b_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, b_load_layout))[None, :]
+        a_scale_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_scale_layout))[:, None]
+        a_scale_offs_k = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, a_scale_layout))[None, :]
+        b_scale_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, b_scale_layout))[:, None]
+        b_scale_offs_k = ttgl.arange(0, BLOCK_K // 32, layout=ttgl.SliceLayout(0, b_scale_layout))[None, :]
+
+        acc = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
+        for k in range(0, K, BLOCK_K):
+            a_k = k + a_offs_k
+            b_k = k + b_offs_k
+            a_offs = a_offs_m * row_bytes + a_k // 16 * 12 + a_k % 16
+            b_offs = b_offs_n * row_bytes + b_k // 16 * 12 + b_k % 16
+            if SMEM == "registers":
+                a = ttgl.convert_layout(ttgl.amd.cdna4.buffer.load(a_desc, a_offs, fp6_packed=True), a_layout)
+                b = ttgl.convert_layout(ttgl.amd.cdna4.buffer.load(b_desc, b_offs, fp6_packed=True), b_layout)
+            else:
+                if GLOBAL:
+                    cdna4_async_copy.global_load_to_shared(a_smem, a_ptr + a_offs, fp6_packed=True)
+                    cdna4_async_copy.global_load_to_shared(b_smem, b_ptr + b_offs, fp6_packed=True)
+                else:
+                    ttgl.amd.cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs, fp6_packed=True)
+                    ttgl.amd.cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs, fp6_packed=True)
+                cdna4_async_copy.commit_group()
+                cdna4_async_copy.wait_group(0)
+                ttgl.barrier()
+                a = a_smem.load(a_layout)
+                b = b_smem.load(b_layout)
+            a_scale = ttgl.amd.cdna4.buffer_load(a_scale_ptr, a_scale_offs_m * (K // 32) + k // 32 + a_scale_offs_k)
+            b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + k // 32 + b_scale_offs_k)
+            acc = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, acc)
+            ttgl.barrier()
+        out_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None]
+        out_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
+        ttgl.amd.cdna4.buffer_store(acc, out_ptr, out_offs_m * BLOCK_N + out_offs_n)
+
+    M, N, K = 64, 64, 512
+    torch.manual_seed(0)
+    a_codes = torch.randint(8, 24, (M, K), dtype=torch.int32, device="cuda")
+    b_codes = torch.randint(8, 24, (N, K), dtype=torch.int32, device="cuda")
+    a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
+    b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device="cuda")
+    out = torch.empty((M, N), dtype=torch.float32, device="cuda")
+    compiled = kernel[(1, )](out, pack_fp6(a_codes), pack_fp6(b_codes), a_scale, b_scale, K, a_type, b_type, dest,
+                             src == "global", M, N, 128, num_warps=4)
+    amdgcn = compiled.asm["amdgcn"]
+    if src == "global":
+        assert "global_load_lds_dwordx3" in amdgcn
+        assert not re.search(r"global_load_lds_dword\b", amdgcn)
+    else:
+        assert re.search(r"buffer_load_dwordx3" + (" .* lds" if dest != "registers" else ""), amdgcn)
+        assert "buffer_load_dword " not in amdgcn
+
+    a_ref = fp6_values(a_type, a_codes).double() * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
+    b_ref = fp6_values(b_type, b_codes).double() * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1)
+    torch.testing.assert_close(out, (a_ref @ b_ref.T).float())
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")

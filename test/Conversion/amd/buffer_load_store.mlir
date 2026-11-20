@@ -451,3 +451,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// fp6Packed loads 12 bytes per 16-value group even though the offsets are not
+// known to be contiguous, uses one mask bit per group, and zero-fills the last
+// 4 bytes of each group.
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_load_fp6_packed
+  tt.func public @buffer_load_fp6_packed(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: tensor<64x128xi32, #blocked>, %arg2: tensor<64x128xi1, #blocked>) -> tensor<64x128xi8, #blocked> {
+    // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : vector<3xi32>
+    // CHECK-NOT: rocdl.raw.ptr.buffer.load
+    %0 = amdg.buffer_load %arg0[%arg1], %arg2 {fp6Packed} : !tt.ptr<i8> -> tensor<64x128xi8, #blocked>
+    tt.return %0 : tensor<64x128xi8, #blocked>
+  }
+}

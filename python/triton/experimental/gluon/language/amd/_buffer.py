@@ -144,7 +144,7 @@ def make_buffer_descriptor(base, num_records, semantic):
     return buffer_descriptor(handle, buffer_descriptor_type(base.type.element_ty))
 
 
-def load(desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_type, semantic):
+def load(desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_type, semantic, fp6_packed=False):
     _verify(desc, offsets)
     offsets, mask, other = _broadcast_mask_other(offsets, mask, other, desc.dtype, semantic)
     policy, scope = _cache_policy(cache_policy, cache_policy_type, scope, semantic)
@@ -153,7 +153,7 @@ def load(desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_
     handle = builder.create_buffer_desc_load(ret_ty.to_ir(builder), desc.handle, offsets.handle,
                                              mask.handle if mask is not None else ir.value(),
                                              other.handle if other is not None else ir.value(), policy,
-                                             _soffset_operand(soffset, offsets, semantic), scope)
+                                             _soffset_operand(soffset, offsets, semantic), scope, fp6_packed)
     return ttgl.tensor(handle, ret_ty)
 
 
@@ -174,7 +174,8 @@ def store(value, desc, offsets, mask, soffset, scope, cache_policy, cache_policy
                                               _soffset_operand(soffset, offsets, semantic), scope)
 
 
-def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cache_policy_type, semantic):
+def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cache_policy_type, semantic,
+                   fp6_packed=False):
     _verify(desc, offsets)
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
@@ -185,7 +186,7 @@ def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cach
     semantic.builder.create_buffer_desc_load_to_local(dest.handle, desc.handle,
                                                       offsets.handle, mask.handle if mask is not None else ir.value(),
                                                       ir.value(), ir.value(), policy,
-                                                      _scalar_operand(soffset, "soffset", semantic), scope)
+                                                      _scalar_operand(soffset, "soffset", semantic), scope, fp6_packed)
 
 
 def _atomic_semantic(sem, default, allowed, op_name, semantic):

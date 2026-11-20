@@ -344,6 +344,12 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       `ptr` and `soffset` are described in BufferOpInterface.
       `scope` makes the loaded data visible at that scope (it is not atomic
       and orders nothing).
+
+      With `fp6Packed`, the i8 result holds packed FP6: each group of 16
+      register-consecutive bytes holds 16 codes in 12 bytes followed by 4 zero
+      bytes. Each group is one 96-bit load of the 12 bytes starting at the
+      group's first offset. The mask of a group is the mask of its first
+      element.
     }];
     let arguments = (ins
       Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to load from", [MemRead<GlobalMemory>]>:$ptr,
@@ -354,7 +360,8 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<TT_Tensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<TTAMDG_ScalarOffset>:$soffset,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$fp6Packed
     );
     let results = (outs TT_Tensor:$result);
 
@@ -395,6 +402,12 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       `ptr` and `soffset` are described in BufferOpInterface; an
       out-of-bounds element writes zero to `dest`. `scope` makes the loaded
       data visible at that scope.
+
+      With `fp6Packed`, `dest` holds packed FP6: each group of 16 bytes along
+      the contiguous dimension holds 16 codes in 12 bytes followed by 4
+      padding bytes. Each group is one 96-bit transfer of the 12 bytes starting
+      at the group's first offset; the padding bytes of `dest` are not
+      written. The mask of a group is the mask of its first element.
     }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
@@ -406,7 +419,8 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$fp6Packed
     );
     let results = (outs TTG_AsyncToken:$token);
 
@@ -903,6 +917,61 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
         auto inputTy = cast<RankedTensorType>(input.getType());
         auto resultTy = inputTy.clone(elemType);
         build($_builder, $_state, resultTy, input, scale, axis);
+      }]>
+  ];
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t elementsPerScale);
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledDowncastFp6Op
+//===----------------------------------------------------------------------===//
+
+def ScaledDowncastFp6Op : TT_AMDGPU_Op<"scaled_downcast_fp6", [
+    Pure,
+    DeclareOpInterfaceMethods<CastFpOpInterface>]> {
+  let summary = "Scale and downcast floating-point values to packed FP6";
+
+  let description = [{
+    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to FP6
+    (`format` is e2m3 or e3m2), rounding to nearest even and saturating to the
+    largest finite magnitude. The i8 result has the shape and encoding of the
+    input and holds packed FP6 along `axis`: each group of 16 bytes holds 16
+    codes in 12 bytes, least significant bits first, followed by 4 zero
+    bytes. This is the form of FP6 `tt.dot_scaled` operands.
+
+    The scale must be compact along `axis`, and each scale block must cover a
+    multiple of 32 values. Each thread must hold runs of 32 consecutive values
+    along `axis`, starting at multiples of 32, in consecutive registers.
+
+    This is hardware accelerated with `v_cvt_scalef32_2xpk16_{fp6,bf6}_f32` on
+    CDNA4.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[F16, BF16, F32]>:$input,
+    RankedTensorOf<[I8, F8E8M0FNU]>:$scale,
+    I32Attr:$axis,
+    TT_ScaleDotElemTypeAttr:$format);
+  let results = (outs RankedTensorOf<[I8]>:$output);
+
+  let builders = [
+      OpBuilder<(ins "Value":$input, "Value":$scale, "int32_t":$axis,
+                     "::mlir::triton::ScaleDotElemType":$format), [{
+        auto inputTy = cast<RankedTensorType>(input.getType());
+        build($_builder, $_state, inputTy.clone($_builder.getI8Type()), input,
+              scale, axis, format);
       }]>
   ];
 
