@@ -38,6 +38,9 @@ from sphinx_gallery.sorting import FileNameSortKey
 GLUON_TUTORIALS_SRC = Path("../python/tutorials/gluon")
 GLUON_TUTORIALS_GENERATED = Path("_generated/gluon-tutorials")
 GLUON_TUTORIALS_GALLERY = Path("getting-started/tutorials/gluon")
+GLUON_AMD_TUTORIALS_SRC = Path("../python/tutorials/gluon/amd")
+GLUON_AMD_TUTORIALS_GENERATED = Path("_generated/gluon-amd-tutorials")
+GLUON_AMD_TUTORIALS_GALLERY = Path("getting-started/tutorials/gluon-amd")
 GLUON_EXAMPLES_SRC = Path("../python/examples/gluon")
 GLUON_EXAMPLES_GENERATED = Path("_generated/gluon-examples")
 GLUON_EXAMPLES_GALLERY = Path("getting-started/examples/gluon")
@@ -53,6 +56,22 @@ GLUON_MYST_GALLERIES = [
 These tutorials can be found in ``python/tutorials/gluon``.
 """,
         "ignore": {"__init__.py", "conftest.py"},
+    },
+    {
+        "src": GLUON_AMD_TUTORIALS_SRC,
+        "generated": GLUON_AMD_TUTORIALS_GENERATED,
+        "gallery": GLUON_AMD_TUTORIALS_GALLERY,
+        "title": "Gluon AMD Tutorials",
+        "header_ref": "example_gluon_amd_tutorials_header",
+        "description": """\
+These tutorials cover AMD CDNA4 (MI350 series) and CDNA5 (MI450 series) GPUs.
+They can be found in ``python/tutorials/gluon/amd``.
+""",
+        "ignore": {"__init__.py", "conftest.py"},
+        # Page names and reference targets drop the number prefix of the file
+        # name. The prefix keeps them distinct from the NVIDIA tutorials, e.g.
+        # "02-async-copy.py" becomes "amd-async-copy".
+        "name_prefix": "amd-",
     },
     {
         "src": GLUON_EXAMPLES_SRC,
@@ -204,7 +223,12 @@ def generate_gluon_myst_galleries(app):
                 str(generated_dir),
                 source_label,
             )
-            (generated_dir / source_path.with_suffix(".md").name).write_text(markdown, encoding="utf-8")
+            number, sep, name = source_path.stem.partition("-")
+            if sep and number.isdigit():
+                name = f"{number}-{gallery.get('name_prefix', '')}{name}.md"
+            else:
+                name = f"{gallery.get('name_prefix', '')}{source_path.stem}.md"
+            (generated_dir / name).write_text(markdown, encoding="utf-8")
 
 
 def fix_gluon_myst_gallery_paths(app):
