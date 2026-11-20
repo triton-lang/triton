@@ -1860,7 +1860,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
                               ScaleDotElemType aType, ScaleDotElemType bType,
                               Value useD, Value pred, ValueRange barriers,
                               ValueRange barrierPreds, bool twoCTAs,
-                              bool isAsync, bool multicast) {
+                              bool isAsync, bool multicast,
+                              bool allowSingleCTAK96) {
   MLIRContext *ctx = builder.getContext();
   if (!barriers.empty()) {
     isAsync = true;
@@ -1870,7 +1871,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
-        isAsync ? builder.getUnitAttr() : UnitAttr());
+        isAsync ? builder.getUnitAttr() : UnitAttr(),
+        allowSingleCTAK96 ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }

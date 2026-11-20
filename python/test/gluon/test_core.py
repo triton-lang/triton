@@ -7927,7 +7927,8 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl
 def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, VEC_SIZE: ttgl.constexpr,
                                    block_layout_c: ttgl.constexpr, a_scale_layout_tmem: ttgl.constexpr,
                                    b_scale_layout_tmem: ttgl.constexpr, ctas_per_cga: ttgl.constexpr,
-                                   multicast: ttgl.constexpr, early_a_release: ttgl.constexpr = False):
+                                   multicast: ttgl.constexpr, early_a_release: ttgl.constexpr = False,
+                                   allow_single_cta_k96: ttgl.constexpr = False):
     A_IS_FP4: ttgl.constexpr = a_desc.dtype == ttgl.uint8
     B_IS_FP4: ttgl.constexpr = b_desc.dtype == ttgl.uint8
     A_ELEM_PER_BYTE: ttgl.constexpr = 2 if A_IS_FP4 else 1
@@ -8008,7 +8009,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
         if early_a_release:
             tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                               use_acc=(k != 0), multicast=multicast)
+                               allow_single_cta_k96=allow_single_cta_k96, use_acc=(k != 0), multicast=multicast)
             descs = (a_smem, b_smem) if multicast else ()
             tcgen05_commit(a_bar, descs=descs, completion="a_read")
             tcgen05_commit(mma_bar, descs=descs)
@@ -8022,7 +8023,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
                 hopper.cluster.barrier()
         else:
             tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                               use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
+                               allow_single_cta_k96=allow_single_cta_k96, use_acc=(k != 0), multicast=multicast,
+                               mbarriers=[mma_bar])
         mbarrier.wait(mma_bar, phase_mma)
         phase_mma ^= 1
 
@@ -8041,7 +8043,8 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
-                            out_dtype=torch.float16, return_kernel=False, early_a_release=False):
+                            out_dtype=torch.float16, return_kernel=False, early_a_release=False,
+                            allow_single_cta_k96=False):
     from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
@@ -8084,7 +8087,8 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
     compiled = mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE,
                                                     block_layout_c, a_scale_layout_tmem, b_scale_layout_tmem,
                                                     ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas,
-                                                    multicast=multicast, early_a_release=early_a_release)
+                                                    multicast=multicast, early_a_release=early_a_release,
+                                                    allow_single_cta_k96=allow_single_cta_k96)
     return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
@@ -8144,6 +8148,29 @@ def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block
     use_k96 = block_k >= 256 and block_m == 256
     expected_mmas = (triton.cdiv(block_k, 96) if use_k96 else block_k // 64) * (block_m // 256)
     assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
+
+
+@pytest.mark.skipif(not (is_blackwell() or is_blackwell_ultra()), reason="Requires tcgen05 scaled MMA")
+@pytest.mark.parametrize("fmt, vec_size", [("nvfp4", 16), ("mxfp4", 32)])
+@pytest.mark.parametrize("allow_single_cta_k96", [False, True])
+@pytest.mark.parametrize("block_k,block_n", [(128, 128), (256, 128), (256, 256), (512, 128)])
+def test_tcgen05_mma_scaled_single_cta_k96(fmt, vec_size, allow_single_cta_k96, block_k, block_n):
+    torch.manual_seed(0)
+    a, a_scale, a_ref = random_quantized_tensor(256, 1024, fmt)
+    b, b_scale, b_ref = random_quantized_tensor(256, 1024, fmt)
+    a_scale = swizzle_scales_packed_block(a_scale, vec_size)
+    b_scale = swizzle_scales_packed_block(b_scale, vec_size)
+    actual, compiled = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 128, block_n, block_k, (1, 1), False,
+                                               out_dtype=torch.float32, return_kernel=True,
+                                               allow_single_cta_k96=allow_single_cta_k96)
+    torch.testing.assert_close(actual, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
+    use_k96 = is_blackwell_ultra() and allow_single_cta_k96 and block_k >= 256
+    expected_mmas = triton.cdiv(block_k, 96) if use_k96 else block_k // 64
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
+    if use_k96:
+        paired = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 256, block_n, block_k, (2, 1), False,
+                                         out_dtype=torch.float32)
+        torch.testing.assert_close(actual, paired, atol=0, rtol=0)
 
 
 @gluon.jit
