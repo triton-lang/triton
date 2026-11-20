@@ -1944,6 +1944,7 @@ def _im2col_reference(desc, coords, offsets, pred, rows_per_cta):
     if not pred:
         return expected
 
+    element_strides = desc.element_strides or [1] * source.ndim
     # Each pixel-split CTA starts a separate TMA traversal at its own W coordinate.
     for first_row in range(0, desc.block_shape[0], rows_per_cta):
         pixel = list(coords[:-1])
@@ -1955,12 +1956,12 @@ def _im2col_reference(desc, coords, offsets, pred, rows_per_cta):
                 expected[row, :channels.numel()] = channels
 
             for dim in reversed(range(1, len(pixel))):
-                pixel[dim] += desc.element_strides[dim]
+                pixel[dim] += element_strides[dim]
                 if pixel[dim] < source.shape[dim] + desc.pixel_box_upper_corner[dim - 1]:
                     break
                 pixel[dim] = desc.pixel_box_lower_corner[dim - 1]
             else:
-                pixel[0] += desc.element_strides[0]
+                pixel[0] += element_strides[0]
     return expected
 
 
@@ -2014,9 +2015,10 @@ def test_tma_im2col_gsan_fp4_padded_load(with_gsan, with_allocator):
                                                                   pixel_box_lower_corner=[0],
                                                                   pixel_box_upper_corner=[0])
     output = storage.new_zeros(desc.block_shape)
-    tma_im2col_gsan_kernel[(1, )](desc, output, True, (0, 0, 64), (0, ), False)
-    expected = torch.zeros(desc.block_shape, dtype=storage.dtype)
-    expected[0, :64] = storage.cpu()[0, 0, 64:]
+    coords = (0, 0, 64)
+    offsets = (0, )
+    tma_im2col_gsan_kernel[(1, )](desc, output, True, coords, offsets, False)
+    expected = _im2col_reference(desc, coords, offsets, pred=True, rows_per_cta=desc.block_shape[0])
     torch.testing.assert_close(output.cpu(), expected)
     assert shadow_cell_from_address(storage.data_ptr() + 63).num_reads == 0
     assert shadow_cell_from_address(storage.data_ptr() + 64).num_reads != 0
