@@ -275,7 +275,7 @@ if __name__ == "__main__":
 # time, which also helps to hide some latency within a warp.
 
 if __name__ == "__main__":
-    k = 2048 * 256
+    k = 8192 * 256
     for name, kernel, num_warps in [("wmma_w4", wmma_kernel, 4), ("wmma_w8", wmma_kernel, 8),
                                     ("wmma_w8_s4", wmma_staged_kernel, 8)]:
         ms = triton.testing.do_bench(lambda: kernel[(1024, )](A, B, y, k, num_warps=num_warps))
@@ -283,9 +283,9 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# wmma_w4: 5.32 ms
-# wmma_w8: 6.75 ms
-# wmma_w8_s4: 4.69 ms
+# wmma_w4: 28.40 ms
+# wmma_w8: 34.29 ms
+# wmma_w8_s4: 26.87 ms
 # ```
 #
 # We can see here that with pipeline stages, 8 warps can finish even quicker
@@ -436,9 +436,9 @@ if __name__ == "__main__":
 
 # %%
 # ```
-# 4 warps: 8424 TFLOPS
-# 8 warps: 7860 TFLOPS
-# 8 warps, warp pipeline: 8842 TFLOPS
+# 4 warps: 8411 TFLOPS
+# 8 warps: 7877 TFLOPS
+# 8 warps, warp pipeline: 8758 TFLOPS
 # ```
 #
 # We can see the 8-warp version with warp pipeline is much better than the
