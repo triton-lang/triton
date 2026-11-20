@@ -1003,6 +1003,31 @@ def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, 
     kernel[(1, )](input_desc, out, FINISHED=FINISHED, num_warps=4, num_ctas=2)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+def test_sharded_accesses_to_replicated_shared_memory(device):
+    knobs.compilation.instrumentation_mode = "consan"
+
+    @gluon.jit
+    def kernel(out):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=[[0]])
+        x = ttgl.arange(0, 256, layout)
+        ttgl.barrier(cluster=True)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, x)
+        ttgl.barrier(cluster=True)
+        values = smem.load(layout)
+        # Each CTA reads its half locally and overwrites that same half in both replicas.
+        hopper.cluster.barrier(relaxed=True)
+        smem.store(values + 1)
+        ttgl.barrier(cluster=True)
+        prefix = smem.slice(0, 128, dim=0)
+        ttgl.store(out + ttgl.arange(0, 128, layout), prefix.load(layout))
+
+    out = torch.empty(128, dtype=torch.int32, device=device)
+    kernel[(1, )](out, num_ctas=2)
+    torch.testing.assert_close(out, torch.arange(1, 129, dtype=torch.int32, device=device))
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
     "MODE,BLOCK,SIZE_PER_THREAD,NUM_CTAS,FAILURE",

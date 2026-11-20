@@ -15,7 +15,6 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
@@ -574,15 +573,6 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
-LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
-                                         RankedTensorType regTy, bool isStore) {
-  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
-  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
-  auto regLayout = ttg::toLinearLayout(regTy);
-  return isStore ? invertAndComposeStore(sharedLayout, regLayout)
-                 : invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
-}
-
 void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   span |= translateXorMask(span, basis, numCTAs);
 }
@@ -651,18 +641,6 @@ Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
   return recipients;
 }
 
-Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
-                                     ttg::MemDescType memDescTy,
-                                     RankedTensorType regTy,
-                                     bool isStore = false) {
-  // Layout-less tensors can appear in intermediate/test IR but cannot encode a
-  // cross-CTA ownership mapping. Preserve the existing current-CTA behavior.
-  if (!regTy.getEncoding())
-    return currentCTAMask(b);
-  return getLocalMemoryRecipientCTAs(
-      b, getLocalLoadStoreConversion(memDescTy, regTy, isStore));
-}
-
 Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
                          Value ownerCTAs) {
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
@@ -691,23 +669,9 @@ Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
 
 Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
                        const ConSanTargetHooks &hooks) {
-  if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
-    return getLocalLoadStoreRecipientCTAs(b, load.getSrc().getType(),
-                                          load.getType());
-  }
-  if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
-    return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
-                                          store.getSrc().getType(),
-                                          /*isStore=*/true);
-  }
-  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
-    return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
-                                          store.getSrc().getType());
-  }
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op); alloc && alloc.getSrc()) {
-    return getLocalLoadStoreRecipientCTAs(
-        b, alloc.getType(), alloc.getSrc().getType(), /*isStore=*/true);
-  }
+  if (auto access = tti::getSharedMemoryAccess(op))
+    return getLocalMemoryRecipientCTAs(b, access->conversion,
+                                       access->multicastMask);
   auto indexed = [&](ttg::MemDescType memDesc, Value indices, unsigned axis,
                      Value mask = {}) -> Value {
     if (!hooks.supportsCrossCTASharedMemory() || ttg::lookupNumCTAs(op) == 1)
@@ -724,25 +688,6 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
   if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op))
     return indexed(atomic.getDst().getType(), atomic.getIndices(),
                    atomic.getAxis(), atomic.getMask());
-  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (ttg::lookupNumCTAs(op) == 1)
-      return currentCTAMask(b);
-    auto dstTy = cast<ttg::MemDescType>(tmaLoad.getResult().getType());
-    uint32_t broadcastMask =
-        tmaLoad.getMulticast() ? getBlockBroadcastMask(tmaLoad.getResult()) : 0;
-    LinearLayout messageToShared;
-    if (auto gather = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-      messageToShared = ttng::getTMAGatherScatterLayouts(
-                            gather.getXOffsets().getType(), dstTy)
-                            .messageToShared;
-    } else {
-      auto mode = isa<ttng::TensorDescIm2ColType>(tmaLoad.getDesc().getType())
-                      ? ttg::TMAMode::Im2Col
-                      : ttg::TMAMode::Tiled;
-      messageToShared = ttng::getTMAMessageLayouts(dstTy, mode).messageToShared;
-    }
-    return getLocalMemoryRecipientCTAs(b, messageToShared, broadcastMask);
-  }
   if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
     if (bulk.getMulticast())
       return getRecipientCTAsForBroadcastMasks(
