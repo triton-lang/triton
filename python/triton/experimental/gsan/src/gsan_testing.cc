@@ -386,27 +386,6 @@ void init_gsan_testing(py::module_ &m) {
       strides.push_back(desc.byteStride(dim));
     return strides;
   });
-  m.def("im2col_access_ranges",
-        [](py::bytes data, const std::vector<int> &coords,
-           const std::array<int16_t, 2> &blockShape,
-           const std::vector<int16_t> &offsets, int bytesPerElem, int warpId,
-           int numWarps) {
-          int rank = coords.size();
-          if (data.size() < 64 || rank < 3 || rank > 5 ||
-              offsets.size() != rank - 2 || bytesPerElem <= 0 ||
-              numWarps <= 0 || warpId < 0 || warpId >= numWarps)
-            throw py::value_error("Invalid im2col access arguments");
-          std::array<uint64_t, 8> descriptor;
-          std::memcpy(descriptor.data(), data.c_str(), sizeof(descriptor));
-          std::vector<std::array<uint64_t, 2>> ranges;
-          auto handleRow = [&](uintptr_t address, int bytes) {
-            ranges.push_back({address, static_cast<uint64_t>(bytes)});
-          };
-          gsan::forEachIm2ColRow(
-              descriptor.data(), coords.data(), rank, blockShape.data(),
-              offsets.data(), bytesPerElem, warpId, numWarps, handleRow);
-          return ranges;
-        });
   m.def("shadow_cell_size", [](uintptr_t addr, uintptr_t reserveBase) {
     return gsan::getShadowCellSize(addr, reserveBase);
   });
