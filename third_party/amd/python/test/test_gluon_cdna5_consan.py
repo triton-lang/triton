@@ -1,45 +1,16 @@
 # ruff: noqa: E402
 import pytest
-import subprocess
 import sys
 import os
 
 from triton._internal_testing import is_hip_cdna5
+from consan_subprocess import run_consan_command, run_consan_helper
 
 
 def _run_consan_subprocess(test_name, *args, timeout=120):
-    """Run a ConSan test in a subprocess, validate its outcome, and return stderr.
-
-    The subprocess pipe captures all stderr output including messages
-    flushed during process exit.
-    """
+    """Run a ConSan test in a subprocess, validate its outcome, and return stderr."""
     helper_script = os.path.join(os.path.dirname(__file__), "cdna5_consan_helper.py")
-    command = [sys.executable, helper_script, test_name] + [str(a) for a in args]
-    return _run_consan_command(command, timeout=timeout)
-
-
-def _run_consan_command(command, *, timeout):
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        pytest.fail(f"ConSan helper {command} timed out after {timeout}s.\n"
-                    f"stdout:\n{stdout.decode(errors='replace')}\n"
-                    f"stderr:\n{stderr.decode(errors='replace')}")
-    stdout = stdout.decode(errors="replace")
-    stderr = stderr.decode(errors="replace")
-    # A device assertion may stop execution before normal completion;
-    # the calling test checks the expected diagnostic.
-    # If no assertion was reported, require a successful exit and the
-    # completion marker printed after device synchronization.
-    if "device assertion failed" not in stderr:
-        assert proc.returncode == 0, (f"ConSan helper {command} exited with {proc.returncode}.\n"
-                                      f"stdout:\n{stdout}\nstderr:\n{stderr}")
-        assert "ConSan helper completed" in stdout.splitlines(), (f"ConSan helper {command} did not complete.\n"
-                                                                  f"stdout:\n{stdout}\nstderr:\n{stderr}")
-    return stderr
+    return run_consan_helper(helper_script, test_name, *args, timeout=timeout)
 
 
 @pytest.mark.parametrize(
@@ -57,10 +28,10 @@ def test_consan_subprocess_completion(script, timeout, error):
     # Exercise real subprocess exits and timeout cleanup without a GPU kernel.
     command = [sys.executable, "-c", script]
     if error is None:
-        _run_consan_command(command, timeout=timeout)
+        run_consan_command(command, timeout=timeout)
     else:
         with pytest.raises((AssertionError, pytest.fail.Exception), match=error):
-            _run_consan_command(command, timeout=timeout)
+            run_consan_command(command, timeout=timeout)
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
