@@ -148,12 +148,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
       return 0;
     return getAtomicResultScratchSize(op->getResult(0));
   }
-  if (isa<ttng::BarrierTestWaitOp, ttng::BarrierTestWaitReportOp>(op) &&
-      gpu::lookupNumWarps(op) > 1) {
-    // Multi-warp mbarrier tests broadcast their scalar predicate results
-    // through shared memory. Pack both report predicates into one byte.
-    return 1;
-  }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;

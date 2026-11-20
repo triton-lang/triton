@@ -83,8 +83,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_wait_barrier
   tt.func @test_wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
     // CHECK: mov.pred $0, 0;
-    // CHECK: mbarrier.test_wait.parity.shared::cta.b64 $0, [$1], $2;
+    // CHECK: @$3 mbarrier.test_wait.parity.shared::cta.b64 $0, [$1], $2;
     // CHECK: "=b,r,r,b"
+    // CHECK: nvvm.vote.sync all
     %complete = ttng.barrier_test_wait %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared0, #smem> -> i1
     // CHECK-NOT: st.shared::cta.b8
     // CHECK: llvm.return

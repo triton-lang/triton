@@ -59,57 +59,33 @@ bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
          targetInfo.getPtxVersion() >= 93;
 }
 
-Value createMbarrierTestWriterPredicate(Operation *op,
-                                        ConversionPatternRewriter &rewriter,
-                                        const NVIDIA::TargetInfo &targetInfo) {
-  if (ttg::lookupNumWarps(op) == 1)
-    return {};
-
+Value reduceMbarrierTestCompletion(Operation *op, Value complete,
+                                   ConversionPatternRewriter &rewriter) {
   auto loc = op->getLoc();
-  auto ctx = op->getContext();
-  auto freeVarMasks = getFreeVariableMasks(op->getResult(0).getType());
-  // The result is broadcast through CTA-local shared memory, so elect one
-  // writer per CTA rather than one writer across the cluster.
-  freeVarMasks[str_attr("block")] = 0;
-  return ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
-                                           targetInfo);
-}
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned numWarps = ttg::lookupNumWarps(op);
+  if (numWarps == 1)
+    return NVVM::VoteSyncOp::create(rewriter, loc, rewriter.getI1Type(),
+                                    b.i32_val(-1), complete,
+                                    NVVM::VoteSyncKind::all);
 
-SmallVector<Value> broadcastMbarrierTestResults(
-    Operation *op, ArrayRef<Value> results, Value writerPred,
-    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
-    const NVIDIA::TargetInfo &targetInfo) {
-  assert(!results.empty() && results.size() <= 8 &&
-         llvm::all_of(
-             results,
-             [](Value result) { return result.getType().isInteger(1); }) &&
-         "expected one to eight predicate results");
-  if (ttg::lookupNumWarps(op) == 1)
-    return SmallVector<Value>(results);
-
-  assert(op->hasAttr("allocation.offset") &&
-         "multi-warp mbarrier test requires shared scratch");
-  Value packed = b.zext(i8_ty, results.front());
-  for (auto [index, result] : llvm::enumerate(results.drop_front())) {
-    Value bit = b.zext(i8_ty, result);
-    bit = b.shl(bit, b.i8_val(index + 1));
-    packed = b.or_(packed, bit);
-  }
-
-  Value scratch =
-      LLVM::getSharedMemoryBase(op->getLoc(), rewriter, targetInfo, op);
-  targetInfo.storeShared(rewriter, op->getLoc(), scratch, packed, writerPred);
-  targetInfo.barrier(op->getLoc(), rewriter, ttg::AddrSpace::Local);
-  packed = targetInfo.loadShared(rewriter, op->getLoc(), scratch, i8_ty,
-                                 b.true_val());
-
-  SmallVector<Value> broadcast;
-  broadcast.reserve(results.size());
-  for (unsigned index = 0; index < results.size(); ++index) {
-    Value bit = b.and_(packed, b.i8_val(1 << index));
-    broadcast.push_back(b.icmp_ne(bit, b.i8_val(0)));
-  }
-  return broadcast;
+  // Warp-specialization lowering assigns this handle to the calling partition,
+  // including when this query is in an outlined helper. Use an explicit count
+  // and the non-aligned form: the other partitions need not reach this query.
+  Value barrierId = triton::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+  unsigned numThreads = numWarps * ttg::lookupThreadsPerWarp(rewriter);
+  // Model convergence and memory ordering just like a barrier intrinsic.
+  // NVVM's barrier reduction intrinsic does not accept a participant count.
+  auto reduce = LLVM::InlineAsmOp::create(
+      rewriter, loc, rewriter.getI1Type(), ValueRange{barrierId, complete},
+      "barrier.cta.red.and.pred $0, $1, " + std::to_string(numThreads) +
+          ", $2;",
+      "=b,r,b,~{memory}", /*has_side_effects=*/true, /*is_align_stack=*/false,
+      LLVM::TailCallKind::None, /*convergent=*/true,
+      LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                LLVM::AsmDialect::AD_ATT),
+      ArrayAttr{});
+  return reduce.getRes();
 }
 
 template <typename OpTy>
@@ -503,10 +479,6 @@ struct BarrierTestWaitOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
-    Value writerPred =
-        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
-    if (writerPred)
-      pred = pred ? b.and_(pred, writerPred) : writerPred;
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
@@ -525,10 +497,8 @@ struct BarrierTestWaitOpConversion
       ptx = R"(
 {
 	mov.pred $0, 0;
-	@!$3 bra.uni skipTest;
-	mbarrier.test_wait.parity)" +
+	@$3 mbarrier.test_wait.parity)" +
             phaseType + R"(.shared::cta.b64 $0, [$1], $2;
-	skipTest:
 }
 )";
       operands.push_back(ptxBuilder.newOperand(pred, "b"));
@@ -544,9 +514,8 @@ struct BarrierTestWaitOpConversion
     auto &test = *ptxBuilder.create(ptx);
     test(operands, /*onlyAttachMLIRArgs=*/true);
     Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI1Type());
-    auto results = broadcastMbarrierTestResults(op, {complete}, writerPred,
-                                                rewriter, b, *targetInfo);
-    rewriter.replaceOp(op, results);
+    complete = reduceMbarrierTestCompletion(op, complete, rewriter);
+    rewriter.replaceOp(op, complete);
     return success();
   }
 };
@@ -577,10 +546,6 @@ struct BarrierTestWaitReportOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto pred = adaptor.getPred();
-    Value writerPred =
-        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
-    if (writerPred)
-      pred = pred ? b.and_(pred, writerPred) : writerPred;
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
       pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
@@ -598,9 +563,7 @@ struct BarrierTestWaitReportOpConversion
 {
 	mov.pred $0, 0;
 	mov.pred $1, 0;
-	@!$4 bra.uni skipTest;
-	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
-	skipTest:
+	@$4 mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
 }
 )";
       operands.push_back(ptxBuilder.newOperand(pred, "b"));
@@ -619,8 +582,11 @@ struct BarrierTestWaitReportOpConversion
     SmallVector<Value> results = {
         b.extract_val(rewriter.getI1Type(), packed, 0),
         b.extract_val(rewriter.getI1Type(), packed, 1)};
-    results = broadcastMbarrierTestResults(op, results, writerPred, rewriter, b,
-                                           *targetInfo);
+    results[0] = reduceMbarrierTestCompletion(op, results[0], rewriter);
+    // The report is unspecified on an incomplete query. Once every thread
+    // observes completion of this generation, all report predicates agree.
+    // Gate it so the raw IR report result is uniform even before completion.
+    results[1] = b.and_(results[0], results[1]);
     rewriter.replaceOp(op, results);
     return success();
   }

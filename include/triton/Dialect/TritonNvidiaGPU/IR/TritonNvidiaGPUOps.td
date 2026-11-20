@@ -433,13 +433,13 @@ def TTNG_BarrierTestWaitOp : TTNG_Op<"barrier_test_wait", [
     phase. The latter requires the mbarrier v1 layout.
 
     This operation is supported only when `ttg.num-ctas` is 1. Its predicate
-    must be uniform among the participating threads. When multiple warps
-    participate, they must execute the operation convergently so the result can
-    be broadcast within the warp group.
+    must be uniform among the participating threads. Completion is reduced
+    across the execution region and is true only when every participating
+    thread observes completion. Participating warps must execute convergently.
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", BarrierSharedRead>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase,
     Optional<I1>:$pred,
     DefaultValuedAttr<TTNG_MBarrierPhaseTypeAttr,
@@ -465,13 +465,14 @@ def TTNG_BarrierTestWaitReportOp : TTNG_Op<"barrier_test_wait_report", [
     `i1` values.
 
     This operation is supported only when `ttg.num-ctas` is 1. Its predicate
-    must be uniform among the participating threads. When multiple warps
-    participate, they must execute the operation convergently so the results
-    can be broadcast within the warp group.
+    must be uniform among the participating threads. Completion is reduced
+    across the execution region and is true only when every participating
+    thread observes completion. The report predicate is zero unless completion
+    is true. Participating warps must execute convergently.
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", BarrierSharedRead>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase,
     Optional<I1>:$pred
   );

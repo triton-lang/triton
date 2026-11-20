@@ -575,6 +575,11 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
   bool hasScratch = scratchId != Allocation::InvalidBufferId;
   fixed =
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
+  // Barrier queries finish with a completion reduction over their execution
+  // region, even though result transport no longer needs shared scratch.
+  if (isa<ttng::BarrierTestWaitOp, ttng::BarrierTestWaitReportOp>(op))
+    fixed.after =
+        triton::gpu::lookupNumWarps(op) == 1 ? warpBarrier : fullBarrier;
   if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
       barrier && barrier.isPerWarp())
     model.arrivalMode = ArrivalMode::PerWarp;

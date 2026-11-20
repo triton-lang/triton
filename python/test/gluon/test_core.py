@@ -1823,6 +1823,83 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     assert out.item() == 1
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("query", ["primary", "conditional", "validity"])
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8])
+@pytest.mark.parametrize("warp_specialized", [False, True])
+def test_mbarrier_test_wait_results(query, num_warps, warp_specialized, device):
+    # Check uniform results for incomplete, predicated-off, and completed queries.
+    # WS polling also checks partition-local barriers and prevents query hoisting.
+
+    @gluon.jit
+    def test(bar, pred, QUERY: ttgl.constexpr):
+        if QUERY == "validity":
+            return rubin.mbarrier.test_wait_validity(bar, 0, pred=pred)
+        else:
+            done = rubin.mbarrier.test_wait(bar, 0, pred=pred, phase_type=QUERY)
+            return done, done
+
+    @gluon.jit(noinline=True)
+    def worker(bar, out, pred_ptr, flag_ptr, QUERY: ttgl.constexpr, WS: ttgl.constexpr):
+        width: ttgl.constexpr = 32 * ttgl.num_warps()
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+        offsets = ttgl.arange(0, width, layout=layout)
+        # Check every lane's copy of both scalar results, including when the
+        # query lives in an outlined helper called by a WS worker partition.
+        done, valid = test(bar, True, QUERY)
+        ttgl.store(out + offsets, done)
+        ttgl.store(out + width + offsets, valid)
+        if WS:
+            ttgl.atomic_store(flag_ptr, 1, sem="release", scope="cta")
+            while not done:
+                done, valid = test(bar, True, QUERY)
+        else:
+            rubin.mbarrier.arrive(bar)
+            rubin.mbarrier.wait(bar, 0)
+        pred = ttgl.load(pred_ptr) != 0
+        done, valid = test(bar, pred, QUERY)
+        ttgl.store(out + 2 * width + offsets, done)
+        ttgl.store(out + 3 * width + offsets, valid)
+        done, valid = test(bar, True, QUERY)
+        ttgl.store(out + 4 * width + offsets, done)
+        ttgl.store(out + 5 * width + offsets, valid)
+
+    @gluon.jit
+    def publisher(bar, flag_ptr):
+        # This partition's atomic poll also uses its own named barrier. It
+        # must be independent of the worker's completion reduction barrier.
+        ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="cta")
+        rubin.mbarrier.arrive(bar)
+
+    @gluon.jit
+    def kernel(out, pred_ptr, flag_ptr, QUERY: ttgl.constexpr, WS: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=1)
+        if WS:
+            ttgl.warp_specialize([(publisher, (bar, flag_ptr)), (worker, (bar, out, pred_ptr, flag_ptr, QUERY, WS))],
+                                 [WORKER_WARPS])
+        else:
+            worker(bar, out, pred_ptr, flag_ptr, QUERY, WS)
+        rubin.mbarrier.invalidate(bar)
+
+    width = 32 * num_warps
+    out = torch.full((6, width), -1, dtype=torch.int32, device=device)
+    pred = torch.zeros((), dtype=torch.int32, device=device)
+    flag = torch.zeros((), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](out, pred, flag, query, warp_specialized, num_warps,
+                             num_warps=4 if warp_specialized else num_warps)
+    expected = torch.zeros_like(out)
+    expected[4:] = 1
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    ptx = compiled.asm["ptx"]
+    if num_warps == 1:
+        assert "vote.sync.all.pred" in ptx
+        assert "barrier.cta.red.and.pred" not in ptx
+    else:
+        assert re.search(rf"barrier\.cta\.red\.and\.pred\s+%p\d+,\s*%r\d+,\s*{width},", ptx)
+    assert "skipTest" not in ptx
+
+
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
 # along.  Two CTAs share a class when (id_a & ~mask) == (id_b & ~mask).
 #
@@ -8559,13 +8636,12 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
 # from a separate stream.
 @gluon.jit
 def request_tma_validcheck_data_update(flag_ptr):
-    ttgl.atomic_cas(flag_ptr, 0, 1)
+    ttgl.atomic_store(flag_ptr, 1, sem="release", scope="cta")
 
 
 @gluon.jit
 def wait_for_tma_validcheck_data_update_request(flag_ptr):
-    while ttgl.atomic_cas(flag_ptr, 1, 1) != 1:
-        pass
+    ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="cta")
 
 
 @pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
@@ -8716,7 +8792,8 @@ def test_tma_validcheck(report_validity):
 @pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
 @pytest.mark.parametrize("num_stages", [2, 4])
 @pytest.mark.parametrize("num_blocks", [3, 8, 13])
-def test_tma_validcheck_multi_stage(num_stages, num_blocks):
+@pytest.mark.parametrize("retry_warps", [1, 4])
+def test_tma_validcheck_multi_stage(num_stages, num_blocks, retry_warps):
     # Use a dedicated "retry warp" for checking data validity and re-issuing TMA.
     # The TMA warp is unchanged from the ordinary form while the retry protocol
     # remains fully non-blocking.
@@ -8879,6 +8956,7 @@ def test_tma_validcheck_multi_stage(num_stages, num_blocks):
         smem_layout: ttgl.constexpr,
         dtype: ttgl.constexpr,
         REPORT_VALIDITY: ttgl.constexpr,
+        RETRY_WARPS: ttgl.constexpr,
     ):
         input_desc = rubin.tma.make_tensor_descriptor(
             input_ptr,
@@ -8907,7 +8985,7 @@ def test_tma_validcheck_multi_stage(num_stages, num_blocks):
                               REPORT_VALIDITY)),
                 (data_init_warp, (input_ptr, valid_input_ptr, order_ptr, need_update_ptr, num_elems, block_size)),
             ],
-            (1, 1, 1),
+            (1, RETRY_WARPS, 1),
             (128, 128, 32),
         )
 
@@ -8953,6 +9031,7 @@ def test_tma_validcheck_multi_stage(num_stages, num_blocks):
         smem_layout,
         ttgl.float16,
         report_validity,
+        retry_warps,
         num_warps=4,
     )
     torch.testing.assert_close(output, valid_input, rtol=0, atol=0)
