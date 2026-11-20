@@ -1665,15 +1665,36 @@ else:
 _AGGREGATE_MISSING = object()
 
 
-def _is_host_aggregate_field_value(ann, value):
-    # raw values an aggregate constructed on the host may hold in a runtime field
+def _is_raw_aggregate_field_value(ann, value):
+    # raw constructor values a runtime field accepts; _wrap_aggregate_field turns
+    # them into what the field holds once the constructor has run
     if ann is tensor:
+        if isinstance(value, constexpr):
+            value = value.value
         return isinstance(value, (int, float, bool)) or hasattr(value, "data_ptr")
     if ann is tensor_descriptor or ann is tensor_descriptor_base:
         return hasattr(value, "base") and hasattr(value, "block_shape")  # TensorDescriptor
     if ann is tuple:
         return isinstance(value, builtins.tuple)
     return False
+
+
+def _wrap_aggregate_field(ann, value, _semantic):
+    """Turn a constructor value into what the annotated field holds.
+
+    On the host (`_semantic` is None) a runtime field keeps its raw value: it is
+    lifted to a kernel parameter when the instance is passed to a kernel, so a
+    Python number in a `tl.tensor` field is a runtime scalar. Inside a kernel every
+    field is a Triton value, and a number in a `tl.tensor` field becomes a scalar
+    tensor. The auto-generated and user-written constructors share this rule.
+    """
+    if ann is tensor and isinstance(value, (int, float, bool, constexpr)):
+        if _semantic is None:
+            return value.value if isinstance(value, constexpr) else value
+        return _semantic.to_tensor(value)
+    if isinstance(value, base_value) or (_semantic is None and ann is not constexpr):
+        return value
+    return _wrap_init_args(value)
 
 
 class _aggregate_cache_key:
@@ -1730,7 +1751,7 @@ def _aggregate(cls):
 
     if init is None:
 
-        def init(self, *args, **kwargs):
+        def init(self, *args, _semantic=None, **kwargs):
             if len(args) > len(field_names):
                 raise TypeError(f"{cls.__name__}.__init__() takes {len(field_names) + 1} positional arguments "
                                 f"but {len(args) + 1} were given")
@@ -1747,8 +1768,7 @@ def _aggregate(cls):
                 else:
                     raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
 
-                value = _wrap_init_args(value)
-                setattr(self, name, value)
+                setattr(self, name, _wrap_aggregate_field(all_annotations[name], value, _semantic))
 
             if kwargs:
                 unexpected = next(iter(kwargs))
@@ -1758,7 +1778,6 @@ def _aggregate(cls):
 
     # Probe the constructor once: aggregates are also constructed on the host, per launch.
     if isinstance(init, JITCallable):
-        # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
         init_takes_semantic = init_takes_generator = False
     else:
         init_params = inspect.signature(init).parameters
@@ -1793,12 +1812,13 @@ def _aggregate(cls):
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
-            # Inside a kernel every runtime field must be a Triton value.
-            if _semantic is not None:
-                for name, ann in all_annotations.items():
-                    value = getattr(instance, name)
-                    if ann is not constexpr and not isinstance(value, base_value):
-                        setattr(instance, name, _wrap_init_args(value))
+            # Turn what the constructor assigned into what each field holds; see
+            # _wrap_aggregate_field for the host and in-kernel rules.
+            for name, ann in all_annotations.items():
+                value = getattr(instance, name)
+                wrapped = _wrap_aggregate_field(ann, value, _semantic)
+                if wrapped is not value:
+                    setattr(instance, name, wrapped)
 
             # Lock further attribute assignment after __init__.
             object.__setattr__(instance, "_aggregate_init_complete", True)
@@ -1809,7 +1829,7 @@ def _aggregate(cls):
         def __setattr__(self, name, value):
             if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, all_annotations[name]) and not _is_host_aggregate_field_value(
+            if not isinstance(value, all_annotations[name]) and not _is_raw_aggregate_field_value(
                     all_annotations[name], value):
                 raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
             if getattr(self, "_aggregate_init_complete", False):

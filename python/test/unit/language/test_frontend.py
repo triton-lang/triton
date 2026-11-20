@@ -868,18 +868,36 @@ def test_aggregate_auto_init_with_tuples():
         shape: tl.tuple
         strides: tl.tuple
 
+    # On the host a runtime field keeps the raw value it was constructed with, so
+    # the instance can be passed to a kernel, where the tuples are lifted in place.
     state = State(Shape(3, tl.constexpr(7)), (7, tl.constexpr(1)))
-    assert isinstance(state.shape, tl.tuple)
-    assert isinstance(state.shape.x, tl.constexpr)
-    assert isinstance(state.shape.y, tl.constexpr)
-    assert state.shape[0].value == 3
-    assert state.shape[1].value == 7
-
-    assert isinstance(state.strides, tl.tuple)
-    assert isinstance(state.strides[0], tl.constexpr)
-    assert isinstance(state.strides[1], tl.constexpr)
-    assert state.strides[0].value == 7
+    assert type(state.shape) is Shape
+    assert state.shape.x == 3
+    assert state.shape.y.value == 7
+    assert type(state.strides) is tuple
+    assert state.strides[0] == 7
     assert state.strides[1].value == 1
+
+    # The raw ints become runtime parameters, the `tl.constexpr`s stay constexprs.
+    @triton.jit
+    def kernel(state):
+        tl.static_assert(state.shape.y == 7)
+        tl.static_assert(state.strides[1] == 1)
+        _ = state.shape.x + state.strides[0]
+
+    assert _frontend_signature(kernel, (state, ))["state"] == ("constexpr", Shape("i32",
+                                                                                  "constexpr"), ("i32", "constexpr"))
+    run_parser(kernel, args=(state, ))
+
+    # Inside a kernel the same constructor wraps the tuples into `tl.tuple`s.
+    @triton.jit
+    def kernel_side():
+        s = State(Shape(3, 7), (7, 1))
+        tl.static_assert(isinstance(s.shape, tl.tuple))
+        tl.static_assert(s.shape.x == 3)
+        tl.static_assert(s.strides[0] == 7)
+
+    run_parser(kernel_side)
 
 
 def test_aggregate_auto_init_respects_user_defined_init():
@@ -1434,6 +1452,68 @@ def test_aggregate_kernel_side_user_init_wraps_raw_members():
     # The `shape` members stayed compile-time: `out_ptr` is the only parameter.
     interface = next(line for line in module.splitlines() if "tt.func public @" in line)
     assert interface.count("%arg") == 1
+
+
+@triton.aggregate
+class _AutoScale:
+    # Auto-generated __init__: a scalar runtime member and a compile-time member.
+    scale: tl.tensor
+    gain: tl.constexpr
+
+    @triton.jit
+    def apply(self, x):
+        return x * self.scale * self.gain
+
+
+@triton.jit
+def _host_scale_kernel(out_ptr, scaler, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    tl.store(out_ptr + offs, scaler.apply(offs.to(tl.float32)))
+
+
+def test_aggregate_scalar_tensor_field_host_construction():
+    # A Python number handed to a `tl.tensor` field is a *runtime* member: on the
+    # host it stays raw and is lifted to a scalar kernel parameter. The
+    # auto-generated constructor (`_AutoScale`) and a user-written one that assigns
+    # the raw value (`_NestedScale`) agree.
+    torch = pytest.importorskip("torch")
+    out = torch.empty((16, ))
+
+    auto = _AutoScale(0.5, 2.0)
+    assert auto.scale == 0.5 and auto.gain == 2.0
+    expected = ("constexpr", "fp32", "constexpr")
+    assert _frontend_signature(_host_scale_kernel, (out, auto, 16))["scaler"] == expected
+    assert _frontend_signature(_host_scale_kernel, (out, _NestedScale(0.5, 2.0), 16))["scaler"] == expected
+
+    # A `tl.constexpr`-wrapped number is still a runtime member of a `tl.tensor` field.
+    assert _AutoScale(tl.constexpr(0.5), 2.0).scale == 0.5
+
+    # The kernel takes the scalar as an f32 parameter, next to the output pointer.
+    module = run_parser(_host_scale_kernel, args=(out, auto, 16)).str_nodebug()
+    interface = next(line for line in module.splitlines() if "tt.func public @_host_scale_kernel" in line)
+    assert interface.count("%arg") == 2 and " f32" in interface
+
+
+@triton.jit
+def _kernel_side_scalar_tensor_field(out_ptr, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    x = offs.to(tl.float32)
+    # Literals handed to the `tl.tensor` member become scalar tensors, through the
+    # auto-generated constructor and a user-written one alike.
+    a = _AutoScale(0.5, 2.0)
+    b = _NestedScale(0.25, 4.0)
+    tl.store(out_ptr + offs, a.apply(x) + b.apply(x))
+
+
+def test_aggregate_scalar_tensor_field_kernel_side_construction():
+    torch = pytest.importorskip("torch")
+
+    module = run_parser(_kernel_side_scalar_tensor_field, args=(torch.empty((16, )), 16)).str_nodebug()
+    # The runtime scalars are materialized as constants; the constexpr gains fold too.
+    for value in ("5.000000e-01", "2.500000e-01", "2.000000e+00", "4.000000e+00"):
+        assert f"arith.constant {value} : f32" in module
+    interface = next(line for line in module.splitlines() if "tt.func public @" in line)
+    assert interface.count("%arg") == 1  # only out_ptr
 
 
 @triton.aggregate
