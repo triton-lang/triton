@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir {
 namespace triton {
@@ -47,16 +48,28 @@ public:
       auto order = getOrderForMemory(srcType);
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
-      auto tmpType = triton::gpu::MemDescType::get(
-          dstType.getShape(), dstType.getElementType(),
-          triton::gpu::SwizzledSharedEncodingAttr::get(
-              mod.getContext(), dstDotOp, srcType.getShape(), order,
-              triton::gpu::getCGALayout(srcEncoding), srcType.getElementType()),
-          sharedMemorySpace);
-      auto tmp = triton::gpu::LocalAllocOp::create(builder, cvtOp.getLoc(),
-                                                   tmpType, cvtOp.getSrc());
-      auto newConvert = triton::gpu::LocalLoadOp::create(
-          builder, cvtOp.getLoc(), dstType, tmp);
+      Attribute sharedEncoding = SwizzledSharedEncodingAttr::get(
+          mod.getContext(), dstDotOp, srcType.getShape(), order,
+          getCGALayout(srcEncoding), srcType.getElementType());
+      // Stage the original tile when it also has other users. CSE can then
+      // share the allocation if those users need the same physical layout.
+      Value src = cvtOp.getSrc();
+      auto trans = src.getDefiningOp<TransOp>();
+      bool stageBeforeTranspose = trans && !trans.getSrc().hasOneUse();
+      if (stageBeforeTranspose) {
+        sharedEncoding = inferSrcEncoding(trans, sharedEncoding);
+        src = trans.getSrc();
+      }
+      auto tileType = cast<RankedTensorType>(src.getType());
+      auto tmpType =
+          MemDescType::get(tileType.getShape(), tileType.getElementType(),
+                           sharedEncoding, sharedMemorySpace);
+      Value tmp = LocalAllocOp::create(builder, cvtOp.getLoc(), tmpType, src);
+      if (stageBeforeTranspose)
+        tmp = MemDescTransOp::create(builder, cvtOp.getLoc(), tmp,
+                                     trans.getOrder());
+      auto newConvert =
+          LocalLoadOp::create(builder, cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
     });
