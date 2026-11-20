@@ -79,24 +79,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK-LABEL: test_wait_barrier
-  tt.func @test_wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
-    // CHECK: mov.pred $0, 0;
-    // CHECK: @$3 mbarrier.test_wait.parity.shared::cta.b64 $0, [$1], $2;
-    // CHECK: "=b,r,r,b"
-    // CHECK: nvvm.vote.sync all
-    %complete = ttng.barrier_test_wait %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared0, #smem> -> i1
-    // CHECK-NOT: st.shared::cta.b8
-    // CHECK: llvm.return
-    tt.return
-  }
-}
-
-// -----
-
-#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: wait_barrier
   tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {

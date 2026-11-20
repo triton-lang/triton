@@ -454,72 +454,6 @@ struct WaitBarrierOpConversion
   }
 };
 
-struct BarrierTestWaitOpConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierTestWaitOp> {
-  const NVIDIA::TargetInfo *targetInfo;
-  BarrierTestWaitOpConversion(LLVMTypeConverter &typeConverter,
-                              PatternBenefit benefit,
-                              NVIDIA::TargetInfo &targetInfo)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::BarrierTestWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    bool conditional =
-        op.getPhaseType() == triton::nvidia_gpu::MBarrierPhaseType::CONDITIONAL;
-    if (conditional && !supportsMbarV1Layout(*targetInfo))
-      return op.emitError(
-          "conditional mbarrier test requires mbarrier v1 layout support");
-
-    auto barrierTy = op.getAlloc().getType();
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getAlloc(),
-        typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto pred = adaptor.getPred();
-    if (auto leaderPred =
-            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
-      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
-    bool predicated = pred && !matchPattern(pred, m_NonZero());
-    std::string phaseType =
-        conditional ? ".phase_type::conditional" : std::string();
-
-    ::mlir::triton::PTXBuilder ptxBuilder;
-    SmallVector<::mlir::triton::PTXBuilder::Operand *, 4> operands = {
-        ptxBuilder.newOperand("=b"),
-        ptxBuilder.newOperand(smemObj.getBase(), "r"),
-        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
-
-    std::string ptx;
-    if (predicated) {
-      ptx = R"(
-{
-	mov.pred $0, 0;
-	@$3 mbarrier.test_wait.parity)" +
-            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
-}
-)";
-      operands.push_back(ptxBuilder.newOperand(pred, "b"));
-    } else {
-      ptx = R"(
-{
-	mbarrier.test_wait.parity)" +
-            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
-}
-)";
-    }
-
-    auto &test = *ptxBuilder.create(ptx);
-    test(operands, /*onlyAttachMLIRArgs=*/true);
-    Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI1Type());
-    complete = reduceMbarrierTestCompletion(op, complete, rewriter);
-    rewriter.replaceOp(op, complete);
-    return success();
-  }
-};
-
 struct BarrierTestWaitReportOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::BarrierTestWaitReportOp> {
@@ -583,9 +517,8 @@ struct BarrierTestWaitReportOpConversion
         b.extract_val(rewriter.getI1Type(), packed, 0),
         b.extract_val(rewriter.getI1Type(), packed, 1)};
     results[0] = reduceMbarrierTestCompletion(op, results[0], rewriter);
-    // The report is unspecified on an incomplete query. Once every thread
-    // observes completion of this generation, all report predicates agree.
-    // Gate it so the raw IR report result is uniform even before completion.
+    // Force the report to false until all threads observe completion,
+    // since PTX leaves it undefined for incomplete queries.
     results[1] = b.and_(results[0], results[1]);
     rewriter.replaceOp(op, results);
     return success();
@@ -849,7 +782,6 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<BarrierTestWaitOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<BarrierTestWaitReportOpConversion>(typeConverter, benefit,
                                                   targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit,

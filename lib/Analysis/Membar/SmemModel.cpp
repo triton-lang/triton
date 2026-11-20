@@ -577,7 +577,7 @@ void SMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
   // Barrier queries finish with a completion reduction over their execution
   // region, even though result transport no longer needs shared scratch.
-  if (isa<ttng::BarrierTestWaitOp, ttng::BarrierTestWaitReportOp>(op))
+  if (isa<ttng::BarrierTestWaitReportOp>(op))
     fixed.after =
         triton::gpu::lookupNumWarps(op) == 1 ? warpBarrier : fullBarrier;
   if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);

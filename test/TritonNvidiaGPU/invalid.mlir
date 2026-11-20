@@ -3,19 +3,6 @@
 #shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @barrier_test_wait_multicta(
-      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %phase: i32) {
-    // expected-error @below {{is only supported when ttg.num-ctas is 1}}
-    %done = ttng.barrier_test_wait %barrier, %phase : !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> i1
-    tt.return
-  }
-}
-
-// -----
-
-#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @barrier_test_wait_report_multicta(
       %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %phase: i32) {
     // expected-error @below {{is only supported when ttg.num-ctas is 1}}

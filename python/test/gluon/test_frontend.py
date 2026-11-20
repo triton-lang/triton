@@ -1853,8 +1853,6 @@ def rubin_tma_validity_kernel(input_desc, XBLOCK: ttgl.constexpr, cache_policy: 
 
     rubin.mbarrier.expect(bar, input_desc.block_type.nbytes)
     rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity="per_16B_fp16", cache_policy=cache_policy)
-    _ = rubin.mbarrier.test_wait(bar, 0)
-    _ = rubin.mbarrier.test_wait(bar, 0, phase_type="conditional")
     done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
     _ = done & valid
     rubin.mbarrier.wait(bar, 0, phase_type="conditional")
@@ -1879,35 +1877,29 @@ def test_rubin_tma_validity_ir(cache_policy):
     assert "reportValidity = per_16B_fp16" in ir
     if cache_policy is not None:
         assert "cachePolicy = #ttng.cache_policy<l2_primary = evict_first" in ir
-    assert ir.count("ttng.barrier_test_wait ") == 2
-    assert "ttng.barrier_test_wait" in ir and ", conditional :" in ir
     assert ir.count("ttng.barrier_test_wait_report") == 1
     assert "arith.xori" in ir and "arith.andi" in ir
     assert "ttng.wait_barrier" in ir and ", conditional :" in ir
 
 
 @gluon.jit
-def rubin_mbarrier_test_wait_multicta_kernel(op: ttgl.constexpr):
+def rubin_mbarrier_test_wait_validity_multicta_kernel():
     bar = ttgl.allocate_shared_memory(
         ttgl.int64,
         [1],
         rubin.mbarrier.MBarrierLayout(),
     )
-    if op == "test_wait":
-        _ = rubin.mbarrier.test_wait(bar, 0)
-    else:
-        _ = rubin.mbarrier.test_wait_validity(bar, 0)
+    _ = rubin.mbarrier.test_wait_validity(bar, 0)
 
 
-@pytest.mark.parametrize("op", ["test_wait", "test_wait_validity"])
-def test_rubin_mbarrier_test_wait_rejects_multicta(op):
+def test_rubin_mbarrier_test_wait_validity_rejects_multicta():
     with pytest.raises(CompilationError) as exc:
         run_parser(
-            rubin_mbarrier_test_wait_multicta_kernel,
-            *make_args(op, num_ctas=2),
+            rubin_mbarrier_test_wait_validity_multicta_kernel,
+            *make_args(num_ctas=2),
             target=RUBIN_TARGET,
         )
-    assert f"mbarrier.{op} is only supported when num_ctas == 1" in str(exc.value.__cause__)
+    assert "mbarrier.test_wait_validity is only supported when num_ctas == 1" in str(exc.value.__cause__)
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])

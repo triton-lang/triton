@@ -487,25 +487,6 @@ Type WaitBarrierOp::getPredicateOperandTypeLike() {
   return IntegerType::get(getContext(), 1);
 }
 
-// -- BarrierTestWaitOp --
-LogicalResult BarrierTestWaitOp::verify() {
-  if (gpu::lookupNumCTAs(*this) != 1)
-    return emitOpError("is only supported when ttg.num-ctas is 1");
-  return success();
-}
-
-TypedValue<MemDescType> BarrierTestWaitOp::getBarrier() { return getAlloc(); }
-
-Value BarrierTestWaitOp::getPredicateOperand() { return getPred(); }
-
-void BarrierTestWaitOp::setPredicateOperand(Value pred) {
-  getPredMutable().assign(pred);
-}
-
-Type BarrierTestWaitOp::getPredicateOperandTypeLike() {
-  return IntegerType::get(getContext(), 1);
-}
-
 // -- BarrierTestWaitReportOp --
 LogicalResult BarrierTestWaitReportOp::verify() {
   if (gpu::lookupNumCTAs(*this) != 1)

@@ -21,14 +21,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NOT: st.shared
     // CHECK-NOT: llvm.load
 
-    // CHECK: @$3 mbarrier.test_wait.parity.phase_type::conditional.shared::cta.b64 $0, [$1], $2;
-    %conditional = ttng.barrier_test_wait %alloc, %phase, %pred, conditional : !ttg.memdesc<1xi64, #shared, #smem, mutable> -> i1
-    // CHECK: barrier.cta.red.and.pred $0, $1, 128, $2;
-    // CHECK-NOT: st.shared
-    // CHECK-NOT: llvm.load
-    // Keep both completion and report results live through the reductions.
-    %combined = arith.andi %done, %reported : i1
-    %result = arith.andi %combined, %conditional : i1
+    // Keep both completion and report results live through the reduction.
+    %result = arith.andi %done, %reported : i1
     tt.store %out, %result : !tt.ptr<i1>
     tt.return
   }

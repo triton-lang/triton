@@ -1824,43 +1824,34 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-@pytest.mark.parametrize("query", ["primary", "conditional", "validity"])
 @pytest.mark.parametrize("num_warps", [1, 2, 4, 8])
 @pytest.mark.parametrize("warp_specialized", [False, True])
-def test_mbarrier_test_wait_results(query, num_warps, warp_specialized, device):
+def test_mbarrier_test_wait_validity_results(num_warps, warp_specialized, device):
     # Check uniform results for incomplete, predicated-off, and completed queries.
     # WS polling also checks partition-local barriers and prevents query hoisting.
 
-    @gluon.jit
-    def test(bar, pred, QUERY: ttgl.constexpr):
-        if QUERY == "validity":
-            return rubin.mbarrier.test_wait_validity(bar, 0, pred=pred)
-        else:
-            done = rubin.mbarrier.test_wait(bar, 0, pred=pred, phase_type=QUERY)
-            return done, done
-
     @gluon.jit(noinline=True)
-    def worker(bar, out, pred_ptr, flag_ptr, QUERY: ttgl.constexpr, WS: ttgl.constexpr):
+    def worker(bar, out, pred_ptr, flag_ptr, WS: ttgl.constexpr):
         width: ttgl.constexpr = 32 * ttgl.num_warps()
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
         offsets = ttgl.arange(0, width, layout=layout)
         # Check every lane's copy of both scalar results, including when the
         # query lives in an outlined helper called by a WS worker partition.
-        done, valid = test(bar, True, QUERY)
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
         ttgl.store(out + offsets, done)
         ttgl.store(out + width + offsets, valid)
         if WS:
             ttgl.atomic_store(flag_ptr, 1, sem="release", scope="cta")
             while not done:
-                done, valid = test(bar, True, QUERY)
+                done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
         else:
             rubin.mbarrier.arrive(bar)
             rubin.mbarrier.wait(bar, 0)
         pred = ttgl.load(pred_ptr) != 0
-        done, valid = test(bar, pred, QUERY)
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0, pred=pred)
         ttgl.store(out + 2 * width + offsets, done)
         ttgl.store(out + 3 * width + offsets, valid)
-        done, valid = test(bar, True, QUERY)
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
         ttgl.store(out + 4 * width + offsets, done)
         ttgl.store(out + 5 * width + offsets, valid)
 
@@ -1872,21 +1863,21 @@ def test_mbarrier_test_wait_results(query, num_warps, warp_specialized, device):
         rubin.mbarrier.arrive(bar)
 
     @gluon.jit
-    def kernel(out, pred_ptr, flag_ptr, QUERY: ttgl.constexpr, WS: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+    def kernel(out, pred_ptr, flag_ptr, WS: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
         bar = rubin.mbarrier.allocate_mbarrier()
         rubin.mbarrier.init(bar, count=1)
         if WS:
-            ttgl.warp_specialize([(publisher, (bar, flag_ptr)), (worker, (bar, out, pred_ptr, flag_ptr, QUERY, WS))],
+            ttgl.warp_specialize([(publisher, (bar, flag_ptr)), (worker, (bar, out, pred_ptr, flag_ptr, WS))],
                                  [WORKER_WARPS])
         else:
-            worker(bar, out, pred_ptr, flag_ptr, QUERY, WS)
+            worker(bar, out, pred_ptr, flag_ptr, WS)
         rubin.mbarrier.invalidate(bar)
 
     width = 32 * num_warps
     out = torch.full((6, width), -1, dtype=torch.int32, device=device)
     pred = torch.zeros((), dtype=torch.int32, device=device)
     flag = torch.zeros((), dtype=torch.int32, device=device)
-    compiled = kernel[(1, )](out, pred, flag, query, warp_specialized, num_warps,
+    compiled = kernel[(1, )](out, pred, flag, warp_specialized, num_warps,
                              num_warps=4 if warp_specialized else num_warps)
     expected = torch.zeros_like(out)
     expected[4:] = 1
