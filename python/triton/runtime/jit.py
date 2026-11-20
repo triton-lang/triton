@@ -381,6 +381,9 @@ class KernelInterface(Generic[T]):
 def serialize_specialization_data(name, signature, constants, attrs, options, key, target):
 
     def _encode_constant(value):
+        if isinstance(value, str):
+            # Bare strings are also used for dtype constants in existing specialization data.
+            return {"str": value}
         if value.__class__.__name__ == "dtype":
             return str(value)
         if value.__class__.__name__ == "constexpr":
@@ -863,6 +866,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
             if tl.dtype.is_dtype(value):
                 return tl.dtype(value)
             if isinstance(value, dict):
+                if 'str' in value:
+                    return value['str']
                 if 'constexpr' in value:
                     return tl.constexpr(convert_to_tuple_if_list(value['constexpr']))
                 if 'jit_function' in value:
