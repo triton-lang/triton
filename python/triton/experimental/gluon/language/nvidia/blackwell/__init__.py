@@ -622,7 +622,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
 
 @builtin
 def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
-                       mbarriers=None, mbarrier_preds=None, allow_single_cta_k96=False, _semantic=None):
+                       mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA scaled instruction.
     acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
@@ -638,8 +638,6 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        allow_single_cta_k96 (bool): Allow K96 instructions for eligible single-CTA FP4 tiles on SM103.
-            This can change floating-point accumulation order. Defaults to False.
         mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
@@ -667,8 +665,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast,
-                                                _unwrap_if_constexpr(allow_single_cta_k96))
+                                                acc.layout.two_ctas, multicast)
 
 
 @constexpr_function
