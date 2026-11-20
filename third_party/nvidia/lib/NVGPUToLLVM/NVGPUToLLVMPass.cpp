@@ -691,7 +691,10 @@ public:
     patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
                  WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
-    if (applyPatternsGreedily(mod, std::move(patterns)).failed())
+    GreedyRewriteConfig config;
+    if (conSan)
+      config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
+    if (applyPatternsGreedily(mod, std::move(patterns), config).failed())
       signalPassFailure();
 
     lowerTensorMemoryAlloc(mod);
