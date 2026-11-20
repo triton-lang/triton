@@ -519,7 +519,7 @@ Value getAsyncSharedStoreBarrierRecipientCTAs(ImplicitLocOpBuilder &b,
 }
 
 Value getMulticastBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Value result,
-                                       Value barrier) {
+                                       Value barrier, bool perPayload = false) {
   uint32_t resultBroadcastMask = getBlockBroadcastMask(result);
   uint32_t barrierBroadcastMask = getBlockBroadcastMask(barrier);
   int numCTAs = ttg::lookupNumCTAs(b);
@@ -529,6 +529,18 @@ Value getMulticastBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Value result,
       ttng::getTMAMulticastMaskEncoding(numCTAs, recipientBroadcastMask);
   uint32_t baseMask =
       ~(resultBroadcastMask | barrierBroadcastMask) & (numCTAs - 1);
+  if (perPayload && recipientBroadcastMask) {
+    // Each payload selects one barrier in the group. Take the varying bits
+    // from its destination CTA, keeping the barrier's cta_group::2 parity.
+    auto type = tti::getIntTensorType(b.getInsertionBlock()->getParent(),
+                                      {numCTAs}, 32);
+    Value dst = tt::MakeRangeOp::create(b, type, 0, numCTAs);
+    Value bits =
+        tti::createConstIntTensor(b, b.getLoc(), recipientBroadcastMask, type);
+    Value index = arith::AndIOp::create(b, dst, bits);
+    Value first = createCTABitset(b, 1, baseMask);
+    return arith::ShLIOp::create(b, tt::SplatOp::create(b, type, first), index);
+  }
   return createCTABitset(b, encoding.pattern, baseMask);
 }
 
@@ -1600,20 +1612,26 @@ private:
             b, barrier, baseThread, combinedPred, op, recipientCTAs);
       } else if (barrierInfo.trackingMode ==
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
+        Value payloadBarrierCTAs = recipientCTAs;
+        if (auto load = dyn_cast<ttng::AsyncLoadOpInterface>(op);
+            load && load.getMulticast())
+          payloadBarrierCTAs = getMulticastBarrierRecipientCTAs(
+              b, load.getResult(), barrier, /*perPayload=*/true);
         for (const auto &materialized : materializedWrites) {
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
-              materialized.memType, op, recipientCTAs, materialized.effectCTAs);
+              materialized.memType, op, payloadBarrierCTAs,
+              materialized.effectCTAs);
           if (materialized.memType == MemType::SHARED_MEM) {
             funcBuilder.createTrackProxyAccessesForBufferCall(
                 b, barrier, materialized.bufferMask, baseThread, combinedPred,
-                op, recipientCTAs, materialized.effectCTAs);
+                op, payloadBarrierCTAs, materialized.effectCTAs);
           }
         }
         if (completionBufferMask)
           funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, MemType::SHARED_MEM, op,
-              recipientCTAs, completionBufferMask);
+              payloadBarrierCTAs, completionBufferMask);
       } else if (barrierInfo.trackingMode ==
                  MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies) {
         funcBuilder.createTrackAsyncCopiesForBarrierCall(
