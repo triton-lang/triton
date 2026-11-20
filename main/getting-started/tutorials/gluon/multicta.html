@@ -407,17 +407,13 @@ to the lead CTA.</p></li>
 <p>Barriers used across CTAs need one extra ordering rule: every relevant
 <code class="docutils literal notranslate"><span class="pre">mbarrier.init</span></code> must complete before any CTA uses that barrier. This applies
 both to barriers that are themselves cross-CTA and to per-CTA barriers consumed
-by multicast or 2CTA ops. The compiler inserts the required
-<code class="docutils literal notranslate"><span class="pre">fence.mbarrier_init.release.cluster</span></code> plus a relaxed cluster barrier after the
-top-level init sequence and before the first use. Since cluster barriers must
-execute outside <code class="docutils literal notranslate"><span class="pre">warp_specialize</span></code>, initialize these barriers in the top-level
-part of the kernel before entering warp specialization.</p>
-<p>Final note on synchronization.
-Cluster barriers (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be executed by all
-threads in the kernel. As a result, they cannot be used inside a warp_specialize block.</p>
-<p>Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
-Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
-CTAs.</p>
+by multicast or 2CTA ops. The compiler orders initialization and use with
+a strong cluster barrier or a <code class="docutils literal notranslate"><span class="pre">fence.mbarrier_init.release.cluster</span></code> followed
+by a relaxed cluster barrier.</p>
+<p>Inside <code class="docutils literal notranslate"><span class="pre">warp_specialize</span></code>, a cluster barrier synchronizes the corresponding
+partition across CTAs. Each partition must be able to make progress when
+its CTAs advance together. The compiler can insert a cluster barrier between
+operations, for example when a layout conversion reuses shared storage.</p>
 </section>
 <section id="cta-tcgen5mma">
 <h2>2CTA TCGen5MMA<a class="headerlink" href="#cta-tcgen5mma" title="Link to this heading"></a></h2>
@@ -1047,10 +1043,8 @@ kernel by adding a new partition that handles the CLC generation and broadcasts 
 <span class="c1"># The entry kernel allocates and initializes every barrier before</span>
 <span class="c1"># `gl.warp_specialize`. Some of these barriers are cross-CTA barriers, and some</span>
 <span class="c1"># otherwise per-CTA barriers are consumed by multicast or 2CTA operations. The</span>
-<span class="c1"># compiler inserts the required init fence and relaxed cluster barrier after</span>
-<span class="c1"># this top-level init sequence, before any partition can use the barriers.</span>
-<span class="c1"># Keeping the init sequence here also keeps that mandatory cluster sync outside</span>
-<span class="c1"># `warp_specialize`.</span>
+<span class="c1"># compiler synchronizes these initializations across CTAs before any partition</span>
+<span class="c1"># can use the barriers.</span>
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul_multicta_kernel</span><span class="p">(</span>
     <span class="n">a_desc</span><span class="p">,</span>

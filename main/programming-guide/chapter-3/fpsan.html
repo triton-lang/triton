@@ -347,20 +347,23 @@ returns positive zero.</p></li>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">y</span></code> becomes <code class="docutils literal notranslate"><span class="pre">embed(x)</span> <span class="pre">*</span> <span class="pre">inv(embed(y))</span></code>, then <code class="docutils literal notranslate"><span class="pre">unembed</span></code></p></li>
 </ul>
-<p>Here <code class="docutils literal notranslate"><span class="pre">inv</span></code> is:</p>
-<ul class="simple">
-<li><p>the true modular inverse for odd payloads</p></li>
-<li><p>a parity-preserving involution for even payloads</p></li>
-</ul>
+<p>For a nonzero denominator payload <code class="docutils literal notranslate"><span class="pre">d</span> <span class="pre">=</span> <span class="pre">2^k</span> <span class="pre">*</span> <span class="pre">t</span></code> with <code class="docutils literal notranslate"><span class="pre">t</span></code> odd, <code class="docutils literal notranslate"><span class="pre">inv(d)</span></code>
+is <code class="docutils literal notranslate"><span class="pre">2^k</span></code> times the modular inverse of <code class="docutils literal notranslate"><span class="pre">t</span></code> modulo <code class="docutils literal notranslate"><span class="pre">2^w</span></code>. For a zero
+payload, <code class="docutils literal notranslate"><span class="pre">inv(0)</span> <span class="pre">=</span> <span class="pre">0</span></code>.</p>
 <p>Exact preserved properties:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">1</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">(1</span> <span class="pre">/</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">x</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">inv(a</span> <span class="pre">*</span> <span class="pre">b)</span> <span class="pre">=</span> <span class="pre">inv(a)</span> <span class="pre">*</span> <span class="pre">inv(b)</span></code> for all payloads</p></li>
 <li><p>for odd payloads, the usual modular inverse laws hold</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">(u</span> <span class="pre">*</span> <span class="pre">x)</span> <span class="pre">/</span> <span class="pre">(u</span> <span class="pre">*</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">x</span> <span class="pre">/</span> <span class="pre">y</span></code> whenever <code class="docutils literal notranslate"><span class="pre">embed(u)</span></code> is odd, for any <code class="docutils literal notranslate"><span class="pre">y</span></code></p></li>
 </ul>
+<p>Subtracting the row maximum in softmax multiplies each weight by the same
+exponential factor. Its payload is odd, so it cancels in the division even
+when the sum of the weights has an even payload.</p>
 <p>Important caveats:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">x</span> <span class="pre">=</span> <span class="pre">1</span></code> is not guaranteed for all payloads.</p></li>
+<li><p>For <code class="docutils literal notranslate"><span class="pre">embed(x)</span> <span class="pre">=</span> <span class="pre">2^k</span> <span class="pre">*</span> <span class="pre">t</span></code> with <code class="docutils literal notranslate"><span class="pre">t</span></code> odd, <code class="docutils literal notranslate"><span class="pre">embed(x</span> <span class="pre">/</span> <span class="pre">x)</span> <span class="pre">=</span> <span class="pre">2^(2k)</span></code> modulo <code class="docutils literal notranslate"><span class="pre">2^w</span></code>.</p></li>
 <li><p>Division by zero does not produce IEEE infinities or traps.</p></li>
 <li><p>This rewrite is chosen for algebraic checking, not numeric realism.</p></li>
 </ul>
@@ -467,7 +470,11 @@ optional <code class="docutils literal notranslate"><span class="pre">fp_downcas
 </ul>
 <p>Rewrite:</p>
 <ul class="simple">
-<li><p>modular exponentiation by a fixed odd generator in payload space</p></li>
+<li><p>For a <code class="docutils literal notranslate"><span class="pre">w</span></code>-bit input payload <code class="docutils literal notranslate"><span class="pre">u</span></code>, the output payload is <code class="docutils literal notranslate"><span class="pre">3**u</span> <span class="pre">mod</span> <span class="pre">2**w</span></code>.
+Its period is <code class="docutils literal notranslate"><span class="pre">2**(w-2)</span></code>, the maximum for an odd base at these widths.
+Exponentiation commutes with truncation to a narrower payload ring.
+For example, a homomorphic cast of FP32 <code class="docutils literal notranslate"><span class="pre">exp2</span></code> to FP8 can produce
+64 distinct payloads.</p></li>
 </ul>
 <p>Exact preserved properties:</p>
 <ul class="simple">

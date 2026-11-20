@@ -1495,11 +1495,11 @@ to the indices of the CUDA threads allowed to access some data at index $i$.
 </pre></div>
 </div>
 <p>This operation marks entry into a restricted thread region and executes in
-the enclosing domain before its branch. Its conservative effects let
-synchronization analysis finish pending waits before entering the region.
-It must not be speculated, merged, or eliminated before that analysis.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
+the enclosing domain before its branch. It returns whether the current
+thread belongs to the specified domain.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id54">
 <h3>Attributes:<a class="headerlink" href="#id54" title="Link to this heading"></a></h3>
 <table>

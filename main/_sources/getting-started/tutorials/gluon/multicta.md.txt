@@ -315,19 +315,14 @@ All the operations that act on barriers generalize naturally to multi-CTA barrie
 Barriers used across CTAs need one extra ordering rule: every relevant
 `mbarrier.init` must complete before any CTA uses that barrier. This applies
 both to barriers that are themselves cross-CTA and to per-CTA barriers consumed
-by multicast or 2CTA ops. The compiler inserts the required
-`fence.mbarrier_init.release.cluster` plus a relaxed cluster barrier after the
-top-level init sequence and before the first use. Since cluster barriers must
-execute outside `warp_specialize`, initialize these barriers in the top-level
-part of the kernel before entering warp specialization.
+by multicast or 2CTA ops. The compiler orders initialization and use with
+a strong cluster barrier or a `fence.mbarrier_init.release.cluster` followed
+by a relaxed cluster barrier.
 
-Final note on synchronization.
-Cluster barriers (i.e., CGA barriers, the cluster equivalent of bar.sync for CTAs) must be executed by all
-threads in the kernel. As a result, they cannot be used inside a warp_specialize block.
-
-Moreover, operations such as convert_layout, reduce, sum, max, etc., emit CGA barriers when they cross CTAs.
-Therefore, these operations are also not allowed inside a warp_specialize block whenever they may span multiple
-CTAs.
+Inside `warp_specialize`, a cluster barrier synchronizes the corresponding
+partition across CTAs. Each partition must be able to make progress when
+its CTAs advance together. The compiler can insert a cluster barrier between
+operations, for example when a layout conversion reuses shared storage.
 
 ## 2CTA TCGen5MMA
 
@@ -981,10 +976,8 @@ def matmul_epilogue_partition(p):
 # The entry kernel allocates and initializes every barrier before
 # `gl.warp_specialize`. Some of these barriers are cross-CTA barriers, and some
 # otherwise per-CTA barriers are consumed by multicast or 2CTA operations. The
-# compiler inserts the required init fence and relaxed cluster barrier after
-# this top-level init sequence, before any partition can use the barriers.
-# Keeping the init sequence here also keeps that mandatory cluster sync outside
-# `warp_specialize`.
+# compiler synchronizes these initializations across CTAs before any partition
+# can use the barriers.
 @gluon.jit
 def matmul_multicta_kernel(
     a_desc,

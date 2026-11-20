@@ -329,9 +329,8 @@ mbarrier object in shared memory. The operation requires a <code class="docutils
 of at least 1 and decreases the pending arrival count of the mbarrier by
 the specified count.</p>
 <p>The compiler-owned <code class="docutils literal notranslate"><span class="pre">per_warp</span></code> flag selects an arrival from each of the
-execution region’s warps. The compiler may set this flag before final count
-scaling. Before lowering, the count must be divisible by the warp count;
-it remains the total decrement per source CTA and target barrier. Membar
+execution region’s warps. The count is the total decrement per source CTA
+and target barrier and must be divisible by the warp count. Membar
 inserts the required warp synchronization before each warp contributes its
 equal share to every routed target.</p>
 <p>When <code class="docutils literal notranslate"><span class="pre">multicastCTA</span></code> is non-zero, the arrive is multicast across the cluster.

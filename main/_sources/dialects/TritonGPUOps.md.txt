@@ -988,13 +988,14 @@ operation ::= `ttg.thread_predicate` $domain attr-dict
 ```
 
 This operation marks entry into a restricted thread region and executes in
-the enclosing domain before its branch. Its conservative effects let
-synchronization analysis finish pending waits before entering the region.
-It must not be speculated, merged, or eliminated before that analysis.
+the enclosing domain before its branch. It returns whether the current
+thread belongs to the specified domain.
 
-Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
 
 #### Attributes:
 
