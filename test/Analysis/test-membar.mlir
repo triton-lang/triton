@@ -2183,6 +2183,42 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
 
+// The read and refill advance together, two slots apart. The other store
+// advances by two and meets the read at slot two on the third iteration.
+// CHECK-LABEL: @lockstep_cursors
+tt.func @lockstep_cursors(%input: !loop_input, %out: !loop_dst, %n: i32) {
+  %m1 = arith.constant -1 : i32
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<3x128xi32, #shared, #smem, mutable>
+  %first = ttg.memdesc_index %ring[%c0] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !loop_tile
+  ttg.local_store %input, %first : !loop_input -> !loop_tile
+  scf.for %i = %c1 to %n step %c2 iter_args(%r = %m1, %w = %c1) -> (i32, i32) : i32 {
+    %r1 = arith.addi %r, %c1 : i32
+    %w1 = arith.addi %w, %c1 : i32
+    %wrap = arith.cmpi sge, %r1, %c3 : i32
+    %read = arith.select %wrap, %c0, %r1 : i32
+    %refill = arith.remsi %w1, %c3 : i32
+    %write = arith.remsi %i, %c3 : i32
+    %src = ttg.memdesc_index %ring[%read] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !loop_tile
+    %dst = ttg.memdesc_index %ring[%refill] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !loop_tile
+    %other = ttg.memdesc_index %ring[%write] : !ttg.memdesc<3x128xi32, #shared, #smem, mutable> -> !loop_tile
+    // CHECK: cf.cond_br
+    // CHECK: ttg.local_store
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %input, %other : !loop_input -> !loop_tile
+    %value = ttg.local_load %src : !loop_tile -> !loop_result
+    ttg.local_store %input, %dst : !loop_input -> !loop_tile
+    tt.store %out, %value : !loop_dst
+    scf.yield %read, %refill : i32, i32
+  }
+  tt.return
+}
+
 // A single barrier before the fork covers both reads on every iteration.
 // CHECK-LABEL: @loop_with_optional_reader
 // CHECK: ttg.local_store

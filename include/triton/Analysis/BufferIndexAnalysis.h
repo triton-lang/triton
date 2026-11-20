@@ -23,8 +23,10 @@ struct BufferIndexExpr;
 ///
 /// The analysis is intentionally narrow. It decomposes the dynamic slot index
 /// into `base + constantOffset`, optionally under a positive constant modulus,
-/// and proves two accesses disjoint only when the expressions have the same
-/// base and different offsets modulo the same modulus.
+/// and proves two accesses disjoint when the expressions have the same base
+/// and different offsets modulo the same modulus. Cursors of the same block
+/// also stay disjoint if their slots start at distinct residues and advance
+/// by the same constant step on every backedge.
 /// Scalar indices follow Triton's block-programming semantics. Comparisons
 /// also require the same indexed source in the same dynamic iteration:
 /// a source change can change both the origin and the byte stride of a slot.
@@ -48,8 +50,8 @@ struct BufferIndexExpr;
 /// Buffer-index reasoning is disabled for functions with irreducible control
 /// flow because not every cyclic edge is a dominance backedge in such CFGs.
 ///
-/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
-/// SSA bases, and slices carried across cf-form backedges all fail the
+/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli,
+/// unrelated bases, and slices carried across cf-form backedges all fail the
 /// disjointness proof and fall back to normal membar aliasing.
 ///
 /// The class owns and interns the analyzed expressions attached to
