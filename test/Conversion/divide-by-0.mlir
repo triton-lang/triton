@@ -11,4 +11,14 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %cvt = ttg.convert_layout %zero : tensor<16x1xf32, #mma> -> tensor<16x1xf32, #blocked>
     tt.return
   }
+
+  // NVPTX expands llvm.frem inline as a - trunc(a/b) * b, which loses the
+  // dividend's sign on an exact-zero remainder (#11986). frem lowers to
+  // libdevice fmod instead; NaN/inf/denormal edge cases come with it.
+  // CHECK-LABEL: remf_lowers_to_libdevice_fmod
+  // CHECK: llvm.call @__nv_fmodf
+  tt.func public @remf_lowers_to_libdevice_fmod(%arg0: tensor<32x2xf32, #blocked>, %arg1: tensor<32x2xf32, #blocked>) {
+    %0 = arith.remf %arg0, %arg1 : tensor<32x2xf32, #blocked>
+    tt.return
+  }
 }
