@@ -750,6 +750,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @trig_ops
+  tt.func public @trig_ops(%x: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
+    // CHECK-NOT: scf.for
+    // CHECK-NOT: math.cos
+    // CHECK-NOT: math.sin
+    // CHECK: tt.return
+    %c = math.cos %x : tensor<4xf32>
+    %s = math.sin %x : tensor<4xf32>
+    tt.return %c, %s : tensor<4xf32>, tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @exp_ops
   tt.func public @exp_ops(%a: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
     // CHECK-DAG: arith.constant dense<648190581>
