@@ -11,6 +11,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -43,11 +44,33 @@ static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
 static constexpr int64_t kGSanMBarrierRecordBytes = 176;
 
+static Value predicateMulticastLeader(ImplicitLocOpBuilder &b, Value pred,
+                                      Value ctaId, uint32_t broadcastMask) {
+  Value replica = arith::AndIOp::create(
+      b, ctaId, arith::ConstantIntOp::create(b, broadcastMask, 32));
+  Value leader = arith::CmpIOp::create(b, arith::CmpIPredicate::eq, replica,
+                                       arith::ConstantIntOp::create(b, 0, 32));
+  return arith::AndIOp::create(b, pred, leader);
+}
+
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
-  OpBuilder builder(op);
+  ImplicitLocOpBuilder b(op.getLoc(), op);
+  Value pred = op.getPred();
+  TypeAttr im2colDst;
+  if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType())) {
+    auto dstTy = op.getResult().getType();
+    im2colDst = TypeAttr::get(dstTy);
+    if (op.getMulticast()) {
+      auto layout = ttg::toLinearLayoutIgnoringPadding(dstTy);
+      auto mask =
+          layout.getFreeVariableMasks().lookup(b.getStringAttr("block"));
+      Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+      pred = predicateMulticastLeader(b, pred, ctaId, mask);
+    }
+  }
   ExperimentalGSanTensorDescAccessOp::create(
-      builder, op.getLoc(), op.getDesc(), op.getCoord(), op.getOffsets(),
-      op.getPred(), /*isStore=*/false);
+      b, b.getLoc(), op.getDesc(), op.getCoord(), op.getOffsets(), pred,
+      /*isStore=*/false, im2colDst);
 }
 
 static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
@@ -73,15 +96,9 @@ static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
     stride *= 2;
   }
   Value issuerPred = pred;
-  if (leaderOnly) {
-    Value replica = arith::AndIOp::create(
-        b, ctaId,
-        arith::ConstantIntOp::create(b, copyLayout.broadcastMask, 32));
-    Value leader =
-        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, replica,
-                              arith::ConstantIntOp::create(b, 0, 32));
-    issuerPred = arith::AndIOp::create(b, issuerPred, leader);
-  }
+  if (leaderOnly)
+    issuerPred =
+        predicateMulticastLeader(b, pred, ctaId, copyLayout.broadcastMask);
   auto ptrTy = tt::PointerType::get(b.getI8Type());
   Value ptr = tt::BitcastOp::create(b, ptrTy, pointer);
   ptr = tt::AddPtrOp::create(b, ptrTy, ptr, sourceOffset);
@@ -96,7 +113,7 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
   OpBuilder builder(op);
   ExperimentalGSanTensorDescAccessOp::create(
       builder, op->getLoc(), descValue, coords, /*offsets=*/ValueRange{},
-      /*pred=*/Value{}, /*isStore=*/true);
+      /*pred=*/Value{}, /*isStore=*/true, /*im2colDst=*/TypeAttr{});
 }
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {

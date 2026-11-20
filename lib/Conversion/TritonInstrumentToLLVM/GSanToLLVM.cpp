@@ -8,7 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -510,17 +510,22 @@ public:
       return failure();
 
     auto descTy = op.getDesc().getType();
-    ArrayRef<int64_t> blockShape = descTy.getShape();
+    SmallVector<int64_t> blockShape(descTy.getShape());
+    ttg::MemDescType im2colDst;
     unsigned rank = op.getCoords().size();
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
     if (isIm2Col) {
       if constexpr (std::is_same_v<AccessOp,
                                   tti::ExperimentalGSanTensorDescAccessOp>) {
-        if (op.getIsStore() || rank < 3 || rank > 5 ||
+        auto dst = op.getIm2colDst();
+        if (!dst || op.getIsStore() || rank < 3 || rank > 5 ||
             op.getOffsets().size() != rank - 2)
           return rewriter.notifyMatchFailure(
               op, "expected an im2col load with three to five coordinates and "
-                  "spatial offsets");
+                  "spatial offsets and a destination layout");
+        im2colDst = *dst;
+        blockShape = ttng::getTMABlockShape(descTy, /*packedSize=*/true,
+                                            ttg::TMAMode::Im2Col);
       } else {
         return rewriter.notifyMatchFailure(op, "im2col atomics are unsupported");
       }
@@ -549,7 +554,8 @@ public:
     auto shapeTy = array_ty(i16_ty, blockShape.size());
     Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
                                          b.i32_val(1), /*alignment=*/0);
-    for (auto [dim, coord] : llvm::enumerate(adaptor.getCoords())) {
+    for (auto [dim, coord] : llvm::enumerate(
+             adaptor.getCoords().take_front(isIm2Col ? rank - 2 : rank))) {
       Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
       b.store(coord, coordSlot);
@@ -563,7 +569,7 @@ public:
     Value warpId = getLaneAndWarpId(rewriter, loc).second;
     int numWarps = ttg::lookupNumWarps(op);
     int numCTAs = ttg::lookupNumCTAs(op);
-    if (numCTAs > 1) {
+    if (numCTAs > 1 && !isIm2Col) {
       Value ctaRank = targetInfo->getClusterCTAId(rewriter, loc);
       warpId = b.add(b.mul(warpId, b.i32_val(numCTAs)), ctaRank);
       numWarps *= numCTAs;
@@ -576,7 +582,7 @@ public:
       funcName = kGSanAtomicTensorDescRuntimeFn;
     } else {
       funcName = op.getIsStore() ? kGSanStoreTensorDescRuntimeFn
-                                : kGSanLoadTensorDescRuntimeFn;
+                                 : kGSanLoadTensorDescRuntimeFn;
       if (isIm2Col)
         funcName = kGSanLoadIm2ColTensorDescRuntimeFn;
     }
@@ -609,7 +615,29 @@ public:
       args.push_back(materializeI32Bool(rewriter, b, adaptor.getPred()));
     }
     args.append({warpId, b.i32_val(numWarps), sourceLoc.file, sourceLoc.line});
-    b.call(runtimeFunc, args);
+    if (isIm2Col) {
+      // TMA adds each message's offsets to W and C before traversing the
+      // spatial box. A W offset is a coordinate displacement, not a row count.
+      auto layout = ttng::getTMAMessageLayouts(im2colDst, ttg::TMAMode::Im2Col)
+                        .messageToPackedOffset;
+      auto msg = rewriter.getStringAttr("msg");
+      auto block = rewriter.getStringAttr("block");
+      Value cta = numCTAs > 1 ? targetInfo->getClusterCTAId(rewriter, loc)
+                              : b.i32_val(0);
+      for (int i = 0; i < layout.getInDimSize(msg); ++i) {
+        auto offsets = applyLinearLayout(loc, rewriter, layout,
+                                         {{msg, b.i32_val(i)}, {block, cta}});
+        for (auto [dim, offset] : llvm::enumerate(offsets)) {
+          unsigned idx = rank - 2 + dim;
+          Value slot = b.gep(ptr_ty(ctx), coordsTy, coords,
+                             ValueRange{b.i32_val(0), b.i32_val(idx)});
+          b.store(b.add(adaptor.getCoords()[idx], offset.second), slot);
+        }
+        b.call(runtimeFunc, args);
+      }
+    } else {
+      b.call(runtimeFunc, args);
+    }
     rewriter.eraseOp(op);
     return success();
   }

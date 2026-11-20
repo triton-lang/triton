@@ -784,30 +784,41 @@ def tma_im2col_gsan_kernel(desc, out, pred, COORDS: ttgl.constexpr, OFFSETS: ttg
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("rank", [3, 4, 5])
 @pytest.mark.parametrize("pred", [False, True])
-@pytest.mark.parametrize("num_ctas", [1, 2])
-def test_tma_im2col_gsan_shadow(fresh_knobs, with_allocator, rank, pred, num_ctas):
+@pytest.mark.parametrize("cga_layout", [
+    pytest.param([], id="single"),
+    pytest.param([[0, 0]], id="multicast"),
+    pytest.param([[1, 0]], id="split-pixels"),
+    pytest.param([[0, 1]], id="split-channels"),
+])
+def test_tma_im2col_gsan_shadow(fresh_knobs, with_allocator, rank, pred, cga_layout):
     from triton.experimental.gsan import create_mem_pool
     from triton.experimental.gsan._testing import shadow_cell_address
     from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
+    num_ctas = 2**len(cga_layout)
     skip_if_unsupported_cluster_size(num_ctas)
     triton.knobs.compilation.instrumentation_mode = "gsan"
     pool = create_mem_pool()
-    shape = [2] + [3] * (rank - 2) + [20]
-    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=[[0, 0]] if num_ctas > 1 else [])
+    # A pixel split shifts the second CTA's starting W coordinate by eight.
+    # Keep that start inside the box while allowing traversal to wrap.
+    width = 19 if cga_layout == [[1, 0]] else 3
+    shape = [5] + [3] * (rank - 3) + [width, 52]
+    block_shape = [16, 64]
+    layout = ttgl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
     with torch.cuda.use_mem_pool(pool):
         source = torch.arange(1, math.prod(shape) + 1, dtype=torch.int32, device="cuda").reshape(shape)
-        output = torch.zeros((16, 32), dtype=torch.int32, device="cuda")
-    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(
-        source, shape, list(source.stride()), [16, 32], layout,
-        element_strides=[1] + [2] * (rank - 2) + [1],
-        pixel_box_lower_corner=[-1] * (rank - 2), pixel_box_upper_corner=[-1] * (rank - 2))
+        output = torch.zeros(block_shape, dtype=torch.int32, device="cuda")
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col(source, shape, list(source.stride()), block_shape, layout,
+                                                      element_strides=[2] * (rank - 1) + [1],
+                                                      pixel_box_lower_corner=[-1] * (rank - 2),
+                                                      pixel_box_upper_corner=[-1] * (rank - 2))
     shadow = uint8_cuda_tensor_from_ptr(shadow_cell_address(source.data_ptr()), source.numel() * 24,
                                         source.device.index)
     before = shadow.cpu()
-    coords = [0] + [1] * (rank - 2) + [4]
-    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, [1] * (rank - 2), num_ctas > 1,
-                                             num_ctas=num_ctas)
+    coords = (0, ) + (1, ) * (rank - 2) + (4, )
+    offsets = (1, ) * (rank - 2)
+    multicast = cga_layout == [[0, 0]]
+    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, offsets, multicast, num_ctas=num_ctas)
     assert "__triton_gsan_load_im2col_tensor_desc" in compiled.asm["llir"]
     after = shadow.cpu()
     changed = (before.reshape(-1, 24) != after.reshape(-1, 24)).any(dim=1)

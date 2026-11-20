@@ -74,6 +74,7 @@ GSAN_DEVICE void forEachIm2ColRow(const void *descriptor, const int *coords,
   int64_t lower[5], upper[5];
   int step[5];
   pixel[0] = coords[0];
+  step[0] = desc.elementStride(0);
   for (int dim = 1; dim < channelDim; ++dim) {
     pixel[dim] = coords[dim];
     lower[dim] = desc.im2colCorner(dim, /*upper=*/false);
@@ -101,12 +102,8 @@ GSAN_DEVICE void forEachIm2ColRow(const void *descriptor, const int *coords,
     // Advance through the spatial pixel box, then into the next image. The
     // filter offsets move the accessed coordinates along with the pixel box.
     for (int dim = channelDim - 1; dim >= 0; --dim) {
-      if (dim == 0) {
-        ++pixel[0];
-        break;
-      }
       pixel[dim] += step[dim];
-      if (pixel[dim] < upper[dim])
+      if (dim == 0 || pixel[dim] < upper[dim])
         break;
       pixel[dim] = lower[dim];
     }
