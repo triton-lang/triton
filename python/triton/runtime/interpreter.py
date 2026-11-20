@@ -1597,7 +1597,29 @@ class _InterpreterComparison:
         return result
 
 
+def _loop_range(arg1, arg2=None, step=None, **kwargs):
+    lb, ub = (0, arg1) if arg2 is None else (arg1, arg2)
+    step = 1 if step is None else step
+    # Like the compiler: the induction variable has the promoted type of the bounds and step.
+    ty = None
+    for bound in (lb, ub, step):
+        bound_ty = interpreter_semantic.to_tensor(bound).dtype
+        ty = bound_ty if ty is None else interpreter_semantic.integer_promote_impl(ty, bound_ty)
+    np_dtype = _get_np_dtype(ty)
+    for value in range(lb, ub, step):
+        yield tl.tensor(TensorHandle(_int_constant(value, np_dtype), ty), ty)
+
+
 class ASTTransformer(ast.NodeTransformer):
+
+    def visit_For(self, node):
+        node = self.generic_visit(node)
+        func = node.iter.func if isinstance(node.iter, ast.Call) else None
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        # tl.static_range induction variables are constexprs, so leave them alone.
+        if isinstance(node.target, ast.Name) and name == "range":
+            node.iter.func = ast.Name(id="_loop_range", ctx=ast.Load())
+        return node
 
     def visit_Compare(self, node):
         node = self.generic_visit(node)
