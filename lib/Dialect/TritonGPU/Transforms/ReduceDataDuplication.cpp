@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace mlir {
 namespace triton {
@@ -44,6 +45,32 @@ public:
         return;
       if (!cvtNeedsSharedMemory(cvtOp))
         return;
+      // Read a transposed operand through a transposed view of its source,
+      // so that it can share one buffer with other dot operands of that value.
+      if (auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
+          trans && trans.getOrder() == ArrayRef<int32_t>{1, 0}) {
+        auto ctx = mod.getContext();
+        auto transSrcType = trans.getSrc().getType();
+        auto cgaLayout = CGAEncodingAttr::get(
+            ctx, transposeLinearLayout(
+                     getCGALayout(transSrcType.getEncoding()).getLinearLayout(),
+                     trans.getOrder()));
+        auto allocType = MemDescType::get(
+            transSrcType.getShape(), transSrcType.getElementType(),
+            SwizzledSharedEncodingAttr::get(
+                ctx, dstDotOp, transSrcType.getShape(),
+                getOrderForMemory(transSrcType), cgaLayout,
+                transSrcType.getElementType(), /*needTrans=*/true),
+            SharedMemorySpaceAttr::get(ctx));
+        auto alloc = LocalAllocOp::create(builder, cvtOp.getLoc(), allocType,
+                                          trans.getSrc());
+        auto view = MemDescTransOp::create(builder, cvtOp.getLoc(), alloc,
+                                           trans.getOrder());
+        auto load = LocalLoadOp::create(builder, cvtOp.getLoc(), dstType, view);
+        cvtOp.replaceAllUsesWith(load.getResult());
+        cvtOp.erase();
+        return;
+      }
       auto order = getOrderForMemory(srcType);
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
