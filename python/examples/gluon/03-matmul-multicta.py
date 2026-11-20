@@ -445,7 +445,7 @@ def matmul_epilogue_partition(p):
             acc_sub = acc_buf.slice(SPLIT_TILE_N * s, SPLIT_TILE_N)
             acc_smem = acc_smems.index(sub_acc_state.index)
             acc = acc_sub.load().to(dtype)
-            tma.store_wait(pendings=SUBTILE_STAGES - 1)
+            tma.store_wait(pendings=SUBTILE_STAGES - 1, deps=[acc_smem])
             acc_smem.store(acc)
             tma.async_store(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()

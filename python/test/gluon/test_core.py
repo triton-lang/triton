@@ -657,14 +657,13 @@ def tma_kernel(desc):
     value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     tma.async_store(desc, [0, 0], alloc)
-    tma.store_wait(0)
-    alloc._keep_alive()
+    tma.store_wait(0, deps=[alloc])
 
 
 @gluon.jit(noinline=True)
 def noinline_tma_store(desc, alloc):
     tma.async_store(desc, [0, 0], alloc)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[alloc])
 
 
 @gluon.jit
@@ -714,7 +713,7 @@ def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr, POLICY: ttgl
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_store(out_desc, [0, 0], smem)
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, deps=[smem])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -772,8 +771,7 @@ def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     mbarrier.wait(bar, phase=0, deps=[smem])
     mbarrier.invalidate(bar)
     tma.async_store(out_desc, [0, 0], smem)
-    tma.store_wait(0)
-    smem._keep_alive()
+    tma.store_wait(0, deps=[smem])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -821,10 +819,9 @@ def tma_multicast_copy_kernel(in_desc, out_desc, POLICY: ttgl.constexpr = None):
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     tma.async_store(out_desc, [0, 0], smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[smem])
 
     mbarrier.invalidate(bar)
-    smem._keep_alive()
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -883,9 +880,7 @@ def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather
     scatter_offsets = ttgl.load(scatter_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
     tma.async_store(gather_out_desc, [0, 0], smem, cache_policy=POLICY)
     blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem, cache_policy=POLICY)
-    tma.store_wait(0)
-
-    smem._keep_alive()
+    tma.store_wait(0, deps=[smem])
 
 
 def get_split_dim(cga_layout, dim):
@@ -985,7 +980,7 @@ def tma_gather_scatter_subslice_kernel(in_desc, out_desc, parent_out, KIND: ttgl
 
     if KIND == "row" or KIND == "column":
         blackwell_tma.async_scatter(out_desc, (indices + 1) % 64, 0, tile)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[tile])
 
     values = parent.load(parent_layout)
     offsets = ttgl.arange(0, shape[0])[:, None] * shape[1] + ttgl.arange(0, shape[1])[None, :]
@@ -2023,8 +2018,7 @@ def test_device_tma_store():
             layout=smem_layout,
         )
         tma.async_store(out_desc, [0, 0], alloc)
-        tma.store_wait(0)
-        alloc._keep_alive()
+        tma.store_wait(0, deps=[alloc])
 
     XBLOCK = 16
     out = torch.ones((XBLOCK, XBLOCK), dtype=torch.float16, device="cuda")
@@ -2412,8 +2406,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         scatter_offsets = ttgl.load(scatter_idx_ptr + ttgl.arange(0, BLOCK_M, layout=scatter_offsets_layout))
         acc_smem = ttgl.allocate_shared_memory(out_desc.dtype, [BLOCK_M, BLOCK_N], out_desc.layout, acc)
         blackwell_tma.async_scatter(out_desc, scatter_offsets, 0, acc_smem)
-        tma.store_wait(0)
-        acc_smem._keep_alive()
+        tma.store_wait(0, deps=[acc_smem])
     else:
         offs_m = ttgl.arange(0, BLOCK_M)[:, None]
         offs_n = ttgl.arange(0, BLOCK_N)[None, :]
@@ -4133,8 +4126,7 @@ def test_proxy_fence_nested_multibuffer_prefix(fresh_knobs):
         # The runtime merge prevents folding the nested slices. With choose=1,
         # their offsets add to stage 2, whose TMA read needs a proxy fence.
         tma.async_store(desc, [0, 0], parent.index(2))
-        tma.store_wait(0)
-        parent._keep_alive()
+        tma.store_wait(0, deps=[parent])
 
     values = torch.arange(1024, device="cuda", dtype=torch.float32).reshape(32, 32)
     output = torch.empty_like(values)
@@ -4201,7 +4193,7 @@ def test_tma_slice():
         smem_slice0.store(ttgl.zeros((XBLOCK, YBLOCK), dtype=ttgl.float32, layout=blocked))
 
         tma.async_store(out_desc, [0, 0], smem_slice1)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem_slice1])
 
     input = torch.rand((XBLOCK, YBLOCK), dtype=torch.float32, device="cuda")
     output = torch.empty_like(input)
@@ -5258,7 +5250,7 @@ def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr)
     stage = ttgl.allocate_shared_memory(ttgl.uint8, [ROWS, WIDTH], fmt, lanes)
     fence_async_shared()
     tma.async_store(desc, [pid * (ROWS + 1) + 1, 0], stage)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[stage])
 
 
 def test_fp6_tma_store_reshaped_source_sm100():
@@ -8103,7 +8095,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     acc_smem.store(acc)
     tma.async_store(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
 
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
@@ -8210,6 +8202,60 @@ def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block
     use_k96 = block_k >= 256 and block_m == 256
     expected_mmas = (triton.cdiv(block_k, 96) if use_k96 else block_k // 64) * (block_m // 256)
     assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
+
+
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
+@pytest.mark.parametrize("fmt, vec_size", [("nvfp4", 16), ("mxfp4", 32)])
+@pytest.mark.parametrize("block_k,block_n", [(128, 128), (256, 128), (256, 256), (512, 128)])
+def test_tcgen05_mma_scaled_single_cta_k96(fmt, vec_size, block_k, block_n):
+    torch.manual_seed(0)
+    a, a_scale, a_ref = random_quantized_tensor(256, 1024, fmt)
+    b, b_scale, b_ref = random_quantized_tensor(256, 1024, fmt)
+    a_scale = swizzle_scales_packed_block(a_scale, vec_size)
+    b_scale = swizzle_scales_packed_block(b_scale, vec_size)
+    actual, compiled = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 128, block_n, block_k, (1, 1), False,
+                                               out_dtype=torch.float32, return_kernel=True)
+    torch.testing.assert_close(actual, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
+    use_k96 = is_blackwell_ultra() and block_k >= 256
+    expected_mmas = triton.cdiv(block_k, 96) if use_k96 else block_k // 64
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
+    if use_k96:
+        paired = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 256, block_n, block_k, (2, 1), False,
+                                         out_dtype=torch.float32)
+        torch.testing.assert_close(actual, paired, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
+@pytest.mark.parametrize("scale_rows", [64, 128])
+def test_tcgen05_mma_scaled_single_cta_k96_rhs_stride(scale_rows):
+
+    @gluon.jit
+    def kernel(out, SCALE_ROWS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8)
+        regs: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 128], layout, ttgl.full([128, 128], 0x22, ttgl.uint8, regs))
+        b = a.slice(0, 64).permute((1, 0))
+        sa = allocate_tensor_memory(ttgl.uint8, [128, 8], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.uint8, [SCALE_ROWS, 8], TensorMemoryScalesLayout())
+        sa.store(ttgl.full([128, 8], 127, ttgl.uint8, sa.get_reg_layout()))
+        k = ttgl.arange(0, 8, layout=ttgl.SliceLayout(0, sb.get_reg_layout()))
+        sb.store(ttgl.full([SCALE_ROWS, 8], 127, ttgl.uint8, sb.get_reg_layout()) + k[None, :].to(ttgl.uint8))
+        acc = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared()
+        tcgen05_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[a])
+        mbarrier.invalidate(bar)
+        offsets = ttgl.arange(0, 128)[:, None] * 64 + ttgl.arange(0, 64)[None, :]
+        ttgl.store(out + offsets, acc.load())
+
+    out = torch.empty((128, 64), device="cuda")
+    compiled = kernel[(1, )](out, scale_rows)
+    # Each K block contributes 32 ones scaled by 2**k.
+    torch.testing.assert_close(out, torch.full_like(out, 32 * 255), rtol=0, atol=0)
+    expected_mmas = 3 if scale_rows == 128 and is_blackwell_ultra() else 4
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
 
 
 @gluon.jit
@@ -8380,8 +8426,7 @@ def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr
         blackwell_tma.async_scatter(out_desc, offsets, 0, smem, cache_policy=POLICY)
     else:
         tma.async_store(out_desc, [0] * len(shape), smem)
-    tma.store_wait(0)
-    smem._keep_alive()
+    tma.store_wait(0, deps=[smem])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
@@ -9324,7 +9369,7 @@ def _bulk_store_kernel(src, out, take_copy, COUNT: ttgl.constexpr, BLOCK: ttgl.c
     smem = allocation.index(1)
     smem.store(ttgl.load(src + offsets))
     hopper.bulk.async_store(out + OFFSET, smem, COUNT, pred=take_copy)
-    hopper.bulk.store_wait(0, read_only=False)
+    hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -9380,8 +9425,8 @@ def _bulk_store_reuse(out, take_copy):
     for i in range(4):
         smem.store(ttgl.full((128, ), i, ttgl.int32, layout))
         hopper.bulk.async_store(out + i * 128, smem, 128, pred=take_copy)
-        hopper.bulk.store_wait(0)
-    hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, deps=[smem])
+    hopper.bulk.store_wait(0, read_only=False, deps=[smem])
     # Full completion must make writes visible to an ordinary load in this CTA.
     offsets = ttgl.arange(0, 128, layout)
     ttgl.store(out + 512 + offsets, ttgl.load(out + 384 + offsets))
@@ -9427,7 +9472,7 @@ def test_bulk_async_store_swizzled_layout(shared, mode, device, fresh_knobs):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [16, 32], SHARED,
                                            ttgl.load(src + rows[:, None] * 32 + cols[None, :]))
         hopper.bulk.async_store(out, smem, 512)
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
     src = torch.arange(512, device=device, dtype=torch.int32)
     reference = torch.empty_like(src)
@@ -9455,11 +9500,11 @@ def test_bulk_async_store_tma_queue(bulk_first, mode, device, fresh_knobs):
         else:
             hopper.tma.async_store(desc, [0, 0], a)
             hopper.bulk.async_store(out, b, 4096)
-        hopper.bulk.store_wait(1)
+        hopper.bulk.store_wait(1, deps=[a])
         a.store(ttgl.full((16, 256), 17, ttgl.int32, layout))
-        hopper.tma.store_wait(0)
+        hopper.tma.store_wait(0, deps=[b])
         b.store(ttgl.full((16, 256), 19, ttgl.int32, layout))
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[a, b])
 
     out = torch.empty((16, 256), device=device, dtype=torch.int32)
     tensor_out = torch.empty_like(out)

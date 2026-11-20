@@ -1190,6 +1190,10 @@ void init_gluon_ir(py::module_ &m) {
                                                earlyARelease);
            })
 
+      .def("create_prefetch_bulk",
+           [](GluonOpBuilder &self, Value ptr, Value numBytes, Value pred) {
+             self.create<ttng::PrefetchBulkOp>(ptr, numBytes, pred);
+           })
       .def("create_async_bulk_copy_global_to_local",
            [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
               Value barrier, Value pred, bool multicast) {
@@ -1237,8 +1241,9 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
            })
       .def("create_async_tma_store_wait",
-           [](GluonOpBuilder &self, int pendings, bool readOnly) {
-             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly);
+           [](GluonOpBuilder &self, int pendings, bool readOnly,
+              std::vector<Value> &deps) {
+             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly, deps);
            })
       .def(
           "create_async_tma_gather",
