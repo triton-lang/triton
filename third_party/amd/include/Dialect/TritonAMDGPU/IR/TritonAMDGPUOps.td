@@ -344,6 +344,12 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       `ptr` and `soffset` are described in BufferOpInterface.
       `scope` makes the loaded data visible at that scope (it is not atomic
       and orders nothing).
+
+      With `fp6Packed`, the i8 result holds packed FP6: each group of 16
+      register-consecutive bytes holds 16 codes in 12 bytes followed by 4 zero
+      bytes. Each group is one 96-bit load of the 12 bytes starting at the
+      group's first offset. The mask of a group is the mask of its first
+      element.
     }];
     let arguments = (ins
       Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to load from", [MemRead<GlobalMemory>]>:$ptr,
@@ -354,7 +360,8 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<TT_Tensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<TTAMDG_ScalarOffset>:$soffset,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$fp6Packed
     );
     let results = (outs TT_Tensor:$result);
 

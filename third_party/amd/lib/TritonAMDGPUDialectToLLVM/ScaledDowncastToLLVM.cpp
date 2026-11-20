@@ -395,19 +395,16 @@ struct ScaledDowncastFp6OpPattern
           return isa<Float32Type>(v.getType()) ? v : b.fpext(f32_ty, v);
         };
         lo = b.insert_element(lo, toF32(inputVals[i + 2 * j]), b.i32_val(j));
-        hi = b.insert_element(hi, toF32(inputVals[i + 2 * j + 1]),
-                              b.i32_val(j));
+        hi =
+            b.insert_element(hi, toF32(inputVals[i + 2 * j + 1]), b.i32_val(j));
       }
       Value scaleF32 = scaleToF32(b, scaleVals[scaleRegisters[i]]);
-      Value packed =
-          isE2M3 ? ROCDL::CvtScaleF322xPk16Fp6F32Op::create(rewriter, loc,
-                                                            v6i32, lo, hi,
-                                                            scaleF32)
-                       .getResult()
-                 : ROCDL::CvtScaleF322xPk16Bf6F32Op::create(rewriter, loc,
-                                                            v6i32, lo, hi,
-                                                            scaleF32)
-                       .getResult();
+      Value packed = isE2M3 ? ROCDL::CvtScaleF322xPk16Fp6F32Op::create(
+                                  rewriter, loc, v6i32, lo, hi, scaleF32)
+                                  .getResult()
+                            : ROCDL::CvtScaleF322xPk16Bf6F32Op::create(
+                                  rewriter, loc, v6i32, lo, hi, scaleF32)
+                                  .getResult();
       // Two 16-byte groups: 12 bytes of codes followed by 4 zero bytes.
       for (int group = 0; group < 2; ++group) {
         for (int w = 0; w < 3; ++w)

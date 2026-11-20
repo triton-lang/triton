@@ -807,13 +807,19 @@ void init_gluon_ir(py::module_ &m) {
       .def(
           "create_async_copy_global_to_local",
           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-             Value other, Attribute cachePolicy, bool isVolatile) {
-            self.create<ttg::AsyncCopyGlobalToLocalOp>(
+             Value other, Attribute cachePolicy, bool isVolatile,
+             bool fp6Packed) {
+            auto op = self.create<ttg::AsyncCopyGlobalToLocalOp>(
                 pointer, smem, mask, other, cachePolicy, isVolatile,
                 /*contiguity=*/1);
+            // Read by the AMD lowering, see `fp6_packed` of CDNA4's
+            // `async_copy.global_load_to_shared`.
+            if (fp6Packed)
+              op->setAttr("amdg.fp6_packed", UnitAttr::get(self.getContext()));
           },
           py::arg("smem"), py::arg("pointer"), py::arg("mask"),
-          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
+          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"),
+          py::arg("fp6_packed") = false)
       .def(
           "create_async_copy_local_to_global",
           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
@@ -1281,17 +1287,18 @@ void init_gluon_ir(py::module_ &m) {
           "create_buffer_desc_load",
           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
              Value mask, Value other, Attribute cachePolicy, Value soffset,
-             std::optional<tt::MemSyncScope> scope) -> Value {
+             std::optional<tt::MemSyncScope> scope, bool fp6Packed) -> Value {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             return self.create<ttag::BufferLoadOp>(
                 resultType, ptr, offsets, Value() /*stride*/, cachePolicy, mask,
-                other, /*contiguity=*/1, soffset, scopeAttr);
+                other, /*contiguity=*/1, soffset, scopeAttr, fp6Packed);
           },
           py::arg("resultType"), py::arg("ptr"), py::arg("offsets"),
           py::arg("mask"), py::arg("other"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
+          py::arg("soffset"), py::arg("scope").none(),
+          py::arg("fp6_packed") = false)
       .def(
           "create_buffer_desc_store",
           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,

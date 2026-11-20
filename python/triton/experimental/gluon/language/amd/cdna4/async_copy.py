@@ -38,7 +38,8 @@ def _cache_policy_attr(cache_policy, cache_modifier, semantic):
 
 
 @builtin
-def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *, cache_policy=None, _semantic=None):
+def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *, cache_policy=None, fp6_packed=False,
+                          _semantic=None):
     """
     AMD global load to shared operation.
 
@@ -80,6 +81,12 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *
         cache_modifier (str): Cache modifier specifier. Defaults to "".
         cache_policy (CachePolicy, optional): gfx9 cache hints. Cannot be combined with ``cache_modifier``.
             Defaults to None.
+        fp6_packed (bool): Load densely packed FP6 (4 codes per 3 bytes) into the operand form of
+            :func:`~triton.experimental.gluon.language.amd.cdna4.mfma_scaled`. ``dest`` is uint8, and each group of
+            16 bytes along its contiguous dimension receives 16 FP6 codes (12 bytes) followed by 4 padding bytes,
+            which are not written. Each lane must hold whole groups; a group is loaded with one 96-bit transfer of
+            the 12 bytes starting at the pointer of its first element, and uses that element's mask. Requires no
+            ``other``. Defaults to False.
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(ptr.type.layout, DistributedLayout), lambda: "expected ptr type layout to be a DistributedLayout")
@@ -100,7 +107,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *
     other_handle = other.handle if other is not None else ir.value()
     cache_policy = _cache_policy_attr(cache_policy, cache_modifier, _semantic)
     _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
-                                                        cache_policy, False)
+                                                        cache_policy, False, _unwrap_if_constexpr(fp6_packed))
 
 
 @builtin

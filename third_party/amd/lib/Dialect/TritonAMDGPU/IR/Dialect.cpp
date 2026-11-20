@@ -1568,6 +1568,16 @@ LogicalResult BufferLoadOp::verify() {
   if (failed(
           verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
     return failure();
+  if (getFp6Packed()) {
+    auto resultTy = cast<RankedTensorType>(getType());
+    if (!resultTy.getElementType().isInteger(8) || getOther() ||
+        (getSoffset() && isa<RankedTensorType>(getSoffset().getType())))
+      return emitOpError("fp6Packed requires an i8 result, no other value and "
+                         "a scalar soffset");
+    if (failed(verifyRegisterConsecutiveGroups(getOperation(), resultTy,
+                                               /*groupSize=*/16)))
+      return failure();
+  }
   return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                   getScope(),
                                   triton::CachePolicyOperation::Load);

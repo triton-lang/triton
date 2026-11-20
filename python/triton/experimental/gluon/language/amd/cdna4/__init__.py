@@ -163,10 +163,7 @@ def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_
         is_k_contig (bool): K is the contiguous dim in shared memory.
     Returns:
         The layout, or ``None`` if the input falls outside the supported set.
-        FP6 ``mfma_scaled`` operands use ``ttgl.uint8`` with
-        ``k_width=32``; they need K contiguous, 128 or 256 bytes of K, and at least 64 rows, and get 16 bytes of
-        padding per 1 KiB with reordered rows.
-        Common reasons for ``None``: ``k_width`` not in {4, 8, 16} (or 32 for packed FP6); element
+        Common reasons for ``None``: ``k_width`` not in {4, 8, 16}, or 32 with 8-bit elements; element
         bitwidth not in {4, 8, 16}; or an MFMA instruction shape or kWidth
         combination not handled by the underlying algorithm.
     """

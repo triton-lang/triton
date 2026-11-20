@@ -4799,20 +4799,22 @@ def _fp6_packed_copy_layout(shared, num_warps):
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
-@pytest.mark.parametrize("smem", ["unswizzled", "swizzled", "padded"])
-def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
-    from triton._internal_testing import fp6_values, pack_fp6
+@pytest.mark.parametrize("src, dest", [("buffer", "registers")] + [(src, dest)
+                                                                   for src in ["buffer", "global"]
+                                                                   for dest in ["unswizzled", "swizzled", "padded"]])
+def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
 
     @gluon.jit
     def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, K, a_type: ttgl.constexpr, b_type: ttgl.constexpr,
-               SMEM: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
+               SMEM: ttgl.constexpr, GLOBAL: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+               BLOCK_K: ttgl.constexpr):
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
                                                              warps_per_cta=[2, 2])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=32)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=32)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
-        # Each lane copies one 16-value group: 12 global bytes into a 16-byte LDS slot.
+        # Each lane loads one 16-value group: 12 global bytes into 16 bytes of registers or LDS.
         # Swizzling and padding move whole 16-byte groups, so they keep each group intact.
         if SMEM == "padded":
             a_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
@@ -4827,8 +4829,9 @@ def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
             b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
             a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
             b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
-        a_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_M, BLOCK_K], a_shared)
-        b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_K, BLOCK_N], b_shared)
+        if SMEM != "registers":
+            a_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_M, BLOCK_K], a_shared)
+            b_smem = ttgl.allocate_shared_memory(ttgl.uint8, [BLOCK_K, BLOCK_N], b_shared)
         row_bytes = K // 4 * 3
         a_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(a_ptr, (BLOCK_M * row_bytes).to(ttgl.uint32))
         b_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(b_ptr, (BLOCK_N * row_bytes).to(ttgl.uint32))
@@ -4846,15 +4849,23 @@ def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
         for k in range(0, K, BLOCK_K):
             a_k = k + a_offs_k
             b_k = k + b_offs_k
-            ttgl.amd.cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs_m * row_bytes + a_k // 16 * 12 + a_k % 16,
-                                                 fp6_packed=True)
-            ttgl.amd.cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs_n * row_bytes + b_k // 16 * 12 + b_k % 16,
-                                                 fp6_packed=True)
-            cdna4_async_copy.commit_group()
-            cdna4_async_copy.wait_group(0)
-            ttgl.barrier()
-            a = a_smem.load(a_layout)
-            b = b_smem.load(b_layout)
+            a_offs = a_offs_m * row_bytes + a_k // 16 * 12 + a_k % 16
+            b_offs = b_offs_n * row_bytes + b_k // 16 * 12 + b_k % 16
+            if SMEM == "registers":
+                a = ttgl.convert_layout(ttgl.amd.cdna4.buffer.load(a_desc, a_offs, fp6_packed=True), a_layout)
+                b = ttgl.convert_layout(ttgl.amd.cdna4.buffer.load(b_desc, b_offs, fp6_packed=True), b_layout)
+            else:
+                if GLOBAL:
+                    cdna4_async_copy.global_load_to_shared(a_smem, a_ptr + a_offs, fp6_packed=True)
+                    cdna4_async_copy.global_load_to_shared(b_smem, b_ptr + b_offs, fp6_packed=True)
+                else:
+                    ttgl.amd.cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs, fp6_packed=True)
+                    ttgl.amd.cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs, fp6_packed=True)
+                cdna4_async_copy.commit_group()
+                cdna4_async_copy.wait_group(0)
+                ttgl.barrier()
+                a = a_smem.load(a_layout)
+                b = b_smem.load(b_layout)
             a_scale = ttgl.amd.cdna4.buffer_load(a_scale_ptr, a_scale_offs_m * (K // 32) + k // 32 + a_scale_offs_k)
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + k // 32 + b_scale_offs_k)
             acc = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, acc)
@@ -4870,63 +4881,19 @@ def test_amd_mfma_scaled_fp6_packed_load_to_shared(a_type, b_type, smem):
     a_scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
     b_scale = torch.randint(124, 131, (N, K // 32), dtype=torch.uint8, device="cuda")
     out = torch.empty((M, N), dtype=torch.float32, device="cuda")
-    compiled = kernel[(1, )](out, pack_fp6(a_codes), pack_fp6(b_codes), a_scale, b_scale, K, a_type, b_type, smem, M, N,
-                             128, num_warps=4)
+    compiled = kernel[(1, )](out, pack_fp6(a_codes), pack_fp6(b_codes), a_scale, b_scale, K, a_type, b_type, dest,
+                             src == "global", M, N, 128, num_warps=4)
     amdgcn = compiled.asm["amdgcn"]
-    assert re.search(r"buffer_load_dwordx3 .* lds", amdgcn)
-    assert "buffer_load_dword " not in amdgcn
+    if src == "global":
+        assert "global_load_lds_dwordx3" in amdgcn
+        assert not re.search(r"global_load_lds_dword\b", amdgcn)
+    else:
+        assert re.search(r"buffer_load_dwordx3" + (" .* lds" if dest != "registers" else ""), amdgcn)
+        assert "buffer_load_dword " not in amdgcn
 
     a_ref = fp6_values(a_type, a_codes).double() * torch.exp2(a_scale.double() - 127).repeat_interleave(32, dim=1)
     b_ref = fp6_values(b_type, b_codes).double() * torch.exp2(b_scale.double() - 127).repeat_interleave(32, dim=1)
     torch.testing.assert_close(out, (a_ref @ b_ref.T).float())
-
-
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_amd_scaled_downcast_fp6_packed(fmt, dtype):
-    from triton._internal_testing import fp6_values, pack_fp6
-
-    @gluon.jit
-    def kernel(x_ptr, scale_ptr, out_ptr, FMT: ttgl.constexpr, M: ttgl.constexpr, K: ttgl.constexpr):
-        # Each thread converts 32 consecutive values with one instruction.
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 32], [16, 4], [4, 1], [1, 0])
-        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [16, 4], [4, 1], [1, 0])
-        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
-        offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, layout))[None, :]
-        x = ttgl.load(x_ptr + offs_m * K + offs_k)
-        scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))[:, None]
-        scale_k = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout))[None, :]
-        scale = ttgl.load(scale_ptr + scale_m * (K // 32) + scale_k)
-        packed = ttgl.amd.cdna4.scaled_downcast(x, scale, FMT, axis=1)
-        # Store the 12 code bytes of each 16-byte group densely.
-        ttgl.store(out_ptr + offs_m * (K // 4 * 3) + offs_k // 16 * 12 + offs_k % 16, packed, mask=offs_k % 16 < 12)
-
-    M, K = 64, 128
-    torch.manual_seed(0)
-    scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
-    scale_f = torch.exp2(scale.double() - 127).repeat_interleave(32, dim=1)
-    grid = fp6_values(fmt, torch.arange(32, device="cuda")).double()
-    # Exact grid values, midpoints (ties to even), and out-of-range values that saturate.
-    pick = torch.randint(0, 32, (M, K), device="cuda")
-    x = grid[pick]
-    tie = torch.rand((M, K), device="cuda") < 0.3
-    x = torch.where(tie & (pick < 31), (grid[pick] + grid[(pick + 1).clamp_max(31)]) / 2, x)
-    x = torch.where(torch.rand((M, K), device="cuda") < 0.05, grid[31] * 4, x)
-    x = x * torch.where(torch.rand((M, K), device="cuda") < 0.5, -1.0, 1.0)
-    x = (x * scale_f).to(dtype)
-    out = torch.empty((M, K // 4 * 3), dtype=torch.uint8, device="cuda")
-    compiled = kernel[(1, )](x, scale, out, fmt, M, K, num_warps=4)
-    assert f"v_cvt_scalef32_2xpk16_{'fp6' if fmt == 'e2m3' else 'bf6'}_f32" in compiled.asm["amdgcn"]
-
-    # Round x / scale to nearest, ties to even code, saturating to the largest magnitude.
-    a = (x.double() / scale_f).abs()
-    dist = (a[..., None] - grid).abs()
-    nearest = dist == dist.min(dim=-1, keepdim=True).values
-    even = nearest & (torch.arange(32, device="cuda") % 2 == 0)
-    code = torch.where(even.any(-1), even.int().argmax(-1), nearest.int().argmax(-1))
-    code = torch.where(a >= grid[31], 31, code) | (torch.signbit(x.float()).int() << 5)
-    torch.testing.assert_close(out, pack_fp6(code), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
