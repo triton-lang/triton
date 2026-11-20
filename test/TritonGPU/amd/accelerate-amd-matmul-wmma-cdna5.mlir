@@ -669,7 +669,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-// CHECK-LABEL: wmma_dot_scaled_mxfp4_packed_mn
+// COMMON-LABEL: wmma_dot_scaled_mxfp4_packed_mn
   tt.func public @wmma_dot_scaled_mxfp4_packed_mn(
       %arg0: tensor<8x256xi8, #blocked>,
       %arg1: tensor<256x256xf16, #blocked>,
