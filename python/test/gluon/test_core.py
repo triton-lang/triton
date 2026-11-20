@@ -8173,6 +8173,39 @@ def test_tcgen05_mma_scaled_single_cta_k96(fmt, vec_size, allow_single_cta_k96, 
         torch.testing.assert_close(actual, paired, atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not (is_blackwell() or is_blackwell_ultra()), reason="Requires tcgen05 scaled MMA")
+@pytest.mark.parametrize("scale_rows", [64, 128])
+def test_tcgen05_mma_scaled_single_cta_k96_rhs_stride(scale_rows):
+
+    @gluon.jit
+    def kernel(out, SCALE_ROWS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8)
+        regs: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 128], layout, ttgl.full([128, 128], 0x22, ttgl.uint8, regs))
+        b = a.slice(0, 64).permute((1, 0))
+        sa = allocate_tensor_memory(ttgl.uint8, [128, 8], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.uint8, [SCALE_ROWS, 8], TensorMemoryScalesLayout())
+        sa.store(ttgl.full([128, 8], 127, ttgl.uint8, sa.get_reg_layout()))
+        k = ttgl.arange(0, 8, layout=ttgl.SliceLayout(0, sb.get_reg_layout()))
+        sb.store(ttgl.full([SCALE_ROWS, 8], 127, ttgl.uint8, sb.get_reg_layout()) + k[None, :].to(ttgl.uint8))
+        acc = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared()
+        tcgen05_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", use_acc=False, mbarriers=[bar], allow_single_cta_k96=True)
+        mbarrier.wait(bar, phase=0, deps=[a])
+        mbarrier.invalidate(bar)
+        offsets = ttgl.arange(0, 128)[:, None] * 64 + ttgl.arange(0, 64)[None, :]
+        ttgl.store(out + offsets, acc.load())
+
+    out = torch.empty((128, 64), device="cuda")
+    compiled = kernel[(1, )](out, scale_rows)
+    # Each K block contributes 32 ones scaled by 2**k.
+    torch.testing.assert_close(out, torch.full_like(out, 32 * 255), rtol=0, atol=0)
+    expected_mmas = 3 if scale_rows == 128 and is_blackwell_ultra() else 4
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
+
+
 @gluon.jit
 def tmem288k_simple_kernel(in_ptr, out_ptr, M: ttgl.constexpr, Ncol1: ttgl.constexpr, Ncol2: ttgl.constexpr,
                            num_warps: ttgl.constexpr):
