@@ -57,9 +57,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 // STORE-LABEL: tma_store
-//       STORE: ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
+//       STORE: [[SRC:%.*]] = ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
 //       FENCE-NEXT: ttng.fence_async_shared {bCluster = false}
 //       STORE-NEXT: ttng.async_tma_copy_local_to_global
+//       STORE-NEXT: ttng.async_tma_store_wait {pendings = 0 : i32} deps [[SRC]]
   tt.func public @tma_store(%arg0: !tt.tensordesc<128x256xf32, #nvmma_128>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
     tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<128x256xf32, #nvmma_128>, tensor<128x256xf32, #blocked>
     tt.return

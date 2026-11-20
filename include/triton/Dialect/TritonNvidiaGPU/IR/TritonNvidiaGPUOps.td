@@ -827,14 +827,20 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
   let summary = "wait for pending bulk and TMA store operations.";
-  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only);
+  let arguments = (ins I32Attr:$pendings, UnitAttr:$read_only, Variadic<TTG_MemDescType>:$deps);
   let description = [{
     Wait for the associated store operations to complete. When `read_only` is
     set, only wait until their reads from shared memory have completed. This is
-    needed before shared memory can be written to again.
+    needed before shared memory can be written to again. Optional dependencies
+    keep the source buffers live through this wait.
   }];
 
-  let assemblyFormat = "attr-dict";
+  let builders = [
+    OpBuilder<(ins "uint32_t":$pendings, "bool":$readOnly), [{
+      build($_builder, $_state, pendings, readOnly, ValueRange{});
+    }]>
+  ];
+  let assemblyFormat = "attr-dict (`deps` $deps^ `:` type($deps))?";
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
