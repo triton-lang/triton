@@ -255,7 +255,9 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize(
     "reset_period, reset_value, snapshot, store_after_loop",
-    list(product([0, 2, 4], [0, 1], ["even", "last"], [False, True])) +
+    [(period, value, snapshot, store_after_loop)
+     for period, value in [(0, 0), (2, 0), (2, 1), (4, 0), (4, 1)]
+     for snapshot, store_after_loop in product(["even", "last"], [False, True])] +
     [(2, 0, snapshot, False) for snapshot in ("before_dot", "after_reset", "next_iteration")],
 )
 def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_value, snapshot, store_after_loop):
