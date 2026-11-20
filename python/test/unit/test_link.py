@@ -1,4 +1,5 @@
 import pytest
+import subprocess
 import torch
 import triton
 import triton.language as tl
@@ -39,3 +40,49 @@ def test_link_extern_libs(use_libdevice, kernel, monkeypatch):
         kernel[(1, )](x, SQRT=use_libdevice)
 
     assert (link_called == use_libdevice)
+
+
+@pytest.mark.parametrize("constant, other_constant", [("-1", "2"), ("0.5", "2"), ("-0.0", "2"), ("1e+20", "2"),
+                                                      ("inf", "2"), ("nan", "2"), ("101605", "145791")])
+def test_aot_linker_constexpr_symbols(tmp_path, constant, other_constant):
+    from triton.tools.link import (
+        HeaderParser,
+        make_func_pointers,
+        make_kernel_hints_dispatcher,
+        make_kernel_meta_const_dispatcher,
+    )
+
+    parser = HeaderParser()
+    for signature_hash, suffix, value in [("aaaa", "0d", constant), ("bbbb", "", constant),
+                                          ("cccc", "", other_constant)]:
+        parser.extract_linker_meta(f"// tt-linker: kernel_{signature_hash}_{suffix}:int32_t x:{value}_warps1xstages3")
+    assert len(parser.kernels) == 2
+    assert sorted(len(metas) for metas in parser.kernels.values()) == [1, 2]
+    meta = next(iter(parser.kernels.values()))[0]
+    dispatchers = "\n".join(make_kernel_hints_dispatcher(name, metas) for name, metas in parser.kernels.items())
+    source = f"""
+#include <stdint.h>
+typedef void *TT_StreamTy;
+typedef int TT_ResultTy;
+#define TT_ERROR_INVALID_VALUE 777
+int kernel_aaaa_0d(TT_StreamTy stream, int32_t x) {{ return 1; }}
+int kernel_bbbb_(TT_StreamTy stream, int32_t x) {{ return 2; }}
+int kernel_cccc_(TT_StreamTy stream, int32_t x) {{ return 3; }}
+void load_kernel_aaaa_0d(void) {{}}
+void unload_kernel_aaaa_0d(void) {{}}
+void load_kernel_bbbb_(void) {{}}
+void unload_kernel_bbbb_(void) {{}}
+void load_kernel_cccc_(void) {{}}
+void unload_kernel_cccc_(void) {{}}
+{dispatchers}
+{make_func_pointers(list(parser.kernels), meta)}
+{make_kernel_meta_const_dispatcher(meta)}
+int main(void) {{
+    return kernel(0, 16, 0) != 1 || kernel(0, 3, 0) != 2 || kernel(0, 16, 1) != 3;
+}}
+"""
+    c_path = tmp_path / "dispatch.c"
+    exe_path = tmp_path / "dispatch"
+    c_path.write_text(source)
+    subprocess.run(["gcc", "-std=c99", str(c_path), "-o", str(exe_path)], check=True)
+    subprocess.run([str(exe_path)], check=True)
