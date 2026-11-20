@@ -861,6 +861,8 @@ def test_cluster_barrier_does_not_publish_later_read(device, run_wrapper, monkey
         for i in ttgl.static_range(2):
             sink.index(i).store(val)
 
+        # Order every read before the multicast without publishing it.
+        hopper.cluster.barrier(relaxed=True)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
         tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
         mbarrier.wait(bar, 0, deps=[smem])
@@ -5212,37 +5214,46 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-def test_bulk_async_load_multicast_reuse_race(device, run_wrapper, monkeypatch):
-    if run_wrapper:
-        result = run_in_process(test_bulk_async_load_multicast_reuse_race, (device, False, monkeypatch))
+@pytest.mark.parametrize("op", ["bulk", "tma"])
+@pytest.mark.parametrize("race", ["first-read", "second-read", "reuse-after-read", None])
+def test_multicast_load_reuse(op, race, device, run_wrapper):
+    if race is not None and run_wrapper:
+        result = run_in_process(test_multicast_load_reuse, (op, race, device, False))
         assert_expected_cuda_failure(result.exc)
-        assert "outstanding reads" in result.driver_stderr_output
+        expected = "outstanding reads" if race == "reuse-after-read" else "outstanding writes"
+        assert expected in result.driver_stderr_output
         return
 
-    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
-    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    knobs.refresh_knobs()
+    knobs.compilation.instrumentation_mode = "consan"
 
     @gluon.jit
-    def kernel(src, out):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=((0, ), ))
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=((0, ), ))
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared)
-        bar = hopper.mbarrier.allocate_mbarrier()
-        hopper.mbarrier.init(bar, count=1)
-        values = ttgl.full((128, ), 0, ttgl.int32, layout)
-        for phase in range(2):
-            hopper.mbarrier.expect(bar, 512)
-            hopper.bulk.async_load(smem, src, 128, bar, multicast=True)
-            hopper.mbarrier.wait(bar, phase)
+    def kernel(src, out, shared: ttgl.constexpr, OP: ttgl.constexpr, RACE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0], [0]])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        values = ttgl.full([256], 0, ttgl.int32, layout)
+        for phase in ttgl.static_range(2):
+            mbarrier.expect(bar, smem.nbytes_per_cta)
+            if OP == "bulk":
+                hopper.bulk.async_load(smem, src + phase * 256, 256, bar, multicast=True)
+            else:
+                tma.async_load(src, [phase * 256], bar, smem, multicast=True)
+            mbarrier.wait(bar, phase)
+            # Each CTA waits for its own shard, then reads both shards.
+            hopper.cluster.barrier(relaxed=RACE == ("first-read", "second-read")[phase])
             values += smem.load(layout)
-            # Deliberately omit the cluster join before the next multicast.
-        ttgl.store(out + ttgl.arange(0, 128, layout), values)
-        hopper.mbarrier.invalidate(bar)
+            hopper.cluster.barrier(relaxed=RACE == "reuse-after-read")
+        ttgl.store(out + ttgl.arange(0, 256, layout), values)
+        mbarrier.invalidate(bar)
 
-    src = torch.arange(128, device=device, dtype=torch.int32)
-    out = torch.empty_like(src)
-    kernel[(1, )](src, out, num_ctas=2)
+    src = torch.arange(512, dtype=torch.int32, device=device)
+    out = torch.empty_like(src[:256])
+    shared = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=32, rank=1, cga_layout=[[1], [0]])
+    arg = gluon.nvidia.hopper.TensorDescriptor.from_tensor(src, [256], shared) if op == "tma" else src
+    kernel[(1, )](arg, out, shared, op, race, num_ctas=4)
+    if race is None:
+        torch.testing.assert_close(out, src[:256] + src[256:])
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")

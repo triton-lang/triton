@@ -148,6 +148,13 @@ can see that read. After a barrier-tracked write, ConSan records the current
 peer thread mask as the new write frontier for the buffer and clears prior read
 state that the write supersedes.
 
+For bulk and TMA loads in a cluster, each region has a second write slot.
+Before the first load, all threads satisfy this slot. Issuing a load clears
+both slots and their barrier snapshots in every observer CTA. A wait on the
+completion barrier grants the waiting thread and its peers access to the
+payload. Ordinary writes preserve the load slot so each CTA contributing to
+a scatter can independently acquire the preceding load.
+
 All normal instrumentation emitted around one IR operation is wrapped in the
 ConSan lock. Barrier waits are split into a locked pre-wait section and a locked
 post-wait section.
