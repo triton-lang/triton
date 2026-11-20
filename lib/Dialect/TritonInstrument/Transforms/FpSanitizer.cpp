@@ -1103,9 +1103,15 @@ struct CellPointers {
 CellPointers cellPointers(PatternRewriter &rw, Location loc, Value base,
                           ttg::MemDescType desc, RankedTensorType tile,
                           Value row = {}, Value col = {}) {
-  // Map the logical tile coordinates to the physical row and subword
-  // column, including padding, packing, and layout replication.
-  auto inv = ttg::toLinearLayout(desc).pseudoinvert();
+  // The descriptor verifier requires at least blockM rows. In single-CTA
+  // TMEM layouts both blockM=64 and blockM=128 therefore use distinct rows
+  // across all four warps. A zero row-16 basis is an unallocated half-warp
+  // of rows, which the pseudoinverse skips.
+  auto layout = ttg::toLinearLayout(desc);
+  assert(!(layout.getFreeVariableMasks().lookup(rw.getStringAttr("row")) &
+           (32 | 64)) &&
+         "physical TMEM emulation requires distinct rows across warps");
+  auto inv = layout.pseudoinvert();
   auto dims = llvm::to_vector(inv.getInDimNames());
   auto offsetsTy = tile.clone(rw.getI32Type());
   auto constant = [&](int n) {

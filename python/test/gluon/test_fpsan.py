@@ -3808,6 +3808,11 @@ def _probability_stage(Out, X, Y, count, overwrite, WRITER: gl.constexpr):
             tcgen05_mma(q, k.permute((1, 0)), half, use_acc=False, pred=overwrite, mbarriers=[done])
             mbarrier.wait(done, phase=0, pred=overwrite)
             mbarrier.invalidate(done)
+        elif WRITER == "tmem_64_rows":
+            view = stage.reinterpret(gl.float8e5, (64, 128), TensorMemoryLayout((64, 128), col_stride=1))
+            row = gl.arange(0, 64, layout=gl.SliceLayout(1, view.get_reg_layout()))
+            data = (row[:, None] + 1).broadcast_to((64, 128))
+            view.store(gl.fpsan.probability_cast(gl.fpsan.unembed(data, gl.float32), gl.float8e5), pred=overwrite)
         else:
             # Each row gets a different low byte so a column-major bitcast fails.
             row = gl.arange(0, 128, layout=gl.SliceLayout(1, half.get_reg_layout()))
@@ -3834,7 +3839,7 @@ def _probability_stage(Out, X, Y, count, overwrite, WRITER: gl.constexpr):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("writer", ["tmem", "qk", "smem", "smem_rhs"])
+@pytest.mark.parametrize("writer", ["tmem", "tmem_64_rows", "qk", "smem", "smem_rhs"])
 def test_fpsan_probability_cast_stage(device, fresh_knobs, writer):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     # Both stages have identical narrow bytes but different residuals.
@@ -3852,6 +3857,10 @@ def test_fpsan_probability_cast_stage(device, fresh_knobs, writer):
                 expected[64:] = 0
             if overwrite and writer == "tmem":
                 expected += np.arange(128, dtype=np.uint64)[:, None] * 16
+            if overwrite and writer == "tmem_64_rows":
+                # Each warp writes its first 16 rows. The other 16 retain the original probability.
+                payload = np.arange(1, 65, dtype=np.uint64)[:, None]
+                expected[np.arange(128) % 32 < 16] = payload * 0x71b39a53 * cols
             np.testing.assert_array_equal(out.cpu().numpy().view(np.uint32), expected.astype(np.uint32))
 
 
