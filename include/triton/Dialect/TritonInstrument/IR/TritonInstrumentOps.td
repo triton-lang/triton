@@ -93,6 +93,17 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalIndexedAccessCTAsOp
+    : TTI_Op<"experimental_indexed_access_ctas", [Pure]> {
+  let summary = "Find the CTAs targeted by an indexed shared-memory access";
+  let arguments = (ins TypeAttrOf<TTG_MemDescType>:$memdesc, TT_IntTensor:$indices,
+                       Optional<TT_BoolTensor>:$mask, I32Attr:$axis);
+  let results = (outs I32:$result);
+  let assemblyFormat = [{
+    $indices (`,` $mask^)? attr-dict `:` type($indices) (`,` type($mask)^)?
+  }];
+}
+
 def TTI_ExperimentalLocalGatherOp
     : TTI_Op<"experimental_local_gather"> {
   let summary = "Gather elements from shared memory with logical base offsets";

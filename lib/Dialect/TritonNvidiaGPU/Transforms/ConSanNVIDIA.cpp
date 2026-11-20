@@ -129,7 +129,7 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::AsyncStoreOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
-    if (op->hasAttr("allocation.size"))
+    if (op->hasAttr("allocation.size") || isa<ttg::LocalAtomicScatterRMWOp>(op))
       mask = getResultScratchBroadcastMask(op).value_or(mask);
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());

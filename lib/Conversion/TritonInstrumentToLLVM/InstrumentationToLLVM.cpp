@@ -365,6 +365,69 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct IndexedAccessCTAsOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalIndexedAccessCTAsOp> {
+  IndexedAccessCTAsOpConversion(const LLVMTypeConverter &converter,
+                                const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern(converter), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalIndexedAccessCTAsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto layout =
+        ttg::toLinearLayout(op.getIndices().getType())
+            .removeZeroBasesAlongDim(rewriter.getStringAttr("register"));
+    auto indices =
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto addresses =
+        computeBlockLocalOffsets(loc, op.getMemdesc(), layout, indices,
+                                 op.getAxis(), rewriter, targetInfo);
+    SmallVector<Value> mask;
+    if (adaptor.getMask())
+      mask = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+
+    Value zero = b.i32_val(0);
+    Value one = b.i32_val(1);
+    bool local = !addresses.front().second;
+    Value laneTargets = zero;
+    for (auto [i, address] : llvm::enumerate(addresses)) {
+      Value bit = local ? one : b.shl(one, address.second);
+      if (!mask.empty())
+        bit = b.select(mask[i], bit, zero);
+      laneTargets = b.or_(laneTargets, bit);
+    }
+
+    // ConSan runs after shared memory allocation. Union the target bits
+    // across this partition using its named barrier.
+    Value targets = one;
+    if (!local || !mask.empty()) {
+      Value barrier = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+      Value threads = b.i32_val(ttg::lookupNumWarps(op) *
+                                ttg::lookupThreadsPerWarp(rewriter));
+      int count = local ? 1 : ttg::lookupNumCTAs(op);
+      targets = zero;
+      for (int i = 0; i < count; ++i) {
+        Value bit = b.i32_val(1u << i);
+        Value hit = b.icmp_ne(b.and_(laneTargets, bit), zero);
+        Value any = LLVM::createLLVMIntrinsicCallOp(
+                        rewriter, loc, "llvm.nvvm.barrier.cta.red.or.count",
+                        rewriter.getI1Type(), {barrier, threads, hit})
+                        .getResult(0);
+        targets = b.or_(targets, b.select(any, bit, zero));
+      }
+    }
+    if (local)
+      targets = b.shl(targets, targetInfo.getClusterCTAId(rewriter, loc));
+    rewriter.replaceOp(op, targets);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 static SmallVector<std::pair<Value, Value>>
 computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       RankedTensorType regTy,
@@ -470,5 +533,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MemDescToI32OpConversion>(typeConverter);
   patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
+  if (targetInfo.isCuda())
+    patterns.add<IndexedAccessCTAsOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
 }
