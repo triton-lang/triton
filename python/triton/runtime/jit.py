@@ -197,9 +197,11 @@ class DependenciesFinder(ast.NodeVisitor):
         self.local_names = {arg.arg for arg in node.args.args}
         for child in ast.iter_child_nodes(node):
             self.visit(child)
-            # Keyword-only parameters shadow globals in the body, but not in defaults.
-            if child is node.args and node.args.kwonlyargs:
+            # These parameters shadow globals in the body, but not in defaults.
+            if child is node.args:
                 self.local_names.update(arg.arg for arg in node.args.kwonlyargs)
+                if node.args.vararg is not None:
+                    self.local_names.add(node.args.vararg.arg)
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
