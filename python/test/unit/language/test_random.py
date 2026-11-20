@@ -5,6 +5,9 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_cuda, is_interpreter
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 
 #####################################
 # Reference Philox Implementation
@@ -154,6 +157,63 @@ def test_randint(size, seed, device, dtype, const_seed):
     gen = CustomPhilox4x(seed, config=config)
     out_ref = [gen.random_raw()[0] for _ in out_tri]
     assert out_tri == out_ref
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("frontend,dtype", [("triton", "uint32"), ("triton", "uint64"), ("gluon", "uint32")])
+@pytest.mark.parametrize("n_rounds", [0, 1, 7, 10])
+@pytest.mark.parametrize("seed", [0, 0xFEDCBA9876543210])
+def test_philox_full_counter(dtype, n_rounds, seed, frontend, device):
+    if frontend == "gluon" and is_interpreter():
+        pytest.skip("Gluon does not support the interpreter")
+
+    @triton.jit
+    def kernel(In, Out, seed, N_ROUNDS: tl.constexpr):
+        x = tl.arange(0, 128)
+        c0, c1, c2, c3 = tl.random.philox(seed, tl.load(In + x), tl.load(In + 128 + x), tl.load(In + 256 + x),
+                                          tl.load(In + 384 + x), N_ROUNDS)
+        tl.store(Out + x, c0)
+        tl.store(Out + 128 + x, c1)
+        tl.store(Out + 256 + x, c2)
+        tl.store(Out + 384 + x, c3)
+
+    @gluon.jit
+    def gluon_kernel(In, Out, seed, N_ROUNDS: gl.constexpr, WARP_SIZE: gl.constexpr):
+        x = gl.arange(0, 128, layout=gl.BlockedLayout([1], [WARP_SIZE], [4], [0]))
+        c0, c1, c2, c3 = tl.random.philox(seed, gl.load(In + x), gl.load(In + 128 + x), gl.load(In + 256 + x),
+                                          gl.load(In + 384 + x), N_ROUNDS)
+        gl.store(Out + x, c0)
+        gl.store(Out + 128 + x, c1)
+        gl.store(Out + 256 + x, c2)
+        gl.store(Out + 384 + x, c3)
+
+    np_dtype = getattr(np, dtype)
+    config = PHILOX_32 if dtype == "uint32" else PHILOX_64
+    rng = np.random.default_rng(0)
+    counters = rng.integers(0, np.iinfo(np_dtype).max, size=(4, 128), dtype=np_dtype, endpoint=True)
+    # Exercise zero, the sign bit, and products whose high half has its sign bit set.
+    counters[:, :4] = np.array([0, 1, 1 << (np.iinfo(np_dtype).bits - 1), np.iinfo(np_dtype).max], dtype=np_dtype)
+    expected = np.empty_like(counters)
+    reference = CustomPhilox4x(seed, config)
+    with np.errstate(over="ignore"):
+        for i in range(counters.shape[1]):
+            counter = counters[:, i]
+            key = reference._key.copy()
+            for _ in range(n_rounds):
+                counter = reference._single_round(counter, key)
+                key = reference._raise_key(key)
+            expected[:, i] = counter
+
+    inp = torch.from_numpy(counters).to(device)
+    out = torch.empty_like(inp)
+    fn = kernel if frontend == "triton" else gluon_kernel
+    kwargs = {"WARP_SIZE": triton.runtime.driver.active.get_current_target().warp_size} if frontend == "gluon" else {}
+    compiled = fn[(1, )](inp, out, seed, n_rounds, num_warps=4, **kwargs)
+    np.testing.assert_array_equal(out.cpu().numpy(), expected)
+    if is_cuda() and dtype == "uint32" and n_rounds == 7:
+        # All four counter words are dynamic, so each round needs two full products.
+        assert compiled.asm["ptx"].count("mul.wide.u32") >= 2 * n_rounds
+        assert "mul.hi.u32" not in compiled.asm["ptx"]
 
 
 # test uniform PRNG
