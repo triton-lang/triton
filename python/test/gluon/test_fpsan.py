@@ -408,24 +408,13 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
 
 
 def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
-    mask = np.uint64(0xFFFFFFFF)
-    x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    x_minus_one = (x + mask) & mask
-    choose2 = ((x * x_minus_one) & mask) >> np.uint64(1)
-    x_low = (x & np.uint64(0x1FF)).astype(np.int64)
-    choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
-    y = (np.uint64(1) + (x << np.uint64(8)) + (choose2 << np.uint64(16)) + (choose3 << np.uint64(24))) & mask
-    return _unmix_payload_u32_to_f32_bits_i32(y.astype(np.uint32))
+    x = _mix_f32_bits_to_payload_u32(x_i32)
+    return _unmix_payload_u32_to_f32_bits_i32(np.power(np.uint32(3), x))
 
 
 def _expected_exp2_i64(x_i64: np.ndarray) -> np.ndarray:
     x = _mix_float_bits(x_i64, "f64")
-    with np.errstate(over="ignore"):
-        choose2 = (x * (x - np.uint64(1))) >> np.uint64(1)
-        x_low = (x & np.uint64(0x1FFFF)).astype(np.int64)
-        choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
-        y = (np.uint64(1) + (x << np.uint64(16)) + (choose2 << np.uint64(32)) + (choose3 << np.uint64(48)))
-    return _unmix_payload_to_float_bits(y, "f64")
+    return _unmix_payload_to_float_bits(np.power(np.uint64(3), x), "f64")
 
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
@@ -1288,6 +1277,23 @@ def test_exp_add_mul_identity_f64(device, fresh_knobs):
     )
 
     _assert_payload_equal(out_add, out_mul)
+
+
+def test_exp2_homomorphic_cast_fp8(device, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(out_ptr, WARP_SIZE: gl.constexpr):
+        offsets = gl.arange(0, 256, layout=gl.BlockedLayout([1], [WARP_SIZE], [4], [0]))
+        x = gl.fpsan.unembed(offsets, gl.float32)
+        p = gl.fpsan.homomorphic_cast(gl.exp2(x), gl.float8e5)
+        gl.store(out_ptr + offsets, gl.fpsan.embed(p))
+
+    out = torch.empty(256, dtype=torch.int8, device=device)
+    kernel[(1, )](out, THREADS_PER_WARP)
+    expected = np.power(np.uint8(3), np.arange(256, dtype=np.uint8))
+    np.testing.assert_array_equal(out.cpu().numpy().view(np.uint8), expected)
 
 
 def test_exp_exp2_scaled_identity(device, fresh_knobs):

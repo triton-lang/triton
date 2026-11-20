@@ -367,7 +367,11 @@ Supported operation:
 
 Rewrite:
 
-- modular exponentiation by a fixed odd generator in payload space
+- For a ``w``-bit input payload ``u``, the output payload is ``3**u mod 2**w``.
+  Its period is ``2**(w-2)``, the maximum for an odd base at these widths.
+  Exponentiation commutes with truncation to a narrower payload ring.
+  For example, a homomorphic cast of FP32 ``exp2`` to FP8 can produce
+  64 distinct payloads.
 
 Exact preserved properties:
 
