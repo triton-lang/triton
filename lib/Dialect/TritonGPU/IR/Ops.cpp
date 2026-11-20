@@ -318,50 +318,6 @@ struct CanonicalizeConvertFromLocalStore
   }
 };
 
-struct CombineSplitResultConversions
-    : public OpRewritePattern<triton::SplitOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(triton::SplitOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!op.getOutLHS().hasOneUse() || !op.getOutRHS().hasOneUse())
-      return failure();
-    auto lhs = dyn_cast<ConvertLayoutOp>(*op.getOutLHS().getUsers().begin());
-    auto rhs = dyn_cast<ConvertLayoutOp>(*op.getOutRHS().getUsers().begin());
-    if (!lhs || !rhs || lhs.getType() != rhs.getType() ||
-        lhs->getBlock() != op->getBlock() || rhs->getBlock() != op->getBlock())
-      return failure();
-    Operation *first = lhs;
-    if (lhs->getNextNode() != rhs) {
-      if (rhs->getNextNode() != lhs)
-        return failure();
-      first = rhs;
-    }
-
-    auto conversion = minimalCvtLayout(lhs.getSrc().getType(), lhs.getType());
-    auto dims = conversion.getInDimNames();
-    if (!llvm::is_contained(dims, StringAttr::get(op.getContext(), "warp")) ||
-        llvm::is_contained(dims, StringAttr::get(op.getContext(), "block")))
-      return failure();
-
-    auto dst = lhs.getType().getEncoding();
-    auto src = inferSrcEncoding(op, dst);
-    if (!src || inferDstEncoding(op, src) != dst)
-      return failure();
-
-    // Exchange both halves together before splitting them in registers.
-    rewriter.setInsertionPoint(first);
-    auto type = op.getSrc().getType().cloneWithEncoding(src);
-    auto converted =
-        ConvertLayoutOp::create(rewriter, op.getLoc(), type, op.getSrc());
-    auto split = triton::SplitOp::create(rewriter, op.getLoc(), converted);
-    rewriter.replaceOp(lhs, split.getOutLHS());
-    rewriter.replaceOp(rhs, split.getOutRHS());
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 struct CanonicalizeConvertFromSplit
     : public mlir::OpRewritePattern<triton::SplitOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -491,7 +447,6 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
   patterns.add<CanonicalizeConvertFromSplit>(context);
-  patterns.add<CombineSplitResultConversions>(context);
   patterns.add<CanonicalizeConvertFromTMEMStore>(context);
 }
 

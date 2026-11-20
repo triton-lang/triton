@@ -446,33 +446,3 @@ tt.func @gsan_descriptor_predicate(%desc: !tt.tensordesc<4x4xf32>, %x: i32, %y: 
   tti.experimental_gsan_tensordesc_access %desc[%x, %y], false, %true : !tt.tensordesc<4x4xf32>
   tt.return
 }
-
-// -----
-
-#packed = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [4, 8, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
-#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#dst = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
-module attributes {"ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @convert_both_split_results
-  // CHECK: %[[PACKED:.*]] = ttg.convert_layout %arg0
-  // CHECK-NEXT: %[[L:[^,]+]], %[[R:[^ ]+]] = tt.split %[[PACKED]]
-  // CHECK-NEXT: tt.return %[[L]], %[[R]]
-  tt.func @convert_both_split_results(%arg0: tensor<32x64x2xf32, #packed>) -> (tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>) {
-    %l, %r = tt.split %arg0 : tensor<32x64x2xf32, #packed> -> tensor<32x64xf32, #src>
-    %b = ttg.convert_layout %r : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
-    %a = ttg.convert_layout %l : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
-    tt.return %a, %b : tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>
-  }
-
-  // CHECK-LABEL: @keep_split_with_another_user
-  // CHECK: %[[L:[^,]+]], %[[R:[^ ]+]] = tt.split %arg0
-  // CHECK-NEXT: %[[A:.*]] = ttg.convert_layout %[[L]]
-  // CHECK-NEXT: %[[B:.*]] = ttg.convert_layout %[[R]]
-  // CHECK-NEXT: tt.return %[[A]], %[[B]], %[[L]]
-  tt.func @keep_split_with_another_user(%arg0: tensor<32x64x2xf32, #packed>) -> (tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>, tensor<32x64xf32, #src>) {
-    %l, %r = tt.split %arg0 : tensor<32x64x2xf32, #packed> -> tensor<32x64xf32, #src>
-    %a = ttg.convert_layout %l : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
-    %b = ttg.convert_layout %r : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
-    tt.return %a, %b, %l : tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>, tensor<32x64xf32, #src>
-  }
-}
