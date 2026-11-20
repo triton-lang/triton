@@ -861,8 +861,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   SmallVector<Value> commitDescs = op.getCompletionDescs();
   bool useK96 =
-      targetFeatures.supportsK96Tcgen05MMA() &&
-      (twoCTAs || op.getAllowSingleCtaK96()) && opKindIsMXFP4 &&
+      targetFeatures.supportsK96Tcgen05MMA() && opKindIsMXFP4 &&
       !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
       ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&

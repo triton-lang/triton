@@ -925,8 +925,6 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     If `$two_ctas` is set, the op will execute a matmul across two contiguous
     CTAs, read the data distributed across the two CTAs, and synchronize both
     CTAs if the op is synchronous.
-    `allow_single_cta_k96` permits reassociation into K96 instructions
-    for eligible single-CTA FP4 operands.
     If `is_async` is false, the op executes synchronously. The barrier operands
     must not be present in that case.
     Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
@@ -952,8 +950,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     Variadic<I1>:$barrier_preds,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_async,
-    UnitAttr:$allow_single_cta_k96
+    UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -976,8 +973,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
       CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
       CArg<"bool", "false">:$two_ctas,
       CArg<"bool", "false">:$is_async,
-      CArg<"bool", "false">:$multicast,
-      CArg<"bool", "false">:$allow_single_cta_k96)>
+      CArg<"bool", "false">:$multicast)>
   ];
 
   let assemblyFormat = [{
