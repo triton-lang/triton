@@ -236,11 +236,15 @@ multiCTA kernel those roles can differ:
 - The barrier-recipient CTA bitset selects the live barrier rows that arrivals,
   expectations, and completion signals update.
 
-For example, a multicast TMA load is issued by the multicast-group leader,
-writes every result-recipient CTA row, and signals the leader barrier row. A
-two-CTA Tensor Core operation is issued by the even CTA in the pair, but its
-memory effects cover both CTA rows in that pair. CLC try-cancel is issued once
-for the cluster and touches all CTA rows.
+The multicast-group leader issues a bulk or TMA load. Each destination CTA
+receives a replica and signals its local mbarrier. For `cta_group::2`, the
+barrier address selects the receiving member of each CTA pair. ConSan records
+the destination rows tracked by each barrier. A wait acquires those rows,
+and a cluster barrier can share the acquired writes with peer CTAs.
+
+The even CTA issues a two-CTA Tensor Core operation whose memory effects
+cover both rows in the pair. CLC try-cancel is issued once for the cluster
+and touches all CTA rows.
 
 For direct memdesc accesses, ConSan derives the possible recipient CTA rows
 from the same block-local register-to-shared layout conversion used by
