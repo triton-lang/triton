@@ -374,6 +374,16 @@ void init_triton_amd(py::module_ &m) {
   m.def("get_target_triple",
         [](const std::string &arch) { return getAMDTargetTriple(arch).str(); });
 
+  m.def("is_arch_supported", [](const std::string &arch) {
+    try {
+      (void)getAMDTargetTriple(arch);
+    } catch (const std::invalid_argument &) {
+      return false;
+    }
+    return mlir::triton::amdgpu::TargetFeatures(llvm::StringRef(arch))
+               .getISAFamily() != mlir::triton::amdgpu::ISAFamily::Unknown;
+  });
+
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect>();
