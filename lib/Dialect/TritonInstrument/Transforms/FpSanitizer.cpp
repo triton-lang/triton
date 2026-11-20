@@ -16,6 +16,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/bit.h"
 #include <cassert>
 #include <functional>
 
@@ -728,13 +729,6 @@ Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
   return scalar;
 }
 
-uint64_t getLowBitsMask(unsigned bitWidth) {
-  assert(bitWidth > 0 && bitWidth <= 64);
-  if (bitWidth == 64)
-    return ~uint64_t{0};
-  return (uint64_t{1} << bitWidth) - 1;
-}
-
 uint64_t invOddU64(uint64_t a) {
   assert((a & 1) == 1);
   uint64_t x = 2 - a;
@@ -805,22 +799,25 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
 }
 
 Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
-  auto one = getU32ConstantLike(rewriter, loc, u.getType(), 1u);
-  auto two = getU32ConstantLike(rewriter, loc, u.getType(), 2u);
-  auto evenMask = getIntConstantLike(rewriter, loc, u.getType(), -2);
+  // For u = 2^k * t with t odd, return 2^k * inv(t). Setting the high bit
+  // before counting trailing zeros keeps both shifts in range for u = 0.
+  unsigned width = getIntBitwidth(u.getType());
+  Value highBit = getUIntConstantLike(rewriter, loc, u.getType(),
+                                      uint64_t{1} << (width - 1));
+  Value nonzero = arith::OrIOp::create(rewriter, loc, u, highBit);
+  Value k = math::CountTrailingZerosOp::create(rewriter, loc, nonzero);
+  Value t = arith::ShRUIOp::create(rewriter, loc, u, k);
 
-  Value a = arith::OrIOp::create(rewriter, loc, u, one);
-  Value x = arith::SubIOp::create(rewriter, loc, two, a);
-  for (unsigned correctBits = 2; correctBits < getIntBitwidth(u.getType());
-       correctBits *= 2) {
-    Value ax = arith::MulIOp::create(rewriter, loc, a, x);
-    Value factor = arith::SubIOp::create(rewriter, loc, two, ax);
+  // Every odd t is its own inverse modulo 8. Starting Newton iteration at t
+  // also keeps x = 0 throughout when u = 0.
+  Value two = getUIntConstantLike(rewriter, loc, u.getType(), 2);
+  Value x = t;
+  for (unsigned correctBits = 3; correctBits < width; correctBits *= 2) {
+    Value tx = arith::MulIOp::create(rewriter, loc, t, x);
+    Value factor = arith::SubIOp::create(rewriter, loc, two, tx);
     x = arith::MulIOp::create(rewriter, loc, x, factor);
   }
-
-  Value evenPart = arith::AndIOp::create(rewriter, loc, x, evenMask);
-  Value originalParity = arith::AndIOp::create(rewriter, loc, u, one);
-  return arith::OrIOp::create(rewriter, loc, evenPart, originalParity);
+  return arith::ShLIOp::create(rewriter, loc, x, k);
 }
 
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
@@ -850,52 +847,69 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
-// A fixed-base modular exponential in payload space.  For payload width N, set
-// k = ceil(N/4) and c = 1 + 2^k.  Then c^x mod 2^N has the exact closed form
-// below because all terms from the fourth binomial term onward vanish. This
-// preserves exp2(a + b) = exp2(a) * exp2(b) without a per-element
-// exponentiation loop. If N <= 8, then this has the maximal possible period
-// of 2^(N-2); if N > 8, then this has a large but non-maximal period of
-// 2^(N-k) = 2^floor(3N/4) instead.
+// Interpolate base^(u/stride) at multiples u of stride, where base = 3^stride.
+// The kth binomial term is delta^k / k! times u(u-stride)...(u-(k-1)*stride)
+// for delta = (base-1)/stride. Generate its coefficients on the host.
+SmallVector<uint64_t, 8> getExp2Coefficients(uint64_t base, unsigned stride,
+                                             unsigned degree) {
+  // delta is divisible by 4, enough to cancel the powers of two in each
+  // divisor k <= 7 before taking the modular inverse of its odd part.
+  uint64_t delta = (base - 1) / stride;
+  assert(degree <= 7 && delta % 4 == 0);
+  SmallVector<uint64_t, 8> coeffs{1};
+  for (unsigned k = 1; k <= degree; ++k) {
+    int twos = llvm::countr_zero(k);
+    coeffs.push_back(coeffs.back() * (delta >> twos) * invOddU64(k >> twos));
+  }
+  // Expand the Newton basis into powers of u for Horner evaluation.
+  for (unsigned k = degree; k > 0; --k) {
+    uint64_t node = (k - 1) * stride;
+    for (unsigned i = k; i <= degree; ++i)
+      coeffs[i - 1] -= node * coeffs[i];
+  }
+  return coeffs;
+}
+
+// Use 3^x modulo 2^w at every width. Its period is 2^(w-2), maximal
+// for an odd base, and truncating the payload commutes with exponentiation.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
   unsigned bitWidth = getIntBitwidth(xI.getType());
-  unsigned shift = (bitWidth + 3) / 4;
-  auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
-  auto shiftBase = getIntConstantLike(rewriter, loc, xI.getType(), shift);
-  auto shiftBase2 = getIntConstantLike(rewriter, loc, xI.getType(), 2 * shift);
+  assert(bitWidth >= 4 && bitWidth <= 64);
+  auto constant = [&](uint64_t value) {
+    return getUIntConstantLike(rewriter, loc, xI.getType(), value);
+  };
 
-  Value xMinusOne = arith::SubIOp::create(rewriter, loc, xI, one);
-  Value choose2Twice = arith::MulIOp::create(rewriter, loc, xI, xMinusOne);
-  Value choose2 = arith::ShRUIOp::create(rewriter, loc, choose2Twice, one);
+  // Split off the low s bits r. For stride = 2^s, base = 3^stride is
+  // 1 mod 2^(s+2) since each squaring after 3^2 = 9 adds one trailing
+  // zero to base-1. The kth binomial term vanishes when k*(s+2) >= w.
+  // Taking s = 2 for FP32 and s = 6 for FP64 limits the degree to seven.
+  unsigned lowBits = bitWidth > 32 ? 6 : 2;
+  unsigned stride = 1u << lowBits;
+  SmallVector<uint64_t, 7> powers{3};
+  for (unsigned i = 0; i < lowBits; ++i)
+    powers.push_back(powers.back() * powers.back());
 
-  Value term1 = arith::ShLIOp::create(rewriter, loc, xI, shiftBase);
-  Value term2 = arith::ShLIOp::create(rewriter, loc, choose2, shiftBase2);
-  Value result = arith::AddIOp::create(rewriter, loc, one, term1);
-  result = arith::AddIOp::create(rewriter, loc, result, term2);
+  // u = x-r modulo the period. Evaluate directly in u to avoid shifting it.
+  uint64_t period = uint64_t{1} << (bitWidth - 2);
+  Value u = arith::AndIOp::create(rewriter, loc, xI, constant(period - stride));
+  unsigned degree = (bitWidth - 1) / (lowBits + 2);
+  auto coeffs = getExp2Coefficients(powers.back(), stride, degree);
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, u);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
 
-  unsigned choose3Bits = bitWidth - 3 * shift;
-  uint64_t choose3InputMask = (uint64_t{1} << (choose3Bits + 1)) - 1;
-  auto choose3Mask =
-      getIntConstantLike(rewriter, loc, xI.getType(), choose3InputMask);
-  auto two = getIntConstantLike(rewriter, loc, xI.getType(), 2);
-  auto six = getIntConstantLike(rewriter, loc, xI.getType(), 6);
-  auto shiftBase3 = getIntConstantLike(rewriter, loc, xI.getType(), 3 * shift);
-
-  // Only the low choose3Bits bits of C(x, 3) survive the final shift. C(x, 3)
-  // modulo 2^choose3Bits has period 2^(choose3Bits + 1), so reducing x first
-  // keeps the products small.
-  Value xLow = arith::AndIOp::create(rewriter, loc, xI, choose3Mask);
-  Value xLowMinusOne = arith::SubIOp::create(rewriter, loc, xLow, one);
-  Value xLowMinusTwo = arith::SubIOp::create(rewriter, loc, xLow, two);
-  Value choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, xLow, xLowMinusOne);
-  choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, choose3Numerator, xLowMinusTwo);
-  Value choose3 = arith::DivUIOp::create(rewriter, loc, choose3Numerator, six);
-
-  Value term3 = arith::ShLIOp::create(rewriter, loc, choose3, shiftBase3);
-  result = arith::AddIOp::create(rewriter, loc, result, term3);
+  // Multiply by 3^r, one set bit at a time.
+  for (unsigned i = 0; i < lowBits; ++i) {
+    Value bit = arith::AndIOp::create(rewriter, loc, xI, constant(1u << i));
+    Value set = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                      bit, constant(0));
+    Value next =
+        arith::MulIOp::create(rewriter, loc, result, constant(powers[i]));
+    result = arith::SelectOp::create(rewriter, loc, set, next, result);
+  }
   return unembedToFloat(rewriter, loc, result, floatTy);
 }
 
@@ -919,83 +933,69 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
 
-struct FpSanCosSin {
-  Value cos;
-  Value sin;
-};
+// Let C(x) + i S(x) = z^x for z = (-3 + 4i)/5 and t = z + 1/z - 2 = -16/5.
+// By Pascal's identity the sums below satisfy f(x+1) - 2f(x) + f(x-1) = t f(x)
+// with the same values at 0 and 1 as the real and imaginary parts of z^x.
+//   C(x) = sum_k t^k (binom(x+k, 2k) + binom(x+k-1, 2k)) / 2
+//   S(x) = (4/5) sum_k t^k binom(x+k, 2k+1)
+// The kth terms vanish modulo 2^w for 4k-1 >= w and 4k+2 >= w respectively.
+// Factoring the binomials gives C(x) = P(x^2) and S(x) = x Q(x^2) in the
+// Newton basis at consecutive squares starting at 0 for P and 1 for Q.
+SmallVector<uint64_t, 17> getTrigCoefficients(int bitWidth, bool isSin) {
+  assert(bitWidth > 0 && bitWidth <= 64);
+  int degree = isSin ? (bitWidth - 3) / 4 : bitWidth / 4;
+  int firstNode = isSin ? 1 : 0;
 
-FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
-                               Value xI) {
-  Type intTy = xI.getType();
-  unsigned bitWidth = getIntBitwidth(intTy);
-  uint64_t mask = getLowBitsMask(bitWidth);
-  uint64_t rcp5 = invOddU64(5) & mask;
-  uint64_t aValue = (uint64_t{0} - ((uint64_t{3} * rcp5) & mask)) & mask;
-  uint64_t bValue = (uint64_t{4} * rcp5) & mask;
+  // The Newton coefficients are t^k/(2k)! for P and (4/5)t^k/(2k+1)! for Q.
+  // Each step multiplies by -16/(5n(n-1)). Track powers of two separately
+  // so we only invert odd denominators.
+  uint64_t odd = isSin ? invOddU64(5) : 1;
+  int shift = isSin ? 2 : 0;
+  SmallVector<uint64_t, 17> coeffs{odd << shift};
+  for (int k = 1; k <= degree; ++k) {
+    int n = 2 * k + firstNode;
+    unsigned denominator = 5 * n * (n - 1);
+    int twos = llvm::countr_zero(denominator);
+    odd *= uint64_t{0} - invOddU64(denominator >> twos);
+    shift += 4 - twos;
+    coeffs.push_back(odd << shift);
+  }
 
-  auto zero = getUIntConstantLike(rewriter, loc, intTy, 0);
-  auto one = getUIntConstantLike(rewriter, loc, intTy, 1);
-  auto two = getUIntConstantLike(rewriter, loc, intTy, 2);
-  auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
-  auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
+  // Expand the nested factors (x^2 - j^2) into powers of x^2 on the host.
+  for (int k = degree - 1; k >= 0; --k) {
+    int j = k + firstNode;
+    for (int i = k; i < degree; ++i)
+      coeffs[i] -= j * j * coeffs[i + 1];
+  }
+  return coeffs;
+}
 
-  auto lower =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(rewriter, loc,
-                                         rewriter.getI32IntegerAttr(bitWidth));
-  auto step =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
-  auto topBit = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
-  SmallVector<Value> initArgs{one, zero};
-  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, initArgs);
-  rewriter.setInsertionPointToStart(loop.getBody());
-
-  Value bit = loop.getInductionVar();
-  Value c = loop.getRegionIterArgs()[0];
-  Value s = loop.getRegionIterArgs()[1];
-  Value cc = arith::MulIOp::create(rewriter, loc, c, c);
-  Value ss = arith::MulIOp::create(rewriter, loc, s, s);
-  Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
-  Value cs = arith::MulIOp::create(rewriter, loc, c, s);
-  Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
-
-  Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
-  Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
-  Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
-  Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
-  Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
-  Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
-
-  Value bitIndex =
-      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, bit);
-  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, intTy);
-  Value bitMask = arith::ShLIOp::create(rewriter, loc, one, shift);
-  auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
-  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                      masked, zero);
-  c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
-  s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
-  scf::YieldOp::create(rewriter, loc, ValueRange{c, s});
-  rewriter.setInsertionPointAfter(loop);
-
-  return {loop.getResult(0), loop.getResult(1)};
+Value fpsanTrig(PatternRewriter &rewriter, Location loc, Value input,
+                bool isSin) {
+  if (!isFloatLike(input.getType()))
+    return Value();
+  Value x = embedToInt(rewriter, loc, input);
+  Value x2 = arith::MulIOp::create(rewriter, loc, x, x);
+  auto coeffs = getTrigCoefficients(getIntBitwidth(x.getType()), isSin);
+  auto constant = [&](uint64_t c) {
+    return getUIntConstantLike(rewriter, loc, x.getType(), c);
+  };
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, x2);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
+  if (isSin)
+    result = arith::MulIOp::create(rewriter, loc, result, x);
+  return unembedToFloat(rewriter, loc, result, input.getType());
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/false);
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/true);
 }
 
 bool hasNumericOperands(ValueRange operands) {
