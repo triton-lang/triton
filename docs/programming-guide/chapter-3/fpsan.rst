@@ -387,17 +387,18 @@ count changes that maximum. A later multiplication by
 ``alpha = exp2(old_max - new_max)`` compensates for the change, provided the
 weights survive the intervening FP8 store and load.
 
-For this check, set ``triton.knobs.compilation.fpsan_compact_exp2 = True``
-inside a ``triton.knobs.compilation.scope()`` around all FPSan launches,
-including the merge. The setting uses base ``1 + 2**25`` for FP32
-``exp2`` and for the exponential in FP32 ``exp``. Its powers have the form
+Use ``gl.fpsan.compact_exp2`` for the FP32 probabilities and each correction
+factor. For a separate merge kernel written in Triton, use
+``tl.fpsan.compact_exp2(local_max - global_max)`` for the merge weights.
+Each explicit call uses base ``1 + 2**25`` under FPSan. Its powers have the form
 ``1 + ((u % 128) << 25)`` modulo ``2**32``. Gluon can encode every such
 payload and masked zero in one FP8 element.
 
 .. code-block:: python
 
-   p = gl.fpsan.probability_cast(gl.exp2(scores - maximum[:, None]),
-                                 gl.float8e4nv, expect_zero=mask)
+   alpha = gl.fpsan.compact_exp2(old_max - maximum)
+   weights = gl.fpsan.compact_exp2(scores - maximum[:, None])
+   p = gl.fpsan.probability_cast(weights, gl.float8e4nv, expect_zero=mask)
    p_tile.store(p)
    tcgen05_mma(p_tile, v_tile, acc, a_type="fpsan_probability", mbarriers=[done])
 
@@ -407,8 +408,8 @@ it. Each consumer decodes the byte it reads. Copies preserve the code.
 The decoder multiplies the recovered payload by an odd, format-specific
 constant, making the FP8 conversion observable while commuting with alpha.
 Packing other nonzero inputs yields a disjoint set of lossy codes.
-Keep arithmetic on the expanded values. With the setting disabled,
-the annotation uses ordinary cast and MMA semantics.
+Keep arithmetic on the expanded values. Native execution uses the ordinary
+exponential, cast and MMA.
 
 The compact exponential has period 128. For an exponent difference divisible
 by 128, alpha equals one. For a difference divisible by 64, alpha equals

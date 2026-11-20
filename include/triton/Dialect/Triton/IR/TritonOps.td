@@ -181,6 +181,18 @@ def TT_FpSanBarrierOp : TT_Op<"fpsan_barrier", [Elementwise,
     let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
+def TT_FpSanCompactExp2Op : TT_Op<"fpsan_compact_exp2", [Elementwise,
+                                         SameOperandsAndResultType, Pure]> {
+    let summary = "Compute a base-2 exponential with 128 distinct FPSan payloads";
+    let description = [{
+        Raise 1 + 2^25 to the input payload modulo 2^32. The 128 powers
+        can be encoded exactly by an FPSan probability cast.
+    }];
+    let arguments = (ins AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$input);
+    let results = (outs AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$result);
+    let assemblyFormat = "$input attr-dict `:` type($input)";
+}
+
 def TT_FpSanHomomorphicCastOp : TT_Op<"fpsan_homomorphic_cast", [Elementwise,
                                       SameOperandsAndResultShape,
                                       SameOperandsAndResultEncoding, Pure]> {

@@ -151,7 +151,6 @@ class CUDAOptions:
     arch: str = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
-    fpsan_compact_exp2: bool = False
 
     def __post_init__(self):
         if self.max_occupancy is not None and (type(self.max_occupancy) is not int or self.max_occupancy <= 0):
@@ -383,7 +382,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
         if is_enabled(opt, "fpsan"):
-            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts, opt.fpsan_compact_exp2)
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
             passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
@@ -410,7 +409,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
         if is_enabled(options, "fpsan"):
-            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts, options.fpsan_compact_exp2)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         if any(is_enabled(options, mode) for mode in ["consan", "fpsan"]):
             passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)

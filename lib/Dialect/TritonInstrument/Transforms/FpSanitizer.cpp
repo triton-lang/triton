@@ -64,8 +64,6 @@ constexpr int64_t kI8MmaN = 8;
 constexpr int64_t kI8MmaK = 32;
 constexpr llvm::StringLiteral kHomomorphicCastsAttr =
     "triton.instrument.fpsan_homomorphic_casts";
-constexpr llvm::StringLiteral kCompactExp2Attr =
-    "triton.instrument.fpsan_compact_exp2";
 
 bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
@@ -873,7 +871,7 @@ SmallVector<uint64_t, 8> getExp2Coefficients(uint64_t base, unsigned stride,
   return coeffs;
 }
 
-// By default use 3^x modulo 2^w. Its period is 2^(w-2), maximal
+// Use 3^x modulo 2^w at every width. Its period is 2^(w-2), maximal
 // for an odd base, and truncating the payload commutes with exponentiation.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
@@ -882,15 +880,6 @@ Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
   auto constant = [&](uint64_t value) {
     return getUIntConstantLike(rewriter, loc, xI.getType(), value);
   };
-
-  auto module =
-      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (bitWidth == 32 && module->hasAttr(kCompactExp2Attr)) {
-    // (1 + 2^25)^x = 1 + (x << 25) modulo 2^32.
-    Value high = arith::ShLIOp::create(rewriter, loc, xI, constant(25));
-    Value result = arith::AddIOp::create(rewriter, loc, high, constant(1));
-    return unembedToFloat(rewriter, loc, result, floatTy);
-  }
 
   // Split off the low s bits r. For stride = 2^s, base = 3^stride is
   // 1 mod 2^(s+2) since each squaring after 3^2 = 9 adds one trailing
@@ -1176,6 +1165,22 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
                        ValueRange deps) {
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
+
+struct CompactExp2Pattern : OpRewritePattern<tt::FpSanCompactExp2Op> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(tt::FpSanCompactExp2Op op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value x = embedToInt(rw, loc, op.getInput());
+    // (1 + 2^25)^x = 1 + (x << 25) modulo 2^32.
+    Value high = arith::ShLIOp::create(
+        rw, loc, x, getIntConstantLike(rw, loc, x.getType(), 25));
+    Value power = arith::AddIOp::create(
+        rw, loc, high, getIntConstantLike(rw, loc, x.getType(), 1));
+    rw.replaceOp(op, unembedToFloat(rw, loc, power, op.getType()));
+    return success();
+  }
+};
 
 // 0 encodes a masked weight. 128..255 encode the 128 compact powers.
 // Keep other inputs in a disjoint range so a perturbation that leaves the
@@ -3530,8 +3535,6 @@ public:
                             BoolAttr::get(&getContext(), twoCTAs));
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
-    if (compactExp2)
-      getOperation()->setAttr(kCompactExp2Attr, UnitAttr::get(&getContext()));
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
@@ -3562,8 +3565,8 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
                                                    UnaryOpId::Barrier);
-    patterns.add<FpSanHomomorphicCastPattern, ProbabilityCastPattern>(
-        &getContext());
+    patterns.add<FpSanHomomorphicCastPattern, CompactExp2Pattern,
+                 ProbabilityCastPattern>(&getContext());
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
@@ -3575,7 +3578,6 @@ public:
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
     getOperation()->removeAttr(kHomomorphicCastsAttr);
-    getOperation()->removeAttr(kCompactExp2Attr);
     if (failed(result)) {
       llvm::errs() << "FpSanitizer error: Failed to apply patterns\n";
       signalPassFailure();

@@ -2,11 +2,11 @@ from __future__ import annotations
 from typing import Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass, field
+from triton._instrumentation import is_enabled
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
-from triton.experimental.gluon.language.fpsan import _compact_exp2_enabled
 
 from . import tma
 from . import clc
@@ -628,7 +628,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     mma = builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                      mbarrier_preds, acc.layout.two_ctas, multicast, operand_type(a_type, a),
                                      operand_type(b_type, b))
-    if _compact_exp2_enabled(builder.options):
+    if is_enabled(builder.options, "fpsan"):
         if a_type == "fpsan_probability":
             mma.set_attr("tti.fpsan_probability_a", builder.get_unit_attr())
         if b_type == "fpsan_probability":

@@ -3672,7 +3672,7 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constex
     score = gl.load(Scores + shard * WIDTH + keys)
     maximum = gl.max(score, 0)
     centered = (score - maximum)[None, :].broadcast_to((M, WIDTH))
-    p = gl.exp2(centered)
+    p = gl.fpsan.compact_exp2(centered)
     mask = ((shard * WIDTH + keys) % 11 == 2)[None, :]
     if MUTATION == "drop_token":
         mask = mask | ((shard * WIDTH + keys)[None, :] == 0)
@@ -3717,30 +3717,31 @@ def _probability_cast_partial(Scores, Values, Partial, Maxima, WIDTH: gl.constex
     gl.store(Maxima + shard, maximum)
 
 
-@gluon.jit
-def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
-    cols = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
-    maximum = gl.load(Maxima)
-    acc = gl.load(Partial + gl.program_id(0) * 128 + cols)
-    for shard in gl.static_range(1, SHARDS):
-        next_max = gl.load(Maxima + shard)
-        merged = gl.maximum(maximum, next_max)
-        alpha = gl.exp2(maximum - merged)
+@triton.jit
+def _probability_cast_merge(Partial, Maxima, Out, SHARDS: tl.constexpr, MUTATION: tl.constexpr):
+    offsets = tl.program_id(0) * 128 + tl.arange(0, 128)
+    maximum = tl.load(Maxima)
+    acc = tl.load(Partial + offsets)
+    for shard in tl.static_range(1, SHARDS):
+        next_max = tl.load(Maxima + shard)
+        merged = tl.maximum(maximum, next_max)
+        alpha = tl.fpsan.compact_exp2(maximum - merged)
         if MUTATION == "missing_alpha":
-            alpha = gl.exp2(maximum - maximum)
+            alpha = tl.fpsan.compact_exp2(maximum - maximum)
         elif MUTATION == "reversed_alpha":
-            alpha = gl.exp2(merged - maximum)
-        rhs = gl.load(Partial + (shard * 128 + gl.program_id(0)) * 128 + cols)
-        acc = gl.fma(acc, alpha, rhs * gl.exp2(next_max - merged))
+            alpha = tl.fpsan.compact_exp2(merged - maximum)
+        elif MUTATION == "ordinary_alpha":
+            alpha = tl.exp2(maximum - merged)
+        rhs = tl.load(Partial + shard * 128 * 128 + offsets)
+        acc = tl.fma(acc, alpha, rhs * tl.fpsan.compact_exp2(next_max - merged))
         maximum = merged
-    gl.store(Out + gl.program_id(0) * 128 + cols, acc)
+    tl.store(Out + offsets, acc)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("storage", ["tmem", "smem_lhs", "smem_rhs"])
 def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    fresh_knobs.compilation.fpsan_compact_exp2 = True
     # Successive maxima differ by 33, so alpha and its inverse differ.
     scores = np.arange(128, dtype=np.uint64)
     scores += scores // 32
@@ -3757,7 +3758,7 @@ def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
     # Full-width unchunked reference with one E5M2 cast marker per live weight.
     expected_bits = _unmix_payload_to_float_bits(expected * np.uint64(0x71b39a53), "f32").view(np.uint32)
     for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite", "missing_tag",
-                     "ordinary_cast"):
+                     "ordinary_cast", "ordinary_alpha"):
         for shards in ((1, 2, 4) if mutation == "none" else (4, )):
             partial = torch.empty((shards, 128, 128), device=device, dtype=torch.float32)
             maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
@@ -3777,14 +3778,16 @@ def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
 
 
 @gluon.jit
-def _probability_roundtrip(X, Out, DST: gl.constexpr, TAGGED: gl.constexpr, WARP: gl.constexpr):
+def _probability_roundtrip(X, Out, OrdinaryExp, DST: gl.constexpr, TAGGED: gl.constexpr, WARP: gl.constexpr):
     i = gl.arange(0, 256, layout=gl.BlockedLayout([2], [WARP], [4], [0]))
-    x = gl.exp2(gl.load(X + i))
+    x = gl.load(X + i)
+    ordinary = gl.exp2(x)
+    gl.store(OrdinaryExp + i, ordinary)
     if TAGGED:
-        p = gl.fpsan.probability_cast(x, DST, expect_zero=i == 0)
+        p = gl.fpsan.probability_cast(gl.fpsan.compact_exp2(x), DST, expect_zero=i == 0)
         wide = gl.fpsan.probability_cast(p, gl.float32)
     else:
-        wide = x.to(DST).to(gl.float32)
+        wide = ordinary.to(DST).to(gl.float32)
     gl.store(Out + i, wide)
 
 
@@ -3794,12 +3797,13 @@ def test_fpsan_probability_roundtrip(device, fresh_knobs, dst, tag):
     if dst == gl.float8e4nv and is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("E4M3 requires SM90 or newer")
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    fresh_knobs.compilation.fpsan_compact_exp2 = True
     scores = np.arange(-128, 128, dtype=np.int32)
     bits = _unmix_payload_to_float_bits(scores.astype(np.uint64), "f32")
     _, x = _as_float_bits_tensor(bits, "f32")
     out = torch.empty((256, ), dtype=torch.float32, device=device)
-    _probability_roundtrip[(1, )](x, out, dst, True, THREADS_PER_WARP)
+    ordinary_exp = torch.empty_like(out)
+    _probability_roundtrip[(1, )](x, out, ordinary_exp, dst, True, THREADS_PER_WARP)
+    np.testing.assert_array_equal(ordinary_exp.cpu().numpy().view(np.int32), _expected_exp2_i32(bits.view(np.int32)))
     expected = np.array([tag * pow(1 + 2**25, int(s), 2**32) % 2**32 for s in scores], dtype=np.uint64)
     expected[0] = 0
     np.testing.assert_array_equal(_mix_float_bits(out.cpu().numpy().view(np.uint32), "f32"), expected)
@@ -3807,6 +3811,6 @@ def test_fpsan_probability_roundtrip(device, fresh_knobs, dst, tag):
     fresh_knobs.compilation.instrumentation_mode = ""
     x = torch.linspace(-20, 4, 256, device=device)
     ordinary = torch.empty_like(out)
-    _probability_roundtrip[(1, )](x, out, dst, True, THREADS_PER_WARP, debug=True)
-    _probability_roundtrip[(1, )](x, ordinary, dst, False, THREADS_PER_WARP)
+    _probability_roundtrip[(1, )](x, out, ordinary_exp, dst, True, THREADS_PER_WARP, debug=True)
+    _probability_roundtrip[(1, )](x, ordinary, ordinary_exp, dst, False, THREADS_PER_WARP)
     assert torch.equal(out, ordinary)
