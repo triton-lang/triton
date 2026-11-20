@@ -1322,6 +1322,7 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
+    Value collectiveWrite = funcBuilder.createNextCollectiveWriteCall(b, op);
     Value defaultEffectCTAs;
     struct MaterializedEffect {
       Value bufferMask;
@@ -1554,7 +1555,7 @@ private:
         auto verifyWrite = [&] {
           addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType,
                          effectThread, effect.operandName, readCTAs,
-                         opInfo->commitKind);
+                         opInfo->commitKind, collectiveWrite);
           addReadChecks(b, funcBuilder, op, bufferMask, pred, memType,
                         effectThread, effect.operandName, effectCTAs,
                         opInfo->commitKind);
@@ -1604,7 +1605,7 @@ private:
           if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
             funcBuilder.createPublishWriteVisibilityCall(
                 b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
-                pred, memType, op, effectCTAs);
+                pred, memType, op, effectCTAs, collectiveWrite);
           }
         }
         if (opInfo->trackingKind ==
@@ -1711,9 +1712,11 @@ private:
                       tti::FunctionBuilder &funcBuilder, Operation *op,
                       Value bufferMask, Value pred, MemType memType, int thread,
                       const std::string &operandName, Value effectCTAs,
-                      CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyWriteVisibilityCall(
-        b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
+                      CommitKind::Kind opCommitKind = CommitKind::None,
+                      Value collectiveWrite = nullptr) {
+    funcBuilder.createVerifyWriteVisibilityCall(b, bufferMask, thread,
+                                                operandName, pred, memType, op,
+                                                effectCTAs, collectiveWrite);
     if (hooks.isTMAOp(op) && !hooks.isOrderedCommitKind(CommitKind::TmaStore)) {
       funcBuilder.createVerifyWriteVisibilityCall(
           b, bufferMask, getBaseThread(thread, auxData.threadLayout),
