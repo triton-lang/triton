@@ -367,15 +367,15 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
         cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 3)
         next_k = k + NUM_BUFFERS - 1
         if WARP_PIPELINE:
-            with gl.amd.warp_pipeline_stage("lds_low", priority=1):
+            with gl.amd.warp_pipeline_stage("memory0", priority=1):
                 a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 0, a_smem, w_smem, ws_smem, layouts)
                 matmul_ld_gmem(next_k, next_k < num_k, next_k % NUM_BUFFERS, off_m, off_n, a_desc, w_desc, ws_desc,
                                a_smem, w_smem, ws_smem, BLOCK_K)
-            with gl.amd.warp_pipeline_stage("wmma_low", priority=0):
+            with gl.amd.warp_pipeline_stage("compute0", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
-            with gl.amd.warp_pipeline_stage("lds_high", priority=1):
+            with gl.amd.warp_pipeline_stage("memory1", priority=1):
                 a, w, w_scale = matmul_ld_smem(k % NUM_BUFFERS, 1, a_smem, w_smem, ws_smem, layouts)
-            with gl.amd.warp_pipeline_stage("wmma_high", priority=0):
+            with gl.amd.warp_pipeline_stage("compute1", priority=0):
                 acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
         else:
             # The same loop without stages.
