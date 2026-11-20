@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -18,6 +19,7 @@
 namespace tt = mlir::triton;
 namespace tti = mlir::triton::instrument;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
@@ -36,6 +38,8 @@ static constexpr StringLiteral kGSanLoadRangeRuntimeFn =
     "__triton_gsan_load_range";
 static constexpr StringLiteral kGSanLoadTensorDescRuntimeFn =
     "__triton_gsan_load_tensor_desc";
+static constexpr StringLiteral kGSanLoadIm2ColTensorDescRuntimeFn =
+    "__triton_gsan_load_im2col_tensor_desc";
 static constexpr StringLiteral kGSanStoreTensorDescRuntimeFn =
     "__triton_gsan_store_tensor_desc";
 static constexpr StringLiteral kGSanLoadIndexedTensorDescRuntimeFn =
@@ -114,6 +118,10 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
               i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanLoadIm2ColTensorDescRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
+              ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadIndexedTensorDescRuntimeFn ||
              funcName == kGSanStoreIndexedTensorDescRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
@@ -501,10 +509,29 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    auto descTy = cast<tt::TensorDescType>(op.getDesc().getType());
-    ArrayRef<int64_t> blockShape = descTy.getShape();
-    if (blockShape.empty() || blockShape.size() > 5 ||
-        blockShape.size() != op.getCoords().size()) {
+    auto descTy = op.getDesc().getType();
+    SmallVector<int64_t> blockShape(descTy.getShape());
+    ttg::MemDescType resultType;
+    unsigned rank = op.getCoords().size();
+    bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
+    if (isIm2Col) {
+      if constexpr (std::is_same_v<AccessOp,
+                                   tti::ExperimentalGSanTensorDescAccessOp>) {
+        auto dst = op.getResult();
+        if (!dst || op.getIsStore() || rank < 3 || rank > 5 ||
+            op.getOffsets().size() != rank - 2)
+          return rewriter.notifyMatchFailure(
+              op, "expected an im2col load with three to five coordinates and "
+                  "spatial offsets and a destination layout");
+        resultType = dst.getType();
+        blockShape = ttng::getTMABlockShape(descTy, /*packedSize=*/true,
+                                            ttg::TMAMode::Im2Col);
+      } else {
+        return rewriter.notifyMatchFailure(op,
+                                           "im2col atomics are unsupported");
+      }
+    } else if (blockShape.empty() || blockShape.size() > 5 ||
+               blockShape.size() != rank) {
       return rewriter.notifyMatchFailure(
           op, "expected one to five descriptor coordinates");
     }
@@ -522,26 +549,28 @@ public:
 
     auto *ctx = rewriter.getContext();
     TritonLLVMOpBuilder b(loc, rewriter);
-    unsigned rank = blockShape.size();
     auto coordsTy = array_ty(i32_ty, rank);
     Value coords = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), coordsTy,
                                           b.i32_val(1), /*alignment=*/0);
-    auto shapeTy = array_ty(i16_ty, rank);
+    auto shapeTy = array_ty(i16_ty, blockShape.size());
     Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
                                          b.i32_val(1), /*alignment=*/0);
-    for (auto [dim, coord] : llvm::enumerate(adaptor.getCoords())) {
+    for (auto [dim, coord] : llvm::enumerate(
+             adaptor.getCoords().take_front(isIm2Col ? rank - 2 : rank))) {
       Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
       b.store(coord, coordSlot);
+    }
+    for (auto [dim, extent] : llvm::enumerate(blockShape)) {
       Value shapeSlot = b.gep(ptr_ty(ctx), shapeTy, shape,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
-      b.store(b.i16_val(blockShape[dim]), shapeSlot);
+      b.store(b.i16_val(extent), shapeSlot);
     }
 
     Value warpId = getLaneAndWarpId(rewriter, loc).second;
     int numWarps = ttg::lookupNumWarps(op);
     int numCTAs = ttg::lookupNumCTAs(op);
-    if (numCTAs > 1) {
+    if (numCTAs > 1 && !isIm2Col) {
       Value ctaRank = targetInfo->getClusterCTAId(rewriter, loc);
       warpId = b.add(b.mul(warpId, b.i32_val(numCTAs)), ctaRank);
       numWarps *= numCTAs;
@@ -555,16 +584,31 @@ public:
     } else {
       funcName = op.getIsStore() ? kGSanStoreTensorDescRuntimeFn
                                  : kGSanLoadTensorDescRuntimeFn;
+      if (isIm2Col)
+        funcName = kGSanLoadIm2ColTensorDescRuntimeFn;
     }
     auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     SmallVector<Value> args{
         *gsanGlobalStatePtr,
-        castToGenericPointer(rewriter, loc, adaptor.getDesc()),
-        coords,
-        b.i32_val(rank),
-        shape,
-        b.i32_val(elemTy.getIntOrFloatBitWidth() / 8)};
+        castToGenericPointer(rewriter, loc, adaptor.getDesc()), coords,
+        b.i32_val(rank), shape};
+    if constexpr (std::is_same_v<AccessOp,
+                                 tti::ExperimentalGSanTensorDescAccessOp>) {
+      if (isIm2Col) {
+        auto offsetsTy = array_ty(i16_ty, rank - 2);
+        Value offsets =
+            LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), offsetsTy,
+                                   b.i32_val(1), /*alignment=*/0);
+        for (auto [dim, offset] : llvm::enumerate(adaptor.getOffsets())) {
+          Value slot = b.gep(ptr_ty(ctx), offsetsTy, offsets,
+                             ValueRange{b.i32_val(0), b.i32_val(dim)});
+          b.store(offset, slot);
+        }
+        args.push_back(offsets);
+      }
+    }
+    args.push_back(b.i32_val(elemTy.getIntOrFloatBitWidth() / 8));
     if constexpr (std::is_same_v<
                       AccessOp,
                       tti::ExperimentalGSanAtomicTensorDescAccessOp>) {
@@ -574,7 +618,29 @@ public:
       args.push_back(materializeI32Bool(rewriter, b, adaptor.getPred()));
     }
     args.append({warpId, b.i32_val(numWarps), sourceLoc.file, sourceLoc.line});
-    b.call(runtimeFunc, args);
+    if (isIm2Col) {
+      // TMA adds each message's offsets to W and C before traversing the
+      // spatial box. A W offset is a coordinate displacement, not a row count.
+      auto layout = ttng::getTMAMessageLayouts(resultType, ttg::TMAMode::Im2Col)
+                        .messageToPackedOffset;
+      auto msg = rewriter.getStringAttr("msg");
+      auto block = rewriter.getStringAttr("block");
+      Value cta = numCTAs > 1 ? targetInfo->getClusterCTAId(rewriter, loc)
+                              : b.i32_val(0);
+      for (int i = 0; i < layout.getInDimSize(msg); ++i) {
+        auto offsets = applyLinearLayout(loc, rewriter, layout,
+                                         {{msg, b.i32_val(i)}, {block, cta}});
+        for (auto [dim, offset] : llvm::enumerate(offsets)) {
+          unsigned idx = rank - 2 + dim;
+          Value slot = b.gep(ptr_ty(ctx), coordsTy, coords,
+                             ValueRange{b.i32_val(0), b.i32_val(idx)});
+          b.store(b.add(adaptor.getCoords()[idx], offset.second), slot);
+        }
+        b.call(runtimeFunc, args);
+      }
+    } else {
+      b.call(runtimeFunc, args);
+    }
     rewriter.eraseOp(op);
     return success();
   }

@@ -795,3 +795,66 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @tma_im2col_3d
+  tt.func @tma_im2col_3d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<3 x i32>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<1 x i16>
+    // CHECK: llvm.call @__triton_gsan_load_im2col_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: cp.async.bulk.tensor.3d.shared::cta.global.im2col
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord] offsets = [%offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @tma_im2col_4d
+  tt.func @tma_im2col_4d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<4 x i32>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
+    // CHECK: llvm.call @__triton_gsan_load_im2col_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord] offsets = [%offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: llvm.func @tma_im2col_5d
+  tt.func @tma_im2col_5d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<5 x i32>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
+    // CHECK: llvm.alloca %{{.*}} x !llvm.array<3 x i16>
+    // CHECK: llvm.call @__triton_gsan_load_im2col_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: cp.async.bulk.tensor.5d.shared::cta.global.im2col
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord, %coord] offsets = [%offset, %offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}

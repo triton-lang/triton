@@ -1447,6 +1447,28 @@ extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_desc(
                             gsan::ReadShadowCellHandler{});
 }
 
+extern "C" GSAN_DEVICE void __triton_gsan_load_im2col_tensor_desc(
+    void *globalState, const void *descriptor, const int *coords, int rank,
+    const gsan::int16_t *blockShape, const gsan::int16_t *offsets,
+    int bytesPerElem, int pred, int warpId, int numWarps, const char *file,
+    unsigned line) {
+  if (!pred)
+    return;
+  auto loc = gsan::Location{file, line};
+  auto *state =
+      gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
+  gsan::NonAtomicElementHandler<gsan::ReadShadowCellHandler> handleElement{
+      state, state->reserveBase, loc, {}};
+  auto handleRow = [&](gsan::uintptr_t address, int bytes) {
+    gsan::tensorAccessRow(address, bytes, /*elementGranularity=*/0,
+                          handleElement);
+  };
+  gsan::forEachIm2ColRow(descriptor, coords, rank, blockShape, offsets,
+                         bytesPerElem, warpId, numWarps, handleRow);
+  if (handleElement.acquired)
+    gsan::rwLockReleaseRead(state->lock);
+}
+
 extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
     void *globalState, const void *descriptor, const int *indices,
     int numIndices, int yOffset, int numCols, int bytesPerElem, int pred,
