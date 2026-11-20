@@ -310,6 +310,45 @@ def test_tma_matmul_accumulator_intermediate_read(device, reset_period, reset_va
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("observe_at, expected", [
+    ("before_dot", [0, 64, 0, 64]),
+    ("after_reset", [64, 0, 64, 0]),
+    ("next_iteration", [0, 64, 0, 64]),
+])
+def test_matmul_accumulator_reset_observed_in_loop(device, observe_at, expected):
+
+    @triton.jit
+    def kernel(A, B, Out, OBSERVE_AT: tl.constexpr):
+        i = tl.arange(0, 64)
+        offsets = i[:, None] * 64 + i[None, :]
+        acc = tl.zeros((64, 64), tl.float32)
+        for k in range(4):
+            tile = k * 64 * 64 + offsets
+            a = tl.load(A + tile)
+            b = tl.load(B + tile)
+            if OBSERVE_AT == "before_dot":
+                if k == 2:
+                    acc = tl.zeros((64, 64), tl.float32)
+            if OBSERVE_AT != "after_reset":
+                tl.store(Out + tile, acc)
+            acc = tl.dot(a, b, acc)
+            if OBSERVE_AT != "before_dot":
+                if k % 2 == 1:
+                    acc = tl.zeros((64, 64), tl.float32)
+            if OBSERVE_AT == "after_reset":
+                tl.store(Out + tile, acc)
+
+    a = torch.ones((4, 64, 64), device=device, dtype=torch.float16)
+    b = torch.ones_like(a)
+    out = torch.empty_like(a, dtype=torch.float32)
+    kernel[(1, )](a, b, out, observe_at, num_stages=2)
+    if is_compile_warmup():
+        return
+    expected = torch.tensor(expected, device=device, dtype=out.dtype)
+    torch.testing.assert_close(out, expected[:, None, None].expand_as(out), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
 @pytest.mark.parametrize("transpose_b", [False, True])
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
