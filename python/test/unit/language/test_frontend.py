@@ -2346,3 +2346,30 @@ def test_cache_policy_ir_attrs():
         tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("dst", [tl.float8e4nv, tl.float8e5])
+@pytest.mark.parametrize("mode", ["", "fpsan"])
+def test_fpsan_probability_cast_instrumentation_mode(frontend, dst, mode):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, DTYPE: tl.constexpr, MARK: tl.constexpr):
+        x = lang.load(X)
+        if MARK:
+            p = lang.fpsan.probability_cast(x, DTYPE)
+        else:
+            p = x.to(DTYPE)
+        lang.store(Y, p)
+
+    args = (MockTensor(tl.float32), MockTensor(dst), dst)
+    options = {"instrumentation_mode": mode}
+    module = run_parser(kernel, args=(*args, True), kwargs=options)
+    assert module.verify()
+    ir = module.str_nodebug()
+    if mode:
+        assert "tt.fpsan_probability_cast" in ir
+    else:
+        ordinary = run_parser(kernel, args=(*args, False), kwargs=options).str_nodebug()
+        assert ir[ir.index("("):] == ordinary[ordinary.index("("):]

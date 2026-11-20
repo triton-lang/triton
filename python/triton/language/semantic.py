@@ -1940,6 +1940,15 @@ class TritonSemantic(Generic[TensorTy]):
             return input
         return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
 
+    def fpsan_probability_cast(self, input: TensorTy, dst_ty: tl.dtype) -> TensorTy:
+        if input.dtype != tl.float32 or dst_ty not in (tl.float8e4nv, tl.float8e5):
+            raise ValueError("fpsan.probability_cast requires float32 input and float8e4nv or float8e5 output")
+        if not is_enabled(self.builder.options, "fpsan"):
+            return self.cast(input, dst_ty)
+        result_ty = input.type.with_element_ty(dst_ty)
+        handle = self.builder.create_fpsan_probability_cast(input.handle, result_ty.to_ir(self.builder))
+        return self.make_tensor(handle, result_ty)
+
     def fpsan_homomorphic_cast(self, input: TensorTy, dst_ty: tl.dtype,
                                fp_downcast_rounding: Optional[str] = None) -> TensorTy:
         dst_ty = dst_ty.scalar

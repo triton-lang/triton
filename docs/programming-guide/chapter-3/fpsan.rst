@@ -598,3 +598,25 @@ FpSan is a poor fit when you want to check:
 
 In short, rely on FpSan for structure-preserving kernel validation, and rely on
 ordinary numerical tests for IEEE behavior.
+
+FP8 probability tiles (experimental)
+====================================
+
+``gl.fpsan.probability_cast(p, gl.float8e5)`` performs an ordinary FP32-to-FP8
+conversion in normal execution. With FPSan, a single-CTA SMEM or TMEM tile can
+carry the discarded payload in separate compiler-managed scratch storage.
+An unscaled ``tcgen05_mma`` with an FP32 accumulator reads the stored byte and
+its residual together. The reconstructed payload is the original FP32 payload
+multiplied by an invertible, format-specific tag. The tag distinguishes the
+marked cast from omitting the cast, and commutes with multiplication by alpha,
+so online softmax rescaling can be compared to one unchunked reference.
+The cast also accepts ``float8e4nv``.
+
+The prototype supports direct SMEM tiles and two-dimensional TMEM views,
+including indexed stages, subslices and packed FP8 views of FP32 score
+storage. Warp-specialized producers and MMA consumers share the shadow of
+the underlying allocation. Ordinary stores and score MMAs clear the residuals
+of the bytes they overwrite. Layout conversions and elementwise selection
+(including masking) transport the residual through registers. Arithmetic on an
+FP8 value uses the usual FPSan rules. Unsupported descriptor uses produce a
+compilation error. A cast alone does not change global-memory storage.

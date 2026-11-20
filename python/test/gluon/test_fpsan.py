@@ -3657,3 +3657,153 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
     # Encode the integer results as FP16/BF16 bits and compare the bits.
     expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
     _assert_payload_equal(out.view(torch.int16), expected)
+
+
+@gluon.jit
+def _probability_cast_partial(Scores, Values, Partial, Maxima, STORAGE: gl.constexpr, WIDTH: gl.constexpr,
+                              MUTATION: gl.constexpr):
+    M: gl.constexpr = 128
+    N: gl.constexpr = 32
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    rows = gl.arange(0, M, layout=gl.SliceLayout(1, layout))
+    keys = gl.arange(0, WIDTH, layout=gl.SliceLayout(0, layout))
+    cols = gl.arange(0, N, layout=gl.SliceLayout(0, layout))
+    shard = gl.program_id(0)
+    score = gl.load(Scores + shard * WIDTH + keys)
+    maximum = gl.max(score, 0)
+    centered = (score - maximum)[None, :].broadcast_to((M, WIDTH))
+    if MUTATION == "ordinary_cast":
+        p = gl.exp2(centered).to(gl.float8e5)
+    else:
+        p = gl.fpsan.probability_cast(gl.exp2(centered), gl.float8e5)
+    valid = ((shard * WIDTH + keys) % 11 != 2)[None, :]
+    p = gl.where(valid, p, gl.full_like(p, 0))
+    if MUTATION == "drop_token":
+        p = gl.where((shard * WIDTH + keys)[None, :] == 0, gl.full_like(p, 0), p)
+
+    if MUTATION == "narrow_math":
+        p = (p.to(gl.float32) + 1.0).to(gl.float8e5)
+
+    if STORAGE == "borrowed":
+        # P occupies the second half of an FP32 score allocation. The producer
+        # and MMA reach the same bytes through independently constructed views.
+        score_layout: gl.constexpr = TensorMemoryLayout((M, WIDTH // 2), col_stride=1)
+        score_mem = allocate_tensor_memory(gl.float32, (M, WIDTH // 2), score_layout)
+        packed = score_mem.reinterpret(gl.float8e5, (M, WIDTH * 2), TensorMemoryLayout((M, WIDTH), col_stride=1))
+        dst = packed.slice(WIDTH, WIDTH)
+        dst.store(gl.convert_layout(p, dst.get_reg_layout()))
+        pmem = packed.slice(WIDTH, WIDTH)
+        other = score_mem.slice(0, WIDTH // 4)
+        other.store(gl.full((M, WIDTH // 4), 0, gl.float32, layout=other.get_reg_layout()))
+    elif STORAGE == "tmem":
+        pmem = allocate_tensor_memory(gl.float8e5, (M, WIDTH), TensorMemoryLayout((M, WIDTH), col_stride=1))
+        pmem.store(gl.convert_layout(p, pmem.get_reg_layout()))
+    else:
+        playout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([M, WIDTH], gl.float8e5)
+        pmem = gl.allocate_shared_memory(gl.float8e5, (M, WIDTH), playout, p)
+
+    if MUTATION == "overwrite":
+        zero = gl.full_like(p, 0)
+        if STORAGE == "borrowed":
+            overlap = score_mem.slice(WIDTH // 4, WIDTH // 4)
+            overlap.store(gl.full((M, WIDTH // 4), 0, gl.float32, layout=overlap.get_reg_layout()))
+        elif STORAGE == "tmem":
+            pmem.store(gl.convert_layout(zero, pmem.get_reg_layout()))
+        else:
+            pmem.store(zero)
+
+    vrows = gl.arange(0, N, layout=gl.SliceLayout(1, layout))
+    v = gl.load(Values + vrows[:, None] * 128 + shard * WIDTH + keys[None, :])
+    vlayout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([N, WIDTH], gl.float8e5)
+    vmem = gl.allocate_shared_memory(gl.float8e5, (N, WIDTH), vlayout, v)
+    acc = allocate_tensor_memory(gl.float32, (M, N), TensorMemoryLayout((M, N), col_stride=1))
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    tcgen05_mma(pmem, vmem.permute((1, 0)), acc, use_acc=False, mbarriers=[bar])
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    out = gl.convert_layout(acc.load(), layout)
+    gl.store(Partial + (shard * M + rows[:, None]) * N + cols[None, :], out)
+    gl.store(Maxima + shard, maximum)
+
+
+@gluon.jit
+def _probability_cast_merge(Partial, Maxima, Out, SHARDS: gl.constexpr, MUTATION: gl.constexpr):
+    cols = gl.arange(0, 32, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    maximum = gl.load(Maxima)
+    acc = gl.load(Partial + gl.program_id(0) * 32 + cols)
+    for shard in gl.static_range(1, SHARDS):
+        next_max = gl.load(Maxima + shard)
+        merged = gl.maximum(maximum, next_max)
+        alpha = gl.exp2(maximum - merged)
+        if MUTATION == "missing_alpha":
+            alpha = gl.exp2(maximum - maximum)
+        elif MUTATION == "reversed_alpha":
+            alpha = gl.exp2(merged - maximum)
+        rhs = gl.load(Partial + (shard * 128 + gl.program_id(0)) * 32 + cols)
+        acc = gl.fma(acc, alpha, rhs * gl.exp2(next_max - merged))
+        maximum = merged
+    gl.store(Out + gl.program_id(0) * 32 + cols, acc)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("storage", ["smem", "tmem", "borrowed"])
+def test_fpsan_probability_cast_shard_identity(device, fresh_knobs, storage):
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    # Increasing maxima make both omitted and reversed alpha observable.
+    scores = np.arange(128, dtype=np.uint64)
+    score_bits = _unmix_payload_to_float_bits(scores, "f32")
+    _, s = _as_float_bits_tensor(score_bits, "f32")
+    rng = np.random.default_rng(2037)
+    v = rng.integers(-8, 9, size=(32, 128), dtype=np.int8)
+    v[-1, :] = 1  # The last PV column is the unnormalized denominator.
+    vbits = _unmix_payload_to_float_bits(v.astype(np.uint64), "e5m2")
+    _, vals = _as_float_bits_tensor(vbits, "e5m2")
+    weights = [pow(257, int(i) - 127, 2**32) if i % 11 != 2 else 0 for i in scores]
+    expected = np.array([sum(w * int(x) for w, x in zip(weights, row)) % 2**32 for row in v], dtype=np.uint64)
+    unmarked_bits = _unmix_payload_to_float_bits(expected, "f32").view(np.uint32)
+    # Full-width unchunked reference with one E5M2 cast marker per live weight.
+    expected_bits = _unmix_payload_to_float_bits(expected * np.uint64(0x71b39a53), "f32").view(np.uint32)
+    for mutation in ("none", "missing_alpha", "reversed_alpha", "drop_token", "narrow_math", "overwrite",
+                     "ordinary_cast"):
+        for shards in ((1, 2, 4) if mutation == "none" else (4, )):
+            partial = torch.empty((shards, 128, 32), device=device, dtype=torch.float32)
+            maxima = torch.empty((shards, ), device=device, dtype=torch.float32)
+            out = torch.empty_like(partial[0])
+            _probability_cast_partial[(shards, )](s, vals, partial, maxima, storage, 128 // shards, mutation)
+            _probability_cast_merge[(128, )](partial, maxima, out, shards, mutation)
+            actual = out.view(torch.int32).cpu().numpy().view(np.uint32)
+            if mutation == "overwrite":
+                assert np.all(actual == 0)
+            if mutation == "none":
+                np.testing.assert_array_equal(actual, np.broadcast_to(expected_bits, actual.shape))
+                assert np.any(actual[:, :-1] != unmarked_bits[:-1])
+                assert np.all(actual[:, -1] != unmarked_bits[-1])
+            else:
+                assert np.any(actual[:, :-1] != expected_bits[:-1])
+                assert np.all(actual[:, -1] != expected_bits[-1])
+
+
+@gluon.jit
+def _probability_cast_bytes(Src, Marked, Ordinary, DTYPE: gl.constexpr):
+    i = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    w = gl.load(Src + i)
+    gl.store(Marked + i, gl.fpsan.probability_cast(w, DTYPE))
+    gl.store(Ordinary + i, w.to(DTYPE))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dst,tag", [("e5m2", 0x53), ("e4m3", 0x23)])
+def test_fpsan_probability_cast_signature(device, fresh_knobs, dst, tag):
+    _, src = _as_float_bits_tensor(_unmix_payload_to_float_bits(np.arange(128, dtype=np.uint64), "f32"), "f32")
+    marked, marked_arg = _as_float_bits_tensor(np.zeros(128, dtype=np.int8), dst)
+    ordinary, ordinary_arg = _as_float_bits_tensor(np.zeros(128, dtype=np.int8), dst)
+    for mode in ("", "fpsan"):
+        fresh_knobs.compilation.instrumentation_mode = mode
+        _probability_cast_bytes[(1, )](src, marked_arg, ordinary_arg, _float_dtype_info(dst)[5])
+        if mode:
+            plain = _mix_float_bits(ordinary.cpu().numpy(), dst)
+            np.testing.assert_array_equal(_mix_float_bits(marked.cpu().numpy(), dst), (plain * tag) & 255)
+            assert not torch.equal(marked, ordinary)
+        else:
+            assert torch.equal(marked, ordinary)
