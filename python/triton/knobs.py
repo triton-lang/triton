@@ -363,6 +363,7 @@ class compilation_knobs(base_knobs):
     use_ir_loc: env_opt_str = env_opt_str("USE_IR_LOC")
     enable_asan: env_bool = env_bool("TRITON_ENABLE_ASAN")
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
+    source_prefix_map: env_opt_str = env_opt_str("TRITON_SOURCE_PREFIX_MAP")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     # Instrumentation mode is checked on every run, which is expensive.
