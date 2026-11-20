@@ -118,3 +118,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return %result : tensor<16x16xf32, #mma>
   }
 }
+
+// -----
+
+// A preshuffled B operand stored as [K / 16, N * 16]: each 16-byte K slice of
+// 16 consecutive N rows is contiguous, so the MFMA operand reads are already
+// free of LDS bank conflicts. Keep LDS unswizzled so async copy does not need
+// cross-lane address swizzling.
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [4, 0]], lane = [[0, 16], [0, 32], [0, 64], [0, 128], [1, 0], [2, 0]], warp = [[0, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [4, 0, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [1, 0, 0], [2, 0, 0]], warp = [[0, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [4, 0, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [1, 0, 0], [2, 0, 0]], warp = [[0, 0, 0]], block = []}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 1], instrShape = [16, 16, 128], isTransposed = true}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: preshuffled_weight_without_lds_bank_conflicts
+  tt.func @preshuffled_weight_without_lds_bank_conflicts(
+      %ptrs: tensor<8x256x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+      %a: tensor<32x128xi8, #dotA>, %lb: i32, %ub: i32, %step: i32) -> tensor<32x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <8x256xi8, #shared, #smem, mutable>
+    %zero = arith.constant dense<0.0> : tensor<32x16xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %zero) -> (tensor<32x16xf32, #mma>) : i32 {
+      %raw = tt.load %ptrs : tensor<8x256x!tt.ptr<i8>, #blocked>
+      %cvt = ttg.convert_layout %raw : tensor<8x256xi8, #blocked> -> tensor<8x256xi8, #linear>
+      // [K / 16, N, 16] -> [K / 16, 16, N] -> [K, N]
+      %r = tt.reshape %cvt : tensor<8x256xi8, #linear> -> tensor<8x16x16xi8, #linear1>
+      %t = tt.trans %r {order = array<i32: 0, 2, 1>} : tensor<8x16x16xi8, #linear1> -> tensor<8x16x16xi8, #linear2>
+      %b = tt.reshape %t : tensor<8x16x16xi8, #linear2> -> tensor<128x16xi8, #dotB>
+      %dot = tt.dot_scaled %a, %b, %acc lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x128xi8, #dotA> * tensor<128x16xi8, #dotB> -> tensor<32x16xf32, #mma>
+      scf.yield %dot : tensor<32x16xf32, #mma>
+    }
+    tt.return %result : tensor<32x16xf32, #mma>
+  }
+}
+
+// -----
+
+// A linear consumer layout alone does not justify an unswizzled LDS layout:
+// lanes 0-15 read 16-byte K slices from 16 rows of this [N, K] tile, which
+// conflict without swizzling.
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 16], [0, 32]], warp = [[0, 0]], block = []}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 1], instrShape = [16, 16, 128], isTransposed = true}>
+#dotA = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>
+#dotB = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: linear_weight_with_lds_bank_conflicts
+  tt.func @linear_weight_with_lds_bank_conflicts(
+      %ptrs: tensor<16x128x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+      %a: tensor<32x128xi8, #dotA>, %lb: i32, %ub: i32, %step: i32) -> tensor<32x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <16x128xi8, #shared, #smem, mutable>
+    %zero = arith.constant dense<0.0> : tensor<32x16xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %zero) -> (tensor<32x16xf32, #mma>) : i32 {
+      %raw = tt.load %ptrs : tensor<16x128x!tt.ptr<i8>, #blocked>
+      %cvt = ttg.convert_layout %raw : tensor<16x128xi8, #blocked> -> tensor<16x128xi8, #linear>
+      %b = tt.trans %cvt {order = array<i32: 1, 0>} : tensor<16x128xi8, #linear> -> tensor<128x16xi8, #dotB>
+      %dot = tt.dot_scaled %a, %b, %acc lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x128xi8, #dotA> * tensor<128x16xi8, #dotB> -> tensor<32x16xf32, #mma>
+      scf.yield %dot : tensor<32x16xf32, #mma>
+    }
+    tt.return %result : tensor<32x16xf32, #mma>
+  }
+}
