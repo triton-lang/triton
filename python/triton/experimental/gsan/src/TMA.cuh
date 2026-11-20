@@ -5,6 +5,10 @@
 namespace gsan {
 
 struct TensorDescInfo {
+  // Raw format tags in descriptor word 2, bits [10:7]. The CUDA tensor map
+  // API uses a different encoding for these formats.
+  enum class ElementType : uint32_t { B4x16P64 = 12, B6x16P32 = 13 };
+
   static constexpr int kShapeWordBase = 8;
   static constexpr int kStrideWordBase = 3;
   static constexpr int kStrideUnitBytes = 16;
@@ -13,6 +17,10 @@ struct TensorDescInfo {
   const uint32_t *words;
   int rank;
   int bytesPerElem;
+
+  GSAN_DEVICE ElementType elementType() const {
+    return static_cast<ElementType>((words[2] >> 7) & 0xf);
+  }
 
   GSAN_DEVICE int64_t shape(int dim) const {
     return static_cast<int64_t>(words[kShapeWordBase + rank - 1 - dim]) + 1;
@@ -57,13 +65,14 @@ GSAN_DEVICE void forEachIm2ColRow(const void *descriptor, const int *coords,
   TensorDescInfo desc = decodeTensorDesc(descriptor, rank, bytesPerElem);
   int channelDim = rank - 1;
   int64_t channels = desc.shape(channelDim);
-  int elementType = (desc.words[2] >> 7) & 0xf;
+  auto elementType = desc.elementType();
   // FP4-padded descriptors count individual nibbles. Triton's i8 descriptor
   // coordinates and block shape count packed bytes in global memory.
-  if (elementType == 12)
+  if (elementType == TensorDescInfo::ElementType::B4x16P64)
     channels /= 2;
   // FP6 coordinates count logical six-bit values packed into global bytes.
-  int channelBits = elementType == 13 ? 6 : bytesPerElem * 8;
+  int channelBits =
+      elementType == TensorDescInfo::ElementType::B6x16P32 ? 6 : bytesPerElem * 8;
   int64_t firstChannel = coords[channelDim] > 0 ? coords[channelDim] : 0;
   int64_t endChannel = static_cast<int64_t>(coords[channelDim]) + blockShape[1];
   endChannel = endChannel < channels ? endChannel : channels;
