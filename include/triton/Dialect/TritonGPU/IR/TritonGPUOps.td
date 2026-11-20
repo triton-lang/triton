@@ -58,13 +58,12 @@ def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
 
 // These operations are introduced after logical control flow has been assigned
 // a physical execution domain. They do not change tensor placement layouts.
-def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate"> {
+def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate", [Pure]> {
   let summary = "select the threads in a compiler-generated execution domain";
   let description = [{
     This operation marks entry into a restricted thread region and executes in
-    the enclosing domain before its branch. Its conservative effects let
-    synchronization analysis finish pending waits before entering the region.
-    It must not be speculated, merged, or eliminated before that analysis.
+    the enclosing domain before its branch. It returns whether the current
+    thread belongs to the specified domain.
   }];
   let arguments = (ins ThreadDomainAttr:$domain);
   let results = (outs I1:$result);

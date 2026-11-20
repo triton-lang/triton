@@ -1371,26 +1371,24 @@ bool atomicResultHasCTABroadcast(Operation *op) {
 
 namespace triton::nvidia_gpu {
 
-static bool atomicNeedsClusterBarrier(Operation *op) {
-  if (isa<AtomicPollOp>(op))
-    return gpu::lookupNumCTAs(op) != 1;
+BarrierStages getClusterBarrierStages(Operation *op) {
+  if (auto barrier = dyn_cast<ClusterBarrierOp>(op))
+    return {.beforeMemoryEffects = !barrier.getRelaxed()};
+  bool scratch = hasCrossCTAScratch(op);
   auto atomic = dyn_cast<AtomicOpInterface>(op);
-  if (!atomic || gpu::lookupNumCTAs(op) == 1 ||
-      op->getParentOfType<gpu::ThreadScopeOp>())
-    return false;
-
-  auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
-                                       atomicResultHasCTABroadcast(op));
-  return stages.hasBarrier();
+  if (!atomic)
+    return {.betweenMemoryEffects = scratch};
+  if (gpu::lookupNumCTAs(op) == 1 || op->getParentOfType<gpu::ThreadScopeOp>())
+    return {};
+  // A poll always joins the cluster. A distributed result uses the
+  // rendezvous between its scratch write and read.
+  if (isa<AtomicPollOp>(op))
+    return {.afterMemoryEffects = !scratch, .betweenMemoryEffects = scratch};
+  return getAtomicBarrierStages(atomic.getMemSemantic(), scratch);
 }
 
 bool needsClusterBarrier(Operation *op) {
-  if (isa<ClusterBarrierOp>(op))
-    return true;
-  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp,
-          gpu::LocalAtomicScatterRMWOp>(op))
-    return hasCrossCTAScratch(op);
-  return atomicNeedsClusterBarrier(op);
+  return isa<ClusterBarrierOp>(op) || getClusterBarrierStages(op).hasBarrier();
 }
 
 } // namespace triton::nvidia_gpu

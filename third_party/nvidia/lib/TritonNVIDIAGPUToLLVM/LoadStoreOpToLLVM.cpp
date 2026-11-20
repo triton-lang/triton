@@ -1,6 +1,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
@@ -1429,8 +1430,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    uint64_t affineBlockMask =
-        LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
+    uint64_t affineBlockMask = ttng::getTMASubviewCTAMask(dstTy);
 
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
@@ -1780,8 +1780,7 @@ static void iterateGatherScatterIndices(
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
-  bool crossCTA =
-      LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(smemType).second;
+  bool crossCTA = ttng::getTMASubviewCTAMask(smemType);
 
   Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
@@ -1879,9 +1878,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     barrierPtr =
         LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
   }
-  bool crossCTA = LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
-                      op.getResult().getType())
-                      .second;
+  bool crossCTA = ttng::getTMASubviewCTAMask(op.getResult().getType());
 
   std::string ctaGroup;
   if (getModuleTwoCTAs(op)) {

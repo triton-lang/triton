@@ -434,34 +434,21 @@ def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
     return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
 
 
-def _expected_cossin_payload_u32(x_u32: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    mask = np.uint64(0xFFFFFFFF)
-    rcp5 = int(_inv_odd_u64(np.uint64(5)) & mask)
-    a = np.uint64((-3 * rcp5) & 0xFFFFFFFF)
-    b = np.uint64((4 * rcp5) & 0xFFFFFFFF)
-    x = x_u32.astype(np.uint64)
-    c = np.ones_like(x, dtype=np.uint64)
-    s = np.zeros_like(x, dtype=np.uint64)
+def _expected_trig(x_bits: np.ndarray, dtype: str, op: str) -> np.ndarray:
+    # Reference via complex exponentiation by squaring, wrapping in uint64.
+    x = _mix_float_bits(x_bits, dtype)
+    rcp5 = _inv_odd_u64(np.uint64(5))
+    c, s = np.ones_like(x), np.zeros_like(x)
     with np.errstate(over="ignore"):
-        for i in range(32):
-            c_double = (c * c - s * s) & mask
-            s_double = (np.uint64(2) * c * s) & mask
-            c_inc = (a * c_double - b * s_double) & mask
-            s_inc = (a * s_double + b * c_double) & mask
-            inc = (x & np.uint64(1 << (31 - i))) != 0
-            c = np.where(inc, c_inc, c_double) & mask
-            s = np.where(inc, s_inc, s_double) & mask
-    return c.astype(np.uint32), s.astype(np.uint32)
-
-
-def _expected_cos_i32(x_i32: np.ndarray) -> np.ndarray:
-    c, _ = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
-    return _unmix_payload_u32_to_f32_bits_i32(c)
-
-
-def _expected_sin_i32(x_i32: np.ndarray) -> np.ndarray:
-    _, s = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
-    return _unmix_payload_u32_to_f32_bits_i32(s)
+        a = -np.uint64(3) * rcp5
+        b = np.uint64(4) * rcp5
+        for bit in reversed(range(_float_dtype_info(dtype)[0])):
+            c_double = c * c - s * s
+            s_double = np.uint64(2) * c * s
+            inc = (x & np.uint64(1 << bit)) != 0
+            c = np.where(inc, a * c_double - b * s_double, c_double)
+            s = np.where(inc, a * s_double + b * c_double, s_double)
+    return _unmix_payload_to_float_bits(s if op == "sin" else c, dtype)
 
 
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
@@ -1031,10 +1018,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp2_i32(x_bits)
     elif op == "neg":
         exp_bits = _expected_neg_i32(x_bits)
-    elif op == "cos":
-        exp_bits = _expected_cos_i32(x_bits)
-    elif op == "sin":
-        exp_bits = _expected_sin_i32(x_bits)
+    elif op in ("cos", "sin"):
+        exp_bits = _expected_trig(x_bits, "f32", op)
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
@@ -1190,7 +1175,8 @@ def test_absf_payload_semantics(device, fresh_knobs):
     _assert_payload_equal(out, x_bits & np.int32(0x7FFFFFFF))
 
 
-def test_exp2_payload_f64(device, fresh_knobs):
+@pytest.mark.parametrize("op", ["exp2", "cos", "sin"])
+def test_unary_math_payload_f64(device, op, fresh_knobs):
     _require_cuda_backend(device)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
@@ -1206,12 +1192,13 @@ def test_exp2_payload_f64(device, fresh_knobs):
         x,
         triton.TensorWrapper(out, dtype=torch.float64),
         n_elements,
-        OP="exp2",
+        OP=op,
         BLOCK=block,
         THREADS_PER_WARP=THREADS_PER_WARP,
     )
 
-    _assert_payload_equal(out, _expected_exp2_i64(x_bits))
+    expected = _expected_exp2_i64(x_bits) if op == "exp2" else _expected_trig(x_bits, "f64", op)
+    _assert_payload_equal(out, expected)
 
 
 def test_exp_add_mul_identity(device, fresh_knobs):

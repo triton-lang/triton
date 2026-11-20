@@ -2292,7 +2292,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire {{.*}} {ctaLocal}
       // CHECK: tt.call @__triton_consan_set_waiting
-      // CHECK: tt.call @__triton_consan_check_all_active_waiting
+      // CHECK-NEXT: ttg.barrier global_write
+      // CHECK-NEXT: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release {{.*}} {ctaLocal}
       %c0_i32 = arith.constant 0 : i32
       %true = arith.constant true

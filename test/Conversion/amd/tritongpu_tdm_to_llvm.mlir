@@ -225,6 +225,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_wait_token_block_arg
+  tt.func public @tdm_wait_token_block_arg(%lb: i32, %ub: i32) {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    // CHECK: rocdl.s.wait.tensorcnt 0
+    // CHECK-NOT: unrealized_conversion_cast
+    %w = amdg.async_tdm_intrinsic_wait {count = 0 : i32}
+    %v0 = ttg.local_load %alloc token %w : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16, #blocked>
+    cf.br ^bb1(%w : !ttg.async.token)
+  ^bb1(%t: !ttg.async.token):
+    %v = ttg.local_load %alloc token %t : !ttg.memdesc<16x16xf16, #shared, #smem, mutable> -> tensor<16x16xf16, #blocked>
+    %c = arith.cmpi slt, %lb, %ub : i32
+    cf.cond_br %c, ^bb1(%t : !ttg.async.token), ^bb2
+  ^bb2:
+    // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [128, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {

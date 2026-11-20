@@ -5,6 +5,21 @@
 namespace mlir::triton::nvidia_gpu {
 namespace ttg = gpu;
 
+uint32_t getTMASubviewCTAMask(ttg::MemDescType type) {
+  auto encoding = type.getEncoding();
+  auto shape = ttg::dropPipeliningDim(type.getShape(), encoding);
+  if (shape == ttg::dropPipeliningDim(type.getAllocShape(), encoding))
+    return 0;
+  auto block = StringAttr::get(type.getContext(), "block");
+  auto allocation = ttg::toLinearLayoutIgnoringPadding(type);
+  uint32_t mask = 0;
+  for (auto [bit, basis] : llvm::enumerate(allocation.getBases().at(block)))
+    for (auto [component, extent] : llvm::zip_equal(basis, shape))
+      if (component >= extent)
+        mask |= 1u << bit;
+  return mask;
+}
+
 static LinearLayout getMessageToPackedOffsetLayout(ttg::MemDescType type,
                                                    ttg::TMAMode mode) {
   auto *ctx = type.getContext();
