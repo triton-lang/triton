@@ -718,6 +718,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
   POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
                     [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
+  POPULATE_UNARY_OP(math::CountTrailingZerosOp, math::CountTrailingZerosOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)

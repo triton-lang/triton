@@ -230,20 +230,25 @@ Rewrite:
 
 - ``x / y`` becomes ``embed(x) * inv(embed(y))``, then ``unembed``
 
-Here ``inv`` is:
-
-- the true modular inverse for odd payloads
-- a parity-preserving involution for even payloads
+For a nonzero denominator payload ``d = 2^k * t`` with ``t`` odd, ``inv(d)``
+is ``2^k`` times the modular inverse of ``t`` modulo ``2^w``. For a zero
+payload, ``inv(0) = 0``.
 
 Exact preserved properties:
 
 - ``x / 1 = x``
 - ``1 / (1 / x) = x``
+- ``inv(a * b) = inv(a) * inv(b)`` for all payloads
 - for odd payloads, the usual modular inverse laws hold
+- ``(u * x) / (u * y) = x / y`` whenever ``embed(u)`` is odd, for any ``y``
+
+Subtracting the row maximum in softmax multiplies each weight by the same
+exponential factor. Its payload is odd, so it cancels in the division even
+when the sum of the weights has an even payload.
 
 Important caveats:
 
-- ``x / x = 1`` is not guaranteed for all payloads.
+- For ``embed(x) = 2^k * t`` with ``t`` odd, ``embed(x / x) = 2^(2k)`` modulo ``2^w``.
 - Division by zero does not produce IEEE infinities or traps.
 - This rewrite is chosen for algebraic checking, not numeric realism.
 
