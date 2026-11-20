@@ -490,7 +490,7 @@ Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
                        int dim, Value ctas) {
   int numCTAs = ttg::lookupNumCTAs(b);
 
-  // Turn the scalar recipient bitset into a tensor mask over logical CTA rows:
+  // Turn recipient bitsets into a tensor mask over logical CTA rows:
   // build a [0, numCTAs) row-index vector on `dim`, broadcast it to the state
   // tensor shape, and test one bit of `recipientCTAs` per row.
   auto loc = b.getLoc();
@@ -501,7 +501,12 @@ Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
       tensorType.cloneWith(std::nullopt, b.getI32Type()));
   rowIdx = convertAndBroadcast(b, rowIdx, {dim}, indexType);
 
-  Value recipientBitsTensor = triton::SplatOp::create(b, indexType, ctas);
+  // Multicast tracking selects a separate barrier bitset per physical buffer
+  // CTA (dimension 0).
+  Value recipientBitsTensor =
+      isa<RankedTensorType>(ctas.getType())
+          ? convertAndBroadcast(b, ctas, {0}, indexType)
+          : triton::SplatOp::create(b, indexType, ctas).getResult();
   Value shifted = arith::ShRUIOp::create(b, recipientBitsTensor, rowIdx);
   Value one = tti::createConstIntTensor(b, loc, 1, indexType);
   Value selectedBit = arith::AndIOp::create(b, shifted, one);

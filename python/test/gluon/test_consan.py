@@ -5215,7 +5215,7 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
 @pytest.mark.parametrize("op", ["bulk", "tma"])
-@pytest.mark.parametrize("race", ["first-read", "second-read", "reuse-after-read", None])
+@pytest.mark.parametrize("race", ["first-read", "second-read", "reuse-after-read", "reuse-after-write", None])
 def test_multicast_load_reuse(op, race, device, run_wrapper):
     if race is not None and run_wrapper:
         result = run_in_process(test_multicast_load_reuse, (op, race, device, False))
@@ -5240,10 +5240,13 @@ def test_multicast_load_reuse(op, race, device, run_wrapper):
             else:
                 tma.async_load(src, [phase * 256], bar, smem, multicast=True)
             mbarrier.wait(bar, phase)
-            # Each CTA waits for its own shard, then reads both shards.
-            hopper.cluster.barrier(relaxed=RACE == ("first-read", "second-read")[phase])
-            values += smem.load(layout)
-            hopper.cluster.barrier(relaxed=RACE == "reuse-after-read")
+            if phase == 0 and RACE == "reuse-after-write":
+                hopper.cluster.barrier(relaxed=True)
+            else:
+                # Each CTA waits for its own shard, then reads both shards.
+                hopper.cluster.barrier(relaxed=RACE == ("first-read", "second-read")[phase])
+                values += smem.load(layout)
+                hopper.cluster.barrier(relaxed=RACE == "reuse-after-read")
         ttgl.store(out + ttgl.arange(0, 256, layout), values)
         mbarrier.invalidate(bar)
 
