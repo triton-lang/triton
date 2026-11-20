@@ -1145,11 +1145,21 @@ struct WriteShadowCellHandler {
 };
 
 template <typename ShadowCellHandler> struct NonAtomicElementHandler {
-  ThreadState *state;
   uintptr_t reserveBase;
   Location loc;
-  ShadowCellHandler handleShadowCell;
-  bool acquired = false;
+
+  GSAN_DEVICE NonAtomicElementHandler(ThreadState *state, Location loc,
+                                      ShadowCellHandler handleShadowCell = {})
+      : reserveBase(state->reserveBase), loc(loc), state(state),
+        handleShadowCell(handleShadowCell) {}
+
+  NonAtomicElementHandler(const NonAtomicElementHandler &) = delete;
+  NonAtomicElementHandler &operator=(const NonAtomicElementHandler &) = delete;
+
+  GSAN_DEVICE ~NonAtomicElementHandler() {
+    if (acquired)
+      rwLockReleaseRead(state->lock);
+  }
 
   GSAN_DEVICE void operator()(uintptr_t address) {
     if (!acquired) {
@@ -1166,6 +1176,11 @@ template <typename ShadowCellHandler> struct NonAtomicElementHandler {
     handleShadowCell(state, cell, loc);
     releaseShadow(cell);
   }
+
+private:
+  ThreadState *state;
+  ShadowCellHandler handleShadowCell;
+  bool acquired = false;
 };
 
 template <typename ShadowCellHandler>
@@ -1174,12 +1189,10 @@ tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
                     const int *coords, int rank, const int16_t *blockShape,
                     int bytesPerElem, int warpId, int numWarps, Location loc,
                     ShadowCellHandler handleShadowCell) {
-  NonAtomicElementHandler<ShadowCellHandler> handleElement{
-      state, state->reserveBase, loc, handleShadowCell};
+  NonAtomicElementHandler<ShadowCellHandler> handleElement{state, loc,
+                                                           handleShadowCell};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
                    /*elementGranularity=*/0, warpId, numWarps, handleElement);
-  if (handleElement.acquired)
-    rwLockReleaseRead(state->lock);
 }
 
 template <typename ShadowCellHandler>
@@ -1188,12 +1201,10 @@ tensorNonAtomicIndexedDesc(ThreadState *state, const void *descriptor,
                            const int *indices, int numIndices, int yOffset,
                            int numCols, int bytesPerElem, int pred,
                            Location loc, ShadowCellHandler handleShadowCell) {
-  NonAtomicElementHandler<ShadowCellHandler> handleElement{
-      state, state->reserveBase, loc, handleShadowCell};
+  NonAtomicElementHandler<ShadowCellHandler> handleElement{state, loc,
+                                                           handleShadowCell};
   tensorAccessIndexedDesc(descriptor, indices, numIndices, yOffset, numCols,
                           bytesPerElem, pred, handleElement);
-  if (handleElement.acquired)
-    rwLockReleaseRead(state->lock);
 }
 
 GSAN_DEVICE void initAtomicEventState(AtomicEventState *event) {
@@ -1410,11 +1421,9 @@ __triton_gsan_load_range(void *globalState, const void *ptr, int numBytes,
   auto *state =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::NonAtomicElementHandler<gsan::ReadShadowCellHandler> handleElement{
-      state, state->reserveBase, loc, {}};
+      state, loc};
   gsan::tensorAccessRow(reinterpret_cast<gsan::uintptr_t>(ptr), numBytes,
                         /*elementGranularity=*/0, handleElement);
-  if (handleElement.acquired)
-    gsan::rwLockReleaseRead(state->lock);
 }
 
 extern "C" GSAN_DEVICE void
@@ -1426,11 +1435,9 @@ __triton_gsan_store_range(void *globalState, const void *ptr, int numBytes,
   auto *state =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::NonAtomicElementHandler<gsan::WriteShadowCellHandler> handleElement{
-      state, state->reserveBase, loc, {}};
+      state, loc};
   gsan::tensorAccessRow(reinterpret_cast<gsan::uintptr_t>(ptr), numBytes,
                         /*elementGranularity=*/0, handleElement);
-  if (handleElement.acquired)
-    gsan::rwLockReleaseRead(state->lock);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_desc(
@@ -1458,15 +1465,13 @@ extern "C" GSAN_DEVICE void __triton_gsan_load_im2col_tensor_desc(
   auto *state =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::NonAtomicElementHandler<gsan::ReadShadowCellHandler> handleElement{
-      state, state->reserveBase, loc, {}};
+      state, loc};
   auto handleRow = [&](gsan::uintptr_t address, int bytes) {
     gsan::tensorAccessRow(address, bytes, /*elementGranularity=*/0,
                           handleElement);
   };
   gsan::forEachIm2ColRow(descriptor, coords, rank, blockShape, offsets,
                          bytesPerElem, warpId, numWarps, handleRow);
-  if (handleElement.acquired)
-    gsan::rwLockReleaseRead(state->lock);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
