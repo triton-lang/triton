@@ -2976,13 +2976,13 @@ TEST_F(LinearLayoutConversionsTest, LeadingOffset_64x4x32_1_8_32b_transposed) {
                       {2, 0, 0},
                       {4, 0, 0},
                       {8, 0, 0},
-                      {0, 0, 4},
-                      {4, 0, 8},
-                      {8, 0, 16},
+                      {0, 0, 1},
+                      {4, 0, 2},
+                      {8, 0, 4},
+                      {0, 0, 8},
+                      {0, 0, 16},
                       {0, 1, 0},
                       {0, 2, 0},
-                      {0, 0, 1},
-                      {0, 0, 2},
                       {16, 0, 0},
                       {32, 0, 0}}},
                     {S("block"), {}}},
@@ -3603,7 +3603,7 @@ TEST_F(LinearLayoutConversionsTest,
       // For contiguous dim, use a size that requires multiple messages.
       // With swizzle, the contiguous dim block size = swizzleBytes / elemBytes.
       // Use 2x the max swizzle size to ensure multiple messages in dim1.
-      int64_t dim1 = (swizzleBytes == 0) ? 64 : (128 / elementBytes) * 2;
+      int64_t dim1 = (swizzleBytes == 0) ? 512 : (128 / elementBytes) * 2;
 
       auto encoding =
           nvmmaShared(swizzleBytes, /*transposed=*/false, elementBitWidth,
