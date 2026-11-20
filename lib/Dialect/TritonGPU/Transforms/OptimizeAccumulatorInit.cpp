@@ -159,13 +159,14 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
-    if (isConstantZeroTensor(forOp.getInitArgs()[arg.getArgNumber() - 1])) {
+    unsigned index = arg.getArgNumber() - 1;
+    if (isConstantZeroTensor(forOp.getInitArgs()[index])) {
       loopArgIsZero = true;
     }
     // Another user of the loop argument observes the reset on the next iteration.
     if (!arg.hasOneUse())
       return std::nullopt;
-    v = forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+    v = forOp.getBody()->getTerminator()->getOperand(index);
   }
 
   // Only the MMA sees the use-accumulator flag. Other users of the reset
