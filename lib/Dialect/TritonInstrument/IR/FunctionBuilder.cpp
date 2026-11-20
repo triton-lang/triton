@@ -3540,7 +3540,7 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
             fb, threadVal, cast<IntegerType>(writeType.getElementType()));
         Value shiftByThread = triton::SplatOp::create(fb, writeType, thread);
         Value visible = arith::TruncIOp::create(
-            fb, writeType.clone(fb.getI1Type()),
+            fb, writeType.cloneWith(std::nullopt, fb.getI1Type()),
             arith::ShRUIOp::create(fb, writes, shiftByThread));
         Value reads = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::readMask, visibilityType);
