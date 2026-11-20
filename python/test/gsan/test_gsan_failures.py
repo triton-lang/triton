@@ -1267,7 +1267,7 @@ def _bulk_store_after_read(payload, scratch, ready, ACQUIRE: gl.constexpr):
         smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]),
                                          gl.full((16, ), 17, gl.int32, layout))
         hopper.bulk.async_store(payload, smem, 12)
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
 
 @run_with_gsan

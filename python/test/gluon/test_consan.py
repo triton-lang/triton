@@ -457,7 +457,7 @@ def test_async_shared_store_proxy_handoff(FENCE, device, run_wrapper, monkeypatc
         if FENCE:
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     @gluon.jit
     def kernel(output_desc, FENCE: ttgl.constexpr):
@@ -1256,7 +1256,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
 
         hopper.fence_async_shared()
         tma.async_store(input_desc, [0, 0], smem.index(0))
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     block_m = XBLOCK.value * num_ctas
     input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
@@ -1497,7 +1497,7 @@ def test_tma_overlapping_operations(OP, SYNCHRONIZED, device, run_wrapper, monke
             mbarrier.wait(bars.index(1), 0)
 
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
         if not SYNCHRONIZED:
             mbarrier.wait(bars.index(0), 0)
         mbarrier.invalidate(bars.index(0))
@@ -1750,10 +1750,10 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         val = ttgl.full([block_m, XBLOCK], 42, ttgl.float16, blocked_layout)
         tma.async_store(output_desc, [0, 0], smem.index(0))
         tma.async_store(output_desc, [0, 0], smem.index(1))
-        tma.store_wait(pendings=1)
+        tma.store_wait(pendings=1, deps=[smem.index(0)])
         smem.index(0).store(val)
         if not FAILURE:
-            tma.store_wait(pendings=0)
+            tma.store_wait(pendings=0, deps=[smem.index(1)])
         smem.index(1).store(val)
 
     block_m = XBLOCK.value * num_ctas
@@ -1794,6 +1794,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
         persistent_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
         if not FAILURE:
             stable_source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout)
+        store_sources = [persistent_page] if FAILURE else [persistent_page, stable_source_page]
 
         for iteration in range(iterations):
             base = iteration * 128
@@ -1806,12 +1807,12 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
 
             # Keep an unrelated store pending so wait(1) does not complete the
             # source transfer below.
-            tma.store_wait(1)
+            tma.store_wait(1, deps=[persistent_page])
             persistent_page.store(value)
             hopper.fence_async_shared()
             tma.async_store(output_desc, [2 * base], persistent_page)
 
-            tma.store_wait(1)
+            tma.store_wait(1, deps=store_sources)
             if FAILURE:
                 source_page = ttgl.allocate_shared_memory(ttgl.int32, [128], output_desc.layout, value)
             else:
@@ -1822,10 +1823,7 @@ def test_tma_store_convert_layout_scratch(FAILURE, device, run_wrapper, monkeypa
             if FAILURE:
                 source_page._keep_alive()
 
-        tma.store_wait(0)
-        persistent_page._keep_alive()
-        if not FAILURE:
-            stable_source_page._keep_alive()
+        tma.store_wait(0, deps=store_sources)
 
     iterations = 2
     output = torch.empty(iterations * 2 * 128, dtype=torch.int32, device=device)
@@ -1920,7 +1918,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                 ttgl.NVMMASharedLayout.get_default_for([block_m, block_n], input_desc.dtype,
                                                        cga_layout=acc_layout.cga_layout), res.to(input_desc.dtype))
             tma.async_store(output_desc, [0, 0], smemAcc)
-            tma.store_wait(0)
+            tma.store_wait(0, deps=[smemAcc])
         elif MEM_ACCESS_KIND == "tmem_store":
             acc.store(ttgl.full([block_m, block_n], 42, ttgl.float32, acc_blocked_layout))
 
@@ -2355,7 +2353,7 @@ def test_ws_join_publishes_to_async_peer(FENCE_LOCATION, device, monkeypatch):
         if FENCE_LOCATION == "consumer":
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     output = torch.empty((XBLOCK.value, XBLOCK.value), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(128, 16, rank=2)
@@ -2394,7 +2392,7 @@ def test_ws_join_read_read_no_proxy_fence(device, monkeypatch):
         ], [4], [32])
         # TMA store reads smem. A preceding generic read needs no intervening fence.
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     output = torch.empty((XBLOCK.value, XBLOCK.value), device=device, dtype=torch.float16)
     sink = torch.empty_like(output)
@@ -3210,7 +3208,7 @@ def test_fence_async_shared_across_warp_specialize(FENCE_LOCATION, device, run_w
         if FENCE_LOCATION == "consumer":
             hopper.fence_async_shared()
         tma.async_store(output_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     @gluon.jit
     def kernel(output_desc, ready, FENCE_LOCATION: ttgl.constexpr):
@@ -5237,9 +5235,9 @@ def test_bulk_async_store_missing_wait(wait, pred, device, run_wrapper, monkeypa
                                            ttgl.full((128, ), 7, ttgl.int32, layout))
         hopper.bulk.async_store(out, smem, 128, pred=pred)
         if WAIT:
-            hopper.bulk.store_wait(0)
+            hopper.bulk.store_wait(0, deps=[smem])
         smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
         ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
 
     out = torch.full((256, ), -1, device=device, dtype=torch.int32)
@@ -5271,9 +5269,9 @@ def test_bulk_async_store_false_predicate_queue(pendings, device, run_wrapper, m
                                            ttgl.full((128, ), 7, ttgl.int32, layout))
         hopper.bulk.async_store(out, smem, 128)
         hopper.bulk.async_store(out + 128, smem, 128, pred=pred)
-        hopper.bulk.store_wait(PENDINGS)
+        hopper.bulk.store_wait(PENDINGS, deps=[smem])
         smem.store(ttgl.full((128, ), 9, ttgl.int32, layout))
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
         ttgl.store(out + 128 + ttgl.arange(0, 128, layout), smem.load(layout))
 
     out = torch.empty(256, device=device, dtype=torch.int32)

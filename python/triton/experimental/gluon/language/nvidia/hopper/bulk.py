@@ -97,9 +97,9 @@ def async_store(pointer, smem, num_elements, pred=True, _semantic=None):
     A false predicate neither copies nor commits a group. Call
     :func:`store_wait` before modifying or reusing the shared source. To
     access the global destination or publish it with a release operation,
-    first call ``store_wait(0, read_only=False)``. Issue and wait must execute
-    in the same warp-specialized region. The compiler inserts the shared
-    async-proxy fence needed to publish preceding shared-memory writes.
+    first call ``store_wait(0, read_only=False, deps=[smem])``. Issue and wait
+    must execute in the same warp-specialized region. The compiler inserts the
+    shared async-proxy fence needed to publish preceding shared-memory writes.
 
     Compiler dependencies and ConSan conservatively cover the entire source
     view, including for partial copies. GSan records the exact global write

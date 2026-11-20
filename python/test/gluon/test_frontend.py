@@ -1842,7 +1842,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.invalidate(bar)
 
     tma.async_store(input_desc, [0, 0], smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[smem])
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
@@ -1880,7 +1880,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_4 = arith.constant 0 : i32
     %c0_i32_5 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -1902,7 +1902,7 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.invalidate(bar)
 
     tma.async_scatter(input_desc, x_offsets, 0, smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[smem])
 
 
 def test_async_tma_blackwell():
@@ -1939,7 +1939,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_3 = arith.constant 0 : i32
     ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -5771,8 +5771,8 @@ def test_nv_tma_descriptor_store_kernel(target):
         )
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
         tma.async_store(input_desc, [0, 0], smem)
-        tma.store_wait(0, deps=(smem, ))
-        tma.store_wait(0, read_only=True)
+        tma.store_wait(0, deps=[smem])
+        tma.store_wait(0, read_only=True, deps=[smem])
 
     ptr = MockTensor(ttgl.float32)
     module = run_parser(nv_tma_descriptor_store_kernel, *make_args(ptr), target)
@@ -5792,7 +5792,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_1 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %1 : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %1 : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -5834,7 +5834,7 @@ def test_nv_tma_descriptor_reduce_kernel(target, op_name, kind):
             tma.async_atomic_or(input_desc, [0, 0], smem)
         elif OP_NAME == "async_atomic_xor":
             tma.async_atomic_xor(input_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     ptr = MockTensor(ttgl.int32)
     module = run_parser(nv_tma_descriptor_reduce_kernel, *make_args(ptr, op_name), target)
@@ -6053,11 +6053,11 @@ def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, KIND: ttgl.const
     if KIND == "store":
         if pred:
             hopper.tma.async_store(desc, [0] * len(shape), smem, cache_policy=POLICY)
-            hopper.tma.store_wait(0)
+            hopper.tma.store_wait(0, deps=[smem])
     elif KIND == "scatter":
         if pred:
             tma.async_scatter(desc, offsets, 0, smem, cache_policy=POLICY)
-            hopper.tma.store_wait(0)
+            hopper.tma.store_wait(0, deps=[smem])
 
 
 def make_tma_cache_policy_desc(rank=2, kind="load", multicast=False):
@@ -6207,7 +6207,7 @@ def _bulk_store_codegen_kernel(src, out, pred):
     values = ttgl.load(src + ttgl.arange(0, 4096, layout))
     smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
     hopper.bulk.async_store(out, smem, 2560, pred=pred)
-    hopper.bulk.store_wait(0, read_only=False, deps=(smem, ))
+    hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
 
 @pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])
@@ -6229,7 +6229,7 @@ def test_bulk_async_store_invalid_count(num_elements):
     def kernel(out, count, COUNT: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
         hopper.bulk.async_store(out, smem, count if COUNT is None else COUNT)
-        hopper.bulk.store_wait(0)
+        hopper.bulk.store_wait(0, deps=[smem])
 
     source = gluon.GluonASTSource(kernel, {"out": "*i32", "count": "i32"}, {"COUNT": num_elements})
     with pytest.raises((CompilationError, RuntimeError)):
@@ -6243,7 +6243,7 @@ def test_bulk_async_store_partial_cluster_rejected(cga):
     def kernel(out, SHARED: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [256], SHARED)
         hopper.bulk.async_store(out, smem, 128)
-        hopper.bulk.store_wait(0)
+        hopper.bulk.store_wait(0, deps=[smem])
 
     source = gluon.GluonASTSource(kernel, {"out": "*i32"},
                                   {"SHARED": ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)})
