@@ -170,8 +170,8 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
-                           bool hasScaledDot, bool waitAtTail,
-                           Clusters &clusters, tt::CoarseSchedule &schedule) {
+                           bool waitAtTail, Clusters &clusters,
+                           tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -281,12 +281,12 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // TDM copy reordering to improve latency hiding. Only for the stage schedules
   // LDS prefetch does not already cover (i.e. numStages < 3), since the
   // prefetch ordering above subsumes it and must not be overwritten here.
-  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail && !ldsPrefetch;
+  bool tdmReorder = hasTDMLoad && !waitAtTail && !ldsPrefetch;
   if (tdmReorder) {
     globalLoadCluster = 0; // all TDM copies first
     asyncWaitCluster = 1;  // single wait after the copies
     localLoadCluster = 2;  // local_loads after the wait
-    computeCluster = 3;    // dot_scaled last
+    computeCluster = 3;    // the dot last
     localStoreCluster = 4;
   }
 
@@ -419,13 +419,10 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
     maxDist = std::max(maxDist, info.distToUse);
   }
 
-  bool hasScaledDot = false;
-  forOp.walk([&](tt::DotScaledOp) { hasScaledDot = true; });
-
   int numBuffers = 1;
   if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, hasScaledDot, waitAtTail,
-                          clusters, schedule)))
+                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters,
+                          schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.
