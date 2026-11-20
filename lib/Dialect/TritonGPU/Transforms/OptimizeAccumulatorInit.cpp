@@ -166,8 +166,13 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   //     yield v                         // the yield is the only use of v
   //   }
   //
-  // For a reset before the MMA, v feeds the MMA accumulator directly and
-  // must have no other uses.
+  // A reset before the MMA has this shape:
+  //
+  //   ret = for (arg = init) {
+  //     v = select(reset, zero, arg)
+  //     acc = mma(a, b, v)              // the MMA is the only use of v
+  //     yield acc
+  //   }
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
     unsigned index = arg.getArgNumber() - 1;
