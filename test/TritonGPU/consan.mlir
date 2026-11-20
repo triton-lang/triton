@@ -1167,10 +1167,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %mask = tt.splat %non_issuer_cta : i1 -> tensor<32x32xi1, #blocked>
     ttg.async_copy_global_to_local %ptr, %shmem mask %mask : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     ttg.async_commit_group
+    ttng.fence_async_shared {bCluster = true}
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: ttg.async_copy_global_to_local
     // CHECK: tt.call @__triton_consan_commit_accesses
     // CHECK: ttg.async_commit_group
+    // CHECK: tt.call @__triton_consan_fence_proxy_accesses
+    // CHECK: ttng.fence_async_shared
     // CHECK: %[[RECIPIENTS:.*]] = arith.constant 3 : i32
     // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}({{.*}}, %[[RECIPIENTS]])
     // CHECK: ttng.async_tma_copy_global_to_local
