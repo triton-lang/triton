@@ -515,6 +515,13 @@ def test_source_prefix_map_shares_cache(tmp_path: pathlib.Path, fresh_knobs, fre
         assert str(tmp_path).encode() not in blob
         assert b"/mapped-src/kernel.py" in blob
 
+    # A broad entry given last wins over a more specific earlier one.
+    fresh_knobs.compilation.source_prefix_map = os.pathsep.join([f"{tmp_path / 'a'}=/specific", f"{tmp_path}=/broad"])
+    assert load("a")[0].file_name == "/broad/a/kernel.py"
+    # Each entry splits at its last '=', so the old prefix may contain '='.
+    fresh_knobs.compilation.source_prefix_map = f"{tmp_path / 'x=y'}=/eq"
+    assert write_and_load_module(tmp_path / "x=y" / "kernel.py", code, 0).test_kernel.file_name == "/eq/kernel.py"
+
 
 def test_reuse(device, fresh_triton_cache):
     counter = 0

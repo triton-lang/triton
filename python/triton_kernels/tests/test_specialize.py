@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import os
 import types
 
 import pytest
@@ -61,6 +62,14 @@ def test_specialization_module_preserves_dialect(template_fn, specialized_fn, la
     assert module.kernel.__class__ is template_fn.__class__
     assert module.kernel.is_gluon() == template_fn.is_gluon()
     assert f"fn: {lang_module}.constexpr = {specialized_fn.__name__}" in module.kernel.src
+
+
+def test_specialize_keeps_source_prefix_map(monkeypatch):
+    src_dir = os.path.dirname(template_kernel.fn.__code__.co_filename)
+    monkeypatch.setenv("TRITON_SOURCE_PREFIX_MAP", f"{src_dir}=/mapped-src")
+    template = triton.jit(template_kernel.fn)
+    specialized = specialize(template, types.ModuleType("mapped_kernel"), {"fn": identity}, {})
+    assert template.file_name == specialized.file_name == "/mapped-src/test_specialize.py"
 
 
 def retrieve_fn(module, name):
