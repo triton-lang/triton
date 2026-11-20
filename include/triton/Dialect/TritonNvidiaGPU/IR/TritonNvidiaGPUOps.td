@@ -42,6 +42,7 @@ include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def L2Cache : Resource<"::mlir::triton::nvidia_gpu::L2Cache">;
 def TensorMemory : Resource<"::mlir::triton::nvidia_gpu::TensorMemory">;
 
 class TTNG_Op<string mnemonic, list<Trait> traits = []> :
@@ -518,6 +519,24 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
   }];
 }
 
+
+def TTNG_PrefetchBulkOp : TTNG_Op<"prefetch_bulk", [
+    SameOperandsShape, SameOperandsEncoding, MemoryEffects<[MemWrite<L2Cache>]>]> {
+  let summary = "prefetch global-memory ranges into L2";
+  let description = [{
+    For each enabled logical element, issues an asynchronous hint to prefetch
+    numBytes bytes starting at ptr into the GPU's L2 cache. Each source address
+    must be aligned to 16 bytes and each unsigned byte count must be a multiple
+    of 16. Scalar operands specify one range for the program.
+  }];
+  let arguments = (ins Arg<TT_PtrLike, "", [MemRead<GlobalMemory>]>:$ptr,
+                       TT_I32Like:$numBytes, TT_BoolLike:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes `,` $pred attr-dict `:` type($ptr) `,`
+    type($numBytes) `,` type($pred)
+  }];
+  let hasVerifier = 1;
+}
 
 def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,

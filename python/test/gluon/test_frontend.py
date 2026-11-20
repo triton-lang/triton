@@ -6122,6 +6122,38 @@ def test_tma_cache_policy_frontend_invalid(kind, policy, message):
                                                        False), target=BLACKWELL_TARGET)
 
 
+@pytest.mark.parametrize("target,mode", [(HOPPER_TARGET, "scalar"), (HOPPER_TARGET, "broadcast"),
+                                         (BLACKWELL_TARGET, "per_range")])
+def test_bulk_prefetch_codegen(target, mode):
+
+    @gluon.jit
+    def kernel(src, num_bytes, active, MODE: ttgl.constexpr):
+        if MODE == "scalar":
+            hopper.bulk.prefetch(src, 16384)
+        else:
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+            idx = ttgl.arange(0, 256, layout=layout)
+            sizes = ttgl.where(idx + 1 == active, num_bytes, 16384) if MODE == "per_range" else num_bytes
+            hopper.bulk.prefetch(src + idx * 16384, sizes, pred=idx < active)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8", "num_bytes": "u32", "active": "i32"}, {"MODE": mode})
+    ptx = triton.compile(source, target=target).asm["ptx"]
+    # Two distinct ranges per thread in the vector case, one range per program in the scalar case.
+    assert len(re.findall(r"@%?\w+\s+cp\.async\.bulk\.prefetch\.L2\.global\s", ptx)) == (1 if mode == "scalar" else 2)
+
+
+@pytest.mark.parametrize("num_bytes", [-16, 15, 1 << 32])
+def test_bulk_prefetch_invalid_byte_count(num_bytes):
+
+    @gluon.jit
+    def kernel(src, NUM_BYTES: ttgl.constexpr):
+        hopper.bulk.prefetch(src, NUM_BYTES)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {"NUM_BYTES": num_bytes})
+    with pytest.raises(CompilationError, match="multiple of 16"):
+        triton.compile(source, target=HOPPER_TARGET)
+
+
 @gluon.jit
 def _bulk_codegen_kernel(src, out, pred):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
