@@ -8150,7 +8150,7 @@ def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block
     assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
 
 
-@pytest.mark.skipif(not (is_blackwell() or is_blackwell_ultra()), reason="Requires tcgen05 scaled MMA")
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
 @pytest.mark.parametrize("fmt, vec_size", [("nvfp4", 16), ("mxfp4", 32)])
 @pytest.mark.parametrize("allow_single_cta_k96", [False, True])
 @pytest.mark.parametrize("block_k,block_n", [(128, 128), (256, 128), (256, 256), (512, 128)])
@@ -8173,7 +8173,7 @@ def test_tcgen05_mma_scaled_single_cta_k96(fmt, vec_size, allow_single_cta_k96, 
         torch.testing.assert_close(actual, paired, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not (is_blackwell() or is_blackwell_ultra()), reason="Requires tcgen05 scaled MMA")
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
 @pytest.mark.parametrize("scale_rows", [64, 128])
 def test_tcgen05_mma_scaled_single_cta_k96_rhs_stride(scale_rows):
 
