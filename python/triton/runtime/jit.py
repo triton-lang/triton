@@ -127,8 +127,16 @@ class DependenciesFinder(ast.NodeVisitor):
             for attr in val.hash_attrs:
                 if isinstance(attr, JITCallable) or getattr(attr, "__triton_builtin__", False):
                     self.record_reference(attr)
-                else:  # a plain Python method (e.g. a host-side __init__) is never compiled
-                    self.hasher.update(inspect.getsource(attr).encode("utf-8"))
+                    continue
+                # A plain Python method (e.g. an `__init__`) runs at compile time when the
+                # kernel constructs the aggregate, so hash it like a constexpr function: by
+                # its source and the globals it reads. Its globals need not be constexprs,
+                # so also hash their values; the kernel hash must change with them.
+                proxy = ConstexprFunction(getattr(attr, "__func__", attr))
+                self.record_reference(proxy)
+                for (name, _), (val, _) in sorted(proxy.used_global_vals.items(), key=lambda item: item[0][0]):
+                    key = val.cache_key if hasattr(val, "cache_key") else repr(val)
+                    self.hasher.update(f"{name}={key}".encode("utf-8"))
             return
 
         if getattr(val, "__triton_builtin__", False):
@@ -392,6 +400,8 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
             return {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
         if isinstance(value, type):
             return {"class": f"{value.__module__}:{value.__qualname__}"}
+        if isinstance(value, tuple):  # e.g. a `tl.constexpr` parameter given a host-built aggregate
+            return [_encode_constant(v) for v in value]
         return value
 
     constants = {key: _encode_constant(value) for key, value in constants.items()}
@@ -897,7 +907,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
                     if not isinstance(cls, type):
                         raise RuntimeError(f"Expected class {class_key} for preload, got {type(cls).__name__}")
                     return cls
-            return convert_to_tuple_if_list(value)
+            if isinstance(value, list):  # JSON serializes tuples as lists
+                return tuple(_decode_constant(v) for v in value)
+            return value
 
         constexprs = {key: _decode_constant(value) for key, value in zip(constant_keys, constant_vals)}
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])

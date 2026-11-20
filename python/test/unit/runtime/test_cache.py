@@ -923,6 +923,92 @@ def test_preload_reference_constants(constant, monkeypatch):
     assert constants[(0, )] is constant
 
 
+def test_preload_tuple_constant(monkeypatch):
+    # A `tl.constexpr` parameter given a host-built aggregate is a tuple (class, *fields).
+    constant = (_PreloadAggregate, tl.constexpr(3), (7, _preload_function))
+    specialization_data = _serialize_constants({(0, ): constant})
+    (decoded, ) = _preload_constants(specialization_data, monkeypatch).values()
+    assert decoded[0] is _PreloadAggregate and decoded[1].value == 3
+    assert decoded[2][0] == 7 and decoded[2][1] is _preload_function
+
+
+def _make_policy(op):
+    """Aggregate classes from one factory share module, qualname and fields; only the
+    body of the `@triton.jit` method differs."""
+
+    @triton.aggregate
+    class _Policy:
+        bias: tl.constexpr
+
+        if op == "add":
+
+            @triton.jit
+            def apply(self):
+                return self.bias + 17
+        else:
+
+            @triton.jit
+            def apply(self):
+                return self.bias * 17
+
+    return _Policy
+
+
+@triton.jit
+def _policy_kernel(out, policy: tl.constexpr):
+    tl.store(out, policy.apply())
+
+
+def test_aggregate_constexpr_arg_keys_source_on_class_hash():
+    """A host aggregate passed to a `tl.constexpr` parameter is a tuple constant
+    (class, *fields): the compile cache key must track the class's method sources,
+    not only its name and the field values."""
+    from triton.compiler.compiler import ASTSource
+    from triton.runtime.jit import _flatten_aggregates
+
+    def source_hash(policy):
+        constants = {(1, ): _flatten_aggregates(policy)}
+        return ASTSource(_policy_kernel, {"out": "*i32", "policy": "constexpr"}, constants).hash()
+
+    added, multiplied = _make_policy("add"), _make_policy("mul")
+    assert source_hash(added(0)) == source_hash(added(0))  # equal values, distinct instances
+    assert source_hash(added(0)) != source_hash(added(1))  # a different field value
+    assert source_hash(added(0)) != source_hash(multiplied(0))  # a different method body
+
+
+AGGREGATE_INIT_GLOBAL = 17
+
+
+@triton.aggregate
+class _PlainInitAggregate:
+    bias: tl.constexpr
+
+    def __init__(self):
+        # A plain Python constructor, run at compile time when a kernel constructs
+        # the aggregate; the global it reads is not a constexpr.
+        self.bias = tl.constexpr(AGGREGATE_INIT_GLOBAL)
+
+
+@triton.jit
+def _plain_init_user(out):
+    tl.store(out, _PlainInitAggregate().bias)
+
+
+def test_aggregate_plain_init_global_change():
+    global AGGREGATE_INIT_GLOBAL
+    baseline = _plain_init_user.cache_key
+    assert ("AGGREGATE_INIT_GLOBAL", id(globals())) in _plain_init_user.used_global_vals
+
+    try:
+        AGGREGATE_INIT_GLOBAL = 29
+        _plain_init_user.hash = None
+        assert _plain_init_user.cache_key != baseline
+    finally:
+        AGGREGATE_INIT_GLOBAL = 17
+        _plain_init_user.hash = None
+    assert _plain_init_user.cache_key == baseline
+
+
 def test_preload_dtype_constant(monkeypatch):
     specialization_data = _serialize_constants({(0, ): tl.float32})
     assert _preload_constants(specialization_data, monkeypatch)[(0, )] == tl.float32
