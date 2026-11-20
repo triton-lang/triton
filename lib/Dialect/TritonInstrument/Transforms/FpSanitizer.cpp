@@ -847,52 +847,69 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
-// A fixed-base modular exponential in payload space.  For payload width N, set
-// k = ceil(N/4) and c = 1 + 2^k.  Then c^x mod 2^N has the exact closed form
-// below because all terms from the fourth binomial term onward vanish. This
-// preserves exp2(a + b) = exp2(a) * exp2(b) without a per-element
-// exponentiation loop. If N <= 8, then this has the maximal possible period
-// of 2^(N-2); if N > 8, then this has a large but non-maximal period of
-// 2^(N-k) = 2^floor(3N/4) instead.
+// Interpolate base^(u/stride) at multiples u of stride, where base = 3^stride.
+// The kth binomial term is delta^k / k! times u(u-stride)...(u-(k-1)*stride)
+// for delta = (base-1)/stride. Generate its coefficients on the host.
+SmallVector<uint64_t, 8> getExp2Coefficients(uint64_t base, unsigned stride,
+                                             unsigned degree) {
+  // delta is divisible by 4, enough to cancel the powers of two in each
+  // divisor k <= 7 before taking the modular inverse of its odd part.
+  uint64_t delta = (base - 1) / stride;
+  assert(degree <= 7 && delta % 4 == 0);
+  SmallVector<uint64_t, 8> coeffs{1};
+  for (unsigned k = 1; k <= degree; ++k) {
+    int twos = llvm::countr_zero(k);
+    coeffs.push_back(coeffs.back() * (delta >> twos) * invOddU64(k >> twos));
+  }
+  // Expand the Newton basis into powers of u for Horner evaluation.
+  for (unsigned k = degree; k > 0; --k) {
+    uint64_t node = (k - 1) * stride;
+    for (unsigned i = k; i <= degree; ++i)
+      coeffs[i - 1] -= node * coeffs[i];
+  }
+  return coeffs;
+}
+
+// Use 3^x modulo 2^w at every width. Its period is 2^(w-2), maximal
+// for an odd base, and truncating the payload commutes with exponentiation.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
   unsigned bitWidth = getIntBitwidth(xI.getType());
-  unsigned shift = (bitWidth + 3) / 4;
-  auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
-  auto shiftBase = getIntConstantLike(rewriter, loc, xI.getType(), shift);
-  auto shiftBase2 = getIntConstantLike(rewriter, loc, xI.getType(), 2 * shift);
+  assert(bitWidth >= 4 && bitWidth <= 64);
+  auto constant = [&](uint64_t value) {
+    return getUIntConstantLike(rewriter, loc, xI.getType(), value);
+  };
 
-  Value xMinusOne = arith::SubIOp::create(rewriter, loc, xI, one);
-  Value choose2Twice = arith::MulIOp::create(rewriter, loc, xI, xMinusOne);
-  Value choose2 = arith::ShRUIOp::create(rewriter, loc, choose2Twice, one);
+  // Split off the low s bits r. For stride = 2^s, base = 3^stride is
+  // 1 mod 2^(s+2) since each squaring after 3^2 = 9 adds one trailing
+  // zero to base-1. The kth binomial term vanishes when k*(s+2) >= w.
+  // Taking s = 2 for FP32 and s = 6 for FP64 limits the degree to seven.
+  unsigned lowBits = bitWidth > 32 ? 6 : 2;
+  unsigned stride = 1u << lowBits;
+  SmallVector<uint64_t, 7> powers{3};
+  for (unsigned i = 0; i < lowBits; ++i)
+    powers.push_back(powers.back() * powers.back());
 
-  Value term1 = arith::ShLIOp::create(rewriter, loc, xI, shiftBase);
-  Value term2 = arith::ShLIOp::create(rewriter, loc, choose2, shiftBase2);
-  Value result = arith::AddIOp::create(rewriter, loc, one, term1);
-  result = arith::AddIOp::create(rewriter, loc, result, term2);
+  // u = x-r modulo the period. Evaluate directly in u to avoid shifting it.
+  uint64_t period = uint64_t{1} << (bitWidth - 2);
+  Value u = arith::AndIOp::create(rewriter, loc, xI, constant(period - stride));
+  unsigned degree = (bitWidth - 1) / (lowBits + 2);
+  auto coeffs = getExp2Coefficients(powers.back(), stride, degree);
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, u);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
 
-  unsigned choose3Bits = bitWidth - 3 * shift;
-  uint64_t choose3InputMask = (uint64_t{1} << (choose3Bits + 1)) - 1;
-  auto choose3Mask =
-      getIntConstantLike(rewriter, loc, xI.getType(), choose3InputMask);
-  auto two = getIntConstantLike(rewriter, loc, xI.getType(), 2);
-  auto six = getIntConstantLike(rewriter, loc, xI.getType(), 6);
-  auto shiftBase3 = getIntConstantLike(rewriter, loc, xI.getType(), 3 * shift);
-
-  // Only the low choose3Bits bits of C(x, 3) survive the final shift. C(x, 3)
-  // modulo 2^choose3Bits has period 2^(choose3Bits + 1), so reducing x first
-  // keeps the products small.
-  Value xLow = arith::AndIOp::create(rewriter, loc, xI, choose3Mask);
-  Value xLowMinusOne = arith::SubIOp::create(rewriter, loc, xLow, one);
-  Value xLowMinusTwo = arith::SubIOp::create(rewriter, loc, xLow, two);
-  Value choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, xLow, xLowMinusOne);
-  choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, choose3Numerator, xLowMinusTwo);
-  Value choose3 = arith::DivUIOp::create(rewriter, loc, choose3Numerator, six);
-
-  Value term3 = arith::ShLIOp::create(rewriter, loc, choose3, shiftBase3);
-  result = arith::AddIOp::create(rewriter, loc, result, term3);
+  // Multiply by 3^r, one set bit at a time.
+  for (unsigned i = 0; i < lowBits; ++i) {
+    Value bit = arith::AndIOp::create(rewriter, loc, xI, constant(1u << i));
+    Value set = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                      bit, constant(0));
+    Value next =
+        arith::MulIOp::create(rewriter, loc, result, constant(powers[i]));
+    result = arith::SelectOp::create(rewriter, loc, set, next, result);
+  }
   return unembedToFloat(rewriter, loc, result, floatTy);
 }
 

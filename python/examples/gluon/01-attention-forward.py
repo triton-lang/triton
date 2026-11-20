@@ -770,9 +770,9 @@ def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
         o1_smem, o1_bar, epi_consumer = epi_consumer.acquire()
         tma.async_store(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
 
-        tma.store_wait(1)
+        tma.store_wait(1, deps=[o0_smem])
         mbarrier.arrive(o0_bar, count=1)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[o1_smem])
         mbarrier.arrive(o1_bar, count=1)
 
 

@@ -3,6 +3,7 @@
 from ..._core import builtin, uint64, _unwrap_if_constexpr
 from ... import _core as ttgl
 from ..._semantic import _check
+from .tma import store_wait
 
 __all__ = ["async_load", "async_store", "store_wait"]
 
@@ -96,9 +97,9 @@ def async_store(pointer, smem, num_elements, pred=True, _semantic=None):
     A false predicate neither copies nor commits a group. Call
     :func:`store_wait` before modifying or reusing the shared source. To
     access the global destination or publish it with a release operation,
-    first call ``store_wait(0, read_only=False)``. Issue and wait must execute
-    in the same warp-specialized region. The compiler inserts the shared
-    async-proxy fence needed to publish preceding shared-memory writes.
+    first call ``store_wait(0, read_only=False, deps=[smem])``. Issue and wait
+    must execute in the same warp-specialized region. The compiler inserts the
+    shared async-proxy fence needed to publish preceding shared-memory writes.
 
     Compiler dependencies and ConSan conservatively cover the entire source
     view, including for partial copies. GSan records the exact global write
@@ -128,19 +129,3 @@ def async_store(pointer, smem, num_elements, pred=True, _semantic=None):
         ttgl.device_assert(disabled.__or__(aligned, _semantic=_semantic),
                            "bulk.async_store destination must be 16-byte aligned", _semantic=_semantic)
     _semantic.builder.create_async_bulk_copy_local_to_global(pointer.handle, smem.handle, num_bytes, pred.handle)
-
-
-@builtin
-def store_wait(pendings, read_only=True, _semantic=None):
-    """Wait for committed bulk and TMA store groups in the current region.
-
-    Args:
-        pendings: Maximum number of committed groups allowed to remain pending.
-        read_only: If True, wait only for shared-memory reads to complete, so
-            the source can be reused. If False, also wait for global writes
-            to complete before accessing or publishing the destination.
-            Defaults to True.
-    """
-    pendings = _unwrap_if_constexpr(pendings)
-    read_only = _unwrap_if_constexpr(read_only)
-    _semantic.builder.create_async_tma_store_wait(pendings, read_only)
