@@ -968,7 +968,86 @@ def test_mir_swap_enable_misched_requires_swap_mir(tmp_path):
     assert "TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR" in result.stderr
 
 
-def _run_kernel_script(script_file, env_overrides):
+# Schedulers for TRITON_MIR_SCHEDULER. Written to a temp dir and imported by
+# MODULE:CLASS, so they must stand alone.
+_SCHEDULER_MODULE = '''
+import json
+import os
+
+from triton.backends.amd.compiler import MIRScheduler
+
+
+def _record(mir, dag, dump_file_id, returned):
+    path = os.environ.get("MIR_SCHEDULER_RECORD")
+    if path is None:
+        return
+    with open(path, "a") as record_file:
+        record_file.write(
+            json.dumps({"dump_file_id": dump_file_id, "mir": mir, "dag": dag, "returned": returned}) + "\\n")
+
+
+class IdentityScheduler(MIRScheduler):
+
+    def schedule(self, mir, dag, dump_file_id):
+        _record(mir, dag, dump_file_id, mir)
+        return mir
+
+
+class NopInsertingScheduler(MIRScheduler):
+    """Prepends S_NOP to bb.0 -- legal at any point, and visible in the AMDGCN."""
+
+    def schedule(self, mir, dag, dump_file_id):
+        lines = mir.split("\\n")
+        for i, line in enumerate(lines):
+            if not line.lstrip().startswith("bb.0"):
+                continue
+            # Skip the block's liveins/successors directives.
+            at = i + 1
+            while lines[at].lstrip().startswith(("liveins:", "successors:")) or not lines[at].strip():
+                at += 1
+            indent = lines[at][:len(lines[at]) - len(lines[at].lstrip())]
+            lines.insert(at, indent + "S_NOP 7")
+            break
+        else:
+            raise AssertionError("MIR has no bb.0")
+        out = "\\n".join(lines)
+        _record(mir, dag, dump_file_id, out)
+        return out
+
+
+def _variant():
+    return os.environ.get("MIR_SCHEDULER_VARIANT", "identity")
+
+
+class _VariantMixin:
+    """Emits identity or S_NOP depending on MIR_SCHEDULER_VARIANT."""
+
+    def schedule(self, mir, dag, dump_file_id):
+        if _variant() == "nop":
+            return NopInsertingScheduler().schedule(mir, dag, dump_file_id)
+        return IdentityScheduler().schedule(mir, dag, dump_file_id)
+
+
+class KeyedVariantScheduler(_VariantMixin, MIRScheduler):
+
+    def cache_key(self):
+        return _variant()
+
+
+class UnkeyedVariantScheduler(_VariantMixin, MIRScheduler):
+    """Keeps the default cache_key, so a behaviour change is invisible to the cache."""
+'''
+
+
+def _write_scheduler_module(tmp_path):
+    """Install the scheduler module on a path importable by subprocesses."""
+    module_dir = tmp_path / "schedulers"
+    module_dir.mkdir()
+    (module_dir / "mir_schedulers.py").write_text(_SCHEDULER_MODULE)
+    return module_dir
+
+
+def _run_kernel_script(script_file, env_overrides, syspath=None, expect_success=True):
     """Run a kernel script in a subprocess with a deterministic compilation env."""
     import os
     import subprocess
@@ -979,9 +1058,13 @@ def _run_kernel_script(script_file, env_overrides):
     # Line info perturbs the IR hash, and with it the name the dump is filed under.
     env["TRITON_DISABLE_LINE_INFO"] = "1"
     env.update(env_overrides)
+    if syspath is not None:
+        inherited = [env["PYTHONPATH"]] if env.get("PYTHONPATH") else []
+        env["PYTHONPATH"] = os.pathsep.join([str(syspath)] + inherited)
 
     result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=240)
-    assert result.returncode == 0, f"kernel script should succeed. stderr: {result.stderr[:2000]}"
+    if expect_success:
+        assert result.returncode == 0, f"kernel script should succeed. stderr: {result.stderr[:2000]}"
     return result
 
 
@@ -1067,3 +1150,138 @@ def test_kernarg_preload_survives_mir_round_trip(tmp_path):
         "Round-tripped MIR should request the same kernel descriptor, including kernarg preload"
     assert _normalized_instructions(swapped_asm) == _normalized_instructions(clean_asm), \
         "Round-tripped MIR should produce the same instruction sequence"
+
+
+def test_mir_scheduler_identity_matches_swap(tmp_path):
+    """An identity scheduler must emit exactly what swapping the same MIR emits."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
+    module_dir = _write_scheduler_module(tmp_path)
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+
+    _run_kernel_script(script_file, {"TRITON_DUMP_MIR": str(dump_dir)})
+    assert len(list(dump_dir.glob("simple_kernel_*.txt"))) == 1
+
+    swapped = _run_kernel_script(script_file, {
+        "TRITON_SWAP_MIR": str(dump_dir),
+        "AMDGCN_ENABLE_DUMP": "1",
+    })
+    scheduled = _run_kernel_script(script_file, {
+        "TRITON_MIR_SCHEDULER": "mir_schedulers:IdentityScheduler",
+        "AMDGCN_ENABLE_DUMP": "1",
+    }, syspath=module_dir)
+
+    assert _amdgcn_from_stdout(scheduled.stdout) == _amdgcn_from_stdout(swapped.stdout), \
+        "identity scheduler should round-trip to the same AMDGCN as TRITON_SWAP_MIR"
+
+
+def test_mir_scheduler_receives_mir_and_dag(tmp_path):
+    """The scheduler is called once per kernel, with the MIR, the DAG, and the dump id."""
+    import json
+    import re
+
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
+    module_dir = _write_scheduler_module(tmp_path)
+    record = tmp_path / "record.jsonl"
+
+    _run_kernel_script(script_file, {
+        "TRITON_MIR_SCHEDULER": "mir_schedulers:IdentityScheduler",
+        "MIR_SCHEDULER_RECORD": str(record),
+    }, syspath=module_dir)
+
+    assert record.exists(), "scheduler should have been called"
+    calls = [json.loads(line) for line in record.read_text().splitlines()]
+    assert len(calls) == 1, f"expected one schedule() call, got {len(calls)}"
+    call = calls[0]
+
+    # Same id TRITON_DUMP_MIR names its files after, so both routes key alike.
+    assert re.fullmatch(r"simple_kernel_[0-9a-f]{64}", call["dump_file_id"]), call["dump_file_id"]
+
+    assert call["mir"].strip().startswith("---") and "body:" in call["mir"]
+    assert "========== SCHEDULING DAG ==========" not in call["mir"], \
+        "the DAG is handed over separately, not embedded in the MIR"
+    assert re.search(r'^region \d+ \d+$', call["dag"], re.MULTILINE)
+    assert re.search(r'^node \d+ \S+ \S+', call["dag"], re.MULTILINE)
+    assert re.search(r'^edge \d+ \d+ (Data|Anti|Output|Memory|Barrier)\b', call["dag"], re.MULTILINE)
+
+
+def test_mir_scheduler_output_is_compiled(tmp_path):
+    """What the scheduler returns -- not the MIR it was given -- reaches the code generator."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_COMPLEX_KERNEL_SCRIPT)
+    module_dir = _write_scheduler_module(tmp_path)
+
+    identity = _run_kernel_script(script_file, {
+        "TRITON_MIR_SCHEDULER": "mir_schedulers:IdentityScheduler",
+        "AMDGCN_ENABLE_DUMP": "1",
+    }, syspath=module_dir)
+    modified = _run_kernel_script(script_file, {
+        "TRITON_MIR_SCHEDULER": "mir_schedulers:NopInsertingScheduler",
+        "AMDGCN_ENABLE_DUMP": "1",
+    }, syspath=module_dir)
+
+    identity_asm = _amdgcn_from_stdout(identity.stdout)
+    modified_asm = _amdgcn_from_stdout(modified.stdout)
+    assert identity_asm != modified_asm, "the rescheduled MIR should change the AMDGCN"
+    # The hazard recognizer emits s_nop on its own, so count rather than test membership.
+    assert modified_asm.count("s_nop") > identity_asm.count("s_nop")
+    # The script checks its own numerics, so a zero exit covers end to end correctness.
+
+
+def test_mir_scheduler_rejects_swap_mir(tmp_path):
+    """TRITON_MIR_SCHEDULER and TRITON_SWAP_MIR are two sources for the same MIR."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
+    module_dir = _write_scheduler_module(tmp_path)
+
+    result = _run_kernel_script(script_file, {
+        "TRITON_MIR_SCHEDULER": "mir_schedulers:IdentityScheduler",
+        "TRITON_SWAP_MIR": str(tmp_path),
+    }, syspath=module_dir, expect_success=False)
+    assert result.returncode != 0
+    assert "TRITON_MIR_SCHEDULER and TRITON_SWAP_MIR" in result.stderr
+
+
+def _run_cached(script_file, module_dir, cache_dir, scheduler, variant):
+    """Compile with the cache enabled, so a stale hit is observable.
+
+    A cache hit skips make_amdgcn, and with it the AMDGCN dump, so the marker's
+    presence says whether this run recompiled.
+    """
+    result = _run_kernel_script(
+        script_file, {
+            "TRITON_ALWAYS_COMPILE": "0",
+            "TRITON_CACHE_DIR": str(cache_dir),
+            "TRITON_MIR_SCHEDULER": f"mir_schedulers:{scheduler}",
+            "MIR_SCHEDULER_VARIANT": variant,
+            "AMDGCN_ENABLE_DUMP": "1",
+        }, syspath=module_dir)
+    return result.stdout
+
+
+def test_mir_scheduler_cache_key_tracks_the_scheduler(tmp_path):
+    """A scheduler that changes its output must move the cache key, or the hit is stale."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
+    module_dir = _write_scheduler_module(tmp_path)
+    marker = "// -----// AMDGCN Dump //----- //"
+
+    keyed_dir = tmp_path / "cache_keyed"
+    keyed_identity = _run_cached(script_file, module_dir, keyed_dir, "KeyedVariantScheduler", "identity")
+    keyed_nop = _run_cached(script_file, module_dir, keyed_dir, "KeyedVariantScheduler", "nop")
+    assert marker in keyed_nop, "cache_key() moved with the schedule, so the second run should recompile"
+    identity_asm = _amdgcn_from_stdout(keyed_identity)
+    nop_asm = _amdgcn_from_stdout(keyed_nop)
+    assert nop_asm != identity_asm
+    assert nop_asm.count("s_nop") > identity_asm.count("s_nop")
+
+    # Control: same behaviour change, default cache_key. The cache cannot see it,
+    # so the second run never reaches the scheduler and returns the first binary.
+    unkeyed_dir = tmp_path / "cache_unkeyed"
+    unkeyed_identity = _run_cached(script_file, module_dir, unkeyed_dir, "UnkeyedVariantScheduler", "identity")
+    unkeyed_nop = _run_cached(script_file, module_dir, unkeyed_dir, "UnkeyedVariantScheduler", "nop")
+    assert marker in unkeyed_identity, "the first run should compile"
+    assert marker not in unkeyed_nop, \
+        "default cache_key() cannot see a behaviour change, so the second run should hit the cache"
