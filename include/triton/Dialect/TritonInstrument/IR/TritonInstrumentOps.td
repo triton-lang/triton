@@ -245,8 +245,7 @@ def TTI_ExperimentalGSanTensorDescAccessOp
   let description = [{
     Passes the native tensor descriptor and its coordinates directly to the
     GSan runtime, which decodes the descriptor and iterates over the tile.
-    Im2col loads also carry the spatial offsets and destination memdesc so each
-    issuing CTA can instrument its own TMA messages.
+    Im2col loads also carry the spatial offsets and destination memdesc.
   }];
   let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
                    Variadic<I16>:$offsets, Optional<TTG_MemDescType>:$result,
