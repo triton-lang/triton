@@ -129,6 +129,30 @@ class TestMXScaleTensor(MXBaseTest):
         assert ((data >= 0) & (data <= 254)).all(), "Generated data should be between 0 and 254"
         assert (data != 255).all(), "Generated data should not include NaN encoding (255)"
 
+    def test_random_bounded(self, device):
+        torch.manual_seed(0)
+        values = MXScaleTensor(size=4096, device=device).random(low=3.0, high=4.0).to(torch.float32)
+        assert (values < 3.0).sum().item() == 0
+        assert (values > 4.0).sum().item() == 0
+        assert (values == 4.0).all()
+
+    def test_random_bounded_below_one(self, device):
+        torch.manual_seed(0)
+        low, high = 1 / 128, 0.5
+        values = MXScaleTensor(size=4096, device=device).random(low=low, high=high).to(torch.float32)
+        assert (values < low).sum().item() == 0
+        assert (values > high).sum().item() == 0
+
+    def test_random_unbounded(self, device):
+        data = MXScaleTensor(size=(1000, ), device=device).random(low=None, high=None)
+        assert ((data.data >= 0) & (data.data <= 254)).all()
+
+    def test_random_invalid_range(self, device):
+        with pytest.raises(AssertionError, match="Low must be less than or equal to high"):
+            MXScaleTensor(size=(1, ), device=device).random(low=5.0, high=4.0)
+        with pytest.raises(AssertionError, match="Low must be less than or equal to high"):
+            MXScaleTensor(size=(1, ), device=device).random(low=5.0, high=5.5)
+
     @pytest.mark.parametrize("K, N", [(64, 128), (128, 256)])
     def test_roundtrip(self, K, N, device):
         tensor = MXScaleTensor(size=(K, N), device=device).random()
