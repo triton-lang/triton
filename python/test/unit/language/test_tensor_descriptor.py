@@ -1328,9 +1328,6 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
 
-    if BLOCK_K < K and is_cuda() and torch.cuda.get_device_capability(0)[0] != 10:
-        pytest.skip("Currently broken on hopper")
-
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
 
     dtype_src_str = "float8e5"

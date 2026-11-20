@@ -91,6 +91,23 @@ tt.func private @experimental_lock_release(
 
 // -----
 
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @uncontended_lock
+// CHECK-NOT: cmpxchg
+// CHECK: nvvm.barrier
+// CHECK: llvm.cond_br
+// CHECK: nvvm.barrier
+// CHECK-NOT: atom.global.release
+// CHECK: llvm.return
+tt.func private @uncontended_lock(%lock: !tt.ptr<i32>, %pred: i1) {
+  tti.experimental_lock_acquire %lock, %pred {uncontended} : !tt.ptr<i32>
+  tti.experimental_lock_release %lock, %pred {uncontended} : !tt.ptr<i32>
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
@@ -205,13 +222,14 @@ tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: @lock_acquire
-  // CHECK: llvm.cmpxchg {{.*}} syncscope("device") acquire acquire
+  // CHECK: llvm.cmpxchg {{.*}} syncscope("block") acquire acquire
   // PTX-LABEL: .visible .entry lock_acquire(
-  // PTX: atom.acquire.gpu.global.cas.b32
+  // PTX: atom.acquire.cta.global.cas.b32
   // PTX: bar.sync
+  // PTX: atom.global.release.cta.exch.b32
   tt.func public @lock_acquire(%lock: !tt.ptr<i32>, %pred: i1) {
-    tti.experimental_lock_acquire %lock, %pred : !tt.ptr<i32>
-    tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+    tti.experimental_lock_acquire %lock, %pred {ctaLocal} : !tt.ptr<i32>
+    tti.experimental_lock_release %lock, %pred {ctaLocal} : !tt.ptr<i32>
     tt.return
   }
 }

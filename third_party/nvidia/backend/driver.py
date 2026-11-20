@@ -200,6 +200,21 @@ TMA_TF32 = 11
 TMA_B4X16_P64 = 14
 
 
+def _contiguous_bytes_at_base(base):
+    # Count consecutive bytes in the real tensor. Gaps between rows may be unmapped.
+    shape = getattr(base, "shape", None)
+    if shape is None or not hasattr(base, "stride") or 0 in shape:
+        return 0
+    elements = 1
+    for dim in reversed(range(len(shape))):
+        if shape[dim] == 1:
+            continue
+        if base.stride(dim) != elements:
+            break
+        elements *= shape[dim]
+    return elements * base.dtype.itemsize
+
+
 def make_tensordesc_arg(arg, metadata, _):
     if metadata is None:
         return decompose_descriptor(arg)
@@ -244,6 +259,7 @@ def make_tensordesc_arg(arg, metadata, _):
         )
     else:
         # Tiled mode - use existing tiled descriptor fill function
+        allow_small_alloc = getattr(arg, "allow_small_alloc", False)
         cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
             arg.base.data_ptr(),
             swizzle,
@@ -253,6 +269,8 @@ def make_tensordesc_arg(arg, metadata, _):
             expanded_shape,
             strides,
             padding,
+            allow_small_alloc,
+            _contiguous_bytes_at_base(arg.base) if allow_small_alloc else 0,
         )
 
     return [cu_tensor_map, *shape, *strides]

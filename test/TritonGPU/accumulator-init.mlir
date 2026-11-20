@@ -43,17 +43,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: @if_after_mma
 // CHECK-DAG: %[[C0_TENSOR:.+]] = arith.constant dense<0.000000e+00>
-// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
 // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
 // CHECK: scf.for {{.*}} iter_args(%[[ACC:.+]] = %[[C0_TENSOR]], %[[USE_ACC:.+]] = %[[FALSE]])
 // CHECK: %[[CND:.+]] = arith.cmpi
 // CHECK: %[[ACC_NEXT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, %[[ACC]], %[[USE_ACC]]
-// CHECK: %[[USE_ACC_NEXT:.*]] = arith.select %[[CND]], %[[FALSE]], %[[TRUE]]
-// CHECK: scf.if %[[CND]]
-// CHECK: scf.yield %[[ACC_NEXT]]
+// CHECK: %[[RESET:.+]] = scf.if %[[CND]]
+// CHECK: scf.yield %[[C0_TENSOR]]
 // CHECK: else
 // CHECK: scf.yield %[[ACC_NEXT]]
-// CHECK: scf.yield {{.*}}, %[[USE_ACC_NEXT]]
+// CHECK: scf.yield %[[RESET]]
   tt.func @if_after_mma(%A: !ttg.memdesc<128x64xf16, #shared, #smem>, %B: !ttg.memdesc<64x16xf16, #shared1, #smem>, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %c0_i32 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
@@ -78,11 +76,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: scf.for {{.*}} iter_args(%[[ACC:.+]] = %[[C0_TENSOR]], %[[USE_ACC:.+]] = %[[FALSE]])
 // CHECK: %[[CND:.+]] = arith.cmpi
 // CHECK: %[[ACC_NEXT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, %[[ACC]], %[[USE_ACC]]
-// CHECK: scf.if %[[CND]]
+// CHECK: %[[RESET:.+]] = scf.if %[[CND]]
 // CHECK: scf.yield %[[ACC_NEXT]]
 // CHECK: else
-// CHECK: scf.yield %[[ACC_NEXT]]
-// CHECK: scf.yield {{.*}}, %[[CND]]
+// CHECK: scf.yield %[[C0_TENSOR]]
+// CHECK: scf.yield %[[RESET]]
   tt.func @if_after_mma_invert(%A: !ttg.memdesc<128x64xf16, #shared, #smem>, %B: !ttg.memdesc<64x16xf16, #shared1, #smem>, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %c0_i32 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
@@ -165,13 +163,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: @sel_after_mma
 // CHECK-DAG: %[[C0_TENSOR:.+]] = arith.constant dense<0.000000e+00>
-// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
 // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
 // CHECK: scf.for {{.*}} iter_args(%[[ACC:.+]] = %[[C0_TENSOR]], %[[USE_ACC:.+]] = %[[FALSE]])
 // CHECK: %[[CND:.+]] = arith.cmpi
 // CHECK: %[[ACC_NEXT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, %[[ACC]], %[[USE_ACC]]
-// CHECK: %[[USE_ACC_NEXT:.*]] = arith.select %[[CND]], %[[FALSE]], %[[TRUE]]
-// CHECK: scf.yield {{.*}}, %[[USE_ACC_NEXT]]
+// CHECK: %[[RESET:.+]] = arith.select %[[CND]], %[[C0_TENSOR]], %[[ACC_NEXT]]
+// CHECK: scf.yield %[[RESET]]
   tt.func @sel_after_mma(%A: !ttg.memdesc<128x64xf16, #shared, #smem>, %B: !ttg.memdesc<64x16xf16, #shared1, #smem>, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %c0_i32 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
@@ -254,7 +251,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL: @two_ifs_after_mma
 // CHECK-DAG: %[[C0_TENSOR:.+]] = arith.constant dense<0.000000e+00>
-// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
 // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
 // CHECK: scf.for {{.*}} iter_args(%[[ACC:.+]] = %[[C0_TENSOR]], %[[USE_ACC:.+]] = %[[FALSE]])
 // CHECK: %[[CND:.+]] = arith.cmpi
@@ -263,12 +259,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: scf.yield %[[C0_TENSOR]]
 // CHECK: else
 // CHECK: scf.yield %[[ACC_NEXT]]
-// CHECK: %[[USE_ACC_NEXT:.*]] = arith.select %[[CND]], %[[FALSE]], %[[TRUE]]
-// CHECK: scf.if %[[CND]]
-// CHECK: scf.yield %[[ACC_CND]]
+// CHECK: %[[RESET:.+]] = scf.if %[[CND]]
+// CHECK: scf.yield %[[C0_TENSOR]]
 // CHECK: else
 // CHECK: scf.yield %[[ACC_CND]]
-// CHECK: scf.yield {{.*}}, %[[USE_ACC_NEXT]]
+// CHECK: scf.yield %[[RESET]]
   tt.func @two_ifs_after_mma(%A: !ttg.memdesc<128x64xf16, #shared, #smem>, %B: !ttg.memdesc<64x16xf16, #shared1, #smem>, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %ext: i32, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %c0_i32 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
@@ -335,7 +330,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
 // CHECK-LABEL: @non_cond_override
-// CHECK: %[[ACC_NEXT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, {{.*}}, %arg{{.*}} : !ttg.memdesc
+// CHECK-DAG: %[[ZERO:.+]] = arith.constant dense<0.000000e+00>
+// CHECK-DAG: %[[FALSE:.+]] = arith.constant false
+// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
+// CHECK: scf.for {{.*}} iter_args(%[[ACC:.+]] = %[[ZERO]], %[[USE_ACC:.+]] = %[[FALSE]])
+// CHECK: %[[ACC_NEXT:.+]] = ttng.warp_group_dot {{.*}}, {{.*}}, %[[ACC]], %[[USE_ACC]]
   tt.func @non_cond_override(%A: !ttg.memdesc<128x64xf16, #shared, #smem>, %B: !ttg.memdesc<64x16xf16, #shared1, #smem>, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %inc: tensor<64x16xi32, #blocked> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma1> {
     %c0_i32 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma1>
@@ -345,7 +344,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %17 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst_2) -> (tensor<128x16xf32, #mma1>)  : i32 {
       %acc = ttng.warp_group_dot %A, %B, %arg4 : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x16xf16, #shared1, #smem> -> tensor<128x16xf32, #mma1>
       %acc_ = arith.addf %acc, %cst_3 : tensor<128x16xf32, #mma1>
-      // CHECK: scf.yield {{.*}}, %true
+      // CHECK: scf.yield {{.*}}, %[[TRUE]]
       scf.yield %acc_: tensor<128x16xf32, #mma1>
     }
     tt.return %17 : tensor<128x16xf32, #mma1>

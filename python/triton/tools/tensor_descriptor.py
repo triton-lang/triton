@@ -12,6 +12,8 @@ class TensorDescriptor:
     padding: str = "zero"
     round_f32_to_tf32: bool = False
     fp6_format: str | None = None
+    # Allow small-allocation TMA mode when a virtual shape overstates the backing memory.
+    allow_small_alloc: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)

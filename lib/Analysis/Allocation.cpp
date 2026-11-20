@@ -162,7 +162,7 @@ std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
   if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
     return handoff.getSource().getBlock() &
            ~handoff.getDestination().getBlock();
-  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+  if (!isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
   if (op->getNumResults() == 0)
     return std::nullopt;
@@ -342,9 +342,6 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.contains(alloc))
             allocation->addAlias(value, alloc);
-          else if (auto argument = dyn_cast<BlockArgument>(alloc);
-                   argument && argument.getOwner()->getParentOp() == operation)
-            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

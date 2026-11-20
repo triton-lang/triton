@@ -251,6 +251,21 @@ def TT_ApproxDivFOp
   let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_ClMulOp : TT_Op<"clmul", [Elementwise, Commutative,
+                                 SameOperandsAndResultType, Pure]> {
+  let summary = "Low N bits of the carry-less product of two N-bit integers";
+
+  let description = [{
+        Multiplies the operands as binary polynomials over GF(2), replacing
+        addition with XOR, and returns the low N bits. Signed operands are
+        interpreted by their bit patterns. Tensor operands operate elementwise.
+    }];
+
+  let arguments = (ins TT_IntLike:$x, TT_IntLike:$y);
+  let results = (outs TT_IntLike:$result);
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
                                      SameOperandsAndResultType,
                                      Pure]> {
@@ -457,6 +472,7 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  AtomicOpInterface,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">,
@@ -903,6 +919,7 @@ def TT_ReduceOp: TT_Op<"reduce",
     let description = [{
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
     let results = (outs Variadic<TT_Type>:$result);
@@ -944,6 +961,7 @@ def TT_ScanOp: TT_Op<"scan",
     let description = [{
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis, BoolAttr:$reverse);
     let results = (outs Variadic<TT_Tensor>:$result);
@@ -976,6 +994,7 @@ def TT_MapElementwiseOp: TT_Op<"map_elementwise", [SameOperandsAndResultEncoding
     let description = [{
       The scalar function and its callees may contain memory-effect-free
       operations, `llvm.intr.assume`, `tt.assert`, and `tt.print`.
+      These operations must lower without shared-memory scratch.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$pack);
     let results = (outs Variadic<TT_Tensor>:$result);
@@ -1455,7 +1474,7 @@ def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [TT_DescriptorStoreLikeOpIn
   let hasVerifier = 1;
 }
 
-def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOpInterface]> {
+def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [AtomicOpInterface, TT_DescriptorStoreLikeOpInterface]> {
   let summary = "performs a reducing store operation based on a descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA store operation on targets supporting it.
@@ -1474,6 +1493,12 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    ::mlir::Value getPtr() { return getDesc(); }
+    ::mlir::triton::MemSemantic getMemSemantic() {
+      return ::mlir::triton::MemSemantic::RELAXED;
+    }
+  }];
 }
 
 def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {

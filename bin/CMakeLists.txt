@@ -1,6 +1,11 @@
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
+add_library(TritonToolRegistration OBJECT RegisterTritonDialects.cpp)
+target_compile_options(TritonToolRegistration PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
+target_link_libraries(TritonToolRegistration PRIVATE ${triton_libs})
+
 add_executable(triton-opt triton-opt.cpp)
+target_sources(triton-opt PRIVATE $<TARGET_OBJECTS:TritonToolRegistration>)
 
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
@@ -21,6 +26,7 @@ target_link_libraries(triton-opt PRIVATE
 mlir_check_all_link_libraries(triton-opt)
 
 add_executable(triton-reduce triton-reduce.cpp)
+target_sources(triton-reduce PRIVATE $<TARGET_OBJECTS:TritonToolRegistration>)
 mlir_check_all_link_libraries(triton-reduce)
 target_compile_options(triton-reduce PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 
@@ -42,6 +48,7 @@ target_link_libraries(triton-reduce PRIVATE
 mlir_check_all_link_libraries(triton-reduce)
 
 add_executable(triton-lsp triton-lsp.cpp)
+target_sources(triton-lsp PRIVATE $<TARGET_OBJECTS:TritonToolRegistration>)
 
 target_compile_options(triton-lsp PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-lsp PRIVATE
@@ -78,6 +85,7 @@ export_executable_symbols_for_plugins(triton-llvm-opt)
 
 
 add_executable(triton-tensor-layout triton-tensor-layout.cpp)
+target_sources(triton-tensor-layout PRIVATE $<TARGET_OBJECTS:TritonToolRegistration>)
 target_compile_options(triton-tensor-layout PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-tensor-layout PRIVATE
   ${triton_libs}

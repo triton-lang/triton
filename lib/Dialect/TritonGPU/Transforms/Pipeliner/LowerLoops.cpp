@@ -734,21 +734,26 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
 
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma, int mmaSelfLatency,
-                             Value alloc, int phaseArgIdx,
-                             int barrierIdxArgIdx) {
+                             Value alloc, int phaseArgIdx, int barrierIdxArgIdx,
+                             bool multibufferAccumulator) {
+  bool hasTMAOperandPipeline = false;
   auto isLoadToBePipelined = [&](Operation *op) {
-    return schedule[mma].first > schedule[op].first;
+    bool pipelined = schedule[mma].first > schedule[op].first;
+    if (pipelined && isTMALoad(op) && canPipelineTMALoad(op) &&
+        !mustLoadToRegisters(op))
+      hasTMAOperandPipeline = true;
+    return pipelined;
   };
 
   llvm::SmallDenseSet<Operation *> syncCandidates;
 
   for (auto user : alloc.getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getBlock() != mma->getBlock()) {
-        continue;
-      }
-      syncCandidates.insert(load);
-    }
+    // A multibuffered reset switches to another buffer. A single-buffer reset
+    // must wait for the outstanding MMA, just like a read of its result.
+    if ((isa<ttng::TMEMLoadOp>(user) ||
+         (!multibufferAccumulator && isa<ttng::TMEMStoreOp>(user))) &&
+        user->getBlock() == mma->getBlock())
+      syncCandidates.insert(user);
   }
 
   ttng::MMAv5PipelineableOperandsHelper mmaPipeHelper(mma, forOp,
@@ -838,7 +843,13 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
-  ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  auto mainWait =
+      ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  // Without a TMA operand pipeline, the peer has no paired cta mbarrier
+  // to prevent the leader from reusing a completion slot before its wait.
+  // So we conservatively insert a cluster barrier here
+  if (mma.getTwoCtas() && !hasTMAOperandPipeline)
+    ttng::ClusterBarrierOp::create(builder);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
@@ -851,7 +862,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         continue;
       }
       auto [loadStage, loadCluster] = schedule[topLevelUser];
-      if (loadStage < mainWaitStage) {
+      if (schedule.isOpBefore(topLevelUser, mainWait)) {
         builder.setStageCluster({loadStage, loadCluster});
         builder.setInsertionPoint(load);
         ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
@@ -1174,7 +1185,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
       .append(newYieldOperands);
 
   createBarrierAndWaitOps(forOp, schedule, mma, mmaSelfLatency, alloc,
-                          phaseArgIdx, barrierIdxArgIdx);
+                          phaseArgIdx, barrierIdxArgIdx,
+                          /*multibufferAccumulator=*/tmemUseNumStages > 1);
 
   if (mma.getTwoCtas())
     forOp = protectTwoCTAAccumulatorReuse(forOp, schedule, mma, alloc,
