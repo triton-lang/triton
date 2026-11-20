@@ -314,7 +314,7 @@ struct ScaledUpcastFp4OpPattern
 
         results.append(converted.begin(), converted.end());
       }
-    } else if (targetInfo.supportsHwScaledUpcast()) {
+    } else if (targetInfo.supportsCvtScaleF32Pk()) {
       for (int i = 0; i < inputVals.size(); i += 4) {
         int scaleIdx = groupScaleReg[i / 4];
         SmallVector<Value> converted =
@@ -329,7 +329,6 @@ struct ScaledUpcastFp4OpPattern
     } else {
       // Software emulation: upcast fp4 via LUT, then multiply by scale.
       bool toFp16 = elemType.isF16();
-      auto isaFamily = targetInfo.getISAFamily();
       for (size_t i = 0; i < inputVals.size(); i += 4) {
         Value packedVec = b.undef(vec_ty(i8_ty, 4));
         for (int j : llvm::seq(4))
@@ -337,7 +336,7 @@ struct ScaledUpcastFp4OpPattern
               b.insert_element(packedVec, inputVals[i + j], b.i32_val(j));
 
         SmallVector<Value> v8vals =
-            upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily);
+            upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, targetInfo);
 
         Value scaleF32 = scaleToF32(
             rewriter, loc, scaleVals[groupScaleReg[i / 4]], preShifted);
@@ -408,8 +407,7 @@ struct ScaledUpcastFp8OpPattern
     // hardware conversion paths.
     if (usePk8)
       assert(inputVals.size() % 8 == 0);
-    else if (targetInfo.supportsHwScaledUpcast() &&
-             !targetInfo.supportsCvtPkScalePk8())
+    else if (targetInfo.supportsCvtScaleF32Pk())
       assert(inputVals.size() % 4 == 0);
 
     if (usePk8) {
@@ -445,8 +443,7 @@ struct ScaledUpcastFp8OpPattern
 
         results.append(converted.begin(), converted.end());
       }
-    } else if (targetInfo.supportsHwScaledUpcast() &&
-               !targetInfo.supportsCvtPkScalePk8()) {
+    } else if (targetInfo.supportsCvtScaleF32Pk()) {
       for (int i = 0; i < inputVals.size(); i += 4) {
         SmallVector<Value> converted =
             elemType.isF16()

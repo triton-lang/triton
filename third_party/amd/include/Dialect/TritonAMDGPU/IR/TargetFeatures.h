@@ -90,6 +90,15 @@ public:
   bool supportsCvtPkScalePk8() const;
   bool supportsCvtPkScalePk8Upcast() const;
   bool supportsCvtPkScalePk8Block16() const;
+  // Unscaled v_cvt_[pk_]{f32_fp8,f32_bf8,fp8_f32,bf8_f32} operating on FNUZ fp8
+  // formats.
+  bool supportsCvtFp8Fnuz() const;
+  // The same unscaled instructions operating on OCP fp8 formats.
+  bool supportsCvtFp8Ocp() const;
+  // Scaled v_cvt_scalef32_pk_* converting two OCP fp8 values per instruction.
+  bool supportsCvtScaleF32Pk() const;
+  // Packed v_cvt_pk_{f16,bf16}_f32 RTNE downcasts.
+  bool supportsCvtPkFp32ToFp16Bf16() const;
   ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;

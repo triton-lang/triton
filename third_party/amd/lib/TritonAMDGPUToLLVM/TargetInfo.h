@@ -218,6 +218,12 @@ public:
   bool supportsCvtPkScalePk8Block16() const {
     return targetFeatures.supportsCvtPkScalePk8Block16();
   }
+  bool supportsCvtFp8Fnuz() const {
+    return targetFeatures.supportsCvtFp8Fnuz();
+  }
+  bool supportsCvtScaleF32Pk() const {
+    return targetFeatures.supportsCvtScaleF32Pk();
+  }
   bool supportsHwScaledUpcast() const {
     return targetFeatures.supportsHwScaledUpcast();
   }
