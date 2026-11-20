@@ -194,12 +194,14 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  // arith.remsi(x, N): strip the remainder and record N as the modulus.
-  // N must be a positive compile-time constant.
-  if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
-    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs());
-      // Nested modulus: keep the full remsi as the expression root.
+  // For power-of-two N the low bits give the residue for either signedness.
+  Operation *rem = indexValue.getDefiningOp();
+  if (isa_and_nonnull<arith::RemSIOp, arith::RemUIOp>(rem)) {
+    if (auto mod = getConstantIntValue(rem->getOperand(1));
+        mod && *mod > 0 &&
+        (isa<arith::RemSIOp>(rem) || llvm::isPowerOf2_64(*mod))) {
+      auto result = analyzeBufferIndex(rem->getOperand(0));
+      // Nested modulus: keep the full remainder as the expression root.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
       result.modulus = *mod;

@@ -558,64 +558,45 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   IRRewriter builder(forOp);
   builder.setInsertionPoint(forOp);
   Location loc = forOp.getLoc();
-  // Create a counter to index into the allocations per loop iteration.
-  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
-  // pipeliner will re-materialize the value in later stages of the pipeline
-  // instead of carrying it as a dependency across multiple iterations.
+  Value iv = forOp.getInductionVar();
+  auto step = forOp.getConstantStep();
+  bool oddStep = step && (*step)[0];
   Value minusOne = arith::ConstantIntOp::create(builder, loc, -1, 32);
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
   Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
-  SmallVector<Value> newOperands;
-  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
-  for (auto [_, loadGroup] : loadGroups) {
-    newOperands.push_back(minusOne); // insertIdx
-    newOperands.push_back(minusOne); // extractIdx
-    if (loadGroup.hasTMALoad) {
-      // A single barrier arrival sequence is a "phase" and two phases can
-      // overlap, provided the phases are differentiated with an alternating
-      // boolean value.
-      newOperands.push_back(zero); // phase
-    }
-  }
-
-  // Patch the loop to add the new loop carried dependencies.
-  forOp = addIterArgsToLoop(builder, forOp, newOperands);
-
-  // Update yield op with temporary yield values
-  auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-  for (unsigned i = 0; i < newOperands.size(); ++i) {
-    forYield.getResultsMutable().append(newOperands[i]);
-  }
-
-  builder.setInsertionPoint(forOp);
-  loc = forOp.getLoc();
-  int argIdx = newOperandIndex;
   for (auto &[numBuffers, loadGroup] : loadGroups) {
-    Value insertIdx = forOp.getBody()->getArgument(argIdx);
-    argIdx++;
-    Value extractIdx = forOp.getBody()->getArgument(argIdx);
-    argIdx++;
-    Value phase = nullptr;
-    if (loadGroup.hasTMALoad) {
-      phase = forOp.getBody()->getArgument(argIdx);
-      argIdx++;
+    builder.setInsertionPointToStart(forOp.getBody());
+    Value size = arith::ConstantIntOp::create(builder, loc, numBuffers, 32);
+    // An odd step visits every slot of a power-of-two ring. Without a
+    // TMA phase, the starting slot is arbitrary. Separate remainders let
+    // expansion shift the IV independently for the refill and read.
+    if (!loadGroup.hasTMALoad && llvm::isPowerOf2_64(numBuffers) && oddStep &&
+        iv.getType().isInteger(32)) {
+      loadGroup.insertIdx = arith::RemUIOp::create(builder, loc, iv, size);
+      loadGroup.extractIdx = arith::RemUIOp::create(builder, loc, iv, size);
+      continue;
     }
 
-    // Create two counters for the insert and extract indices to avoid creating
-    // long liverange.
-    builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
-
-    Value numBuffersVal =
-        arith::ConstantIntOp::create(builder, loc, numBuffers, 32);
-    loadGroup.insertIdx = createIncrementModulo(builder, loc, insertIdx,
-                                                numBuffersVal, zero, one);
-    Value cndExt = nullptr;
-    loadGroup.extractIdx = createIncrementModulo(
-        builder, loc, extractIdx, numBuffersVal, zero, one, &cndExt);
-    if (phase) {
-      Value nextPhase = arith::XOrIOp::create(builder, loc, phase, one);
-      phase = arith::SelectOp::create(builder, loc, cndExt, nextPhase, phase);
-      loadGroup.phase = phase;
+    // Carry separate counters so each increment stays in the stage using it.
+    SmallVector<Value> inits{minusOne, minusOne};
+    if (loadGroup.hasTMALoad)
+      inits.push_back(zero);
+    forOp = addIterArgsToLoop(builder, forOp, inits);
+    auto args = forOp.getRegionIterArgs().take_back(inits.size());
+    auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    loadGroup.insertIdx =
+        createIncrementModulo(builder, loc, args[0], size, zero, one);
+    Value wrap;
+    loadGroup.extractIdx =
+        createIncrementModulo(builder, loc, args[1], size, zero, one, &wrap);
+    yield.getResultsMutable().append(
+        {loadGroup.insertIdx, loadGroup.extractIdx});
+    if (loadGroup.hasTMALoad) {
+      Value phase = args[2];
+      Value next = arith::XOrIOp::create(builder, loc, phase, one);
+      loadGroup.phase =
+          arith::SelectOp::create(builder, loc, wrap, next, phase);
+      yield.getResultsMutable().append(loadGroup.phase);
     }
   }
 
@@ -636,15 +617,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                            extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
                            schedule);
     }
-  }
-  // Patch the yield with the updated counters. Subtract to account for the loop
-  // counter.
-  argIdx = newOperandIndex - 1;
-  for (auto &[numBuffers, loadGroup] : loadGroups) {
-    forYield.setOperand(argIdx++, loadGroup.insertIdx);
-    forYield.setOperand(argIdx++, loadGroup.extractIdx);
-    if (loadGroup.phase)
-      forYield.setOperand(argIdx++, loadGroup.phase);
   }
 
   // Automatically discover dependencies and schedule new insert/extract ops to

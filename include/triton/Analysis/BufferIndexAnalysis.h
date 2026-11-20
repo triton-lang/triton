@@ -32,7 +32,8 @@ struct BufferIndexExpr;
 /// Recognized index shapes:
 ///   1. integer constants,
 ///   2. `arith.addi` with one constant operand,
-///   3. `arith.remsi` with a positive constant modulus,
+///   3. `arith.remsi` with a positive constant modulus, or `arith.remui`
+///      with a power-of-two modulus,
 ///   4. the pipeliner's select/cmpi one-step wrap:
 ///        select(cmpi sge(base + 1, N), 0, base + 1)
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
