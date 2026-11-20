@@ -512,7 +512,7 @@ public:
     auto descTy = op.getDesc().getType();
     SmallVector<int64_t> blockShape(descTy.getShape());
     ttg::MemDescType resultType;
-    unsigned rank = op.getCoord().size();
+    unsigned rank = op.getCoords().size();
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
     if (isIm2Col) {
       if constexpr (std::is_same_v<AccessOp,
@@ -555,7 +555,7 @@ public:
     Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
                                          b.i32_val(1), /*alignment=*/0);
     for (auto [dim, coord] : llvm::enumerate(
-             adaptor.getCoord().take_front(isIm2Col ? rank - 2 : rank))) {
+             adaptor.getCoords().take_front(isIm2Col ? rank - 2 : rank))) {
       Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
       b.store(coord, coordSlot);
@@ -631,7 +631,7 @@ public:
           unsigned idx = rank - 2 + dim;
           Value slot = b.gep(ptr_ty(ctx), coordsTy, coords,
                              ValueRange{b.i32_val(0), b.i32_val(idx)});
-          b.store(b.add(adaptor.getCoord()[idx], offset.second), slot);
+          b.store(b.add(adaptor.getCoords()[idx], offset.second), slot);
         }
         b.call(runtimeFunc, args);
       }
