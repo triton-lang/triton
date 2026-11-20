@@ -1080,70 +1080,49 @@ def test_local_scatter_conflicting_values(MODE, BLOCK, SIZE_PER_THREAD, NUM_CTAS
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
-@pytest.mark.parametrize(
-    "OP,FAILURE",
-    [
-        pytest.param("gather", True, id="gather-missing-barrier"),
-        pytest.param("gather", False, id="gather-synchronized"),
-        pytest.param("scatter", False, id="scatter-synchronized"),
-        pytest.param("atomic", False, id="atomic-synchronized"),
-    ],
-)
-def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, monkeypatch):
-    if run_wrapper:
-        result = run_in_process(test_local_indexed_cross_cta_visibility, (OP, FAILURE, device, False, monkeypatch))
-        if FAILURE:
-            assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
-        else:
-            assert result.exc is None
-            assert result.driver_stderr_output == ""
+@pytest.mark.parametrize("op", ["gather", "scatter", "atomic"])
+@pytest.mark.parametrize("access", ["local", "peer", "synchronized"])
+def test_local_indexed_cross_cta_visibility(op, access, device, run_wrapper):
+    if run_wrapper and access == "peer":
+        result = run_in_process(test_local_indexed_cross_cta_visibility, (op, access, device, False))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
         return
 
-    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
-    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    knobs.refresh_knobs()
+    knobs.compilation.instrumentation_mode = "consan"
 
     @gluon.jit
-    def kernel(inp, out, layout: ttgl.constexpr, OP: ttgl.constexpr, FAILURE: ttgl.constexpr):
-        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0], cga_layout=[[0, 1]])
-        rows = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, layout))
-        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
-        offsets = rows[:, None] * 32 + cols[None, :]
-        values = ttgl.load(inp + offsets)
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout)
-        peer_cols = (cols ^ 16)[None, :] + rows[:, None] * 0
-        if FAILURE:
-            result = smem.gather(peer_cols, axis=1)
-            ttgl.store(out + offsets, result)
-            # Order every peer read before the stores without publishing it.
-            hopper.cluster.barrier(relaxed=True)
+    def kernel(indices, out, OP: ttgl.constexpr, ACCESS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=[[1]])
+        x = ttgl.arange(0, 256, layout)
+        idx = ttgl.load(indices + x)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, value=x)
+        ttgl.barrier(cluster=True)
+        values = smem.gather(idx, axis=0) if OP == "gather" else smem.load(layout)
+        # A relaxed barrier orders the checks without publishing the reads.
+        hopper.cluster.barrier(relaxed=ACCESS != "synchronized")
+        if OP == "gather":
             smem.store(values)
+        elif OP == "scatter":
+            smem.scatter(values, idx, axis=0)
+        elif ACCESS == "local":
+            # CTA 1's indices point into CTA 0, but its atomics are masked off.
+            smem.atomic_scatter_add(values, idx % 128, axis=0, mask=x < 128)
         else:
-            smem.store(values)
-            ttgl.barrier(cluster=True)
-            if OP == "gather":
-                result = smem.gather(peer_cols, axis=1)
-                # Order peer DSM reads and keep allocations alive until they finish.
-                ttgl.barrier(cluster=True)
-            elif OP == "scatter":
-                smem.scatter(values, peer_cols, axis=1)
-                ttgl.barrier(cluster=True)
-                result = smem.load(layout)
-            else:
-                smem.atomic_scatter_add(values, peer_cols, axis=1)
-                ttgl.barrier(cluster=True)
-                result = smem.load(layout)
-            ttgl.store(out + offsets, result)
+            smem.atomic_scatter_add(values, idx, axis=0)
+        ttgl.barrier(cluster=True)
+        ttgl.store(out + x, smem.load(layout))
 
-    inp = torch.arange(64, dtype=torch.int32, device=device).reshape(2, 32)
-    out = torch.empty_like(inp)
-    layout = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0], cga_layout=[[0, 1]])
-    kernel[(1, )](inp, out, layout, OP=OP, FAILURE=FAILURE, num_warps=4, num_ctas=2)
-    if not FAILURE:
-        peer = inp.reshape(2, 2, 16).flip(1).reshape(2, 32)
-        expected = inp + peer if OP == "atomic" else peer
-        torch.testing.assert_close(out, expected)
+    x = torch.arange(256, dtype=torch.int32, device=device)
+    # In the peer cases, only the last lane of the last warp accesses the other CTA.
+    indices = x ^ 1 if access == "local" else torch.where(x % 128 == 127, x ^ 128, x)
+    out = torch.empty_like(x)
+    kernel[(1, )](indices, out, op, access, num_ctas=2)
+    expected = indices
+    if op == "atomic":
+        expected = x + (torch.where(x < 128, indices, 0) if access == "local" else indices)
+    torch.testing.assert_close(out, expected)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")

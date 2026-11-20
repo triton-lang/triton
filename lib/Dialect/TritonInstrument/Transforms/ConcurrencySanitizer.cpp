@@ -583,27 +583,6 @@ LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                  : invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
 }
 
-LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
-                                             RankedTensorType regTy,
-                                             unsigned axis) {
-  MLIRContext *ctx = memDescTy.getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
-  SmallVector<StringAttr> allDims =
-      standardOutDimNames(ctx, memDescTy.getRank());
-  StringAttr axisDim = allDims[axis];
-  LinearLayout regLayout = ttg::toLinearLayout(regTy).transposeOuts(allDims);
-  SmallVector<StringAttr> nonIndexedDims = allDims;
-  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
-  LinearLayout indexedLayout =
-      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
-                          nonIndexedDims) *
-      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
-                               axisDim);
-  indexedLayout = indexedLayout.transposeOuts(allDims);
-  return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
-}
-
 void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   span |= translateXorMask(span, basis, numCTAs);
 }
@@ -620,10 +599,7 @@ Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
          conversion.getOutDimSize(kBlock) == numCTAs &&
          "expected conversion to preserve the cluster dimensions");
 
-  // Span every non-issuer input basis that lowering can map into the block
-  // output. For gather/scatter this includes the independent runtime-index
-  // input, whose value is unavailable to this pass. The resulting image is a
-  // conservative recipient set for the full BufferRegion effect.
+  // Span every non-issuer input basis that lowering maps into the block output.
   uint32_t targetSpan = 1;
   for (StringAttr dim : conversion.getInDimNames()) {
     if (dim == kBlock)
@@ -713,7 +689,9 @@ Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
   return ownerCTAs;
 }
 
-Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
+Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op,
+                       const ConSanTargetHooks &hooks,
+                       tti::FunctionBuilder &funcBuilder) {
   if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
     return getLocalLoadStoreRecipientCTAs(b, load.getSrc().getType(),
                                           load.getType());
@@ -731,23 +709,32 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     return getLocalLoadStoreRecipientCTAs(
         b, alloc.getType(), alloc.getSrc().getType(), /*isStore=*/true);
   }
-  if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
-    return getLocalMemoryRecipientCTAs(
-        b, getLocalGatherScatterConversion(gather.getSrc().getType(),
-                                           gather.getType(), gather.getAxis()));
-  }
-  if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
-    return getLocalMemoryRecipientCTAs(
-        b, getLocalGatherScatterConversion(scatter.getDst().getType(),
-                                           scatter.getValues().getType(),
-                                           scatter.getAxis()));
-  }
-  if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
-    return getLocalMemoryRecipientCTAs(
-        b, getLocalGatherScatterConversion(atomic.getDst().getType(),
-                                           atomic.getValues().getType(),
-                                           atomic.getAxis()));
-  }
+  auto indexed = [&](ttg::MemDescType memDesc,
+                     TypedValue<RankedTensorType> indices, unsigned axis,
+                     Value mask = {}) -> Value {
+    if (!hooks.supportsCrossCTASharedMemory() || ttg::lookupNumCTAs(op) == 1)
+      return currentCTAMask(b);
+    if (!mask) {
+      auto dim = standardOutDimNames(b.getContext(), memDesc.getRank())[axis];
+      auto conversion =
+          getGatherScatterLayout(ttg::toLinearLayoutIgnoringPadding(memDesc),
+                                 ttg::toLinearLayout(indices.getType()), dim);
+      // The static set is exact when changing the index cannot change the CTA.
+      if (conversion.sublayoutIsZero({dim}, {b.getStringAttr("block")}))
+        return getLocalMemoryRecipientCTAs(b, conversion);
+    }
+    return funcBuilder.createGatherScatterCTAMask(b, memDesc, indices, mask,
+                                                  axis);
+  };
+  if (auto gather = dyn_cast<ttg::LocalGatherOp>(op))
+    return indexed(gather.getSrc().getType(), gather.getIndices(),
+                   gather.getAxis());
+  if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
+    return indexed(scatter.getDst().getType(), scatter.getIndices(),
+                   scatter.getAxis());
+  if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op))
+    return indexed(atomic.getDst().getType(), atomic.getIndices(),
+                   atomic.getAxis(), atomic.getMask());
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
     if (ttg::lookupNumCTAs(op) == 1)
       return currentCTAMask(b);
@@ -1367,7 +1354,7 @@ private:
         -> FailureOr<SmallVector<MaterializedEffect>> {
       auto accesses = auxData.bufferAccessRegions.find({op, buf});
       if (!recipients && accesses == auxData.bufferAccessRegions.end()) {
-        defaultEffectCTAs = getMemEffectCTAs(b, op);
+        defaultEffectCTAs = getMemEffectCTAs(b, op, hooks, funcBuilder);
         recipients = defaultEffectCTAs;
       }
       MaterializedEffect materialized;

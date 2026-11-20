@@ -647,6 +647,43 @@ Value updateWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
 
 } // namespace
 
+Value FunctionBuilder::createGatherScatterCTAMask(ImplicitLocOpBuilder &b,
+                                                  gpu::MemDescType memDesc,
+                                                  Value indices, Value mask,
+                                                  unsigned axis) {
+  auto *ctx = b.getContext();
+  unsigned lanes = ttg::lookupThreadsPerWarp(b);
+  unsigned warps = ttg::lookupNumWarps(b.getInsertionBlock()->getParent());
+  unsigned ctas = ttg::lookupNumCTAs(b);
+  // Each CTA has its own [warp, lane] tensor of target masks.
+  auto cga =
+      ttg::CGAEncodingAttr::fromSplitParams(ctx, {ctas, 1}, {1, 1}, {1, 0});
+  auto enc = ttg::BlockedEncodingAttr::get(ctx, {1, 1}, {1, lanes}, {warps, 1},
+                                           {1, 0}, cga);
+  auto targetsTy = RankedTensorType::get({warps, lanes}, b.getI32Type(), enc);
+  auto laneMasks = ExperimentalGatherScatterCTAMasksOp::create(
+      b, targetsTy, memDesc, indices, mask, axis);
+  if (warps == 1)
+    return reduceAll<arith::OrIOp>(b, laneMasks);
+
+  Region *group = getClusterBarrierGroupRegion(laneMasks);
+  Value &scratch = gatherScatterScratch[group];
+  if (!scratch) {
+    OpBuilder init(&group->front(), group->front().begin());
+    scratch = createThirdPartyScratchAlloc(
+        init, b.getLoc(), triton::getPointerType(b.getI32Type()), warps * 4, 4);
+  }
+  // Store one mask per warp. Reload all masks in each warp so the final
+  // reduction also stays warp-local.
+  Value warpMasks = reduceLastDim<arith::OrIOp>(b, laneMasks);
+  createStoreScratchMemory(b, b.getLoc(), scratch, warpMasks,
+                           cast<RankedTensorType>(warpMasks.getType()));
+  ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalWrite);
+  Value masks = createLoadScratchMemory(b, b.getLoc(), scratch,
+                                        getIntTensorType(group, {warps}, 32));
+  return reduceLastDim<arith::OrIOp>(b, masks);
+}
+
 void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
                                                  Value ptr,
                                                  RankedTensorType type,

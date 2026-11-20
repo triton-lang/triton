@@ -240,11 +240,12 @@ from the same block-local register-to-shared layout conversion used by
 lowering. This covers `ttg.local_load`, `ttg.local_store`, and source-backed
 `ttg.local_alloc`. For `ttg.local_gather`, `ttg.local_scatter`, and
 `ttg.local_atomic_scatter_rmw`, the runtime index replaces one logical
-coordinate, so ConSan additionally spans that index's layout bases. In each
-case the issuing CTA is fixed while the other input bases are spanned,
-producing a static conservative recipient set for the full buffer without
-defaulting every access to the whole cluster. Cross-CTA affine subslices are
-rejected as unsupported by BufferRegion analysis.
+coordinate. For unmasked accesses, the layout gives the exact recipient set
+when the index cannot affect the target CTA. Otherwise, each warp ORs the
+CTA bits reached by its active indices. Warps in the same partition exchange
+these masks through CTA-private global scratch and compute the final OR
+within each warp. The descriptor's affine CTA offset maps the resulting set
+to physical CTA rows.
 
 ## Barrier Synchronization
 
