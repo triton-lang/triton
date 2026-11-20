@@ -163,8 +163,9 @@ findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
     if (isConstantZeroTensor(forOp.getInitArgs()[index])) {
       loopArgIsZero = true;
     }
-    // Another user of the loop argument observes the reset on the next iteration.
-    if (!arg.hasOneUse())
+    // Preserve the conditional reset if another user observes the loop argument
+    // on the next iteration or the accumulator's final value after the loop.
+    if (!arg.hasOneUse() || !forOp.getResult(index).use_empty())
       return std::nullopt;
     v = forOp.getBody()->getTerminator()->getOperand(index);
   }
@@ -257,14 +258,6 @@ public:
       bool loopArgIsZero = false;
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
-
-      auto accArg = dyn_cast<BlockArgument>(accUse);
-      if (zeroInitOp && accArg &&
-          !forOp.getResult(accArg.getArgNumber() - 1).use_empty()) {
-        // The loop-carried accumulator is conditionally reset to zero by an
-        // if/select, and its final value is used after the loop.
-        zeroInitOp = std::nullopt;
-      }
 
       if (!zeroInitOp && !loopArgIsZero) {
         continue;
