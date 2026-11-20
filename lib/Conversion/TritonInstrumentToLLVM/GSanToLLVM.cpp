@@ -511,19 +511,19 @@ public:
 
     auto descTy = op.getDesc().getType();
     SmallVector<int64_t> blockShape(descTy.getShape());
-    ttg::MemDescType im2colDst;
-    unsigned rank = op.getCoords().size();
+    ttg::MemDescType resultType;
+    unsigned rank = op.getCoord().size();
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(descTy);
     if (isIm2Col) {
       if constexpr (std::is_same_v<AccessOp,
                                   tti::ExperimentalGSanTensorDescAccessOp>) {
-        auto dst = op.getIm2colDst();
+        auto dst = op.getResult();
         if (!dst || op.getIsStore() || rank < 3 || rank > 5 ||
             op.getOffsets().size() != rank - 2)
           return rewriter.notifyMatchFailure(
               op, "expected an im2col load with three to five coordinates and "
                   "spatial offsets and a destination layout");
-        im2colDst = *dst;
+        resultType = dst.getType();
         blockShape = ttng::getTMABlockShape(descTy, /*packedSize=*/true,
                                             ttg::TMAMode::Im2Col);
       } else {
@@ -555,7 +555,7 @@ public:
     Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
                                          b.i32_val(1), /*alignment=*/0);
     for (auto [dim, coord] : llvm::enumerate(
-             adaptor.getCoords().take_front(isIm2Col ? rank - 2 : rank))) {
+             adaptor.getCoord().take_front(isIm2Col ? rank - 2 : rank))) {
       Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
                               ValueRange{b.i32_val(0), b.i32_val(dim)});
       b.store(coord, coordSlot);
@@ -618,7 +618,7 @@ public:
     if (isIm2Col) {
       // TMA adds each message's offsets to W and C before traversing the
       // spatial box. A W offset is a coordinate displacement, not a row count.
-      auto layout = ttng::getTMAMessageLayouts(im2colDst, ttg::TMAMode::Im2Col)
+      auto layout = ttng::getTMAMessageLayouts(resultType, ttg::TMAMode::Im2Col)
                         .messageToPackedOffset;
       auto msg = rewriter.getStringAttr("msg");
       auto block = rewriter.getStringAttr("block");
@@ -631,7 +631,7 @@ public:
           unsigned idx = rank - 2 + dim;
           Value slot = b.gep(ptr_ty(ctx), coordsTy, coords,
                              ValueRange{b.i32_val(0), b.i32_val(idx)});
-          b.store(b.add(adaptor.getCoords()[idx], offset.second), slot);
+          b.store(b.add(adaptor.getCoord()[idx], offset.second), slot);
         }
         b.call(runtimeFunc, args);
       }

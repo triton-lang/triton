@@ -56,12 +56,11 @@ static Value predicateMulticastLeader(ImplicitLocOpBuilder &b, Value pred,
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   ImplicitLocOpBuilder b(op.getLoc(), op);
   Value pred = op.getPred();
-  TypeAttr im2colDst;
+  Value result;
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType())) {
-    auto dstTy = op.getResult().getType();
-    im2colDst = TypeAttr::get(dstTy);
+    result = op.getResult();
     if (op.getMulticast()) {
-      auto layout = ttg::toLinearLayoutIgnoringPadding(dstTy);
+      auto layout = ttg::toLinearLayoutIgnoringPadding(op.getResult().getType());
       auto mask =
           layout.getFreeVariableMasks().lookup(b.getStringAttr("block"));
       Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
@@ -69,8 +68,8 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
     }
   }
   ExperimentalGSanTensorDescAccessOp::create(
-      b, b.getLoc(), op.getDesc(), op.getCoord(), op.getOffsets(), pred,
-      /*isStore=*/false, im2colDst);
+      b, b.getLoc(), op.getDesc(), op.getCoord(), op.getOffsets(), result, pred,
+      /*isStore=*/false);
 }
 
 static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
@@ -113,7 +112,7 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
   OpBuilder builder(op);
   ExperimentalGSanTensorDescAccessOp::create(
       builder, op->getLoc(), descValue, coords, /*offsets=*/ValueRange{},
-      /*pred=*/Value{}, /*isStore=*/true, /*im2colDst=*/TypeAttr{});
+      /*result=*/Value{}, /*pred=*/Value{}, /*isStore=*/true);
 }
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {

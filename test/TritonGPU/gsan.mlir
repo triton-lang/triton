@@ -572,8 +572,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   tt.func @tma_im2col_3d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
     %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1] offsets = [%arg2], false, %arg3
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    // CHECK: %[[DST:.*]] = ttg.local_alloc
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1] offsets = [%arg2], false, %arg3 into %[[DST]]
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local {{.*}} %[[DST]],
     ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord] offsets = [%offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -590,8 +591,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   tt.func @tma_im2col_4d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
     %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2], false, %arg3
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    // CHECK: %[[DST:.*]] = ttg.local_alloc
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2], false, %arg3 into %[[DST]]
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local {{.*}} %[[DST]],
     ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord] offsets = [%offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -608,8 +610,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   tt.func @tma_im2col_5d(%desc: !ttng.tensordesc_im2col<32x64xf16, #shared>, %coord: i32, %offset: i16, %pred: i1) {
     %buf = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
-    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2, %arg2], false, %arg3
-    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    // CHECK: %[[DST:.*]] = ttg.local_alloc
+    // CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg1, %arg1, %arg1, %arg1] offsets = [%arg2, %arg2, %arg2], false, %arg3 into %[[DST]]
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local {{.*}} %[[DST]],
     ttng.async_tma_copy_global_to_local %desc[%coord, %coord, %coord, %coord, %coord] offsets = [%offset, %offset, %offset] %buf, %barrier, %pred : !ttng.tensordesc_im2col<32x64xf16, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
     tt.return
   }

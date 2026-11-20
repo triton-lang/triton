@@ -245,15 +245,16 @@ def TTI_ExperimentalGSanTensorDescAccessOp
   let description = [{
     Passes the native tensor descriptor and its coordinates directly to the
     GSan runtime, which decodes the descriptor and iterates over the tile.
-    Im2col loads also carry the spatial offsets and destination type so each
+    Im2col loads also carry the spatial offsets and destination memdesc so each
     issuing CTA can instrument its own TMA messages.
   }];
-  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
-                   Variadic<I16>:$offsets, Optional<I1>:$pred, BoolAttr:$isStore,
-                   OptionalAttr<TypeAttrOf<TTG_MemDescType>>:$im2colDst);
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coord,
+                   Variadic<I16>:$offsets, Optional<TTG_MemDescType>:$result,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
   let assemblyFormat = [{
-    $desc `[` $coords `]` (`offsets` `=` `[` $offsets^ `]`)?
-    `,` $isStore (`,` $pred^)? attr-dict `:`
+    $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)?
+    `,` $isStore (`,` $pred^)? (`into` $result^ `:` qualified(type($result)))?
+    attr-dict `:`
     qualified(type($desc))
   }];
 }
@@ -281,10 +282,10 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
     Passes a native tensor descriptor and coordinates to the GSan runtime for
     atomic instrumentation with the specified memory semantics and scope.
   }];
-  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coord,
                    TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
   let assemblyFormat = [{
-    $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
+    $desc `[` $coord `]` `,` $sem `,` $scope attr-dict `:`
     qualified(type($desc))
   }];
 }
