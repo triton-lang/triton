@@ -8,9 +8,9 @@ global memory and shared memory (LDS).
 With async copies, the warps do all the work of a copy. Each copy instruction
 moves 16 bytes per lane. On CDNA5, a warp has 32 lanes, so a warp needs 16
 instructions to copy 8 KB, for example an 8x256 fp32 part of a tile. For each
-instruction, the warp computes per-lane offsets and masks in VGPRs and sets the
-shared memory base address. The register and shared memory layouts must also
-match the fixed write pattern of the instruction.
+instruction, the warp computes per-lane offsets and masks in registers and
+sets the shared memory base address. The register and shared memory layouts
+must also match the fixed write pattern of the instruction.
 
 TDM moves this work from the warps to a dedicated unit. A warp issues one TDM
 instruction with a tensor descriptor. The TDM unit generates the addresses,

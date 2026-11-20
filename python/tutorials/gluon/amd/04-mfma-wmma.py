@@ -334,9 +334,9 @@ if __name__ == "__main__" and is_cdna4():
 # `ds_read_b128` in both cases.
 #
 # Take `ds_read_b128 v[26:29], v8 offset:64` as an example. It reads 128 bits,
-# or 16 bytes, for each lane. Each lane passes its own shared memory address in
-# a VGPR, here `v8`, and the instruction adds the immediate `offset` in bytes.
-# The 16 bytes land in 4 VGPRs, `v[26:29]`, which hold the 8 bf16 values of the
+# or 16 bytes. Each lane passes its own shared memory address in a register,
+# here `v8`, and the instruction adds the immediate `offset` in bytes. The 16
+# bytes land in 4 registers, `v[26:29]`, which hold the 8 bf16 values of the
 # lane. The compiler computes the address once and reaches other parts of the
 # tile with the offset. Here `offset:64` moves 32 bf16 values along K, to the
 # operand of the next MFMA.
