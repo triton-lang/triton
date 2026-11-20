@@ -712,7 +712,9 @@ class InterpreterBuilder:
         rhs_data = rhs.data.astype(rhs_dtype)
         lhs = TensorHandle(lhs_data, lhs.dtype)
         rhs = TensorHandle(rhs_data, rhs.dtype)
-        return self.binary_op(lhs, rhs, np.right_shift)
+        result = self.binary_op(lhs, rhs, np.right_shift)
+        # Operand promotion can give an arithmetic shift an unsigned result type.
+        return TensorHandle(result.data.view(_get_np_dtype(result.dtype)), result.dtype)
 
     def create_clmul(self, lhs, rhs):
         if lhs.dtype.scalar.is_int1():
