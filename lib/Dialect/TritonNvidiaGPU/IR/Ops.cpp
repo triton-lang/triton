@@ -930,12 +930,6 @@ int64_t AsyncBulkCopyGlobalToLocalOp::getNumBytesPerCTA() {
   return getNumBytes() / (1u << llvm::popcount(layout.splitMask));
 }
 
-// Prefetch writes cache state without modifying the source memory.
-struct L2Cache : SideEffects::Resource::Base<L2Cache> {
-  StringRef getName() const final { return "<L2Cache>"; }
-  SideEffects::Resource *getParent() const override { return nullptr; }
-};
-
 LogicalResult PrefetchBulkOp::verify() {
   auto space = cast<PointerType>(getElementTypeOrSelf(getPtr().getType()))
                    .getAddressSpace();

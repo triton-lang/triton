@@ -6129,6 +6129,7 @@ def test_bulk_prefetch_codegen(target, mode):
     @gluon.jit
     def kernel(src, num_bytes, active, MODE: ttgl.constexpr):
         if MODE == "scalar":
+            async_copy.wait_group(0)
             hopper.bulk.prefetch(src, 16384)
         else:
             layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
@@ -6140,6 +6141,9 @@ def test_bulk_prefetch_codegen(target, mode):
     ptx = triton.compile(source, target=target).asm["ptx"]
     # Two distinct ranges per thread in the vector case, one range per program in the scalar case.
     assert len(re.findall(r"@%?\w+\s+cp\.async\.bulk\.prefetch\.L2\.global\s", ptx)) == (1 if mode == "scalar" else 2)
+    if mode == "scalar":
+        assert ptx.index("cp.async.wait_group") < ptx.index("cp.async.bulk.prefetch.L2.global")
+        assert not re.search(r"\bbar(?:rier)?\.sync\b", ptx)
 
 
 def test_bulk_prefetch_noinline_consan():
