@@ -1759,4 +1759,18 @@ LogicalResult BarrierOp::verify() {
   return success();
 }
 
+LogicalResult WarpIdOp::canonicalize(WarpIdOp op, PatternRewriter &rewriter) {
+  if (maybeLookupNumWarps(op) != 1)
+    return failure();
+  auto func = op->getParentOfType<FunctionOpInterface>();
+  if (!func)
+    return failure();
+  Operation *zero = func->getDialect()->materializeConstant(
+      rewriter, rewriter.getI32IntegerAttr(0), op.getType(), op.getLoc());
+  if (!zero)
+    return failure();
+  rewriter.replaceOp(op, zero->getResults());
+  return success();
+}
+
 } // namespace mlir::triton::gpu
