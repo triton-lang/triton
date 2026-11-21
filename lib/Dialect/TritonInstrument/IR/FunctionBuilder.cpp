@@ -2504,8 +2504,6 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
-        Value writeTracking = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), writeTrackingPtr, writeTrackingType);
         Value barrierStates = tti::createLoadScratchMemory(
             fb, fb.getLoc(), barrierStatesPtr, barrierStatesType);
         Value barrierDescriptor =
@@ -2538,11 +2536,9 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
         trackMask = arith::AndIOp::create(fb, trackMask, phaseMask);
         Value writeTrackingOne =
             tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
-        Value newTracking = arith::SelectOp::create(
-            fb, trackMask, writeTrackingOne, writeTracking);
-        createMaskedStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
-                                       newTracking, writeTrackingType,
-                                       trackMask);
+        tti::createStoreScratchMemory(fb, fb.getLoc(), writeTrackingPtr,
+                                      writeTrackingOne, writeTrackingType,
+                                      /*currentCTAOnly=*/false, trackMask);
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
