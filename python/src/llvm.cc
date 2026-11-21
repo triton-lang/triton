@@ -13,6 +13,8 @@
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
@@ -65,6 +67,18 @@ namespace py = nanobind;
 using namespace llvm;
 
 namespace {
+
+void handleCodeGenDiagnostic(const llvm::DiagnosticInfo *diagnostic,
+                             void *errorStream) {
+  auto severity = diagnostic->getSeverity();
+  llvm::raw_ostream &errors =
+      *static_cast<llvm::raw_string_ostream *>(errorStream);
+  auto &output = severity == llvm::DS_Error ? errors : llvm::errs();
+  output << llvm::LLVMContext::getDiagnosticMessagePrefix(severity) << ": ";
+  llvm::DiagnosticPrinterRawOStream printer(output);
+  diagnostic->print(printer);
+  output << '\n';
+}
 
 void enableFPContraction(llvm::Module &module) {
   for (llvm::Function &function : module)
@@ -400,7 +414,8 @@ translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
     // emit
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    if (machine->addPassesToEmitFile(pass, pstream, nullptr, fileType))
+      throw std::runtime_error("target cannot emit the requested file type");
     pass.run(module);
 
     if (enabledTiming) {
@@ -765,7 +780,11 @@ void init_triton_llvm(py::module_ &m) {
           llvm::SaveAndRestore schedulingPolicy(scheduleForRegisters,
                                                 sched4reg);
           // create LLVM module from C++
+          std::string codeGenErrors;
+          llvm::raw_string_ostream errorStream(codeGenErrors);
           llvm::LLVMContext context;
+          context.setDiagnosticHandlerCallBack(handleCodeGenDiagnostic,
+                                               &errorStream, true);
           ScopedLSRPassGate lsrGate(context, disableLSR);
           std::unique_ptr<llvm::MemoryBuffer> buffer =
               llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
@@ -780,6 +799,8 @@ void init_triton_llvm(py::module_ &m) {
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
                                      enable_fp_fusion, isObject,
                                      canonicalizeGEP, enableFpSan, abi);
+          if (!codeGenErrors.empty())
+            throw std::runtime_error(codeGenErrors);
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));

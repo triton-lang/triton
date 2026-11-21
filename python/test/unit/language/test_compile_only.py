@@ -78,6 +78,23 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     assert "arith.extui" not in compiled.asm["ttgir"]
 
 
+def test_nvptx_codegen_reports_invalid_register_constraint():
+
+    @triton.jit
+    def kernel(out, CONSTRAINT: tl.constexpr):
+        value = tl.inline_asm_elementwise("mov.u32 $0, 1;", CONSTRAINT, [], dtype=tl.int32, is_pure=True, pack=1)
+        tl.store(out, value)
+
+    def compile_ptx(constraint):
+        src = ASTSource(kernel, signature={"out": "*i32", "CONSTRAINT": "constexpr"},
+                        constexprs={"CONSTRAINT": constraint})
+        return triton.compile(src, target=GPUTarget("cuda", 80, 32)).asm["ptx"]
+
+    with pytest.raises(RuntimeError, match="could not allocate output register for constraint 'Z'"):
+        compile_ptx("=Z")
+    assert "mov.u32" in compile_ptx("=r")
+
+
 def test_compile_only_sm100() -> None:
 
     @triton.jit
