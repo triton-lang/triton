@@ -23,10 +23,19 @@ static Value convertValueLayout(Value src, Attribute enc,
 
 static void retargetCopyOperandsToEncoding(
     AsyncCopyGlobalToLocalOp copyOp, Attribute newEncoding,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternRewriter &rewriter) {
+    PatternRewriter &rewriter) {
   Value src = copyOp.getSrc();
   Value mask = copyOp.getMask();
   Value other = copyOp.getOther();
+
+  auto srcTy = cast<RankedTensorType>(src.getType());
+  auto newSrcTy = srcTy.cloneWithEncoding(newEncoding);
+  auto order = getOrder(newSrcTy);
+  unsigned contiguity = 1;
+  // Contiguity hints describe the register axis of their source layout.
+  if (getOrder(srcTy)[0] == order[0])
+    contiguity = std::min<unsigned>(
+        copyOp.getContiguity(), getContigPerThread(newSrcTy)[order[0]]);
 
   // insert cvt's after src, mask, and other
   src = convertValueLayout(src, newEncoding, rewriter);
@@ -34,11 +43,6 @@ static void retargetCopyOperandsToEncoding(
     mask = convertValueLayout(mask, newEncoding, rewriter);
   if (other)
     other = convertValueLayout(other, newEncoding, rewriter);
-
-  unsigned contiguity = axisInfoAnalysis.getContiguity(src);
-  if (mask)
-    contiguity =
-        std::min<unsigned>(contiguity, axisInfoAnalysis.getMaskAlignment(mask));
 
   rewriter.modifyOpInPlace(copyOp, [&]() {
     copyOp.getSrcMutable().assign(src);
@@ -50,7 +54,7 @@ static void retargetCopyOperandsToEncoding(
   });
 }
 
-// This pass currently only applies if the following are all true...
+// One example where this clipping is needed is when all of the following hold:
 //   1) Operand A for WGMMA is to be loaded in registers
 //   2) We upcast operand A in registers before the WGMMA
 //      (downcasting is not yet supported)
@@ -71,11 +75,7 @@ static void retargetCopyOperandsToEncoding(
 // global data.
 struct ClipAsyncCopySizePerThread
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
-  ModuleAxisInfoAnalysis &axisInfoAnalysis;
   using OpRewritePattern::OpRewritePattern;
-  ClipAsyncCopySizePerThread(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                             MLIRContext *context)
-      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
@@ -86,9 +86,16 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    if (!sharedEnc)
+    if (!isa<SwizzledSharedEncodingAttr, NVMMASharedEncodingAttr>(
+            dstTy.getEncoding()))
       return failure();
+    // Padded/packed NVMMA encodings are outside this per-element clipping
+    // rule. In particular, packed FP6 has no per-element LinearLayout.
+    if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(dstTy.getEncoding())) {
+      if (nvmma.getPadding() != NVMmaPadding::None)
+        return rewriter.notifyMatchFailure(copyOp,
+                                           "padded NVMMA copies are not handled");
+    }
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even
@@ -120,8 +127,7 @@ struct ClipAsyncCopySizePerThread
         blockedEnc.getOrder(), numWarps, threadsPerWarp,
         blockedEnc.getCGALayout());
 
-    retargetCopyOperandsToEncoding(copyOp, newBlockEnc, axisInfoAnalysis,
-                                   rewriter);
+    retargetCopyOperandsToEncoding(copyOp, newBlockEnc, rewriter);
 
     return success();
   }
@@ -132,14 +138,12 @@ struct ClipAsyncCopySizePerThread
 // so picking a coalesced layout is better.
 struct CoalesceCheapAsyncCopyGlobalToLocal
     : public OpRewritePattern<AsyncCopyGlobalToLocalOp> {
-  ModuleAxisInfoAnalysis &axisInfoAnalysis;
   DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap;
   using OpRewritePattern::OpRewritePattern;
   CoalesceCheapAsyncCopyGlobalToLocal(
-      ModuleAxisInfoAnalysis &axisInfoAnalysis,
       DenseMap<AsyncCopyGlobalToLocalOp, Attribute> &coalescedAsyncCopyMap,
       MLIRContext *context)
-      : OpRewritePattern(context), axisInfoAnalysis(axisInfoAnalysis),
+      : OpRewritePattern(context),
         coalescedAsyncCopyMap(coalescedAsyncCopyMap) {}
 
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
@@ -162,7 +166,7 @@ struct CoalesceCheapAsyncCopyGlobalToLocal
     if (newEnc == nullptr || newEnc == srcTy.getEncoding())
       return failure();
 
-    retargetCopyOperandsToEncoding(copyOp, newEnc, axisInfoAnalysis, rewriter);
+    retargetCopyOperandsToEncoding(copyOp, newEnc, rewriter);
 
     return success();
   }
@@ -192,9 +196,9 @@ struct CoalesceAsyncCopyPass
     MLIRContext *context = &getContext();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<ClipAsyncCopySizePerThread>(axisInfoAnalysis, context);
+    patterns.add<ClipAsyncCopySizePerThread>(context);
     patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
-        axisInfoAnalysis, coalescedAsyncCopyMap, context);
+        coalescedAsyncCopyMap, context);
 
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
