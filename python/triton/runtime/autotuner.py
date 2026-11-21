@@ -28,6 +28,10 @@ class Autotuner(KernelInterface):
             'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
+            'compiled_config_prune': a function used to prune configs after they compile successfully and before
+                they are benchmarked. It should have the signature
+                `compiled_config_prune(compiled: Dict[triton.Config, CompiledKernel], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
+                and return the configs to benchmark, chosen from the keys of `compiled`. It should return at least one config.
         """
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=3, num_ctas=1)]
@@ -99,10 +103,12 @@ class Autotuner(KernelInterface):
         self.perf_model = None
         self.configs_top_k = 1.0
         self.early_config_prune = None
+        self.compiled_config_prune = None
         if prune_configs_by:
             self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
             self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
+            self.compiled_config_prune = prune_configs_by.get("compiled_config_prune", self.compiled_config_prune)
 
         self.fn = fn
         self.base_fn = fn
@@ -252,7 +258,11 @@ class Autotuner(KernelInterface):
 
                     def benchmark():
                         bench_start = time.time()
-                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_configs, rejected_configs = self._prune_compiled_configs(pruned_configs, args, kwargs)
+                        timings = {config: [float("inf")] * 3 for config in rejected_configs}
+                        timings.update(
+                            {config: self._bench(*args, config=config, **kwargs)
+                             for config in bench_configs})
                         bench_end = time.time()
                         self.bench_time = bench_end - bench_start
                         self.cache[key] = builtins.min(timings, key=timings.get)
@@ -295,6 +305,80 @@ class Autotuner(KernelInterface):
         )
         self.nargs = None
         return ret
+
+    def _prune_compiled_configs(self, configs: List[Config], args, kwargs: Dict) -> Tuple[List[Config], List[Config]]:
+        """
+        Compiles `configs` without launching them and drops the ones that the
+        user's `compiled_config_prune` rejects, e.g. because the compiler could
+        not honor an optimization hint.
+        Configs that fail to compile are rejected too, so they are not compiled
+        a second time by `_bench`. Returns the configs to benchmark and the
+        rejected ones.
+        """
+        from ..compiler.errors import CompileTimeAssertionFailure
+        from ._async_compile import FutureKernel
+
+        # The interpreter does not compile kernels, so there is nothing to inspect.
+        if knobs.runtime.interpret or self.compiled_config_prune is None:
+            return configs, []
+        # Let _bench report conflicting meta-parameters.
+        if any(kwargs.keys() & config.kwargs.keys() for config in configs):
+            return configs, []
+
+        verbose = knobs.autotuning.print
+        compiled = {}
+        uninspectable = []
+        failed = []
+        for config in configs:
+            current = {**kwargs, **config.all_kwargs()}
+            full_nargs = {**self.nargs, **current}
+            # Config pre-hooks may change the specialization, e.g. by setting
+            # tensor descriptor block shapes. Use the benchmark hook lifecycle
+            # so their side effects are cleaned up even if compilation fails or
+            # the compiled config is later rejected.
+            if config.pre_hook:
+                config.pre_hook(full_nargs)
+            self.pre_hook(full_nargs)
+            try:
+                try:
+                    kernel = self.fn.run(*args, **{**current, "warmup": True})
+                    if isinstance(kernel, FutureKernel):
+                        kernel = kernel.result()
+                except Exception as e:
+                    try:
+                        self.post_hook(full_nargs, exception=e)
+                    finally:
+                        # Run cleanup before propagating the error.
+                        raise
+                self.post_hook(full_nargs, exception=None)
+            except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
+                if verbose:
+                    print(f"Autotuning failed for config {config} with {e}")
+                failed.append(config)
+                continue
+            if kernel is None:
+                # A JIT cache hook skipped the compilation.
+                uninspectable.append(config)
+            else:
+                compiled[config] = kernel
+
+        if compiled:
+            kept = self.compiled_config_prune(compiled, self.nargs, **kwargs)
+            if not kept:
+                raise AutotunerError("No valid autotuner configs after pruning. "
+                                     "`compiled_config_prune` should return at least one config.")
+            unknown = [config for config in kept if config not in compiled]
+            if unknown:
+                raise AutotunerError(f"`compiled_config_prune` returned configs that were not compiled: {unknown}")
+            compiled = {config: compiled[config] for config in kept}
+
+        bench_configs = [config for config in configs if config in compiled or config in uninspectable]
+        rejected_configs = [config for config in configs if config not in bench_configs]
+        if verbose:
+            for config in rejected_configs:
+                if config not in failed:
+                    print(f"Autotuning skipped config {config} after compilation")
+        return bench_configs, rejected_configs
 
     def prune_configs(self, kwargs: Dict) -> List[Config]:
         pruned_configs = self.configs
@@ -458,6 +542,13 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
         'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
+        'compiled_config_prune': a function used to prune configs after they compile successfully and before they
+                are benchmarked, e.g. by inspecting `CompiledKernel.metadata`. It should have the signature
+                `compiled_config_prune(compiled: Dict[triton.Config, CompiledKernel], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
+                and return the configs to benchmark, chosen from the keys of `compiled`. It should return at least one config.
+                For example, on AMD it can skip configs whose `waves_per_eu` hint LLVM could not achieve by comparing
+                `CompiledKernel.metadata.occupancy` with `config.kwargs["waves_per_eu"]`. It does not apply when only
+                one config remains, since the autotuner then uses it without benchmarking.
     :param reset_to_zero: a list of argument names whose value will be reset to zero before evaluating any configs.
     :type reset_to_zero: list[str]
     :param restore_value: a list of argument names whose value will be restored after evaluating any configs.

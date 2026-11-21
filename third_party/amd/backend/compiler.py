@@ -906,6 +906,11 @@ class HIPBackend(BaseBackend):
                 dump_ir=dump_llvm_ir,
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
+        # The waves per EU LLVM achieved given the kernel's LDS, register usage
+        # and workgroup size. waves_per_eu is only a hint that LLVM drops (with a
+        # warning) when it cannot be met, so this can differ from waves_per_eu.
+        occupancy = re.search(r"^\s*; Occupancy:\s+(\d+)\s*$", amdgcn, re.MULTILINE)
+        metadata["occupancy"] = int(occupancy.group(1)) if occupancy is not None else None
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
