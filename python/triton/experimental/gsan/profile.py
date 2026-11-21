@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 _active: ContextVar[AllocationProfile | None] = ContextVar("gsan_allocation_profile", default=None)
 # Compilation knobs are process-global, even though launch state is contextual.
 _context_lock = RLock()
+_SUMMARY_BLOCK_CELLS = 1024
+_ACCESS_FLAGS = _layout.READ | _layout.WRITE | _layout.ATOMIC
 
 
 @triton.jit
@@ -70,7 +72,7 @@ class _Allocation:
     # Used for alias identity only; native allocator hooks observe deallocation.
     storages: dict[int, weakref.ReferenceType] = field(default_factory=dict)
     summaries: dict[torch.device, tuple] = field(default_factory=dict)
-    stats: list[int] | None = None
+    stats: tuple[list[int], list[tuple[int, int]] | None] | None = None
     lifetime: object | None = None
     lifetime_device: torch.device | None = None
     lifetime_enabled: bool = False
@@ -86,13 +88,24 @@ def _launch_state() -> int:
     return profile.state_pointer
 
 
-def _add_stats(total, part):
-    return [total[0] | part[0], *(a + b for a, b in zip(total[1:], part[1:]))]
+def _reduce_summary(rows, nbytes, include_accessed_ranges):
+    totals = [0, 0, 0, 0, 0]
+    ranges = [] if include_accessed_ranges else None
+    block_bytes = _SUMMARY_BLOCK_CELLS * _layout.GRANULARITY
+    for block, row in enumerate(rows):
+        totals = [totals[0] | row[0], *(a + b for a, b in zip(totals[1:], row[1:]))]
+        if ranges is not None and row[0] & _ACCESS_FLAGS:
+            start = block * block_bytes
+            end = min(start + block_bytes, nbytes)
+            if ranges and sum(ranges[-1]) == start:
+                start = ranges.pop()[0]
+            ranges.append((start, end - start))
+    return totals, ranges
 
 
-def _allocation_report(entry, stats, warnings):
+def _allocation_report(entry, stats, warnings, accessed_ranges=None):
     flags, written, repeated, uninitialized, read = stats
-    observed = bool(flags & (_layout.READ | _layout.WRITE | _layout.ATOMIC))
+    observed = bool(flags & _ACCESS_FLAGS)
     candidates = [
         1 << i for i in range(_layout.NUM_GRANULARITIES) if not flags & (1 << (_layout.GRANULARITY_SHIFT + i))
     ]
@@ -112,7 +125,7 @@ def _allocation_report(entry, stats, warnings):
     write_once = observed and not reasons
     nbytes = entry["nbytes"]
     mappings = entry["mappings"]
-    return {
+    report = {
         "allocation_id": entry["allocation_id"],
         "names": entry["names"],
         # Preserve the single-device report field, without implying addresses
@@ -132,6 +145,9 @@ def _allocation_report(entry, stats, warnings):
         "recommended_normal_shadow_bytes": triton.cdiv(nbytes, granularity) * 24 if granularity else None,
         "recommended_write_once_shadow_bytes": triton.cdiv(nbytes, granularity) * 4 if write_once else None,
     }
+    if accessed_ranges is not None:
+        report["accessed_ranges"] = None if warnings else [list(pair) for pair in accessed_ranges]
+    return report
 
 
 class AllocationProfile:
@@ -157,6 +173,12 @@ class AllocationProfile:
     Reporting is allowed only after the context exits. All participating ranks
     must exit their contexts before calling the collective report.
 
+    Set ``include_accessed_ranges=True`` to include sorted ``[byte_offset, byte_length]``
+    pairs in each allocation report. The ranges cover 16 KiB blocks with an observed
+    read, write, or atomic access, relative to the tracked storage and clipped to its
+    size. Adjacent blocks are merged. An empty list means no accesses were observed;
+    ``None`` means the profile was incomplete. Use the same option on every rank.
+
     Register each storage before its first instrumented access. Local storages
     can be registered throughout the context, including reused cache addresses.
     Shared allocation IDs and external mappings must be registered before
@@ -178,7 +200,8 @@ class AllocationProfile:
     run on the creating thread, but storage destruction may run on another thread.
     """
 
-    def __init__(self, device=None, *, devices=None, group: dist.ProcessGroup | None = None):
+    def __init__(self, device=None, *, devices=None, group: dist.ProcessGroup | None = None,
+                 include_accessed_ranges: bool = False):
         from . import _profile_allocator as _allocator
 
         self._hooks = _allocator.get_allocator()
@@ -192,6 +215,7 @@ class AllocationProfile:
         self.devices = tuple(dict.fromkeys(self._device(d) for d in requested))
         self.device = self.devices[0]
         self.group = group
+        self._include_accessed_ranges = include_accessed_ranges
         if group is not None:
             import torch.distributed as dist
             if not dist.is_initialized() or dist.get_rank(group) < 0:
@@ -392,8 +416,9 @@ class AllocationProfile:
         cells = allocation.cells[device]
         with torch.cuda.device(device), triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = ""
-            summary = torch.empty((triton.cdiv(cells.numel(), 1024), 5), dtype=torch.int64, device=device)
-            kernel = _summarize.warmup(cells, summary, cells.numel(), BLOCK=1024, grid=(summary.shape[0], ))
+            num_blocks = triton.cdiv(cells.numel(), _SUMMARY_BLOCK_CELLS)
+            summary = torch.empty((num_blocks, 5), dtype=torch.int64, device=device)
+            kernel = _summarize.warmup(cells, summary, cells.numel(), BLOCK=_SUMMARY_BLOCK_CELLS, grid=(num_blocks, ))
             kernel._init_handles()
         allocation.summaries[device] = (summary, kernel)
 
@@ -409,23 +434,23 @@ class AllocationProfile:
         import torch
         if allocation.stats is not None:
             return allocation.stats
+        rows = ()
         if allocation.lifetime is not None:
             try:
                 device = allocation.lifetime_device
                 with torch.cuda.device(device):
                     self._hooks.finalize(allocation.lifetime, torch.cuda.current_stream().cuda_stream)
-                if not allocation.lifetime_enabled:
-                    return [0, 0, 0, 0, 0]
-                summary = allocation.summaries[device][0]
-                result = [0, 0, 0, 0, 0]
-                for row in summary.cpu().tolist():
-                    result = _add_stats(result, row)
-                return result
+                if allocation.lifetime_enabled:
+                    rows = allocation.summaries[device][0].cpu().tolist()
             except RuntimeError as exc:
                 allocation.errors.append(f"storage retirement failed: {exc}")
-                allocation.stats = [0, 0, 0, 0, 0]
-                return allocation.stats
-        return self._device_stats(allocation) if self._prepared else [0, 0, 0, 0, 0]
+        elif self._prepared:
+            cells = next(iter(allocation.cells.values()))
+            summary, kernel = allocation.summaries[cells.device]
+            with torch.cuda.device(cells.device):
+                kernel[(summary.shape[0], 1, 1)](cells, summary, cells.numel(), _SUMMARY_BLOCK_CELLS)
+                rows = summary.cpu().tolist()
+        return _reduce_summary(rows, allocation.nbytes, self._include_accessed_ranges)
 
     def _manifest(self):
         rank = 0
@@ -575,19 +600,6 @@ class AllocationProfile:
             dist.all_gather_object(result, value, group=self.group)
         return result
 
-    def _device_stats(self, allocation):
-        import torch
-        cells = next(iter(allocation.cells.values()))
-        summary, kernel = allocation.summaries[cells.device]
-        with torch.cuda.device(cells.device):
-            # The compiled kernel has instrumentation disabled. Calling it
-            # directly avoids changing process-global knobs from a destructor.
-            kernel[(summary.shape[0], 1, 1)](cells, summary, cells.numel(), 1024)
-            result = [0, 0, 0, 0, 0]
-            for row in summary.cpu().tolist():
-                result = _add_stats(result, row)
-            return result
-
     def report(self) -> dict:
         """Return final results after context exit; collective with a group.
 
@@ -618,7 +630,9 @@ class AllocationProfile:
             torch.cuda.synchronize(device)
         # This collective must precede shadow reads: another rank may still be
         # writing the same physical cells after this rank's local synchronization.
-        failures = self._gather(self._failed)
+        failures, range_options = zip(*self._gather((self._failed, self._include_accessed_ranges)))
+        if len(set(range_options)) != 1:
+            raise ValueError("include_accessed_ranges must agree across profiling ranks")
         warnings = [(f"rank {rank}: " if self.group is not None else "") + "profile context exited with an exception"
                     for rank, failed in enumerate(failures)
                     if failed]
@@ -647,7 +661,7 @@ class AllocationProfile:
             "observed execution only; not a race check", "world_size":
             len(failures), "warnings":
             warnings, "allocations": [
-                _allocation_report(entry, combined[key], warnings + entry["errors"])
+                _allocation_report(entry, combined[key][0], warnings + entry["errors"], combined[key][1])
                 for key, entry in self._entries.items()
             ]
         }
