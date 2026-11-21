@@ -12,15 +12,21 @@ class FutureKernel:
         self.finalize_compile = finalize_compile
         self.cleanup_compile = cleanup_compile
         self.kernel = None
+        self.error: Exception | None = None
         self.future = future
 
     def result(self, ignore_errors: bool = False):
         if self.kernel is not None:
             return self.kernel
+        if self.error is not None:
+            if ignore_errors:
+                return
+            raise self.error.with_traceback(None)
 
         try:
             kernel = self.future.result()
-        except Exception:
+        except Exception as error:
+            self.error = error
             self.cleanup_compile(self)
             self.future = None
             if ignore_errors:
