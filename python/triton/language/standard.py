@@ -533,7 +533,8 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
     the non-sign bits of negative values, sort, then apply the same map to the
     result (for a :py:func:`topk` of an 8- or 16-bit key, cast the result back
     to the key dtype first). This orders :code:`-0.0` before :code:`+0.0` and
-    NaNs with the sign bit clear after :code:`+inf`.
+    NaNs with the sign bit clear after :code:`+inf`. :code:`float8e8m0fnu` has
+    no sign bit: its bits, bitcast to :code:`uint8`, already sort in value order.
 
     :param x: The input tensor to be sorted.
     :type x: Tensor
