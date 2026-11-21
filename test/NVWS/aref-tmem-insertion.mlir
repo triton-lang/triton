@@ -579,6 +579,11 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK-NEXT: scf.yield [[TOK]]
       scf.yield %token_1 : !ttg.async.token
     } {tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 17 : i32, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 0>]}
+    // CHECK:      nvws.aref.put.exit [[END_AREF:%.*]], {{.*}} [#nvws.async_op<none>] [[PRODUCER_ATTRS:\{ttg.partition = array<i32: 0>, ttg.warp_specialize.tag = [0-9]+ : i32\}]]
+    // CHECK-NEXT: {{.*}}, [[FINAL_GET:%.*]] = nvws.aref.get.enter [[END_AREF]]
+    // CHECK-NEXT: nvws.aref.get.exit [[END_AREF]], [[FINAL_GET]] [#nvws.async_op<tc5mma>]
+    // CHECK-NEXT: {{.*}} = nvws.aref.put.enter [[END_AREF]] [[PRODUCER_ATTRS]]
+    // CHECK-NEXT: tt.return
     tt.return
   }
 
