@@ -68,16 +68,25 @@ using namespace llvm;
 
 namespace {
 
+struct CodeGenErrors {
+  unsigned count = 0;
+  std::string messages;
+};
+
 void handleCodeGenDiagnostic(const llvm::DiagnosticInfo *diagnostic,
-                             void *errorStream) {
+                             void *opaqueErrors) {
+  auto &errors = *static_cast<CodeGenErrors *>(opaqueErrors);
+  llvm::raw_string_ostream errorStream(errors.messages);
   auto severity = diagnostic->getSeverity();
-  llvm::raw_ostream &errors =
-      *static_cast<llvm::raw_string_ostream *>(errorStream);
-  auto &output = severity == llvm::DS_Error ? errors : llvm::errs();
-  output << llvm::LLVMContext::getDiagnosticMessagePrefix(severity) << ": ";
-  llvm::DiagnosticPrinterRawOStream printer(output);
+  llvm::raw_ostream *output = &llvm::errs();
+  if (severity == llvm::DS_Error) {
+    ++errors.count;
+    output = &errorStream;
+  }
+  *output << llvm::LLVMContext::getDiagnosticMessagePrefix(severity) << ": ";
+  llvm::DiagnosticPrinterRawOStream printer(*output);
   diagnostic->print(printer);
-  output << '\n';
+  *output << '\n';
 }
 
 void enableFPContraction(llvm::Module &module) {
@@ -780,11 +789,10 @@ void init_triton_llvm(py::module_ &m) {
           llvm::SaveAndRestore schedulingPolicy(scheduleForRegisters,
                                                 sched4reg);
           // create LLVM module from C++
-          std::string codeGenErrors;
-          llvm::raw_string_ostream errorStream(codeGenErrors);
+          CodeGenErrors codeGenErrors;
           llvm::LLVMContext context;
           context.setDiagnosticHandlerCallBack(handleCodeGenDiagnostic,
-                                               &errorStream, true);
+                                               &codeGenErrors, true);
           ScopedLSRPassGate lsrGate(context, disableLSR);
           std::unique_ptr<llvm::MemoryBuffer> buffer =
               llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
@@ -799,8 +807,12 @@ void init_triton_llvm(py::module_ &m) {
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
                                      enable_fp_fusion, isObject,
                                      canonicalizeGEP, enableFpSan, abi);
-          if (!codeGenErrors.empty())
-            throw std::runtime_error(codeGenErrors);
+          if (codeGenErrors.count) {
+            std::string noun = codeGenErrors.count == 1 ? "Error" : "Errors";
+            throw std::runtime_error(noun +
+                                     " encountered during llvm codegen:\n" +
+                                     codeGenErrors.messages);
+          }
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));

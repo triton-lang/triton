@@ -81,18 +81,27 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
 def test_nvptx_codegen_reports_invalid_register_constraint():
 
     @triton.jit
-    def kernel(out, CONSTRAINT: tl.constexpr):
-        value = tl.inline_asm_elementwise("mov.u32 $0, 1;", CONSTRAINT, [], dtype=tl.int32, is_pure=True, pack=1)
-        tl.store(out, value)
+    def kernel(out, CONSTRAINTS: tl.constexpr):
+        for index in tl.static_range(2):
+            value = tl.inline_asm_elementwise("mov.u32 $0, 1;", CONSTRAINTS[index], [], dtype=tl.int32, is_pure=True,
+                                              pack=1)
+            tl.store(out + index, value)
 
-    def compile_ptx(constraint):
-        src = ASTSource(kernel, signature={"out": "*i32", "CONSTRAINT": "constexpr"},
-                        constexprs={"CONSTRAINT": constraint})
+    def compile_ptx(constraints):
+        src = ASTSource(kernel, signature={"out": "*i32", "CONSTRAINTS": "constexpr"},
+                        constexprs={"CONSTRAINTS": constraints})
         return triton.compile(src, target=GPUTarget("cuda", 80, 32)).asm["ptx"]
 
-    with pytest.raises(RuntimeError, match="could not allocate output register for constraint 'Z'"):
-        compile_ptx("=Z")
-    assert "mov.u32" in compile_ptx("=r")
+    with pytest.raises(RuntimeError, match="(?s)^Error encountered during llvm codegen:\n.*constraint 'Z'"):
+        compile_ptx(("=Z", "=r"))
+    with pytest.raises(RuntimeError) as exc:
+        compile_ptx(("=Z", "=Y"))
+    heading, diagnostics = str(exc.value).split("\n", 1)
+    assert heading == "Errors encountered during llvm codegen:"
+    assert heading not in diagnostics
+    for constraint in ("Z", "Y"):
+        assert f"could not allocate output register for constraint '{constraint}'" in diagnostics
+    assert "mov.u32" in compile_ptx(("=r", "=r"))
 
 
 def test_compile_only_sm100() -> None:
