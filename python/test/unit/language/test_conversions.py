@@ -329,6 +329,23 @@ def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
     torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_fp16_e5m2_rtz_all_encodings(BLOCK_SIZE, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA E5M2 RTZ conversion")
+
+    bits = (torch.arange(65536, dtype=torch.int32) * 25173 + 13849).to(torch.int16)
+    values = bits.view(torch.float16)
+    actual = launch_type_convert_triton(bits.to(device), tl.float16, tl.float8e5, device,
+                                       rounding="rtz", BLOCK_SIZE=BLOCK_SIZE).cpu()
+
+    torch.testing.assert_close(torch.isnan(actual.view(torch.float8_e5m2)), torch.isnan(values))
+    # FP16 and E5M2 share sign and exponent bits; RTZ discards eight mantissa bits.
+    expected = (bits.to(torch.int32) >> 8).to(torch.int8)
+    mask = ~torch.isnan(values)
+    torch.testing.assert_close(actual[mask], expected[mask], rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("dst_dtype, dst_type", [
     (torch.float16, tl.float16),
     (torch.float32, tl.float32),
