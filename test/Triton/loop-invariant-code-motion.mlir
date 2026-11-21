@@ -1,5 +1,26 @@
 // RUN: triton-opt --split-input-file %s -triton-licm | FileCheck %s
 
+// CHECK-LABEL: @hoist_load_unsigned
+// CHECK-SAME: %[[IN:.*]]: !tt.ptr<i32>, %[[OUT:.*]]: !tt.ptr<i32>, %[[LB:.*]]: i32, %[[UB:.*]]: i32
+tt.func @hoist_load_unsigned(%in: !tt.ptr<i32>, %out: !tt.ptr<i32>, %lb: i32, %ub: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: %[[COND:.*]] = arith.cmpi ult, %[[LB]], %[[UB]] : i32
+  // CHECK: %[[VALUE:.*]] = tt.load %[[IN]], %[[COND]] : !tt.ptr<i32>
+  // CHECK: scf.for unsigned
+  // CHECK-NOT: tt.load
+  // CHECK: arith.addi {{.*}}, %[[VALUE]]
+  %result = scf.for unsigned %i = %lb to %ub step %c1 iter_args(%acc = %c0) -> (i32) : i32 {
+    %value = tt.load %in : !tt.ptr<i32>
+    %next = arith.addi %acc, %value : i32
+    scf.yield %next : i32
+  }
+  tt.store %out, %result : !tt.ptr<i32>
+  tt.return
+}
+
+// -----
+
 tt.func @hoist_load_without_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32

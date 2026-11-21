@@ -1,5 +1,23 @@
 // RUN: triton-opt %s -allow-unregistered-dialect -split-input-file -tritongpu-schedule-loops -canonicalize | FileCheck %s
 
+// CHECK-LABEL: @unsigned_loop
+tt.func @unsigned_loop(%lb: i32, %ub: i32, %step: i32, %ptr: !tt.ptr<i32>) -> i32 {
+  %c0 = arith.constant 0 : i32
+  // CHECK: scf.for unsigned
+  // CHECK: tt.load {{.*}}loop.stage = 0 : i32
+  // CHECK: arith.addi {{.*}}loop.stage = 2 : i32
+  // CHECK: tt.scheduled_max_stage = 2 : i32
+  // CHECK: tt.return
+  %result = scf.for unsigned %i = %lb to %ub step %step iter_args(%acc = %c0) -> i32 : i32 {
+    %value = tt.load %ptr {tt.latency = 2 : i32} : !tt.ptr<i32>
+    %next = arith.addi %acc, %value : i32
+    scf.yield %next : i32
+  }
+  tt.return %result : i32
+}
+
+// -----
+
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>

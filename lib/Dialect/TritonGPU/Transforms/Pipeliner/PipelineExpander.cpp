@@ -31,6 +31,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
@@ -153,7 +154,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   auto upperBoundCst = ub.getDefiningOp<arith::ConstantIndexOp>();
   auto lowerBoundCst = lb.getDefiningOp<arith::ConstantIndexOp>();
   auto stepCst = step.getDefiningOp<arith::ConstantIndexOp>();
-  if (!upperBoundCst || !lowerBoundCst || !stepCst) {
+  if (forOp.getUnsignedCmp() || !upperBoundCst || !lowerBoundCst || !stepCst) {
     if (!options.supportDynamicLoops) {
       LDBG("--dynamic loop not supported -> BAIL");
       return false;
@@ -328,8 +329,12 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
 
     if (dynamicLoop) {
       // pred = ub > lb + (i * step)
-      predicates[i] = arith::CmpIOp::create(rewriter, loc,
-                                            arith::CmpIPredicate::slt, iv, ub);
+      if (forOp.getUnsignedCmp())
+        predicates[i] =
+            emitPredicateForStage(rewriter, lb, ub, step, i, 0, true);
+      else
+        predicates[i] = arith::CmpIOp::create(
+            rewriter, loc, arith::CmpIPredicate::slt, iv, ub);
     }
 
     for (Operation *op : opOrder) {
@@ -459,12 +464,16 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   if (peelEpilogue) {
     Type t = ub.getType();
     Location loc = forOp.getLoc();
-    // newUb = ub - maxStage * step
-    Value maxStageValue = arith::ConstantOp::create(
-        rewriter, loc, rewriter.getIntegerAttr(t, maxStage));
-    Value maxStageByStep =
-        arith::MulIOp::create(rewriter, loc, step, maxStageValue);
-    newUb = arith::SubIOp::create(rewriter, loc, ub, maxStageByStep);
+    if (forOp.getUnsignedCmp()) {
+      newUb = getUnsignedBoundAfterPeeling(rewriter, loc, ub, step, maxStage);
+    } else {
+      // newUb = ub - maxStage * step
+      Value maxStageValue = arith::ConstantOp::create(
+          rewriter, loc, rewriter.getIntegerAttr(t, maxStage));
+      Value maxStageByStep =
+          arith::MulIOp::create(rewriter, loc, step, maxStageValue);
+      newUb = arith::SubIOp::create(rewriter, loc, ub, maxStageByStep);
+    }
   }
   auto newForOp =
       scf::ForOp::create(rewriter, forOp.getLoc(), forOp.getLowerBound(), newUb,
@@ -498,8 +507,9 @@ LogicalResult LoopPipelinerInternal::createKernel(
     // Create a predicate for each stage except the last stage.
     for (unsigned i = 0; i < maxStage; i++) {
       // c = ub - (maxStage - i) * step
-      predicates[i] = emitPredicateStageFn(rewriter, newForOp.getInductionVar(),
-                                           ub, step, maxStage, i);
+      predicates[i] =
+          emitPredicateStageFn(rewriter, newForOp.getInductionVar(), ub, step,
+                               maxStage, i, forOp.getUnsignedCmp());
     }
   }
   for (Operation *op : opOrder) {
@@ -672,24 +682,37 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   // - total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
   Value zero = createConst(0);
   Value one = createConst(1);
-  Value stepLessZero = arith::CmpIOp::create(
-      rewriter, loc, arith::CmpIPredicate::slt, step, zero);
-  Value stepDecr = arith::SelectOp::create(rewriter, loc, stepLessZero, one,
-                                           createConst(-1));
-
-  Value rangeDiff = arith::SubIOp::create(rewriter, loc, ub, lb);
-  Value rangeIncrStep = arith::AddIOp::create(rewriter, loc, rangeDiff, step);
-  Value rangeDecr =
-      arith::AddIOp::create(rewriter, loc, rangeIncrStep, stepDecr);
-  Value totalIterations =
-      arith::DivSIOp::create(rewriter, loc, rangeDecr, step);
+  Value totalIterations;
+  if (forOp.getUnsignedCmp()) {
+    // Clamp empty ranges before ceildiv, which must not wrap at either end.
+    Value clampedLb = arith::MinUIOp::create(rewriter, loc, lb, ub);
+    Value distance = arith::SubIOp::create(rewriter, loc, ub, clampedLb);
+    totalIterations = arith::CeilDivUIOp::create(rewriter, loc, distance, step);
+  } else {
+    Value stepLessZero = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::slt, step, zero);
+    Value stepDecr = arith::SelectOp::create(rewriter, loc, stepLessZero, one,
+                                             createConst(-1));
+    Value rangeDiff = arith::SubIOp::create(rewriter, loc, ub, lb);
+    Value rangeIncrStep = arith::AddIOp::create(rewriter, loc, rangeDiff, step);
+    Value rangeDecr =
+        arith::AddIOp::create(rewriter, loc, rangeIncrStep, stepDecr);
+    totalIterations = arith::DivSIOp::create(rewriter, loc, rangeDecr, step);
+  }
 
   // If total_iters < max_stage, start the epilogue at zero to match the
   // ramp-up in the prologue.
   // start_iter = max(0, total_iters - max_stage)
-  Value iterI = arith::SubIOp::create(rewriter, loc, totalIterations,
-                                      createConst(maxStage));
-  iterI = arith::MaxSIOp::create(rewriter, loc, zero, iterI);
+  Value iterI;
+  if (forOp.getUnsignedCmp()) {
+    Value peeled = arith::MinUIOp::create(rewriter, loc, totalIterations,
+                                          createConst(maxStage));
+    iterI = arith::SubIOp::create(rewriter, loc, totalIterations, peeled);
+  } else {
+    iterI = arith::SubIOp::create(rewriter, loc, totalIterations,
+                                  createConst(maxStage));
+    iterI = arith::MaxSIOp::create(rewriter, loc, zero, iterI);
+  }
 
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
@@ -707,9 +730,11 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
     if (dynamicLoop) {
       // Disable stages when `i` is greater than total_iters.
       // pred = total_iters >= i
-      predicates[i] =
-          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
-                                totalIterations, createConst(i));
+      predicates[i] = arith::CmpIOp::create(rewriter, loc,
+                                            forOp.getUnsignedCmp()
+                                                ? arith::CmpIPredicate::uge
+                                                : arith::CmpIPredicate::sge,
+                                            totalIterations, createConst(i));
     }
   }
 
@@ -854,8 +879,14 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
 Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
                                           Value inductionVar, Value upperBound,
                                           Value step, uint64_t maxStage,
-                                          uint64_t stage) {
+                                          uint64_t stage, bool unsignedCmp) {
   auto loc = inductionVar.getLoc();
+  if (unsignedCmp) {
+    Value bound = getUnsignedBoundAfterPeeling(rewriter, loc, upperBound, step,
+                                               maxStage - stage);
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ult,
+                                 inductionVar, bound);
+  }
   auto type = inductionVar.getType();
   Value c = arith::SubIOp::create(
       rewriter, loc, upperBound,
