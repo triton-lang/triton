@@ -1382,10 +1382,9 @@ def _implicit_cvt(arg, annotation=None):
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if isinstance(arg, float):
-        # Like the compiled launcher: a floating-point annotation picks the type, otherwise fp32.
         ty_name = annotation if annotation in ("fp16", "bf16", "fp32", "fp64") else "fp32"
         if ty_name == "bf16":
-            # The launchers keep the upper 16 bits of the fp32 value instead of rounding.
+            # As the launchers' extractBF16 does: round to fp32, then keep its upper 16 bits.
             bits = np.array([arg], dtype=np.float32).view(np.uint32) >> 16
             handle = TensorHandle(bits.astype(np.uint16), tl.bfloat16)
         else:
