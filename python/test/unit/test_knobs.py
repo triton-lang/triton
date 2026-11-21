@@ -174,6 +174,26 @@ def test_nvidia_short_pointer_abi(link_hip_first, fresh_triton_cache):
     assert "\tadd.s64 " not in ptx
 
 
+@pytest.mark.skipif(is_hip(), reason="NVIDIA backend option")
+def test_nvidia_ptxas_options_read_at_compile_time(fresh_knobs_including_libraries, monkeypatch):
+    # PTXAS_OPTIONS must be read when options are parsed, not frozen when
+    # triton is imported.
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.nvidia import compiler
+
+    backend = compiler.CUDABackend(GPUTarget("cuda", 90, 32))
+
+    monkeypatch.delenv("PTXAS_OPTIONS", raising=False)
+    assert backend.parse_options({"ptx_version": 80}).ptx_options is None
+
+    monkeypatch.setenv("PTXAS_OPTIONS", "-v")
+    assert backend.parse_options({"ptx_version": 80}).ptx_options == "-v"
+
+    # An explicit option still takes precedence over the environment.
+    options = backend.parse_options({"ptx_version": 80, "ptx_options": "--verbose"})
+    assert options.ptx_options == "--verbose"
+
+
 def _compile_empty_hip_kernel(arch, warp_size):
     from triton.backends.compiler import GPUTarget
 
