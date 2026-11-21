@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-prefetch -canonicalize | FileCheck %s --dump-input-context=50
+// RUN: triton-opt %s -split-input-file -tritongpu-prefetch -canonicalize | FileCheck %s --check-prefixes=CHECK,CAP --dump-input-context=50
+// RUN: triton-opt %s -split-input-file -tritongpu-prefetch -canonicalize | FileCheck %s --check-prefix=READS
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -541,3 +542,231 @@ tt.func @matmul_loop_mixed_amd(%lb : index, %ub : index, %step : index, %A : !tt
   tt.return %loop#4 : tensor<128x128xf32, #C>
 }
 }  // end module
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#a_packed = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+#b_packed = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:89"} {
+// Split oversized FP4 operands within the current iteration. Both packed A
+// chunks must remain before the overwrite of their shared descriptor. The
+// original completion token also stays attached to every chunk read.
+
+// CHECK-LABEL: tt.func @prefetch_fp4_lhs(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<128x64xi8
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<128x128xbf16
+// CHECK: %[[LOOP:[^ ]+]] = scf.for
+// CHECK-SAME: iter_args(%[[ACC:[^ ]+]] = %{{[^ ,)]+}}) -> (tensor<128x128xf32
+// CHECK: %[[WAIT:.+]] = ttg.async_wait
+// CHECK: %[[A0_VIEW:.+]] = ttg.memdesc_subslice %[[A]][0, 0]
+// CHECK: %[[A0:.+]] = ttg.local_load %[[A0_VIEW]] token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: %[[A1_VIEW:.+]] = ttg.memdesc_subslice %[[A]][0, 32]
+// CHECK: %[[A1:.+]] = ttg.local_load %[[A1_VIEW]] token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: ttg.local_store %{{[^,]+}}, %[[A]]
+// CHECK: %[[B0:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<64x128xbf16,
+// CHECK: %[[B1:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<64x128xbf16,
+// CHECK: %[[A0_UP:.+]] = ttg.fp4_to_fp %[[A0]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[DOT0:.+]] = tt.dot %[[A0_UP]], %[[B0]], %[[ACC]]
+// CHECK: %[[A1_UP:.+]] = ttg.fp4_to_fp %[[A1]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[DOT1:.+]] = tt.dot %[[A1_UP]], %[[B1]], %[[DOT0]]
+// CHECK-NOT: ttg.fp4_to_fp
+// CHECK: scf.yield %[[DOT1]] : tensor<128x128xf32
+// CHECK: tt.return %[[LOOP]]
+// READS-LABEL: tt.func @prefetch_fp4_lhs(
+// READS-COUNT-4: ttg.local_load
+// READS-NOT: ttg.local_load
+// READS: tt.return
+tt.func @prefetch_fp4_lhs(%a_smem: !ttg.memdesc<128x64xi8, #shared, #smem, mutable>, %b_smem: !ttg.memdesc<128x128xbf16, #shared, #smem>, %n: i32, %tok0: !ttg.async.token, %tok1: !ttg.async.token) -> tensor<128x128xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #mma>
+  %replacement = arith.constant dense<0> : tensor<128x64xi8, #a_packed>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<128x128xf32, #mma>) : i32 {
+    %wait = ttg.async_wait %tok0, %tok1 {num = 0 : i32}
+    %a_raw = ttg.local_load %a_smem token %wait : !ttg.memdesc<128x64xi8, #shared, #smem, mutable> -> tensor<128x64xi8, #a_packed>
+    %a_up = ttg.fp4_to_fp %a_raw {axis = 1 : i32} : tensor<128x64xi8, #a_packed> -> tensor<128x128xbf16, #a>
+    ttg.local_store %replacement, %a_smem : tensor<128x64xi8, #a_packed> -> !ttg.memdesc<128x64xi8, #shared, #smem, mutable>
+    %b_raw = ttg.local_load %b_smem token %wait : !ttg.memdesc<128x128xbf16, #shared, #smem> -> tensor<128x128xbf16, #b>
+    %dot = tt.dot %a_up, %b_raw, %acc : tensor<128x128xbf16, #a> * tensor<128x128xbf16, #b> -> tensor<128x128xf32, #mma>
+    scf.yield %dot : tensor<128x128xf32, #mma>
+  }
+  tt.return %result : tensor<128x128xf32, #mma>
+}
+
+// CHECK-LABEL: tt.func @prefetch_fp4_rhs(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<128x128xbf16
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<64x128xi8
+// CHECK: %[[LOOP:[^ ]+]] = scf.for
+// CHECK-SAME: iter_args(%[[ACC:[^ ]+]] = %{{[^ ,)]+}}) -> (tensor<128x128xf32
+// CHECK: %[[WAIT:.+]] = ttg.async_wait
+// CHECK: %[[A0:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<128x64xbf16,
+// CHECK: %[[A1:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<128x64xbf16,
+// CHECK: %[[B0_VIEW:.+]] = ttg.memdesc_subslice %[[B]][0, 0]
+// CHECK: %[[B0:.+]] = ttg.local_load %[[B0_VIEW]] token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[B1_VIEW:.+]] = ttg.memdesc_subslice %[[B]][32, 0]
+// CHECK: %[[B1:.+]] = ttg.local_load %[[B1_VIEW]] token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[B0_UP:.+]] = ttg.fp4_to_fp %[[B0]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT0:.+]] = tt.dot %[[A0]], %[[B0_UP]], %[[ACC]]
+// CHECK: %[[B1_UP:.+]] = ttg.fp4_to_fp %[[B1]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT1:.+]] = tt.dot %[[A1]], %[[B1_UP]], %[[DOT0]]
+// CHECK-NOT: ttg.fp4_to_fp
+// CHECK: scf.yield %[[DOT1]] : tensor<128x128xf32
+// CHECK: tt.return %[[LOOP]]
+// READS-LABEL: tt.func @prefetch_fp4_rhs(
+// READS-COUNT-4: ttg.local_load
+// READS-NOT: ttg.local_load
+// READS: tt.return
+tt.func @prefetch_fp4_rhs(%a_smem: !ttg.memdesc<128x128xbf16, #shared, #smem>, %b_smem: !ttg.memdesc<64x128xi8, #shared, #smem>, %n: i32, %tok0: !ttg.async.token, %tok1: !ttg.async.token) -> tensor<128x128xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<128x128xf32, #mma>) : i32 {
+    %wait = ttg.async_wait %tok0, %tok1 {num = 0 : i32}
+    %a_raw = ttg.local_load %a_smem token %wait : !ttg.memdesc<128x128xbf16, #shared, #smem> -> tensor<128x128xbf16, #a>
+    %b_raw = ttg.local_load %b_smem token %wait : !ttg.memdesc<64x128xi8, #shared, #smem> -> tensor<64x128xi8, #b_packed>
+    %b_up = ttg.fp4_to_fp %b_raw {axis = 0 : i32} : tensor<64x128xi8, #b_packed> -> tensor<128x128xbf16, #b>
+    %dot = tt.dot %a_raw, %b_up, %acc : tensor<128x128xbf16, #a> * tensor<128x128xbf16, #b> -> tensor<128x128xf32, #mma>
+    scf.yield %dot : tensor<128x128xf32, #mma>
+  }
+  tt.return %result : tensor<128x128xf32, #mma>
+}
+
+// Keep the following unary operation with each decoded chunk and chain all
+
+// four partial accumulations in K order.
+
+// CHECK-LABEL: tt.func @prefetch_fp4_both(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<128x128xi8
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<128x128xi8
+// CHECK: %[[LOOP:[^ ]+]] = scf.for
+// CHECK-SAME: iter_args(%[[ACC:[^ ]+]] = %{{[^ ,)]+}}) -> (tensor<128x128xf32
+// CHECK: %[[WAIT:.+]] = ttg.async_wait
+// CHECK: %[[A0:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: %[[A1:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: %[[A2:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: %[[A3_VIEW:.+]] = ttg.memdesc_subslice %[[A]][0, 96]
+// CHECK: %[[A3:.+]] = ttg.local_load %[[A3_VIEW]] token %[[WAIT]] {{.*}} -> tensor<128x32xi8,
+// CHECK: %[[B0:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[B1:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[B2:.+]] = ttg.local_load %{{[^ ]+}} token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[B3_VIEW:.+]] = ttg.memdesc_subslice %[[B]][96, 0]
+// CHECK: %[[B3:.+]] = ttg.local_load %[[B3_VIEW]] token %[[WAIT]] {{.*}} -> tensor<32x128xi8,
+// CHECK: %[[A0_UP:.+]] = ttg.fp4_to_fp %[[A0]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[A0_NEG:.+]] = arith.negf %[[A0_UP]]
+// CHECK-NEXT: %[[B0_UP:.+]] = ttg.fp4_to_fp %[[B0]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT0:.+]] = tt.dot %[[A0_NEG]], %[[B0_UP]], %[[ACC]]
+// CHECK: %[[A1_UP:.+]] = ttg.fp4_to_fp %[[A1]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[A1_NEG:.+]] = arith.negf %[[A1_UP]]
+// CHECK-NEXT: %[[B1_UP:.+]] = ttg.fp4_to_fp %[[B1]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT1:.+]] = tt.dot %[[A1_NEG]], %[[B1_UP]], %[[DOT0]]
+// CHECK: %[[A2_UP:.+]] = ttg.fp4_to_fp %[[A2]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[A2_NEG:.+]] = arith.negf %[[A2_UP]]
+// CHECK-NEXT: %[[B2_UP:.+]] = ttg.fp4_to_fp %[[B2]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT2:.+]] = tt.dot %[[A2_NEG]], %[[B2_UP]], %[[DOT1]]
+// CHECK: %[[A3_UP:.+]] = ttg.fp4_to_fp %[[A3]] {{.*}} -> tensor<128x64xbf16,
+// CHECK-NEXT: %[[A3_NEG:.+]] = arith.negf %[[A3_UP]]
+// CHECK-NEXT: %[[B3_UP:.+]] = ttg.fp4_to_fp %[[B3]] {{.*}} -> tensor<64x128xbf16,
+// CHECK-NEXT: %[[DOT3:.+]] = tt.dot %[[A3_NEG]], %[[B3_UP]], %[[DOT2]]
+// CHECK-NOT: ttg.fp4_to_fp
+// CHECK: scf.yield %[[DOT3]] : tensor<128x128xf32
+// CHECK: tt.return %[[LOOP]]
+// READS-LABEL: tt.func @prefetch_fp4_both(
+// READS-COUNT-8: ttg.local_load
+// READS-NOT: ttg.local_load
+// READS: tt.return
+tt.func @prefetch_fp4_both(%a_smem: !ttg.memdesc<128x128xi8, #shared, #smem>, %b_smem: !ttg.memdesc<128x128xi8, #shared, #smem>, %n: i32, %tok0: !ttg.async.token, %tok1: !ttg.async.token) -> tensor<128x128xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<128x128xf32, #mma>) : i32 {
+    %wait = ttg.async_wait %tok0, %tok1 {num = 0 : i32}
+    %a_raw = ttg.local_load %a_smem token %wait : !ttg.memdesc<128x128xi8, #shared, #smem> -> tensor<128x128xi8, #a_packed>
+    %a_up = ttg.fp4_to_fp %a_raw {axis = 1 : i32} : tensor<128x128xi8, #a_packed> -> tensor<128x256xbf16, #a>
+    %a_neg = arith.negf %a_up : tensor<128x256xbf16, #a>
+    %b_raw = ttg.local_load %b_smem token %wait : !ttg.memdesc<128x128xi8, #shared, #smem> -> tensor<128x128xi8, #b_packed>
+    %b_up = ttg.fp4_to_fp %b_raw {axis = 0 : i32} : tensor<128x128xi8, #b_packed> -> tensor<256x128xbf16, #b>
+    %dot = tt.dot %a_neg, %b_up, %acc : tensor<128x256xbf16, #a> * tensor<256x128xbf16, #b> -> tensor<128x128xf32, #mma>
+    scf.yield %dot : tensor<128x128xf32, #mma>
+  }
+  tt.return %result : tensor<128x128xf32, #mma>
+}
+
+// The estimated full operand/accumulator footprint fits the register budget.
+
+// A K dimension larger than a chunk alone must not force splitting.
+
+// CHECK-LABEL: tt.func @prefetch_fp4_small(
+// CHECK-SAME: %[[A:[^:]+]]: !ttg.memdesc<64x64xi8
+// CHECK-SAME: %[[B:[^:]+]]: !ttg.memdesc<128x64xbf16
+// CHECK: %[[LOOP:[^ ]+]] = scf.for
+// CHECK-SAME: iter_args(%[[ACC:[^ ]+]] = %{{[^ ,)]+}}) -> (tensor<64x64xf32
+// CHECK-NOT: ttg.memdesc_subslice
+// CHECK: %[[A_FULL:.+]] = ttg.local_load %[[A]] {{.*}} -> tensor<64x64xi8,
+// CHECK: %[[A_UP:.+]] = ttg.fp4_to_fp %[[A_FULL]]
+// CHECK: %[[B_FULL:.+]] = ttg.local_load %[[B]] {{.*}} -> tensor<128x64xbf16,
+// CHECK: %[[DOT:.+]] = tt.dot %[[A_UP]], %[[B_FULL]], %[[ACC]]
+// CHECK: scf.yield %[[DOT]] : tensor<64x64xf32
+// CHECK: tt.return %[[LOOP]]
+// READS-LABEL: tt.func @prefetch_fp4_small(
+// READS-COUNT-2: ttg.local_load
+// READS-NOT: ttg.local_load
+// READS: tt.return
+tt.func @prefetch_fp4_small(%a_smem: !ttg.memdesc<64x64xi8, #shared, #smem>, %b_smem: !ttg.memdesc<128x64xbf16, #shared, #smem>, %n: i32, %tok0: !ttg.async.token, %tok1: !ttg.async.token) -> tensor<64x64xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<64x64xf32, #mma>) : i32 {
+    %wait = ttg.async_wait %tok0, %tok1 {num = 0 : i32}
+    %a_raw = ttg.local_load %a_smem token %wait : !ttg.memdesc<64x64xi8, #shared, #smem> -> tensor<64x64xi8, #a_packed>
+    %a_up = ttg.fp4_to_fp %a_raw {axis = 1 : i32} : tensor<64x64xi8, #a_packed> -> tensor<64x128xbf16, #a>
+    %b_raw = ttg.local_load %b_smem token %wait : !ttg.memdesc<128x64xbf16, #shared, #smem> -> tensor<128x64xbf16, #b>
+    %dot = tt.dot %a_up, %b_raw, %acc : tensor<64x128xbf16, #a> * tensor<128x64xbf16, #b> -> tensor<64x64xf32, #mma>
+    scf.yield %dot : tensor<64x64xf32, #mma>
+  }
+  tt.return %result : tensor<64x64xf32, #mma>
+}
+
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#a_packed = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+#b_packed = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+#smem = #ttg.shared_memory
+
+// The same operand footprint that fits the default budget needs splitting
+// when the kernel explicitly requests a smaller register limit.
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:89", ttg.maxnreg = 128 : i32} {
+// CAP-LABEL: tt.func @prefetch_fp4_maxnreg(
+// CAP: scf.for
+// CAP-COUNT-4: ttg.local_load
+// CAP: ttg.fp4_to_fp
+// CAP-NEXT: %[[FIRST_CAP:.+]] = tt.dot {{.*}} : tensor<64x64xbf16,
+// CAP: ttg.fp4_to_fp
+// CAP-NEXT: %[[LAST_CAP:.+]] = tt.dot {{.*}}, %[[FIRST_CAP]] : tensor<64x64xbf16,
+// CAP-NEXT: scf.yield %[[LAST_CAP]] : tensor<64x64xf32,
+tt.func @prefetch_fp4_maxnreg(%a_smem: !ttg.memdesc<64x64xi8, #shared, #smem>, %b_smem: !ttg.memdesc<128x64xbf16, #shared, #smem>, %n: i32, %tok0: !ttg.async.token, %tok1: !ttg.async.token) -> tensor<64x64xf32, #mma> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zero = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+  %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<64x64xf32, #mma>) : i32 {
+    %wait = ttg.async_wait %tok0, %tok1 {num = 0 : i32}
+    %a_raw = ttg.local_load %a_smem token %wait : !ttg.memdesc<64x64xi8, #shared, #smem> -> tensor<64x64xi8, #a_packed>
+    %a_up = ttg.fp4_to_fp %a_raw {axis = 1 : i32} : tensor<64x64xi8, #a_packed> -> tensor<64x128xbf16, #a>
+    %b_raw = ttg.local_load %b_smem token %wait : !ttg.memdesc<128x64xbf16, #shared, #smem> -> tensor<128x64xbf16, #b>
+    %dot = tt.dot %a_up, %b_raw, %acc : tensor<64x128xbf16, #a> * tensor<128x64xbf16, #b> -> tensor<64x64xf32, #mma>
+    scf.yield %dot : tensor<64x64xf32, #mma>
+  }
+  tt.return %result : tensor<64x64xf32, #mma>
+}
+}
