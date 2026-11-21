@@ -11,6 +11,8 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/xxhash.h"
+#include <algorithm>
+#include <numeric>
 
 #define DEBUG_TYPE "gluon-infer-coalesced-encodings"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -26,11 +28,24 @@ namespace mlir::triton::gluon {
 namespace {
 
 ttg::CGAEncodingAttr getDefaultCGALayout(RankedTensorType refTensorType,
+                                         int numWarps, int threadsPerWarp,
                                          int numCTAs) {
-  // TODO support numCTAs > 1
-  assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  return ttg::CGAEncodingAttr::get1CTALayout(refTensorType.getContext(),
-                                             refTensorType.getShape().size());
+  auto ctx = refTensorType.getContext();
+  auto shape = refTensorType.getShape();
+  if (numCTAs == 1)
+    return ttg::CGAEncodingAttr::get1CTALayout(ctx, shape.size());
+
+  // Split the CTAs over the tensor the same way
+  // getDefaultBlockedEncoding does: start from the most significant dim and
+  // move towards the minor dims until the CTAs are exhausted.
+  int rank = shape.size();
+  llvm::SmallVector<unsigned> order(rank);
+  std::iota(order.begin(), order.end(), 0);
+  std::reverse(order.begin(), order.end());
+  llvm::SmallVector<unsigned> sizePerThread(rank, 1);
+  auto blocked = ttg::BlockedEncodingAttr::get(
+      ctx, shape, sizePerThread, order, numWarps, threadsPerWarp, numCTAs);
+  return blocked.getCGALayout();
 }
 
 bool isCoalescedEncodingTensorType(Type ty) {
@@ -71,7 +86,8 @@ LogicalResult inferCoalescedLayout(ModuleOp &mod) {
       int numWarps = ttg::lookupNumWarps(curr);
       int numCTAs = ttg::lookupNumCTAs(curr);
       auto tensorType = cast<RankedTensorType>(ptr.getType());
-      auto cgaLayout = getDefaultCGALayout(tensorType, numCTAs);
+      auto cgaLayout =
+          getDefaultCGALayout(tensorType, numWarps, threadsPerWarp, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(cgaLayout.getCTASplitNum(),
                                              tensorType.getShape());
       auto layout = coalescedEncodingAnalysis.getEncoding(
