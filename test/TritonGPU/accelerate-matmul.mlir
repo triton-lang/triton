@@ -961,6 +961,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.store %arg2, %0 : tensor<128x256x!tt.ptr<f32>, #blocked>
     tt.return
   }
+
+  // Integer operands are sign-extended to the accumulator type.
+  // CHECK-LABEL: dot_fall_back_fma_int8
+  tt.func public @dot_fall_back_fma_int8(%arg0: tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<64x256xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: tensor<128x256x!tt.ptr<i32>, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<128x256xi32, #blocked>
+    // CHECK:   %[[EXT0:.*]] = arith.extsi %arg0
+    // CHECK:   %[[EXT1:.*]] = arith.extsi %arg1
+    // CHECK:   %[[DOT:.*]] = tt.dot %[[EXT0]], %[[EXT1]]
+    %0 = tt.dot %arg0, %arg1, %cst : tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xi32, #blocked>
+    // CHECK:   tt.store %arg2, %[[DOT]]
+    tt.store %arg2, %0 : tensor<128x256x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
 }
 
 // -----
