@@ -208,11 +208,11 @@ public:
 
   bool isEnabled() const override { return true; }
 
-  bool shouldRunPass(llvm::StringRef passName,
-                     llvm::StringRef irDescription) const override {
+  bool shouldRunPass(llvm::StringRef passName, llvm::StringRef irDescription,
+                     llvm::StringRef funcName) const override {
     return passName != "Loop Strength Reduction" &&
            (!previousGate.isEnabled() ||
-            previousGate.shouldRunPass(passName, irDescription));
+            previousGate.shouldRunPass(passName, irDescription, funcName));
   }
 };
 
@@ -231,6 +231,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
   opt.MCOptions.ABIName = abi;
+  opt.MCOptions.LibraryOptions = &module->getContext().getLibraryOptions();
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -339,6 +340,7 @@ translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
   options.enablePrintAfterAllIfRequested();
   options.enableFlagsFromDisableLLVMOptEnv();
   ScopedLLVMOptions optionScope(options.settings);
+  optionScope.apply(module.getContext().getLibraryOptions());
 
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
 
@@ -589,6 +591,7 @@ void init_triton_llvm(py::module_ &m) {
         options.enableFlagsFromDisableLLVMOptEnv();
         options.enablePrintAfterAllIfRequested();
         ScopedLLVMOptions optionScope(options.settings);
+        optionScope.apply(mod->getContext().getLibraryOptions());
 
         std::string error;
         llvm::Triple targetTriple(triple);
@@ -598,6 +601,7 @@ void init_triton_llvm(py::module_ &m) {
         }
         llvm::TargetOptions opt;
         opt.MCOptions.ABIName = abi;
+        opt.MCOptions.LibraryOptions = &mod->getContext().getLibraryOptions();
         // Target machine is only used to create the data layout.
         std::unique_ptr<llvm::TargetMachine> machine{
             target->createTargetMachine(targetTriple, proc, features, opt,
@@ -627,6 +631,7 @@ void init_triton_llvm(py::module_ &m) {
         options.enableFlagsFromDisableLLVMOptEnv();
         options.enablePrintAfterAllIfRequested();
         ScopedLLVMOptions optionScope(options.settings);
+        optionScope.apply(mod->getContext().getLibraryOptions());
         using namespace llvm;
         LoopAnalysisManager lam;
         FunctionAnalysisManager fam;
@@ -679,8 +684,8 @@ void init_triton_llvm(py::module_ &m) {
         if (!arch.empty())
           targetMachine =
               createTargetMachine(mod, arch, enable_fp_fusion, features);
-        PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
-                       std::nullopt, instrCbPtr);
+        PassBuilder pb(mod->getContext(), /*targetMachine=*/targetMachine.get(),
+                       tuningOptions, std::nullopt, instrCbPtr);
 
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM

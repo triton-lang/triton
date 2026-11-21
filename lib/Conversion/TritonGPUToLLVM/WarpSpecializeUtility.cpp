@@ -308,8 +308,10 @@ static LogicalResult findTrivialSubcomputation(LLVM::LLVMFuncOp func,
 
     Operation *op = capture.getDefiningOp();
     // Check if the defining op can be rematerialized. At the LLVM level,
-    // checking for pure is probably a good enough heuristic.
-    if (isPure(op)) {
+    // checking for side effects is probably a good enough heuristic. The op
+    // need not be speculatable, e.g. a division: it dominates the warp
+    // specialize, so it already ran on the same operands.
+    if (isMemoryEffectFree(op)) {
       ops.insert(op);
       worklist.insert(op->operand_begin(), op->operand_end());
       continue;
@@ -371,9 +373,9 @@ static void disableLICM(LLVM::BrOp latchBr) {
   Builder b(latchBr.getContext());
   MLIRContext *ctx = b.getContext();
   auto licmMD = LLVM::LoopLICMAttr::get(ctx, b.getBoolAttr(true), {});
-  auto loopMD =
-      LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {}, {}, licmMD,
-                                    {}, {}, {}, {}, {}, {}, {}, {}, {});
+  auto loopMD = LLVM::LoopAnnotationAttr::get(b.getContext(), {}, {}, {}, {},
+                                              {}, {}, licmMD, {}, {}, {}, {},
+                                              {}, {}, {}, {}, {}, {});
   latchBr.setLoopAnnotationAttr(loopMD);
 }
 
