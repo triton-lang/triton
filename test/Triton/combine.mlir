@@ -574,6 +574,23 @@ tt.func @test_combine_broadcast_mul_reduce_reshape(%arg0: tensor<32x16x1xf32>, %
     tt.return %3 : tensor<32x32xf32>
 }
 
+// CHECK-LABEL: @test_combine_broadcast_mul_reduce_f16
+tt.func @test_combine_broadcast_mul_reduce_f16(%arg0: tensor<32x16xf16>, %arg1: tensor<16x32xf16>) -> tensor<32x32xf16> {
+    // CHECK-NOT: tt.dot
+    // CHECK: tt.reduce
+    %0 = tt.expand_dims %arg0 {axis = 2 : i32} : tensor<32x16xf16> -> tensor<32x16x1xf16>
+    %1 = tt.broadcast %0 : tensor<32x16x1xf16> -> tensor<32x16x32xf16>
+    %2 = tt.expand_dims %arg1 {axis = 0 : i32} : tensor<16x32xf16> -> tensor<1x16x32xf16>
+    %3 = tt.broadcast %2 : tensor<1x16x32xf16> -> tensor<32x16x32xf16>
+    %4 = arith.mulf %1, %3 : tensor<32x16x32xf16>
+    %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f16, %arg3: f16):
+        %6 = arith.addf %arg2, %arg3 : f16
+        tt.reduce.return %6 : f16
+    }) : (tensor<32x16x32xf16>) -> tensor<32x32xf16>
+    tt.return %5 : tensor<32x32xf16>
+}
+
 // CHECK-LABEL: @test_combine_broadcast_mul_reduce_extra_broadcast
 tt.func @test_combine_broadcast_mul_reduce_extra_broadcast(%arg0: tensor<32x1xf32>, %arg1: tensor<1x32xf32>) -> tensor<32x32xf32> {
     // CHECK-NOT: tt.dot

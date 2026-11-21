@@ -119,7 +119,7 @@ class CombineBroadcastMulReducePattern : public RewritePattern {
 private:
   static bool isAddF32(const Operation *op) {
     if (auto addf = dyn_cast_or_null<arith::AddFOp>(op))
-      return addf.getType().getIntOrFloatBitWidth() <= 32;
+      return addf.getType().isF32();
     return false;
   }
 
