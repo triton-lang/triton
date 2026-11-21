@@ -488,6 +488,41 @@ def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, 
         assert original_compiled.kernel != updated_compiled.kernel
 
 
+def test_source_prefix_map_shares_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache):
+    fresh_knobs.compilation.disable_line_info = False
+    code = "import triton\nimport triton.language as tl\n@triton.jit\ndef test_kernel(X):\n    tl.store(X, 1)\n"
+
+    def load(dirname):
+        kernel = write_and_load_module(tmp_path / dirname / "kernel.py", code, 0).test_kernel
+        compiled = triton.compile(triton.compiler.ASTSource(kernel, {"X": "*i32"}))
+        blob = b"".join(v if isinstance(v, bytes) else v.encode() for v in compiled.asm.values())
+        return kernel, compiled, blob
+
+    a, a_compiled, _ = load("a")
+    b, b_compiled, _ = load("b")
+    assert a.cache_key != b.cache_key
+    assert a_compiled.hash != b_compiled.hash
+
+    # The broad first entry also matches both paths; the later, more specific entries must win.
+    fresh_knobs.compilation.source_prefix_map = os.pathsep.join(
+        [f"{tmp_path}=/unused", f"{tmp_path / 'a'}=/mapped-src", f"{tmp_path / 'b'}=/mapped-src"])
+    a, a_compiled, a_blob = load("a")
+    b, b_compiled, b_blob = load("b")
+    assert a.file_name == b.file_name == "/mapped-src/kernel.py"
+    assert a.cache_key == b.cache_key
+    assert a_compiled.hash == b_compiled.hash
+    for blob in (a_blob, b_blob):
+        assert str(tmp_path).encode() not in blob
+        assert b"/mapped-src/kernel.py" in blob
+
+    # A broad entry given last wins over a more specific earlier one.
+    fresh_knobs.compilation.source_prefix_map = os.pathsep.join([f"{tmp_path / 'a'}=/specific", f"{tmp_path}=/broad"])
+    assert load("a")[0].file_name == "/broad/a/kernel.py"
+    # Each entry splits at its last '=', so the old prefix may contain '='.
+    fresh_knobs.compilation.source_prefix_map = f"{tmp_path / 'x=y'}=/eq"
+    assert write_and_load_module(tmp_path / "x=y" / "kernel.py", code, 0).test_kernel.file_name == "/eq/kernel.py"
+
+
 def test_reuse(device, fresh_triton_cache):
     counter = 0
 

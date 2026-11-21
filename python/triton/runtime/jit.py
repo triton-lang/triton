@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import inspect
 import itertools
+import os
 import threading
 import re
 import textwrap
@@ -478,6 +479,19 @@ def get_full_name(fn):
     return f"{fn.__module__}.{fn.__qualname__}"
 
 
+def remap_source_path(path):
+    # Like gcc's -ffile-prefix-map: os.pathsep-separated old=new entries, split at the last '=',
+    # and the last matching entry wins. The mapped path feeds both the cache key and the debug info.
+    prefix_map = knobs.compilation.source_prefix_map
+    if not prefix_map:
+        return path
+    for entry in reversed(prefix_map.split(os.pathsep)):
+        old, sep, new = entry.rpartition("=")
+        if sep and old and path.startswith(old):
+            return new + path[len(old):]
+    return path
+
+
 class JITCallable:
 
     def __init__(self, fn):
@@ -494,7 +508,7 @@ class JITCallable:
         raw_src_str = "".join(self.raw_src)
 
         # get file name, starting line number and starting col number
-        self.file_name = fn.__code__.co_filename
+        self.file_name = remap_source_path(fn.__code__.co_filename)
         self.def_file_line_number = get_def_line_number(self.raw_src, self.starting_line_number)
         self.def_file_col_number = get_def_col_number(raw_src_str)
 

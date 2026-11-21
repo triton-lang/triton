@@ -167,7 +167,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     ret.def_file_col_number = fn.def_file_col_number
 
     orig_code = fn.fn.__code__
-    ret.file_name = orig_code.co_filename
+    ret.file_name = fn.file_name
     # The Python function points at the original source file. Keep its original
     # definition start so inspect.getsource can recover the complete function.
     ret.fn.__code__ = ret.fn.__code__.replace(

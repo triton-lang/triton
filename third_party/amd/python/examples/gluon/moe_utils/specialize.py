@@ -139,7 +139,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     ret.def_file_col_number = fn.def_file_col_number
 
     orig_code = fn.fn.__code__
-    ret.file_name = orig_code.co_filename
+    ret.file_name = fn.file_name
     ret.fn.__code__ = ret.fn.__code__.replace(
         co_filename=orig_code.co_filename,
         co_firstlineno=adjust_line_number(orig_code.co_firstlineno),
