@@ -156,7 +156,7 @@
              
   <section id="module-triton.experimental.gluon.language.nvidia.rubin.bulk">
 <span id="triton-experimental-gluon-language-nvidia-rubin-bulk"></span><h1>triton.experimental.gluon.language.nvidia.rubin.bulk<a class="headerlink" href="#module-triton.experimental.gluon.language.nvidia.rubin.bulk" title="Link to this heading"></a></h1>
-<p>Linear asynchronous bulk copies (without a tensor map).</p>
+<p>Linear asynchronous bulk memory operations (without a tensor map).</p>
 <p class="rubric">Functions</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
@@ -166,8 +166,11 @@
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_store</span></code></p></td>
 <td><p>Copy contiguous shared-memory ranges to global memory asynchronously.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_wait</span></code></p></td>
-<td><p>Wait for committed bulk and TMA store groups in the current region.</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">prefetch</span></code></p></td>
+<td><p>Prefetch contiguous global-memory ranges into L2 on NVIDIA SM90 and newer.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_wait</span></code></p></td>
+<td><p>Wait for pending bulk and TMA stores in their shared completion queue.</p></td>
 </tr>
 </tbody>
 </table>

@@ -97,7 +97,10 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#unary-math-ops">Unary Math Ops</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#exp2"><code class="docutils literal notranslate"><span class="pre">exp2</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exp2"><code class="docutils literal notranslate"><span class="pre">exp2</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#compact-exponentials-for-fp8-probabilities">Compact exponentials for FP8 probabilities</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#exp"><code class="docutils literal notranslate"><span class="pre">exp</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="#sin-and-cos"><code class="docutils literal notranslate"><span class="pre">sin</span></code> and <code class="docutils literal notranslate"><span class="pre">cos</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="#tagged-unary-ops">Tagged Unary Ops</a></li>
@@ -482,6 +485,43 @@ For example, a homomorphic cast of FP32 <code class="docutils literal notranslat
 <li><p><code class="docutils literal notranslate"><span class="pre">exp2(0)</span> <span class="pre">=</span> <span class="pre">1</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">exp2(-x)</span> <span class="pre">=</span> <span class="pre">1.0</span> <span class="pre">/</span> <span class="pre">exp2(x)</span></code></p></li>
 </ul>
+<section id="compact-exponentials-for-fp8-probabilities">
+<h4>Compact exponentials for FP8 probabilities<a class="headerlink" href="#compact-exponentials-for-fp8-probabilities" title="Link to this heading"></a></h4>
+<p>Online softmax centers scores around a running maximum. Changing the shard
+count changes that maximum. A later multiplication by
+<code class="docutils literal notranslate"><span class="pre">alpha</span> <span class="pre">=</span> <span class="pre">exp2(old_max</span> <span class="pre">-</span> <span class="pre">new_max)</span></code> compensates for the change, provided the
+weights survive the intervening FP8 store and load.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">gl.fpsan.compact_exp2</span></code> for the FP32 probabilities and each correction
+factor. For a separate merge kernel written in Triton, use
+<code class="docutils literal notranslate"><span class="pre">tl.fpsan.compact_exp2(local_max</span> <span class="pre">-</span> <span class="pre">global_max)</span></code> for the merge weights.
+Each explicit call uses base <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">2**25</span></code> under FPSan. Its powers have the form
+<code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">((u</span> <span class="pre">%</span> <span class="pre">128)</span> <span class="pre">&lt;&lt;</span> <span class="pre">25)</span></code> modulo <code class="docutils literal notranslate"><span class="pre">2**32</span></code>. Gluon can encode every such
+payload and masked zero in one FP8 element.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">alpha</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">compact_exp2</span><span class="p">(</span><span class="n">old_max</span> <span class="o">-</span> <span class="n">maximum</span><span class="p">)</span>
+<span class="n">weights</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">compact_exp2</span><span class="p">(</span><span class="n">scores</span> <span class="o">-</span> <span class="n">maximum</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">])</span>
+<span class="n">p</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">fpsan</span><span class="o">.</span><span class="n">probability_cast</span><span class="p">(</span><span class="n">weights</span><span class="p">,</span> <span class="n">gl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">,</span> <span class="n">expect_zero</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
+<span class="n">p_tile</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<span class="n">tcgen05_mma</span><span class="p">(</span><span class="n">p_tile</span><span class="p">,</span> <span class="n">v_tile</span><span class="p">,</span> <span class="n">acc</span><span class="p">,</span> <span class="n">a_type</span><span class="o">=</span><span class="s2">"fpsan_probability"</span><span class="p">,</span> <span class="n">mbarriers</span><span class="o">=</span><span class="p">[</span><span class="n">done</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">b_type=&quot;fpsan_probability&quot;</span></code> when P is the right operand. For a
+register tensor use <code class="docutils literal notranslate"><span class="pre">gl.fpsan.probability_cast(p,</span> <span class="pre">gl.float32)</span></code> to expand
+it. Each consumer decodes the byte it reads. Copies preserve the code.
+The decoder multiplies the recovered payload by an odd, format-specific
+constant, making the FP8 conversion observable while commuting with alpha.
+Packing other nonzero inputs yields a disjoint set of lossy codes.
+The same operand tags work on <code class="docutils literal notranslate"><span class="pre">tcgen05_mma_scaled</span></code>. FPSan expands the
+probability before multiplying it by the block scale in the FP32 payload
+ring. The shard identity assumes each token retains the same scale and
+that the value at the cast is a compact power or zero. Computing a scale
+from shard-dependent probabilities can change the quantization itself.
+Keep arithmetic on the expanded values. Native execution uses the ordinary
+exponential, cast and MMA.</p>
+<p>The compact exponential has period 128. For an exponent difference divisible
+by 128, alpha equals one. For a difference divisible by 64, alpha equals
+its inverse. Accumulation can further cancel differences. Exercise multiple
+maximum differences when checking rescaling.</p>
+</section>
 </section>
 <section id="exp">
 <h3><code class="docutils literal notranslate"><span class="pre">exp</span></code><a class="headerlink" href="#exp" title="Link to this heading"></a></h3>

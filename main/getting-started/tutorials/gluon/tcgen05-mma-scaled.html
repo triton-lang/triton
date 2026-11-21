@@ -348,7 +348,7 @@ along K into uint8 elements, they would have the shapes:</p>
     <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">make_operand_descriptor</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">BLOCK_MN</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">BLOCK_K</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">MIXED_PREC</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span>
@@ -649,7 +649,7 @@ the scales.</p>
     <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
     <span class="c1"># ======= End unchanged code from `simple_mma_scaled_kernel` =======</span>
 
 
@@ -897,7 +897,7 @@ the 2D layout expected by <code class="docutils literal notranslate"><span class
     <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
     <span class="c1"># ======= End unchanged code from `simple_mma_scaled_kernel` =======</span>
 
 
@@ -1172,7 +1172,7 @@ that is compatible with <code class="docutils literal notranslate"><span class="
     <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
     <span class="c1"># ======= End unchanged code from `mma_scaled_packed_block_kernel` =======</span>
 
 
@@ -1460,13 +1460,13 @@ with 4 shared memory inputs. Then, we can pipeline it like a regular async MMA.<
 
         <span class="n">acc</span> <span class="o">=</span> <span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">c_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
         <span class="c1"># Pipeline the store by waiting for the previous store to complete.</span>
-        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
         <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">epilogue_pid_m</span> <span class="o">*</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">epilogue_pid_n</span> <span class="o">*</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
 
     <span class="c1"># Wait for the last store.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">):</span>
         <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">load_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">i</span><span class="p">))</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="n">num_mma_bars</span><span class="p">):</span>
@@ -1544,11 +1544,11 @@ wrote simplify writing the warp-specialized code.</p>
         <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">acc_state</span><span class="o">.</span><span class="n">index</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">acc_state</span> <span class="o">=</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
 
-        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
         <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="o">.</span><span class="n">dtype</span><span class="p">))</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">pid_m</span> <span class="o">*</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">pid_n</span> <span class="o">*</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>

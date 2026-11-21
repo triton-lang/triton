@@ -288,7 +288,7 @@ partitions, even when they are sequenced by mbarrier.arrive:</p>
         <span class="n">yoff</span> <span class="o">=</span> <span class="n">i</span> <span class="o">*</span> <span class="n">YBLOCK</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">xoff</span><span class="p">,</span> <span class="n">yoff</span><span class="p">],</span> <span class="n">c_buf</span><span class="p">)</span>
 
-        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">outstanding_stores</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">outstanding_stores</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">c_bufs</span><span class="p">])</span>
         <span class="n">c_empty_bar</span> <span class="o">=</span> <span class="n">c_empty_bars</span><span class="o">.</span><span class="n">index</span><span class="p">((</span><span class="n">i</span> <span class="o">-</span> <span class="n">outstanding_stores</span><span class="p">)</span> <span class="o">%</span> <span class="n">num_buffers</span><span class="p">)</span>
         <span class="c1"># Signal the compute partition that the buffer `outstanding_stores`</span>
         <span class="c1"># iterations ago is consumed, predicated on there having been at least</span>
@@ -297,7 +297,7 @@ partitions, even when they are sequenced by mbarrier.arrive:</p>
 
     <span class="c1"># Since we waited for the last value of c, all the other partitions have</span>
     <span class="c1"># exited by now. We just need the final stores to complete.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">c_bufs</span><span class="p">])</span>
 
 
 <span class="c1"># The default partition can have a different signature than the worker partition</span>
@@ -630,7 +630,7 @@ tutorial, let’s demonstrate a warp-specialized persistent matmul with tcgen05.
         <span class="n">accs</span> <span class="o">=</span> <span class="n">_split_n</span><span class="p">(</span><span class="n">acc</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">SUBTILE_FACTOR</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accs</span><span class="p">)):</span>
             <span class="n">acc</span> <span class="o">=</span> <span class="n">accs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># overlap with downcast</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>  <span class="c1"># overlap with downcast</span>
             <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
             <span class="c1"># Arrive after the first SMEM store and rely on ptxas to interleave.</span>
             <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
@@ -639,7 +639,7 @@ tutorial, let’s demonstrate a warp-specialized persistent matmul with tcgen05.
             <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">off_n</span> <span class="o">+</span> <span class="n">SPLIT_N</span> <span class="o">*</span> <span class="n">i</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
         <span class="n">acc_state</span> <span class="o">=</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
     <span class="c1"># Overlap the last store with the wait, then wait for the last store here.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>

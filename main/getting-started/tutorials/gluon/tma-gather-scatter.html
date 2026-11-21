@@ -489,7 +489,7 @@ that triggered the illegal instruction error:</p>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_scatter</span><span class="p">(</span><span class="n">tensor_desc</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">smem_src</span><span class="p">)</span>
     <span class="c1"># Wait for the completion of the async scatter using `store_wait`.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">smem_src</span><span class="p">])</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">async_scatter</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">x_offsets</span><span class="p">,</span> <span class="n">y_offset</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">BLOCK_X</span><span class="p">,</span> <span class="n">BLOCK_Y</span><span class="p">):</span>
@@ -657,12 +657,12 @@ latency of the global loads.</p>
         <span class="n">out</span><span class="p">,</span> <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">take_result</span><span class="p">()</span>
         <span class="n">out</span> <span class="o">=</span> <span class="n">out</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
         <span class="c1"># Pipeline the async scatter by waiting for the previous scatter to complete.</span>
-        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">out_smem</span><span class="p">])</span>
         <span class="n">out_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
         <span class="n">fence_async_shared</span><span class="p">()</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">async_scatter</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="n">out_offs_m</span><span class="p">,</span> <span class="n">epilogue_off_n</span><span class="p">,</span> <span class="n">out_smem</span><span class="p">)</span>
     <span class="c1"># Wait for the last async scatter to complete.</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">out_smem</span><span class="p">])</span>
 </pre></div>
 </div>
 <p>We will pick reasonable defaults for the block sizes and number of load buffers.

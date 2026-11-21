@@ -28,7 +28,7 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait" href="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait.html" />
+    <link rel="next" title="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch" href="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch.html" />
     <link rel="prev" title="triton.experimental.gluon.language.nvidia.hopper.bulk.async_load" href="triton.experimental.gluon.language.nvidia.hopper.bulk.async_load.html" /> 
 </head>
 
@@ -153,9 +153,9 @@ Only one representative of each replicated tile issues the store.</p>
 A false predicate neither copies nor commits a group. Call
 <a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait.html#triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait" title="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait"><code class="xref py py-func docutils literal notranslate"><span class="pre">store_wait()</span></code></a> before modifying or reusing the shared source. To
 access the global destination or publish it with a release operation,
-first call <code class="docutils literal notranslate"><span class="pre">store_wait(0,</span> <span class="pre">read_only=False)</span></code>. Issue and wait must execute
-in the same warp-specialized region. The compiler inserts the shared
-async-proxy fence needed to publish preceding shared-memory writes.</p>
+first call <code class="docutils literal notranslate"><span class="pre">store_wait(0,</span> <span class="pre">read_only=False,</span> <span class="pre">deps=[smem])</span></code>. Issue and wait
+must execute in the same warp-specialized region. The compiler inserts the
+shared async-proxy fence needed to publish preceding shared-memory writes.</p>
 <p>Compiler dependencies and ConSan conservatively cover the entire source
 view, including for partial copies. GSan records the exact global write
 range at issue time; it does not track the pending transfer to completion.</p>
@@ -178,7 +178,7 @@ range at issue time; it does not track the pending transfer to completion.</p>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="triton.experimental.gluon.language.nvidia.hopper.bulk.async_load.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.nvidia.hopper.bulk.async_load" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

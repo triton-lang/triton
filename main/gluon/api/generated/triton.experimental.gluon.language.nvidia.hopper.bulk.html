@@ -136,7 +136,7 @@
              
   <section id="module-triton.experimental.gluon.language.nvidia.hopper.bulk">
 <span id="triton-experimental-gluon-language-nvidia-hopper-bulk"></span><h1>triton.experimental.gluon.language.nvidia.hopper.bulk<a class="headerlink" href="#module-triton.experimental.gluon.language.nvidia.hopper.bulk" title="Link to this heading"></a></h1>
-<p>Linear asynchronous bulk copies (without a tensor map).</p>
+<p>Linear asynchronous bulk memory operations (without a tensor map).</p>
 <p class="rubric">Functions</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
@@ -146,8 +146,11 @@
 <tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.bulk.async_store.html#triton.experimental.gluon.language.nvidia.hopper.bulk.async_store" title="triton.experimental.gluon.language.nvidia.hopper.bulk.async_store"><code class="xref py py-obj docutils literal notranslate"><span class="pre">async_store</span></code></a></p></td>
 <td><p>Copy contiguous shared-memory ranges to global memory asynchronously.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait.html#triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait" title="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_wait</span></code></a></p></td>
-<td><p>Wait for committed bulk and TMA store groups in the current region.</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch.html#triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch" title="triton.experimental.gluon.language.nvidia.hopper.bulk.prefetch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">prefetch</span></code></a></p></td>
+<td><p>Prefetch contiguous global-memory ranges into L2 on NVIDIA SM90 and newer.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait.html#triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait" title="triton.experimental.gluon.language.nvidia.hopper.bulk.store_wait"><code class="xref py py-obj docutils literal notranslate"><span class="pre">store_wait</span></code></a></p></td>
+<td><p>Wait for pending bulk and TMA stores in their shared completion queue.</p></td>
 </tr>
 </tbody>
 </table>

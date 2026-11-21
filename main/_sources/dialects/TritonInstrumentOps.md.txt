@@ -170,6 +170,36 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tti.experimental_fpsan_probability_cast` (triton::instrument::ExperimentalFPSanProbabilityCastOp)
+
+_Pack or expand compact FPSan probability payloads_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_fpsan_probability_cast` $src attr-dict `:` functional-type(operands, results)
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of 32-bit float or f8E4M3FN type or f8E5M2 type values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of 32-bit float or f8E4M3FN type or f8E5M2 type values |
+
+
+
 ### `tti.experimental_fpsan_unembed` (triton::instrument::ExperimentalFPSanUnembedOp)
 
 _Unembed fpsan integer payload as a float value_

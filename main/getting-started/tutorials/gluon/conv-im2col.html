@@ -401,7 +401,7 @@ configuration and load coordinates differ.</p>
     <span class="n">mbarrier</span><span class="o">.</span><span class="n">invalidate</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
 
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">smem</span><span class="p">])</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">run_tma_im2col</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">pixel_box_lower_corner</span><span class="p">,</span> <span class="n">pixel_box_upper_corner</span><span class="p">,</span> <span class="n">coord</span><span class="p">,</span> <span class="n">offsets</span><span class="p">):</span>
@@ -1094,7 +1094,7 @@ tensor memory) without any code changes.</p>
     <span class="n">c_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
     <span class="n">fence_async_shared</span><span class="p">()</span>
     <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">out_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">offs_m</span><span class="p">,</span> <span class="n">offs_n</span><span class="p">],</span> <span class="n">c_smem</span><span class="p">)</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">c_smem</span><span class="p">])</span>
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>

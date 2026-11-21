@@ -462,12 +462,13 @@ _Wait for pending bulk and TMA store operations._
 Syntax:
 
 ```
-operation ::= `ttng.async_tma_store_wait` attr-dict
+operation ::= `ttng.async_tma_store_wait` attr-dict (`deps` $deps^ `:` type($deps))?
 ```
 
 Wait for the associated store operations to complete. When `read_only` is
 set, only wait until their reads from shared memory have completed. This is
-needed before shared memory can be written to again.
+needed before shared memory can be written to again. Optional dependencies
+keep the source buffers live through this wait.
 
 Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
@@ -478,6 +479,12 @@ Traits: `MemWaitOpTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait
 <tr><td><code>pendings</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>read_only</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `deps` | variadic of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
 
@@ -845,6 +852,34 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of packed arithmetic result element values |
+
+
+
+### `ttng.prefetch_bulk` (triton::nvidia_gpu::PrefetchBulkOp)
+
+_Prefetch global-memory ranges into L2_
+
+Syntax:
+
+```
+operation ::= `ttng.prefetch_bulk` $ptr `,` $numBytes `,` $pred attr-dict `:` type($ptr) `,`
+              type($numBytes) `,` type($pred)
+```
+
+For each enabled logical element, issues an asynchronous hint to prefetch
+numBytes bytes starting at ptr into the GPU's L2 cache. Each source address
+must be aligned to 16 bytes and each unsigned byte count must be a multiple
+of 16. Scalar operands specify one range for the program.
+
+Traits: `SameOperandsEncoding`, `SameOperandsShape`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `numBytes` | 32-bit signless integer or tensor of 32-bit signless integer values |
+| `pred` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
 

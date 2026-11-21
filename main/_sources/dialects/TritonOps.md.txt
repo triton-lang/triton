@@ -1014,6 +1014,39 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.fpsan_compact_exp2` (triton::FpSanCompactExp2Op)
+
+_Compute a base-2 exponential with 128 distinct FPSan payloads_
+
+Syntax:
+
+```
+operation ::= `tt.fpsan_compact_exp2` $input attr-dict `:` type($input)
+```
+
+Raise 1 + 2^25 to the input payload modulo 2^32. The 128 powers
+can be encoded exactly by an FPSan probability cast.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | 32-bit float or ranked tensor of 32-bit float values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit float or ranked tensor of 32-bit float values |
+
+
+
 ### `tt.fpsan_homomorphic_cast` (triton::FpSanHomomorphicCastOp)
 
 _Project an FPSan payload into a same-width or narrower ring_

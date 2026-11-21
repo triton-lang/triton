@@ -646,7 +646,7 @@ accumulators against a single buffered BLOCK_N=256 accumulator.</p>
             <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">USE_OVERLAP</span> <span class="ow">and</span> <span class="n">s</span> <span class="o">==</span> <span class="n">tmem_plan</span><span class="o">.</span><span class="n">early_release_subtile</span><span class="p">:</span>
                 <span class="n">mbarrier</span><span class="o">.</span><span class="n">arrive</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">overlap_bar</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
-            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="n">subtile_stages</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="n">pendings</span><span class="o">=</span><span class="n">subtile_stages</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smem</span><span class="p">])</span>
             <span class="n">acc_smem</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">acc</span><span class="p">)</span>
             <span class="n">tma</span><span class="o">.</span><span class="n">async_store</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">c_desc</span><span class="p">,</span> <span class="p">[</span><span class="n">off_m</span><span class="p">,</span> <span class="n">store_n</span><span class="p">],</span> <span class="n">acc_smem</span><span class="p">)</span>
             <span class="n">sub_acc_state</span> <span class="o">=</span> <span class="n">sub_acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
@@ -654,7 +654,7 @@ accumulators against a single buffered BLOCK_N=256 accumulator.</p>
         <span class="n">acc_state</span> <span class="o">=</span> <span class="n">acc_state</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
         <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
         <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
-    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">tma</span><span class="o">.</span><span class="n">store_wait</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">deps</span><span class="o">=</span><span class="p">[</span><span class="n">acc_smems</span><span class="p">])</span>
 
 
 <span class="c1"># ---------------------------------------------------------------------------</span>
