@@ -112,6 +112,22 @@ private:
   SmallVector<std::unique_ptr<Partition>> partitions;
 };
 
+// Returns true if `op` has a user-visible memory or control side effect that
+// must execute exactly once in a warp-specialized loop. Lowering-only ops
+// (barriers, arefs, tmem, fences) are excluded: they may be replicated into
+// every partition.
+bool isUserVisibleSideEffect(Operation *op);
+
+// Materialize the scalar results of `loop` in the default partition (id 0) by
+// adding partition 0 to the values that feed them. The walk stops at values
+// already communicated through an aref and at user-visible side effects;
+// InsertAref communicates those instead of recomputing them. Runs before
+// InsertAref to seed `ttg.partition.outputs`, which InsertAref reads to decide
+// which loop results to communicate to the default partition. Idempotent: when
+// re-run after InsertAref (for example from AssignStagePhase) it stops at the
+// arefs already present.
+void assignDefaultPartitionToEscapingValues(LoopLikeOpInterface loop);
+
 // Annotate the op with the partition index or indices, and add the op
 // to the partitions it belongs to.
 void setPartition(Operation *op, Partition *partition);

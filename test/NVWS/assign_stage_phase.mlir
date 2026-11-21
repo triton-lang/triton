@@ -819,3 +819,44 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     tt.return
   }
 }
+
+// -----
+
+#merged_phase_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#merged_phase_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#merged_phase_smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // A merged get covering the union of two overlapping consumer sets: an
+  // in-loop consumer in partition 0 and the loop escape into partitions
+  // {0, 2}. The get must advance a single stage/phase iter-arg pair, not one
+  // per overlapping consumer set (the loop gains exactly 2 extra pairs).
+  // CHECK-LABEL: @merged_get_single_counter
+  tt.func @merged_get_single_counter(%lb: i32, %ub: i32, %step: i32, %init: i32, %out: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: [[AREF:%.*]] = nvws.aref.create
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>]>
+    // CHECK: %[[RES:.*]]:5 = scf.for {{.*}} iter_args({{.*}} = {{.*}}, %[[SPUT:.*]] = {{.*}}, %[[PPUT:.*]] = {{.*}}, %[[SGET:.*]] = {{.*}}, %[[PGET:.*]] = {{.*}})
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %init) -> i32 : i32 {
+      %v = arith.muli %lb, %step {ttg.partition = array<i32: 1>} : i32
+      // CHECK: nvws.aref.put.enter [[AREF]][{{%.*}}, {{%.*}}] {ttg.partition = array<i32: 1>}
+      %bufs, %tok = nvws.aref.put.enter %1 {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>]> -> !ttg.memdesc<1xi32, #merged_phase_shared, #merged_phase_smem, mutable, 1x1>, !ttg.async.token
+      %s = tt.splat %v {ttg.partition = array<i32: 1>} : i32 -> tensor<1xi32, #merged_phase_blocked>
+      ttg.local_store %s, %bufs {ttg.partition = array<i32: 1>} : tensor<1xi32, #merged_phase_blocked> -> !ttg.memdesc<1xi32, #merged_phase_shared, #merged_phase_smem, mutable, 1x1>
+      nvws.aref.put.exit %1, %tok [#nvws.async_op<none>] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>]>, !ttg.async.token
+      // CHECK-COUNT-1: [[GBUF:%.*]], [[GTOK:%.*]] = nvws.aref.get.enter [[AREF]][[[SGET:%.*]], [[PGET:%.*]]] {ttg.partition = array<i32: 0, 2>}
+      // CHECK-NOT: nvws.aref.get.enter
+      // CHECK: nvws.aref.get.exit [[AREF]][[[SGET]]], [[GTOK]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0, 2>}
+      %gbufs, %gtok = nvws.aref.get.enter %1 {ttg.partition = array<i32: 0, 2>} : <[!ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>]> -> !ttg.memdesc<1xi32, #merged_phase_shared, #merged_phase_smem, mutable, 1x1>, !ttg.async.token
+      %t = ttg.local_load %gbufs {ttg.partition = array<i32: 0, 2>} : !ttg.memdesc<1xi32, #merged_phase_shared, #merged_phase_smem, mutable, 1x1> -> tensor<1xi32, #merged_phase_blocked>
+      nvws.aref.get.exit %1, %gtok [#nvws.async_op<none>] {ttg.partition = array<i32: 0, 2>} : <[!ttg.memdesc<1x1xi32, #merged_phase_shared, #merged_phase_smem, mutable>]>, !ttg.async.token
+      %u = tt.unsplat %t {ttg.partition = array<i32: 0, 2>} : tensor<1xi32, #merged_phase_blocked>
+      %phi = nvws.aref.phi %v, %u {ttg.partition = array<i32: 0, 1, 2>} : i32
+      %w = arith.addi %phi, %phi {ttg.partition = array<i32: 0>} : i32
+      // CHECK: scf.yield {ttg.partition = array<i32: 0, 1, 2>} {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}, {{%.*}}
+      scf.yield {ttg.partition = array<i32: 0, 1, 2>} %phi : i32
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 0, 1, 2>], ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}

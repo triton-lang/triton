@@ -751,3 +751,106 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     tt.return
   }
 }
+
+// -----
+
+#merged_overlap_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#merged_overlap_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#merged_overlap_smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // Merged overlapping consumer groups (the shape insert-aref emits for
+  // @overlapping_remote_sets_share_get): one get covers the union of the
+  // remote sets {0, 2}. The empty barrier expects one arrival per get.exit
+  // clone, i.e. one per consumer partition (2), and the shared partition has a
+  // single get.enter advancing a single stage/phase counter.
+  // CHECK-LABEL: @merged_overlapping_consumers
+  tt.func @merged_overlapping_consumers(%lb: i32, %ub: i32, %step: i32, %init: i32, %out: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
+    // CHECK: [[EMPTYSLICE:%.*]] = ttg.memdesc_index [[EMPTY]]
+    // CHECK: ttng.init_barrier [[EMPTYSLICE]], 2
+    // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi64
+    // CHECK: [[FULLSLICE:%.*]] = ttg.memdesc_index [[FULL]]
+    // CHECK: ttng.init_barrier [[FULLSLICE]], 1
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>]>
+    // CHECK: %[[RES:.*]]:5 = scf.for {{.*}} iter_args({{.*}} = {{.*}}, {{.*}} = {{.*}}, {{.*}} = {{.*}}, {{.*}} = {{.*}}, {{.*}} = {{.*}})
+    %res = scf.for %i = %lb to %ub step %step iter_args(%carried = %init) -> i32 : i32 {
+      %v = arith.muli %lb, %step {ttg.partition = array<i32: 1>} : i32
+      %bufs, %tok = nvws.aref.put.enter %1 {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>]> -> !ttg.memdesc<1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable, 1x1>, !ttg.async.token
+      %s = tt.splat %v {ttg.partition = array<i32: 1>} : i32 -> tensor<1xi32, #merged_overlap_blocked>
+      ttg.local_store %s, %bufs {ttg.partition = array<i32: 1>} : tensor<1xi32, #merged_overlap_blocked> -> !ttg.memdesc<1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable, 1x1>
+      nvws.aref.put.exit %1, %tok [#nvws.async_op<none>] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>]>, !ttg.async.token
+      %gbufs, %gtok = nvws.aref.get.enter %1 {ttg.partition = array<i32: 0, 2>} : <[!ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>]> -> !ttg.memdesc<1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable, 1x1>, !ttg.async.token
+      %t = ttg.local_load %gbufs {ttg.partition = array<i32: 0, 2>} : !ttg.memdesc<1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable, 1x1> -> tensor<1xi32, #merged_overlap_blocked>
+      nvws.aref.get.exit %1, %gtok [#nvws.async_op<none>] {ttg.partition = array<i32: 0, 2>} : <[!ttg.memdesc<1x1xi32, #merged_overlap_shared, #merged_overlap_smem, mutable>]>, !ttg.async.token
+      %u = tt.unsplat %t {ttg.partition = array<i32: 0, 2>} : tensor<1xi32, #merged_overlap_blocked>
+      %phi = nvws.aref.phi %v, %u {ttg.partition = array<i32: 0, 1, 2>} : i32
+      %w = arith.addi %phi, %phi {ttg.partition = array<i32: 0>} : i32
+      scf.yield {ttg.partition = array<i32: 0, 1, 2>} %phi : i32
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2>, ttg.partition.outputs = [array<i32: 0, 1, 2>], ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // One producer slot: one empty wait / full arrive pair for the put, and
+    // one full wait / empty arrive pair for the merged get (2 partitions).
+    // CHECK: ttng.wait_barrier {{.*}}, {{.*}} {ttg.partition = array<i32: 1>}
+    // CHECK: ttg.local_store {{.*}} {ttg.partition = array<i32: 1>}
+    // CHECK: ttng.arrive_barrier {{.*}}, 1 {ttg.partition = array<i32: 1>}
+    // CHECK-NOT: ttng.wait_barrier {{.*}} {ttg.partition = array<i32: 1>}
+    // CHECK-COUNT-1: ttng.wait_barrier {{.*}}, {{.*}} {ttg.partition = array<i32: 0, 2>}
+    // CHECK: ttg.local_load {{.*}} {ttg.partition = array<i32: 0, 2>}
+    // CHECK-COUNT-1: ttng.arrive_barrier {{.*}}, 1 {ttg.partition = array<i32: 0, 2>}
+    tt.store %out, %res : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+#memdesc_lower_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#memdesc_lower_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#memdesc_lower_smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // Merged MemDesc consumer groups (the shape insert-aref emits for
+  // @memdesc_overlapping_remote_sets_share_get): one get covers the union of
+  // the overlapping consumer sets {0,1} and {1,2}. The empty barrier expects
+  // one arrival per get.exit clone, i.e. one per consumer partition (3).
+  // CHECK-LABEL: @memdesc_overlapping_consumers
+  tt.func @memdesc_overlapping_consumers(%desc: !tt.tensordesc<128x64xf16, #memdesc_lower_shared>, %lb: i32, %ub: i32, %step: i32, %outp: tensor<128x64x!tt.ptr<f16>, #memdesc_lower_blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
+    // CHECK: ttng.init_barrier {{.*}}, 3
+    // CHECK: ttng.init_barrier {{.*}}, 3
+    // CHECK: ttng.init_barrier {{.*}}, 3
+    // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64
+    // CHECK: ttng.init_barrier {{.*}}, 1
+    // CHECK: ttng.init_barrier {{.*}}, 1
+    // CHECK: ttng.init_barrier {{.*}}, 1
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>
+    %1 = nvws.aref.create %0 : <[!ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>]>
+    scf.for %i = %lb to %ub step %c1_i32 : i32 {
+      %bufs, %tok = nvws.aref.put.enter %1 {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>]> -> !ttg.memdesc<128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable, 1x128x64>, !ttg.async.token
+      nvws.descriptor_load %desc[%i, %c0_i32] 16384 %bufs {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 3>} : !tt.tensordesc<128x64xf16, #memdesc_lower_shared>, i32, i32, !ttg.memdesc<128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable, 1x128x64>
+      nvws.aref.put.exit %1, %tok [#nvws.async_op<tma_load>] {loop.cluster = 1 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>]>, !ttg.async.token
+      %gbufs, %gtok = nvws.aref.get.enter %1 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0, 1, 2>} : <[!ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>]> -> !ttg.memdesc<128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, 1x128x64>, !ttg.async.token
+      %la = ttg.local_load %gbufs {ttg.partition = array<i32: 0, 1>} : !ttg.memdesc<128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, 1x128x64> -> tensor<128x64xf16, #memdesc_lower_blocked>
+      %sa = arith.addf %la, %la {ttg.partition = array<i32: 0, 1>} : tensor<128x64xf16, #memdesc_lower_blocked>
+      // Stores keep the consumer values alive through lowering.
+      tt.store %outp, %sa : tensor<128x64x!tt.ptr<f16>, #memdesc_lower_blocked>
+      %lb2 = ttg.local_load %gbufs {ttg.partition = array<i32: 1, 2>} : !ttg.memdesc<128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, 1x128x64> -> tensor<128x64xf16, #memdesc_lower_blocked>
+      %sb = arith.addf %lb2, %lb2 {ttg.partition = array<i32: 1, 2>} : tensor<128x64xf16, #memdesc_lower_blocked>
+      tt.store %outp, %sb : tensor<128x64x!tt.ptr<f16>, #memdesc_lower_blocked>
+      nvws.aref.get.exit %1, %gtok [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0, 1, 2>} : <[!ttg.memdesc<1x128x64xf16, #memdesc_lower_shared, #memdesc_lower_smem, mutable>]>, !ttg.async.token
+    } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32, ttg.partition = array<i32: 0, 1, 2, 3>}
+    // One get for the merged group: one full-barrier wait, both consumers on
+    // the same buffer view, one empty-barrier arrive.
+    // CHECK-COUNT-1: ttng.wait_barrier {{.*}}ttg.partition = array<i32: 0, 1, 2>}
+    // CHECK: [[REG_A:%.*]] = ttg.local_load %[[GBUF:[0-9]+]] {{.*}}ttg.partition = array<i32: 0, 1>}
+    // CHECK: arith.addf [[REG_A]], [[REG_A]] {{.*}}ttg.partition = array<i32: 0, 1>}
+    // CHECK: tt.store
+    // CHECK: [[REG_B:%.*]] = ttg.local_load %[[GBUF]] {{.*}}ttg.partition = array<i32: 1, 2>}
+    // CHECK: arith.addf [[REG_B]], [[REG_B]] {{.*}}ttg.partition = array<i32: 1, 2>}
+    // CHECK: tt.store
+    // CHECK-COUNT-1: ttng.arrive_barrier {{.*}}ttg.partition = array<i32: 0, 1, 2>}
+    tt.return
+  }
+}

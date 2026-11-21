@@ -1,4 +1,5 @@
 #include "PartitionAttrs.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1200,6 +1201,11 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
       auto partition = start->getPartition();
 
       auto isCandidate = [](Node *node) {
+        // Duplication must be restricted to known memory-effect-free ops: a
+        // duplicated barrier would change arrival counts. This is stricter
+        // than isUserVisibleSideEffect.
+        if (node->isOp() && !isMemoryEffectFree(node->getOp()))
+          return false;
         return (getNodeFlags(node) == Flags::NONE ||
                 getNodeFlags(node) == Flags::SFU);
       };
@@ -1499,6 +1505,15 @@ void assignPartitionsForOpsWithNoUse(Graph *graph) {
       defaultPartition = partition;
   graph->walk([&](Node *node) {
     if (node->getPartitions().empty()) {
+      // A user-visible side effect must execute exactly once; assigning it
+      // the union of all sibling partitions would clone it into every
+      // partition. With no default partition, leave it to the fallback check
+      // below instead of inventing a new id 0.
+      if (node->isOp() && isUserVisibleSideEffect(node->getOp())) {
+        if (defaultPartition)
+          node->setPartition(defaultPartition);
+        return;
+      }
       bool done = false;
       auto parent = node->getParent();
       if (parent && parent->isOp()) {
@@ -1531,8 +1546,14 @@ void assignWhileBeforePartitions(scf::WhileOp whileOp, Graph *graph) {
   graph->walk([&](Node *node) {
     Region *region = node->isOp() ? node->getOp()->getParentRegion()
                                   : node->getValue().getParentRegion();
-    if (region == &before || before.isAncestor(region))
-      node->addPartitions(partitions);
+    if (region != &before && !before.isAncestor(region))
+      return;
+    // The before region is replicated because every partition evaluates the
+    // condition. A user-visible effect stays in its single partition;
+    // InsertAref communicates its result.
+    if (node->isOp() && isUserVisibleSideEffect(node->getOp()))
+      return;
+    node->addPartitions(partitions);
   });
 }
 
@@ -1553,7 +1574,14 @@ void assignCLCConsumers(scf::WhileOp whileOp, Graph *graph) {
   const auto &partitions = graph->getRoot()->getPartitions();
   while (!stack.empty()) {
     Node *node = stack.pop_back_val();
-    node->addPartitions(partitions);
+    // CLC control values are collective and must be visible in every
+    // partition. A user-visible effect stays in its own partition; its result
+    // crosses partitions through an aref. Traverse past it so downstream CLC
+    // consumers (for example the cancellation condition) remain available in
+    // every partition.
+    bool isEffect = node->isOp() && isUserVisibleSideEffect(node->getOp());
+    if (!isEffect)
+      node->addPartitions(partitions);
     for (Node *parent = node->getParent(); parent; parent = parent->getParent())
       parent->addPartitions(partitions);
     if (isLoopBlockArg(node))
@@ -1601,6 +1629,9 @@ struct PartitionScheduling
 private:
   void analyze(size_t idx, Operation *op) {
     using namespace partition_scheduling_detail;
+    // Partition.h also declares mlir::triton::gpu::Partition; use a distinct
+    // name for the scheduling graph's partition type.
+    using GraphPartition = partition_scheduling_detail::Partition;
 
     auto func = op->getParentOfType<FuncOp>();
 
@@ -1646,6 +1677,86 @@ private:
         assignCLCConsumers(whileOp, graph.get());
     }
 
+    // Pin user-visible side effects to a single partition: propagation can
+    // assign several, and PartitionLoops would clone the effect into each.
+    // Effects with no used result go to the default partition; used-result
+    // effects go to the partition with the most uses, and InsertAref
+    // communicates the result to the remaining partitions.
+    GraphPartition *defaultPartition = nullptr;
+    for (auto partition : graph->getPartitions())
+      if (partition->id && *partition->id == 0)
+        defaultPartition = partition;
+    auto getDefaultPartition = [&]() {
+      if (!defaultPartition) {
+        defaultPartition = graph->addPartition();
+        defaultPartition->id = 0;
+      }
+      return defaultPartition;
+    };
+
+    // serialize writes each ancestor op's ttg.partition from its node, and
+    // verifyPartitionAttrs requires child ids to be a subset of parent ids,
+    // so a partition assigned here must also reach every ancestor up to the
+    // root. addPartition is a set insert, so this is idempotent.
+    auto pinPartition = [&](Node *node, GraphPartition *partition) {
+      node->setPartition(partition);
+      for (Node *parent = node->getParent(); parent;
+           parent = parent->getParent())
+        parent->addPartition(partition);
+    };
+
+    graph->walk([&](Node *node) {
+      if (!node->isOp() || node->getOp()->getNumRegions() != 0 ||
+          !isUserVisibleSideEffect(node->getOp()))
+        return;
+      auto partitions = node->getPartitions();
+      if (partitions.empty()) {
+        pinPartition(node, getDefaultPartition());
+        return;
+      }
+      if (partitions.size() == 1)
+        return;
+
+      GraphPartition *chosen = nullptr;
+      if (node->getOp()->getNumResults() == 0) {
+        chosen = getDefaultPartition();
+      } else {
+        // Prefer the partition that uses the result the most to minimize
+        // arefs, breaking ties by partition id for determinism.
+        DenseMap<GraphPartition *, unsigned> counts;
+        for (auto result : node->getOp()->getResults())
+          for (auto &use : result.getUses()) {
+            if (!hasPartition(use.getOwner()))
+              continue;
+            for (int id : getPartitionIds(&use)) {
+              for (auto candidate : graph->getPartitions()) {
+                if (candidate->id && *candidate->id == id &&
+                    partitions.contains(candidate))
+                  counts[candidate]++;
+              }
+            }
+          }
+        unsigned best = 0;
+        for (auto [candidate, count] : counts) {
+          if (!chosen || count > best ||
+              (count == best && *candidate->id < *chosen->id)) {
+            chosen = candidate;
+            best = count;
+          }
+        }
+        if (!chosen) {
+          // No in-loop consumers: prefer the default partition, else the
+          // lowest id.
+          chosen = *partitions.begin();
+          for (auto candidate : partitions)
+            if ((defaultPartition && candidate == defaultPartition) ||
+                *candidate->id < *chosen->id)
+              chosen = candidate;
+        }
+      }
+      pinPartition(node, chosen);
+    });
+
     LLVM_DEBUG({
       llvm::errs() << "\nfinal partitions:\n";
       for (auto &partition : graph->getPartitions())
@@ -1656,6 +1767,11 @@ private:
       return;
 
     serialize(idx, op, graph.get());
+    // Scalar loop results consumed outside the loop must be materialized in
+    // the default partition. Mark their producer chains before InsertAref so
+    // it communicates a side-effecting producer's value through an aref
+    // instead of the default partition recomputing the effect.
+    assignDefaultPartitionToEscapingValues(cast<LoopLikeOpInterface>(op));
   }
 
   void cloneMultiPartitionDataOps(Operation *region) {

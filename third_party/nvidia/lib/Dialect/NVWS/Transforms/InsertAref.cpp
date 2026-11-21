@@ -38,6 +38,11 @@ struct ProducedValueInfo {
   Value result;
 };
 
+static bool isSubset(const SetVector<int> &ids,
+                     const SetVector<int> &superset) {
+  return llvm::all_of(ids, [&](int id) { return superset.contains(id); });
+}
+
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op) {
   SmallVector<ProducedValueInfo> producedValues;
 
@@ -325,7 +330,7 @@ getTransitiveConsumers(Operation *op,
           getTransitiveConsumers(use.getOwner(), consumerPartitions);
       opConsumers.insert(consumers.begin(), consumers.end());
     } else {
-      if (getPartitionIds(&use) == consumerPartitions) {
+      if (isSubset(getPartitionIds(&use), consumerPartitions)) {
         opConsumers.insert(use.getOwner());
         // If an op is defined before an inner loop and used inside, the loop
         // itself should be considered as an additional consumer. This is
@@ -346,7 +351,7 @@ getTransitiveConsumers(const SetVector<Value> &results,
   for (auto result : results) {
     if (isa<BlockArgument>(result)) {
       for (auto &use : result.getUses()) {
-        if (getPartitionIds(&use) == consumerPartitions) {
+        if (isSubset(getPartitionIds(&use), consumerPartitions)) {
           opSet.insert(use.getOwner());
         }
       }
@@ -425,7 +430,13 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
       triton::getFirstUseOfPipelinedOp(ops, forOp, coarseSchedule, filterUse);
   auto lastOp =
       triton::getLastUseOfPipelinedOp(ops, forOp, coarseSchedule, filterUse);
-  assert(firstOp && lastOp);
+  if (!firstOp || !lastOp) {
+    // The only consumer can be the loop yield: the value escapes the loop
+    // without a scheduled use. Anchor the get to the producer's stage cluster,
+    // like the block-argument (loop-carried) path above.
+    auto stageCluster = getStageCluster(ops.front());
+    return std::make_pair(stageCluster, stageCluster);
+  }
 
   return std::make_pair(getStageCluster(firstOp), getStageCluster(lastOp));
 }
@@ -528,8 +539,10 @@ void createArefGet(OpBuilder &builder, Operation *loop, ArefCreateOp aref,
                "expected local_alloc consumers to be fully remote");
         auto callback = [&](Operation *oldOp, Operation *newOp) {
           auto oldPartitions = getPartitionIds(oldOp);
-          assert(llvm::all_of(remotePartitions, [&](int id) {
-            return oldPartitions.contains(id);
+          // The replacement must not shrink the partition set: a merged group
+          // widens it to the union of the overlapping remote sets.
+          assert(llvm::all_of(oldPartitions, [&](int id) {
+            return remotePartitions.contains(id);
           }));
           setPartition(newOp, remotePartitions);
         };
@@ -592,6 +605,10 @@ bool insertArefs(OpBuilder &builder, LoopLikeOpInterface loop, Block *block,
     SetVector<int> consumers;
     SetVector<Value> results;
     SmallVector<OpOperand *> uses;
+    // Consumer partitions that do not contain the producer.
+    SetVector<int> remote;
+    bool hasLocalConsumer = false;
+    bool hasMemDesc = false;
   };
   SmallVector<ConsumerGroup> consumerGroups;
   auto processResultUses = [&](Value result) {
@@ -616,9 +633,16 @@ bool insertArefs(OpBuilder &builder, LoopLikeOpInterface loop, Block *block,
         if (it == consumerGroups.end()) {
           consumerGroups.push_back({userPartitions, {}, {}});
           it = std::prev(consumerGroups.end());
+          for (int id : userPartitions) {
+            if (producedValue.partitions.contains(id))
+              it->hasLocalConsumer = true;
+            else
+              it->remote.insert(id);
+          }
         }
         it->results.insert(result);
         it->uses.push_back(&use);
+        it->hasMemDesc |= isa<MemDescType>(result.getType());
       }
     }
   };
@@ -645,14 +669,65 @@ bool insertArefs(OpBuilder &builder, LoopLikeOpInterface loop, Block *block,
 
   auto staleOps = createArefPut(builder, aref, producedValue);
 
-  for (ConsumerGroup &group : consumerGroups) {
+  // Consumer groups that fetch into overlapping remote partition sets must
+  // share one get: otherwise a partition can contain two get enters for the
+  // same aref and AssignStagePhase advances the stage/phase counter twice,
+  // although the producer writes one slot per iteration. MemDesc groups merge
+  // only when every group is fully remote: local_alloc communication cannot
+  // form an aref.phi.
+  SmallVector<ConsumerGroup> mergedGroups;
+  for (ConsumerGroup &group : consumerGroups)
+    mergedGroups.push_back(group);
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (size_t i = 0; i < mergedGroups.size() && !changed; ++i) {
+      for (size_t j = i + 1; j < mergedGroups.size(); ++j) {
+        // Never mix memdesc and non-memdesc groups: their get buffer
+        // propagation paths differ.
+        if (mergedGroups[i].hasMemDesc != mergedGroups[j].hasMemDesc)
+          continue;
+        if (mergedGroups[i].hasMemDesc && (mergedGroups[i].hasLocalConsumer ||
+                                           mergedGroups[j].hasLocalConsumer))
+          continue;
+        bool overlaps = llvm::any_of(mergedGroups[i].remote, [&](int id) {
+          return mergedGroups[j].remote.contains(id);
+        });
+        if (!overlaps)
+          continue;
+        auto &dst = mergedGroups[i];
+        auto &src = mergedGroups[j];
+        dst.remote.insert(src.remote.begin(), src.remote.end());
+        dst.hasLocalConsumer |= src.hasLocalConsumer;
+        dst.results.insert(src.results.begin(), src.results.end());
+        dst.uses.append(src.uses.begin(), src.uses.end());
+        // A memdesc group's consumer set is only updated here; a fully remote
+        // group's set equals its remote set.
+        dst.consumers.insert(src.consumers.begin(), src.consumers.end());
+        mergedGroups.erase(mergedGroups.begin() + j);
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  for (ConsumerGroup &group : mergedGroups) {
+    // A group with local consumers needs a phi whose partition set is the
+    // producer set union the remote set, per ArefPhiOp's invariant. A fully
+    // remote group fetches directly into the remote partitions.
+    if (!group.hasMemDesc) {
+      if (group.hasLocalConsumer) {
+        group.consumers = producedValue.partitions;
+        group.consumers.insert(group.remote.begin(), group.remote.end());
+      } else {
+        group.consumers = group.remote;
+      }
+    }
     OpBuilder::InsertionGuard g(builder);
     auto earliestUser = getEarliestUserInBlock(block, group.uses);
     builder.setInsertionPoint(earliestUser);
-    SetVector<int> remotePartitions = group.consumers;
-    for (auto id : producedValue.partitions)
-      remotePartitions.remove(id);
-    createArefGet(builder, loop, aref, group.results, remotePartitions,
+    createArefGet(builder, loop, aref, group.results, group.remote,
                   group.consumers, group.uses);
   }
 

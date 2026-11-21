@@ -625,3 +625,20 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// A user-visible effect with more than one partition would be cloned by
+// PartitionLoops, executing the effect once per partition.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @effect_must_have_one_partition(%lb: i32, %ub: i32, %step: i32, %cnt: !tt.ptr<i32>) {
+    %c1_i32 = arith.constant 1 : i32
+    %true = arith.constant true
+    scf.for %i = %lb to %ub step %step : i32 {
+      // expected-error @+1 {{side-effecting op must have exactly one partition}}
+      %old = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true {ttg.partition = array<i32: 0, 1>} : (!tt.ptr<i32>, i32, i1) -> i32
+      scf.yield {ttg.partition = array<i32: 0, 1>}
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
