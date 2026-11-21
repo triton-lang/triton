@@ -3472,6 +3472,68 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+def test_amd_wmma_k_warp_bases_layout():
+    plain = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 64])
+    k_swap = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 64], k_warp_bases=[4, 0])
+    # All-zero k_warp_bases is the plain layout.
+    zero = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 64], k_warp_bases=[0, 0])
+    assert zero == plain and hash(zero) == hash(plain) and zero.mangle() == plain.mangle()
+    assert k_swap != plain and k_swap.mangle() != plain.mangle()
+    with pytest.raises(AssertionError, match="one entry per warp basis"):
+        ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 64], k_warp_bases=[4])
+
+
+@gluon.jit
+def amd_wmma_k_warp_bases_kernel(PLAIN: ttgl.constexpr, K_SWAP: ttgl.constexpr):
+    # k_warp_bases only reorders K across warps in the operands; the result layout is unchanged.
+    ttgl.static_assert(ttgl.to_linear_layout(K_SWAP, [128, 64]) == ttgl.to_linear_layout(PLAIN, [128, 64]))
+    # Operands: warp bit 0 also XORs K by 4 instruction K steps (4 * 32 = 128).
+    a_plain: ttgl.constexpr = ttgl.to_linear_layout(ttgl.DotOperandLayout(0, PLAIN, 8), [128, 512])
+    a_swap: ttgl.constexpr = ttgl.to_linear_layout(ttgl.DotOperandLayout(0, K_SWAP, 8), [128, 512])
+    ttgl.static_assert(a_plain.warp_bases == [[16, 0], [32, 0]])
+    ttgl.static_assert(a_swap.warp_bases == [[16, 128], [32, 0]])
+    ttgl.static_assert(a_swap.reg_bases == a_plain.reg_bases and a_swap.lane_bases == a_plain.lane_bases)
+    b_plain: ttgl.constexpr = ttgl.to_linear_layout(ttgl.DotOperandLayout(1, PLAIN, 8), [512, 64])
+    b_swap: ttgl.constexpr = ttgl.to_linear_layout(ttgl.DotOperandLayout(1, K_SWAP, 8), [512, 64])
+    ttgl.static_assert(b_plain.warp_bases == [[0, 0], [0, 0]])
+    ttgl.static_assert(b_swap.warp_bases == [[128, 0], [0, 0]])
+    ttgl.static_assert(b_swap.reg_bases == b_plain.reg_bases and b_swap.lane_bases == b_plain.lane_bases)
+    a = ttgl.full([128, 512], 1.0, ttgl.float16, ttgl.DotOperandLayout(0, K_SWAP, 8))
+    b = ttgl.full([512, 64], 1.0, ttgl.float16, ttgl.DotOperandLayout(1, K_SWAP, 8))
+    acc = ttgl.zeros([128, 64], ttgl.float32, K_SWAP)
+    ttgl.amd.cdna5.wmma(a, b, acc)
+
+
+def test_amd_wmma_k_warp_bases_ir():
+    plain = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 32])
+    k_swap = ttgl.amd.AMDWMMALayout(3, True, [[1, 0], [2, 0]], [], [16, 16, 32], k_warp_bases=[4, 0])
+    module = run_parser(amd_wmma_k_warp_bases_kernel, *make_args(plain, k_swap, num_warps=4), target=HIP_TARGET_CDNA5)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 32], kWarp = [4, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_wmma_k_warp_bases_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f16
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<128x512xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %cst_1 = arith.constant 1.000000e+00 : f16
+    %cst_2 = arith.constant dense<1.000000e+00> : tensor<512x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %0 = tt.call @"triton.experimental.gluon.language._standard.zeros__Tc128_c64T_cfp32_cWMMA_3_True_1~0_2~0__16_16_32__2_KW4_0_WMMA"() : () -> tensor<128x64xf32, #mma>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %1 = tt.dot %cst_0, %cst_2, %0 : tensor<128x512xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<512x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x64xf32, #mma>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros__Tc128_c64T_cfp32_cWMMA_3_True_1~0_2~0__16_16_32__2_KW4_0_WMMA"() -> tensor<128x64xf32, #mma> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
+    tt.return %cst_0 : tensor<128x64xf32, #mma>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<128x64xf32, #mma>
+    tt.return %0 : tensor<128x64xf32, #mma>
+  }
+}
+""")
+
+
 @gluon.jit
 def infer_layout_for_amd_wmma_kernel():
     layout: ttgl.constexpr = amd_layouts.AMDWMMALayout(version=2, transposed=True, warp_bases=[[1, 0], [2, 0]])
