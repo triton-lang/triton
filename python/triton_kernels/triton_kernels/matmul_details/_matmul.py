@@ -20,9 +20,21 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
+    load_output_tensor_scale,
+    multiply_tensor_scales,
     output_mx_scale_store_ptr,
     round_f32_to_tf32,
 )
+
+
+@triton.jit
+def _load_tensor_scale(Scale: tl.tensor, offsets: tl.tensor, stride: tl.constexpr,
+                       mask, other: tl.constexpr) -> tl.tensor:
+    """Return one input scale per offset, broadcasting a scalar load when the stride is shared."""
+    if stride == 0:
+        return tl.where(mask, tl.broadcast_to(tl.load(Scale), offsets.shape), other)
+    else:
+        return tl.load(Scale + offsets * stride, mask=mask, other=other)
 
 
 @triton.jit
@@ -37,16 +49,17 @@ _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
-             YExpectedScale, YActualScale, YChecksumScale,
+             YExpectedScale, stride_y_tensor_scale_z: tl.constexpr, stride_y_tensor_scale_m: tl.constexpr,
+             YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             XTensorScale, stride_x_tensor_scale_z, stride_x_tensor_scale_m,
+             XTensorScale, stride_x_tensor_scale_z: tl.constexpr, stride_x_tensor_scale_m: tl.constexpr,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
-             WTensorScale, stride_w_tensor_scale_e, stride_w_tensor_scale_n,
+             WTensorScale, stride_w_tensor_scale_e: tl.constexpr, stride_w_tensor_scale_n: tl.constexpr,
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
@@ -360,16 +373,14 @@ def _matmul(
     else:
         XMxScalePtrs = None
     if has_x_tensor_scale:
-        XTensorScale += start_z.to(index_type) * stride_x_tensor_scale_z
+        XTensorScale += expt_id * stride_x_tensor_scale_z
         if GatherIndx is None:
             XTensorScale += start_m * stride_x_tensor_scale_m
-        XTensorScalePtrs = XTensorScale + offs_x_m.to(index_type) * stride_x_tensor_scale_m
-    else:
-        XTensorScalePtrs = None
 
     # Inactive rows have no source scales; neutral scales preserve their zero values.
     if REQUANTIZE_X and has_x_tensor_scale:
-        x_conversion_scale = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
+        x_conversion_scale = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
+                                                offs_x_m >= 0 if GatherIndx is not None else True, 1.0)
     else:
         x_conversion_scale: tl.constexpr = None
 
@@ -377,14 +388,7 @@ def _matmul(
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     if has_w_tensor_scale:
-        offs_w_tensor_scale_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        WTensorScalePtrs = (
-            WTensorScale
-            + expt_id * stride_w_tensor_scale_e
-            + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n
-        )
-    else:
-        WTensorScalePtrs = None
+        WTensorScale += expt_id * stride_w_tensor_scale_e
     # compute output
     acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
@@ -520,16 +524,14 @@ def _matmul(
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
     if has_x_epilogue_scale or has_w_tensor_scale:
-        x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
-        w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
+        x_tensor_scales = None
         if has_x_epilogue_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs, mask=(offs_x_m >= 0 if GatherIndx is not None else True), other=1.0)
-        if has_w_tensor_scale:
-            w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
-        if SWAP_XW:
-            acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
-        else:
-            acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+            x_tensor_scales = _load_tensor_scale(XTensorScale, offs_x_m.to(index_type), stride_x_tensor_scale_m,
+                                                 mask=offs_x_m >= 0 if GatherIndx is not None else True, other=1.0)
+        cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        mask_n = True if OUT_N_TILE_ALIGNED and ACTIVATION_REDUCTION_N == 1 else cols < N
+        input_scales = multiply_tensor_scales(x_tensor_scales, WTensorScale, cols.to(index_type), stride_w_tensor_scale_n, mask_n)
+        acc *= input_scales.T if SWAP_XW else input_scales
     # bias + scale
     offs_m = off_m + tl.arange(0, BLOCK_M)
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
@@ -605,20 +607,20 @@ def _matmul(
             AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
         out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
 
+    if PER_BATCH_OUT_SCALE:
+        YExpectedScale += start_z_out
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
         N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
-        if PER_BATCH_OUT_SCALE:
-            YExpectedScale = YExpectedScale + start_z_out
-        # OCP MX outputs leave YExpectedScale unset, so this is an identity there.
-        # NVFP4 uses YExpectedScale to precondition the dense output before the
-        # microscaling epilogue writes direct e4m3 block scales.
-        out = float_to_flex(out, YExpectedScale, None, None, mask, Y, False)
+        output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
+        scale_group = expt_id if RAGGED_DIMENSION == "M" else start_z_out
+        expected_scale = load_output_tensor_scale(YExpectedScale, scale_group.to(index_type), stride_y_tensor_scale_z,
+                                                 output_scale_rows.to(index_type), stride_y_tensor_scale_m, mask_m)
+        out = float_to_flex(out, expected_scale, None, None, mask, Y, False)
         out, out_scale = EPILOGUE_FN(out, mask, *epilogue_fn_args)
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)
-        output_scale_rows = offs_y_m if WriteBackIndx is not None else start_m + offs_y_m
         YActualScalePtrs = output_mx_scale_store_ptr(
             YActualScale,
             offs_m,
@@ -652,7 +654,6 @@ def _matmul(
         tl.store(YActualScalePtrs, out_scale, mask=scale_store_mask)
     else:
         if PER_BATCH_OUT_SCALE:
-            YExpectedScale = YExpectedScale + start_z_out
             YActualScale = YActualScale + start_z_out
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
