@@ -896,6 +896,7 @@ def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
   let arguments = (ins UnitAttr:$omitUniformHint);
   let results = (outs I32:$result);
 
+  let hasCanonicalizeMethod = 1;
   let assemblyFormat = "attr-dict";
 }
 
