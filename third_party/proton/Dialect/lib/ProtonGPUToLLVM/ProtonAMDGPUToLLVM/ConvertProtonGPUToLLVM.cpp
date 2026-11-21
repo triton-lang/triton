@@ -7,11 +7,11 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
-#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLTargetInfo.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
@@ -69,15 +69,15 @@ struct ConvertProtonAMDGPUToLLVM
                                                        tritonTargetInfo);
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
 
-    FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(this->gfxArch);
-    if (failed(maybeChipset)) {
-      emitError(UnknownLoc::get(&getContext()),
-                "Invalid AMDGPU chipset name: " + this->gfxArch);
+    FailureOr<ROCDL::TargetInfo> rocdlTargetInfo = ROCDL::TargetInfo::get(
+        this->gfxArch, tritonTargetInfo.getWarpSize(), [&] {
+          return emitError(UnknownLoc::get(&getContext()))
+                 << "Invalid AMDGPU chipset name: " << this->gfxArch << ": ";
+        });
+    if (failed(rocdlTargetInfo))
       return signalPassFailure();
-    }
     mlir::populateGpuToROCDLConversionPatterns(
-        typeConverter, patterns, mlir::gpu::amd::HIP, *maybeChipset);
+        typeConverter, patterns, mlir::gpu::amd::HIP, *rocdlTargetInfo);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     auto convTarget = ProtonLLVMConversionTarget(*context);

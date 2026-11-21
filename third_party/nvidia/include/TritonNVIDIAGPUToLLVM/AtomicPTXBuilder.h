@@ -186,9 +186,13 @@ emitAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
   auto ordering = getMemoryOrdering(sem);
   if (!binOp || !ordering)
     return failure();
-  return LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, ptr, vals.front(),
-                                   *ordering,
-                                   targetInfo.getAtomicSyncScope(scope))
+  // Like the PTX path, lower fadd to atom.add whatever its denormal handling,
+  // rather than to a CAS loop matching the function's denormal mode.
+  return LLVM::AtomicRMWOp::create(
+             rewriter, loc, *binOp, ptr, vals.front(), *ordering,
+             targetInfo.getAtomicSyncScope(scope), /*alignment=*/0,
+             /*isVolatile=*/false,
+             /*ignoreDenormalMode=*/*binOp == LLVM::AtomicBinOp::fadd)
       .getResult();
 }
 

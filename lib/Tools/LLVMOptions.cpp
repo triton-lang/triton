@@ -1,10 +1,12 @@
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <new>
 
@@ -25,6 +27,10 @@ struct Registry {
   // The override set currently applied to LLVM's registries. Empty whenever
   // `users` is zero.
   Settings active;
+  // The overrides of `active` for library options read per LLVMContext, which
+  // scopes copy into their compilations' contexts. Null whenever `users` is
+  // zero.
+  std::unique_ptr<llvm::cl::LibraryOptionsContext> libraryOptions;
   // Live scopes sharing `active`.
   unsigned users = 0;
   // Scopes waiting to replace `active`. While any is pending, new scopes do not
@@ -99,16 +105,20 @@ void applySettings(Registry &reg, Settings settings) {
 
   // getRegisteredOptions() only exposes cl::opt. The command-line parser also
   // handles TableGen library options, including codegen's start/stop passes,
-  // and owns any argument strings retained by those options. Keep ignoring
-  // unknown options, which may differ between LLVM revisions.
-  llvm::cl::ParseCommandLineOptions(argv.size(), argv.data(), "",
-                                    &llvm::nulls());
+  // and owns any argument strings retained by those options. It sets cl::opt
+  // and the remaining global library options in place, and records those read
+  // per LLVMContext in `libraryOptions`. Keep ignoring unknown options, which
+  // may differ between LLVM revisions.
+  auto libraryOptions = std::make_unique<llvm::cl::LibraryOptionsContext>();
+  llvm::cl::parseCommandLineOptions(*libraryOptions, argv, "", &llvm::nulls());
   reg.active = std::move(settings);
+  reg.libraryOptions = std::move(libraryOptions);
 }
 
 void restoreSettings(Registry &reg) {
   llvm::cl::ResetAllOptionOccurrences();
   reg.active.clear();
+  reg.libraryOptions.reset();
 }
 
 } // namespace
@@ -139,7 +149,15 @@ ScopedLLVMOptions::ScopedLLVMOptions(const std::vector<Setting> &settings) {
   if (reg.users == 0)
     applySettings(reg, std::move(wanted));
   ++reg.users;
+  libraryOptions = reg.libraryOptions.get();
   registryGeneration = reg.generation;
+}
+
+void ScopedLLVMOptions::apply(llvm::cl::LibraryOptionsContext &context) const {
+  // Replaying the overrides looks options up in LLVM's shared parser.
+  Registry &reg = registry();
+  std::lock_guard<std::mutex> lock(reg.mutex);
+  context.assign(*libraryOptions);
 }
 
 ScopedLLVMOptions::~ScopedLLVMOptions() {

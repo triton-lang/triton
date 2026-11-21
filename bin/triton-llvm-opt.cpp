@@ -60,7 +60,7 @@ namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
     PipelineTuningOptions tuningOptions;
-    PassBuilder pb(nullptr, tuningOptions);
+    PassBuilder pb(m->getContext(), nullptr, tuningOptions);
 
     LoopAnalysisManager lam;
     FunctionAnalysisManager fam;
@@ -89,10 +89,11 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
 
 int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
-  cl::ParseCommandLineOptions(
-      argc, argv, "llvm .bc -> .bc modular optimizer and analysis printer\n");
-
   LLVMContext Context;
+  cl::parseCommandLineOptions(
+      Context.getLibraryOptions(), ArrayRef(argv, argc),
+      "llvm .bc -> .bc modular optimizer and analysis printer\n");
+
   SMDiagnostic Err;
 
   // Load the input module...

@@ -4,7 +4,7 @@
 
 //--- sm80.mlir
 
-// CHECK: llvm.atomicrmw fadd %{{[^, ]+}}, %{{[^ ]+}} acq_rel
+// CHECK: llvm.atomicrmw ignore_denormal_mode fadd %{{[^, ]+}}, %{{[^ ]+}} acq_rel
 
 #unique = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32,
@@ -24,7 +24,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32,
   }
   // CHECK-LABEL: @unmasked_bf16_add
   // CHECK-NOT: llvm.cond_br
-  // CHECK: llvm.atomicrmw fadd
+  // CHECK: llvm.atomicrmw ignore_denormal_mode fadd
   tt.func private @unmasked_bf16_add(%ptr: tensor<128x!tt.ptr<bf16>, #unique>, %val: tensor<128xbf16, #unique>) -> tensor<128xbf16, #unique> {
     %old = tt.atomic_rmw fadd, acq_rel, gpu, %ptr, %val : (tensor<128x!tt.ptr<bf16>, #unique>, tensor<128xbf16, #unique>) -> tensor<128xbf16, #unique>
     tt.return %old : tensor<128xbf16, #unique>
