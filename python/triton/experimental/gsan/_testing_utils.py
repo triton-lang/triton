@@ -5,8 +5,9 @@ import triton
 import triton.language as tl
 
 from ._allocator import get_global_state_pointer
-from triton._C.libtriton.gsan_testing import is_write_once_address, shadow_cell_size, shadow_granularity, thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes
-from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor)
+from triton._C.libtriton.gsan_testing import thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, thread_state_stride_bytes
+from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor,
+                       is_write_once_address, shadow_cell_address, shadow_cell_size, shadow_granularity)
 from ._utils import uint8_cuda_tensor_from_ptr
 
 

@@ -966,3 +966,104 @@ def test_mir_swap_enable_misched_requires_swap_mir(tmp_path):
     result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
     assert result.returncode != 0
     assert "TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR" in result.stderr
+
+
+def _run_kernel_script(script_file, env_overrides):
+    """Run a kernel script in a subprocess with a deterministic compilation env."""
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    env["TRITON_ALWAYS_COMPILE"] = "1"
+    # Line info perturbs the IR hash, and with it the name the dump is filed under.
+    env["TRITON_DISABLE_LINE_INFO"] = "1"
+    env.update(env_overrides)
+
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=240)
+    assert result.returncode == 0, f"kernel script should succeed. stderr: {result.stderr[:2000]}"
+    return result
+
+
+def _amdgcn_from_stdout(text):
+    marker = "// -----// AMDGCN Dump //----- //"
+    assert marker in text, "AMDGCN_ENABLE_DUMP should have printed the AMDGCN"
+    return text.split(marker, 1)[1].strip()
+
+
+def _kernarg_preload_length(asm):
+    import re
+
+    match = re.search(r"^\s*\.amdhsa_user_sgpr_kernarg_preload_length\s+(\d+)", asm, re.MULTILINE)
+    return int(match.group(1)) if match else 0
+
+
+def _descriptor_directives(asm):
+    """The .amdhsa_* directives of the kernel descriptor, which encode the preload request."""
+    return [line.strip() for line in asm.splitlines() if line.strip().startswith(".amdhsa_")]
+
+
+def _normalized_instructions(asm):
+    """Instruction lines with register numbers erased, so allocator tie-breaking does not count."""
+    import re
+
+    out = []
+    for line in asm.splitlines():
+        line = line.split(";", 1)[0].split("//", 1)[0].strip()
+        if not line or line.startswith(".") or line.endswith(":"):
+            continue
+        line = re.sub(r"[sv]\[[0-9:]+\]", "R", line)
+        line = re.sub(r"\b[sv][0-9]+\b", "R", line)
+        out.append(line)
+    return out
+
+
+def test_kernarg_preload_state_is_serialized_to_mir(tmp_path):
+    """Preloaded kernarg SGPRs must appear in the dumped MIR, not be silently dropped."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
+
+    clean = _run_kernel_script(script_file, {"AMDGCN_ENABLE_DUMP": "1"})
+    asm = _amdgcn_from_stdout(clean.stdout)
+    if _kernarg_preload_length(asm) == 0:
+        pytest.skip("this target does not preload kernel arguments into user SGPRs")
+
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+    _run_kernel_script(script_file, {"TRITON_DUMP_MIR": str(dump_dir)})
+
+    mir_files = list(dump_dir.glob("simple_kernel_*.txt"))
+    assert len(mir_files) == 1, "Exactly one MIR file should have been dumped"
+    mir = mir_files[0].read_text()
+
+    assert "firstKernArgPreloadReg" in mir, "MIR should record the first preloaded kernarg SGPR"
+    assert "inreg" in mir, "MIR should keep inreg on the kernel arguments"
+
+
+def test_kernarg_preload_survives_mir_round_trip(tmp_path):
+    """A dump/swap round trip must emit the same code, preload included, and still compute correctly."""
+    script_file = tmp_path / "test_kernel.py"
+    script_file.write_text(_COMPLEX_KERNEL_SCRIPT)
+
+    clean = _run_kernel_script(script_file, {"AMDGCN_ENABLE_DUMP": "1"})
+    clean_asm = _amdgcn_from_stdout(clean.stdout)
+    if _kernarg_preload_length(clean_asm) == 0:
+        pytest.skip("this target does not preload kernel arguments into user SGPRs")
+
+    dump_dir = tmp_path / "dump"
+    dump_dir.mkdir()
+    _run_kernel_script(script_file, {"TRITON_DUMP_MIR": str(dump_dir)})
+
+    # The swap path disables LLVM's machine scheduler by default; re-enable it so the
+    # two runs differ only in whether the MIR took a trip through YAML.
+    swapped = _run_kernel_script(script_file, {
+        "TRITON_SWAP_MIR": str(dump_dir),
+        "TRITON_SWAP_MIR_ENABLE_MISCHED": "1",
+        "AMDGCN_ENABLE_DUMP": "1",
+    })
+    swapped_asm = _amdgcn_from_stdout(swapped.stdout)
+
+    assert _descriptor_directives(swapped_asm) == _descriptor_directives(clean_asm), \
+        "Round-tripped MIR should request the same kernel descriptor, including kernarg preload"
+    assert _normalized_instructions(swapped_asm) == _normalized_instructions(clean_asm), \
+        "Round-tripped MIR should produce the same instruction sequence"

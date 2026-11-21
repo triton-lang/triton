@@ -34,8 +34,9 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         f"Expected block_shape[-1] to be at least {min_block} but got {block_shape[-1]}"
     if layout.padding in ("b6x16_p32", "b6p2x16"):
         validate_fp6_box(block_shape[-1], shape[-1], strides[:-1], padding, host=True)
-        if dtype_str != "u8" or layout.swizzle_byte_width not in (0, 128) or tensor.data_ptr() % 32:
-            raise ValueError("FP6 requires 32-byte aligned uint8 storage and 0/128-byte swizzling")
+        alignment = block_shape[-1] // 4
+        if dtype_str != "u8" or layout.swizzle_byte_width not in (0, 128) or tensor.data_ptr() % alignment:
+            raise ValueError(f"FP6 requires {alignment}-byte aligned uint8 storage and 0/128-byte swizzling")
     if layout.fp4_padded:
         assert tensor.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"
         for stride in strides[:-1]:

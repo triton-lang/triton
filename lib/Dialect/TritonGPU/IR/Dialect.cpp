@@ -4,6 +4,7 @@
 #include <numeric>
 #include <utility>
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -314,10 +315,13 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return linearEnc.getOrder();
   }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (shape.size() == 1) {
-      return {0};
+    auto order = getMatrixOrder(shape.size(), /*rowMajor=*/true);
+    if (sharedLayout.getTransposed()) {
+      // Move the first layout axis to the front, skipping pipeline stages.
+      auto end = order.begin() + sharedLayout.getRank();
+      std::rotate(order.begin(), end - 1, end);
     }
-    return getMatrixOrder(shape.size(), !sharedLayout.getTransposed());
+    return order;
   }
   if (auto sharedLayout = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
@@ -466,25 +470,11 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTAsPerCGA");
 }
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout) {
-  // A generic linear encoding may not have a CGA layout
-  // as having a CGA layout implies being of the form cta_layout * cga_layout
+SmallVector<unsigned> getCTASplitNum(Attribute layout,
+                                     ArrayRef<int64_t> shape) {
   auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
-    return linearEnc.basesPerDim(kBlock, /*skipBroadcast=*/true);
-  } else if (auto sharedLinearLayout =
-                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinearLayout.basesPerDim(kBlock);
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.basesPerDim(kBlock, /*skipBroadcast=*/true);
-    return cast<LayoutEncodingTrait>(sliceLayout)
-        .getCGALayout()
-        .getCTASplitNum();
-  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTASplitNum();
-  }
-  llvm_unreachable("Unimplemented usage of getCTASplitNum");
+  auto ll = toLinearLayoutIgnoringPadding(shape, layout);
+  return basesPerDimImpl(ll.getBases(), kBlock, ll.getNumOutDims());
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -505,7 +495,7 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  return getShapePerCTA(getCGALayout(layout).getCTASplitNum(), shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {

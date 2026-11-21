@@ -1,6 +1,8 @@
 #include <array>
 #include <sstream>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -9,12 +11,14 @@
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -178,6 +182,15 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 }
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+LogicalResult AtomicRMWOp::verify() {
+  RMWOp op = getAtomicRmwOp();
+  if ((op == RMWOp::AND || op == RMWOp::OR || op == RMWOp::XOR) &&
+      !isa<IntegerType>(getElementTypeOrSelf(getVal().getType())))
+    return emitOpError() << stringifyRMWOp(op)
+                         << " requires an integer element type";
+  return success();
+}
 
 Value AtomicLoadOp::getPredicateOperand() { return getMask(); }
 
@@ -538,6 +551,31 @@ int32_t DotScaledOp::deduceScaleFactor() {
 }
 
 //-- MakeRangeOp --
+void MakeRangeOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                              MLIRContext *ctx) {
+  // Fold a comparison with a constant when every element gives the same result.
+  patterns.add(+[](arith::CmpIOp op, PatternRewriter &rewriter) {
+    auto range = op.getLhs().getDefiningOp<MakeRangeOp>();
+    APInt bound;
+    if (!range || !matchPattern(op.getRhs(), m_ConstantInt(&bound)))
+      return failure();
+
+    // make_range has signed i32 endpoints and excludes end.
+    auto values = ConstantIntRanges::fromSigned(
+        range.getStartAttr().getValue(), range.getEndAttr().getValue() - 1);
+    auto result = intrange::evaluatePred(
+        static_cast<intrange::CmpPredicate>(op.getPredicate()), values,
+        ConstantIntRanges::constant(bound));
+    if (!result)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, DenseElementsAttr::get(cast<ShapedType>(op.getType()),
+                                   rewriter.getBoolAttr(*result)));
+    return success();
+  });
+}
+
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
   if (adaptor.getStart() + 1 == adaptor.getEnd()) {
@@ -649,6 +687,42 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
   return success();
 }
 
+LogicalResult verifyCallbackBody(Operation *owner, Region &body,
+                                 llvm::SmallPtrSetImpl<Region *> &visited) {
+  if (!visited.insert(&body).second)
+    return success();
+  WalkResult result = body.walk([&](Operation *op) -> WalkResult {
+    // Shared-memory allocation also records scratch used by callees on tt.call.
+    if (op->hasAttr("allocation.size"))
+      return op->emitOpError("requires shared memory scratch in a ")
+             << owner->getName().getStringRef() << " callback";
+    if (auto call = dyn_cast<CallOp>(op)) {
+      // A threaded function pass can be rewriting the callee concurrently.
+      if (op->getContext()->isMultithreadingEnabled())
+        return WalkResult::advance();
+      auto fn = dyn_cast_or_null<FuncOp>(call.resolveCallable());
+      if (!fn)
+        return WalkResult::advance(); // tt.call verifies its callee.
+      return verifyCallbackBody(owner, fn.getBody(), visited);
+    }
+    if (!isa<LLVM::AssumeOp, AssertOp, PrintOp>(op)) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+      if (hasUnknownEffects(op) || (effects && !effects.hasNoEffect()))
+        return op->emitOpError("is not allowed in a ")
+               << owner->getName().getStringRef()
+               << " callback. Expected a pure operation, llvm.intr.assume, "
+                  "tt.assert or tt.print";
+    }
+    return WalkResult::advance();
+  });
+  return success(!result.wasInterrupted());
+}
+
+LogicalResult verifyCallbackBody(Operation *owner, Region &body) {
+  llvm::SmallPtrSet<Region *, 4> visited;
+  return verifyCallbackBody(owner, body, visited);
+}
+
 template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
   auto argElementTypes = op.getElementTypes();
   const auto &operands = op.getOperands();
@@ -691,7 +765,7 @@ template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
              << " to have type " << argElemTy << " but got " << resultTy;
     }
   }
-  return success();
+  return verifyCallbackBody(op, op.getCombineOp());
 }
 
 llvm::SmallVector<RankedTensorType>
@@ -893,22 +967,11 @@ LogicalResult MapElementwiseOp::verifyRegions() {
   }
   auto expectedReturnTypes =
       repeatInterleave(getElementTypesImpl(getResults()), getPack());
-  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
-    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
-    // Ban stores as we won't get the redundant masking correct by treating it
-    // as a scalar.
-    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
-      return op->emitOpError()
-             << "Stores are not supported inside map_elementwise";
-    }
-    if (isa<MapElementwiseReturnOp>(op) &&
-        op->getOperandTypes() != expectedReturnTypes) {
-      return op->emitError()
-             << "region return does not match map_elementwise result";
-    }
-    return WalkResult::advance();
-  });
-  return success(!walkRes.wasInterrupted());
+  for (auto ret : getRegion().getOps<MapElementwiseReturnOp>())
+    if (ret->getOperandTypes() != expectedReturnTypes)
+      return ret.emitError(
+          "region return does not match map_elementwise result");
+  return verifyCallbackBody(*this, getRegion());
 }
 
 //-- SplatOp --
@@ -1186,6 +1249,15 @@ LogicalResult FpToFpOp::verify() {
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
   }
+  return success();
+}
+
+LogicalResult FpSanHomomorphicCastOp::verify() {
+  unsigned srcWidth =
+      getElementTypeOrSelf(getInput().getType()).getIntOrFloatBitWidth();
+  unsigned dstWidth = getElementTypeOrSelf(getType()).getIntOrFloatBitWidth();
+  if (dstWidth > srcWidth)
+    return emitOpError("destination must not be wider than input");
   return success();
 }
 
@@ -1849,7 +1921,11 @@ LogicalResult verifyDescriptorLoadStoreOp(Operation *op,
                                           TensorDescInterface desc,
                                           ShapedType tensor) {
   RankedTensorType block = desc.getSignlessBlockType();
-  if (block.getElementType() != tensor.getElementType()) {
+  if (isFP6(block.getElementType())) {
+    if (!isa<DescriptorStoreOp>(op) || !tensor.getElementType().isInteger(8))
+      return op->emitOpError(
+          "packed FP6 descriptors require stores of i8 codes");
+  } else if (block.getElementType() != tensor.getElementType()) {
     return op->emitOpError("descriptor block and tensor element types must "
                            "match, but got descriptor element type ")
            << block.getElementType() << " and tensor element type "

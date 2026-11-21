@@ -1,11 +1,13 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/CFG.h"
 #include <optional>
 
 namespace mlir {
@@ -16,64 +18,32 @@ static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
 
 /// A buffer index decomposed as `baseValue + constantOffset`, optionally
 /// under a known modulus (recorded when the index is wrapped by remsi or
-/// the pipeliner's select/cmpi idiom). Two expressions rooted at the
-/// same base value with different offsets (modulo the same recorded modulus,
-/// when both carry one) provably target different slots.
+/// the pipeliner's select/cmpi idiom).
 struct BufferIndexExpr {
   Value baseValue;
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
   Value indexedSource;
+  // In the block owning baseValue, the slot is congruent to
+  // loopPhase + iteration * loopStep modulo N when loopPhase is known.
+  std::optional<int64_t> loopPhase;
+  int64_t loopStep = 0;
 
-  bool operator==(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           constantOffset == other.constantOffset && modulus == other.modulus &&
-           indexedSource == other.indexedSource;
-  }
+  bool operator==(const BufferIndexExpr &) const = default;
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           indexedSource == other.indexedSource && modulus == other.modulus &&
-           constantOffset != other.constantOffset;
+    if (indexedSource != other.indexedSource || modulus != other.modulus)
+      return false;
+    if (baseValue == other.baseValue)
+      return constantOffset != other.constantOffset;
+    return loopPhase && other.loopPhase && loopPhase != other.loopPhase &&
+           loopStep == other.loopStep &&
+           cast<BlockArgument>(baseValue).getOwner() ==
+               cast<BlockArgument>(other.baseValue).getOwner();
   }
 };
 
 namespace {
-
-enum class DFSState { Visiting, Visited };
-
-/// A CFG is reducible iff every retreating edge in a depth-first traversal is
-/// a backedge, i.e. its target dominates its source. Only blocks reachable
-/// from the function entry matter to membar's forward dataflow analysis.
-bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
-                    DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  states[block] = DFSState::Visiting;
-
-  for (Block *successor : block->getTerminator()->getSuccessors()) {
-    auto it = states.find(successor);
-    if (it == states.end()) {
-      if (!isReducibleCFG(successor, states, dominanceInfo, loopHeaders))
-        return false;
-      continue;
-    }
-    if (it->second == DFSState::Visiting) {
-      if (!dominanceInfo.dominates(successor, block))
-        return false;
-      loopHeaders.insert(successor);
-    }
-  }
-
-  states[block] = DFSState::Visited;
-  return true;
-}
-
-bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  DenseMap<Block *, DFSState> states;
-  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo,
-                        loopHeaders);
-}
 
 std::optional<int64_t> getConstantIntValue(Value v) {
   APInt val;
@@ -82,16 +52,10 @@ std::optional<int64_t> getConstantIntValue(Value v) {
   return std::nullopt;
 }
 
-BufferIndexExpr analyzeBufferIndex(Value indexValue);
-
-bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
-                                 arith::SelectOp selectOp) {
-  // For cf-form loops, the loop-carried value is a block argument. Each
-  // incoming value must be either an in-range initial value or the matched
-  // select that advances the counter.
+bool allIncomingValues(BlockArgument blockArg,
+                       llvm::function_ref<bool(Block *, Value)> check) {
   Block *header = blockArg.getOwner();
   unsigned argIdx = blockArg.getArgNumber();
-  // Entry block arguments have no incoming operands to prove the bound.
   if (header->pred_begin() == header->pred_end())
     return false;
 
@@ -104,12 +68,7 @@ bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
 
     auto operands = branch.getSuccessorOperands(predIt.getSuccessorIndex());
     Value incoming = operands[argIdx];
-
-    if (incoming == selectOp.getResult())
-      continue;
-
-    auto c = getConstantIntValue(incoming);
-    if (!c || *c < -1 || *c >= modulus)
+    if (!incoming || !check(pred, incoming))
       return false;
   }
 
@@ -138,7 +97,12 @@ bool isBaseProvablyBounded(Value base, int64_t modulus,
   if (!blockArg)
     return false;
 
-  return isCFBlockArgProvablyBounded(blockArg, modulus, selectOp);
+  return allIncomingValues(blockArg, [&](Block *, Value incoming) {
+    if (incoming == selectOp.getResult())
+      return true;
+    auto c = getConstantIntValue(incoming);
+    return c && *c >= -1 && *c < modulus;
+  });
 }
 
 /// Match the one-step modular wrap the pipeliner emits on its iter_arg:
@@ -191,18 +155,13 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   if (!isBaseProvablyBounded(base, *mod, selectOp))
     return std::nullopt;
 
-  auto baseExpr = analyzeBufferIndex(base);
-  // Nested moduli ((x mod M) + 1) mod N don't reduce to (x + 1) mod N in
-  // general; keep the full select as the expression root.
-  if (baseExpr.modulus)
-    return std::nullopt;
-  BufferIndexExpr result{baseExpr.baseValue, baseExpr.constantOffset + *c};
-  result.modulus = *mod;
-  return result;
+  if (auto seed = getConstantIntValue(base))
+    return BufferIndexExpr{nullptr, *seed + 1, *mod};
+  return BufferIndexExpr{base, 1, *mod};
 }
 
-// Slot indices are assumed not to overflow signed integer arithmetic; use a
-// wider index type if the pipeline counter can reach the integer range.
+// Assume signed i32 additions in slot indices and cursor updates fit in range.
+// Overflow can change the residue modulo N when N doesn't divide 2^32.
 BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
@@ -227,12 +186,14 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  // arith.remsi(x, N): strip the remainder and record N as the modulus.
-  // N must be a positive compile-time constant.
-  if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
-    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs());
-      // Nested modulus: keep the full remsi as the expression root.
+  // For power-of-two N the low bits give the residue for either signedness.
+  Operation *rem = indexValue.getDefiningOp();
+  if (isa_and_nonnull<arith::RemSIOp, arith::RemUIOp>(rem)) {
+    if (auto mod = getConstantIntValue(rem->getOperand(1));
+        mod && *mod > 0 &&
+        (isa<arith::RemSIOp>(rem) || llvm::isPowerOf2_64(*mod))) {
+      auto result = analyzeBufferIndex(rem->getOperand(0));
+      // Nested modulus: keep the full remainder as the expression root.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
       result.modulus = *mod;
@@ -241,6 +202,33 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   }
 
   return BufferIndexExpr{indexValue, 0};
+}
+
+// Each entry must establish the same seed and each backedge add the same step.
+void analyzeLoopPhase(BufferIndexExpr &expr, DominanceInfo &dominance) {
+  auto arg = dyn_cast_or_null<BlockArgument>(expr.baseValue);
+  if (!arg || !expr.modulus)
+    return;
+  std::optional<int64_t> seed, step;
+  auto check = [&](Block *pred, Value incoming) {
+    auto input = analyzeBufferIndex(incoming);
+    bool backedge = dominance.dominates(arg.getOwner(), pred);
+    if (input.baseValue != (backedge ? expr.baseValue : Value{}) ||
+        (input.modulus && input.modulus != expr.modulus))
+      return false;
+    int64_t residue =
+        normalizeModuloOffset(input.constantOffset, *expr.modulus);
+    auto &expected = backedge ? step : seed;
+    if (expected && *expected != residue)
+      return false;
+    expected = residue;
+    return true;
+  };
+  if (allIncomingValues(arg, check) && seed) {
+    expr.loopPhase =
+        normalizeModuloOffset(*seed + expr.constantOffset, *expr.modulus);
+    expr.loopStep = step.value_or(0);
+  }
 }
 
 triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
@@ -262,10 +250,28 @@ triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
 } // namespace
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
-    : dominanceInfo(funcOp),
-      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo, loopHeaders)) {}
+    : dominanceInfo(funcOp), hasReducibleCFG(true) {
+  Region &body = funcOp.getFunctionBody();
+  if (const auto *info = getLoopInfo(&body)) {
+    // A CFG is reducible iff every retreating edge in a depth-first traversal
+    // is a backedge, i.e. its target dominates its source. Only blocks
+    // reachable from the function entry matter to membar's forward dataflow
+    // analysis.
+    llvm::ReversePostOrderTraversal<Block *> blocks(&body.front());
+    hasReducibleCFG = !llvm::containsIrreducibleCFG<Block *>(blocks, *info);
+  }
+}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
+
+const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
+  if (region->hasOneBlock())
+    return nullptr;
+  auto &info = loops[region];
+  if (!info)
+    info = std::make_unique<CFGLoopInfo>(dominanceInfo.getDomTree(region));
+  return info.get();
+}
 
 bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
                                        const AllocationSlice &b) {
@@ -312,6 +318,7 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
   if (!index)
     return;
   auto expr = analyzeBufferIndex(index.getIndex());
+  analyzeLoopPhase(expr, dominanceInfo);
   expr.indexedSource = index.getSrc();
   slice.bufferIndexExpr = intern(std::move(expr));
 }
@@ -330,12 +337,15 @@ bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
 }
 
 bool BufferIndexAnalysis::entersLoop(Operation *terminator) const {
-  if (!isa<BranchOpInterface>(terminator))
+  if (!isa<BranchOpInterface>(terminator) ||
+      !isa<FunctionOpInterface>(terminator->getParentOp()))
     return false;
-  return llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
-    return loopHeaders.contains(successor) &&
-           !isBackedgeSuccessor(terminator, successor);
-  });
+  const auto *info = getLoopInfo(terminator->getParentRegion());
+  return info &&
+         llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
+           return info->isLoopHeader(successor) &&
+                  !isBackedgeSuccessor(terminator, successor);
+         });
 }
 
 } // namespace mlir

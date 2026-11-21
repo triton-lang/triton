@@ -113,6 +113,10 @@ uint32_t getOutputBasisMask(const LinearLayout &layout,
 uint64_t getInputBasisMask(const LinearLayout &layout, StringAttr inDim,
                            ArrayRef<StringAttr> outDims);
 
+// Return the 32-bit mask of IDs formed by subsets of varyingIdBits.
+// For example, varying bits 0 and 2 select IDs 0, 1, 4, and 5.
+uint32_t getGroupZeroMask(unsigned varyingIdBits);
+
 struct IdentityFactor {
   int32_t size;
   LinearLayout quotient;

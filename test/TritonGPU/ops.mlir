@@ -367,22 +367,12 @@ tt.func @warp_specialize_nothing() {
   default {
     // CHECK-NEXT: ttg.warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: } : () -> ()
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  // CHECK: } : () -> ()
   } : () -> ()
   tt.return
-}
-
-// CHECK-LABEL: @warp_specialize_no_partitions
-tt.func @warp_specialize_no_partitions(%arg0: i32, %arg1: i64) -> i64 {
-  // CHECK-NEXT: %0 = ttg.warp_specialize(%arg0)
-  %0 = ttg.warp_specialize(%arg0)
-  // CHECK-NEXT: default {
-  default {
-    // CHECK-NEXT: ttg.warp_yield %arg1 : i64
-    ttg.warp_yield %arg1 : i64
-  // CHECK-NEXT: } : (i32) -> i64
-  } : (i32) -> i64
-  tt.return %0 : i64
 }
 
 // CHECK-LABEL: @warp_specialize_partitions

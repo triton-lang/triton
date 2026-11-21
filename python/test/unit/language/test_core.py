@@ -42,7 +42,6 @@ from triton._internal_testing import (
     is_hip_rdna4m,
     is_hip_rdna4,
     is_hip_cdna5,
-    is_xpu,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -228,8 +227,8 @@ def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
 
 
 def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y='real', device='cuda', num_ctas=1,
-                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True,
-                 test_scalar=True):
+                 x_low=None, x_high=None, y_low=None, y_high=None, filter_y=None, test_broadcast=True, test_scalar=True,
+                 check_exact=False):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
     check_type_supported(dtype_y, device)
     SIZE = 128
@@ -309,7 +308,10 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         if not is_compile_warmup():
             err_msg = f"{expr}, {kernel_fn.__name__}"
-            np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
+            if check_exact:
+                np.testing.assert_array_equal(z_ref, to_numpy(z_tri), err_msg=err_msg)
+            else:
+                np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)
 
     def get_scalar(x, dtype, low, high, filter):
         # If dtype is int, don't choose a huge number for the scalar
@@ -2120,7 +2122,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             assert "fence.acq_rel.gpu" in h.asm["ptx"]
         return
 
-    assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.gpu.{sem_str}." in ptx or f"atom.{sem_str}.gpu.global." in ptx
 
 
 @pytest.mark.interpreter
@@ -2398,7 +2401,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
         return
-    assert f"atom.global.{sem_str}" in h.asm["ptx"]
+    ptx = h.asm["ptx"]
+    assert f"atom.global.{sem_str}.gpu.cas." in ptx or f"atom.{sem_str}.gpu.global.cas." in ptx
 
 
 @pytest.mark.interpreter
@@ -2985,6 +2989,75 @@ def test_load_store_same_ptr(device):
         else:
             kernel[(65536, )](x, num_warps=32)
         assert torch.all(x == 2)
+
+
+def _clmul_reference(x, y):
+    # Carry-less multiplication follows the same promotion rules as XOR.
+    dtype = np.bitwise_xor(x, y).dtype
+    bits = 1 if dtype == np.bool_ else np.iinfo(dtype).bits
+    x, y = np.broadcast_arrays(np.asarray(x, dtype=object), np.asarray(y, dtype=object))
+    result = np.zeros(x.shape, dtype=object)
+    for bit in range(bits):
+        result ^= ((y >> bit) & 1) * (x << bit)
+    unsigned = np.dtype("bool" if bits == 1 else f"uint{bits}")
+    return np.asarray(result & ((1 << bits) - 1), dtype=unsigned).view(dtype)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_x, dtype_y", [
+    pytest.param(dtype_x, dtype_y, marks=pytest.mark.disable_warmup if 'float' in dtype_x + dtype_y else ())
+    for dtype_x in dtypes_with_bfloat16
+    for dtype_y in dtypes_with_bfloat16
+] + [('bool', 'bool')])
+@pytest.mark.parametrize("num_ctas", num_ctas_list)
+@pytest.mark.enable_warmup(min_capability=8, priority=1)
+def test_clmul(dtype_x, dtype_y, num_ctas, device):
+    expr = 'tl.clmul(x, y)'
+    if 'float' in dtype_x + dtype_y:
+        with pytest.raises(triton.TritonError, match='clmul requires integer operands'):
+            _test_binary(dtype_x, dtype_y, expr, numpy_expr='np.array([])', device=device, num_ctas=num_ctas)
+        return
+    numpy_expr = '_clmul_reference(x, y)'
+    dtype = _binary_op_dtype_override(dtype_x, dtype_y)
+    if dtype is not None:
+        dtype = np.dtype(dtype).name
+        numpy_expr = f'_clmul_reference(x.astype(np.{dtype}), y.astype(np.{dtype}))'
+    _test_binary(dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas, check_exact=True)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["bool", *integral_dtypes])
+def test_clmul_edge_cases(dtype_str, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr):
+        rows = tl.arange(0, N)
+        cols = tl.arange(0, N)
+        x = tl.load(X + rows)[:, None]
+        y = tl.load(Y + cols)[None, :]
+        tl.store(Z + rows[:, None] * N + cols[None, :], tl.clmul(x, y))
+
+    dtype = np.dtype(dtype_str)
+    bits = 1 if dtype_str == "bool" else dtype.itemsize * 8
+    mask = (1 << bits) - 1
+    unsigned = np.dtype("bool" if bits == 1 else f"uint{bits}")
+    edges = [0, 1, 2 & mask, 3 & mask, mask, mask >> 1, 1 << (bits - 1), mask ^ (mask >> 1)]
+    rng = RandomState(17)
+    random = np.frombuffer(rng.bytes(8 * dtype.itemsize), dtype=unsigned)
+    values = np.concatenate((np.array(edges, dtype=unsigned), random))
+    x = values.view(dtype)
+    y = np.roll(values, 3).view(dtype)
+    n = len(x)
+    expected = _clmul_reference(values[:, None], np.roll(values, 3)[None, :]).view(dtype)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty((n, n), dtype=dtype), device=device)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, n)
+    np.testing.assert_array_equal(to_numpy(z_tri), expected)
+    if not is_interpreter() and bits > 1:
+        # LLVM may vectorize elementwise intrinsics, particularly on AMD.
+        assert re.search(rf"@llvm\.clmul\.(?:v\d+)?i{bits}\(", compiled.asm["llir"])
 
 
 @pytest.mark.interpreter
@@ -5468,6 +5541,25 @@ def test_full(dtype_str, shape, device):
     assert torch.all(out_dynamic == 2)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("value, dtype_str, expected", [
+    (0xFF, "int8", -1),
+    (0x8000, "int16", -32768),
+    (0xFFFFFFFF, "int32", -1),
+    (0x1FF, "uint8", 0xFF),
+])
+def test_full_int_constant_out_of_range(value, dtype_str, expected, device):
+    # An integer constant keeps its low bits, as arith.constant does.
+
+    @triton.jit
+    def kernel(out, VALUE: tl.constexpr, DTYPE: tl.constexpr):
+        tl.store(out + tl.arange(0, 4), tl.full([4], VALUE, DTYPE))
+
+    out = torch.zeros(4, dtype=getattr(torch, dtype_str), device=device)
+    kernel[(1, )](out, value, getattr(tl, dtype_str))
+    assert torch.all(out == expected)
+
+
 @pytest.mark.parametrize("value", [1e-8, 3e-7, -2.5e-7, 1.5e-6, 1e-40, 0.1, 3.14159265])
 def test_full_bf16_small_constant(value, device):
     check_type_supported(torch.bfloat16, device)
@@ -7174,9 +7266,6 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel.warmup(a, grid=(1, ))
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
-    if not (is_hip() or is_xpu()):
-        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------

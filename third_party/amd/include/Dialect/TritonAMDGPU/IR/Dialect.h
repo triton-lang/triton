@@ -24,8 +24,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_DIALECT_H_
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -40,6 +39,14 @@ struct L2Cache : public SideEffects::Resource::Base<L2Cache> {
 } // namespace mlir::triton::amd
 
 namespace mlir::triton::amdgpu {
+/// Internal wait annotation computed by UpdateAsyncWaitCount and consumed by
+/// AMD Membar. "shared" rules out pending async global writes for the waited
+/// queue using target capabilities or dataflow; "all" retains conservative
+/// ordering. The annotation neither replaces the hardware wait nor proves
+/// that accesses are warp-local.
+inline constexpr llvm::StringLiteral kAsyncCompletionScopeAttrName =
+    "amdg.completion_scope";
+
 /// Returns the number of dwords for a TDM tensor descriptor based on rank.
 /// 2D tensors: group0 (4) + group1 (8) = 12 dwords
 /// 3D-5D tensors: group0 (4) + group1 (8) + group2 (4) + group3 (4) = 20 dwords

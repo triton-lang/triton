@@ -251,7 +251,8 @@ def test_fp4_reduction_stage_budget(monkeypatch, block_m, num_warps, epilogue_su
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     monkeypatch.setattr(opt_flags, "cuda_capability_geq", lambda *_: True)
     scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
-    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale)
+    unit = torch.ones(())
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit)
     flags = opt_flags.make_default_opt_flags_nvidia(
         FP4,
         FP4,
@@ -291,8 +292,10 @@ def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expe
                         lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
+    unit = torch.ones(())
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_mx_tensor_scale=unit, b_mx_tensor_scale=unit)
     args = {
-        "precision_config": PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale),
+        "precision_config": precision,
         "is_persistent": True,
         "block_m": 128,
         "block_n": 256,
@@ -338,6 +341,8 @@ def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_wa
     precision = PrecisionConfig(
         a_mx_scale=a_scale,
         b_mx_scale=b_scale,
+        a_mx_tensor_scale=torch.ones((), device=device),
+        b_mx_tensor_scale=torch.ones((), device=device),
         c_mx_scale=c_scale,
         a_microblock_size=16,
         b_microblock_size=16,

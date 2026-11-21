@@ -2,8 +2,8 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "third_party/amd/include/Analysis/Membar.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Membar.h"
 
 using namespace mlir;
 
@@ -25,7 +25,8 @@ struct TestAMDGPUMembarPass
     triton::AMD::annotateLocalLoadsSyncedViaAsyncWait(moduleOp);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-    ModuleMembarAnalysis membarPass(allocation, triton::AMD::membarFilter);
+    triton::AMD::ModuleMembarAnalysis membarPass(allocation,
+                                                 triton::AMD::membarFilter);
     membarPass.run();
   }
 };

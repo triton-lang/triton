@@ -39,6 +39,14 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
   if (!sharedLayout.sublayoutIsZero({kBlock}, {axisDim}))
     return true;
 
+  // High coordinate bits fixed by the subview origin may select a peer.
+  if (memDescTy.getShape() != memDescTy.getAllocShape()) {
+    auto inverse = sharedLayout.pseudoinvert();
+    for (auto [dim, size] : llvm::zip_equal(allDims, memDescTy.getShape()))
+      if (getInputBasisMask(inverse, dim, {kBlock}) >= uint64_t(size))
+        return true;
+  }
+
   LinearLayout regLayout = ttg::toLinearLayout(regTy)
                                .removeZeroBasesAlongDim(kRegister)
                                .transposeOuts(allDims);
@@ -84,16 +92,8 @@ std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
     return isCrossCTAGatherScatter(atomic.getDst().getType(),
                                    atomic.getValues().getType(),
                                    atomic.getAxis());
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (tma.getMulticast())
-      return true;
-    auto type = cast<ttg::MemDescType>(tma.getResult().getType());
-    auto encoding = type.getEncoding();
-    // Subview offsets can select another CTA.
-    if (ttg::dropPipeliningDim(type.getShape(), encoding) ==
-        ttg::dropPipeliningDim(type.getAllocShape(), encoding))
-      return false;
-  }
+  if (isa<ttng::AsyncLoadOpInterface>(op))
+    return hasCrossCTAAsyncSharedAccess(op);
   return std::nullopt;
 }
 
@@ -113,7 +113,7 @@ bool hasCrossCTAMBarrierUse(ttg::MBarrierOpInterface barrier) {
   int numCTAs = ttg::lookupNumCTAs(op);
   if (numCTAs == 1)
     return false;
-  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+  if (auto tma = dyn_cast<ttng::AsyncLoadOpInterface>(op))
     return tma.getMulticast();
   if (isa<ttng::CLCTryCancelOp>(op))
     return true;

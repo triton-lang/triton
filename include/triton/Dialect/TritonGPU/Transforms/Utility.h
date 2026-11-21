@@ -15,6 +15,12 @@ namespace mlir {
 class DominanceInfo;
 class PostDominanceInfo;
 
+namespace scf {
+class ForOp;
+class IfOp;
+class WhileOp;
+} // namespace scf
+
 namespace triton {
 class ModuleAxisInfoAnalysis;
 class LoadOp;
@@ -327,6 +333,21 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
 // Get a boolean if the Value is an arith::ConstantOp
 std::optional<bool> getBoolFromConstant(Value cst);
+
+/// Emit cluster synchronization so every warp in each CTA participates.
+///
+/// `emit` creates the target-specific cluster synchronization operations using
+/// the supplied builder. These operations must not reference SSA values defined
+/// outside the region where they are inserted. If `joinWarps` is true, ensure
+/// all warps in the CTA finish the emitted operations before execution
+/// continues past the synchronization.
+///
+/// `anchor`, which must be outside any warp_specialize op, provides the context
+/// for looking up warp counts, and `builder` determines the insertion point.
+void emitClusterSyncForAllWarps(OpBuilder &builder, Location loc,
+                                Operation *anchor,
+                                function_ref<void(OpBuilder &)> emit,
+                                bool joinWarps = false);
 
 } // namespace mlir::triton
 

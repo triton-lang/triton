@@ -337,7 +337,10 @@ tt.func @unused_warp_specialize_results(%arg0: i32, %arg1: i32, %arg2: i32) -> (
   default {
     // CHECK-NEXT: ttg.warp_yield %arg0, %arg2 : i32, i32
     ttg.warp_yield %arg0, %arg1, %arg2 : i32, i32, i32
-  // CHECK-NEXT: () -> (i32, i32)
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  // CHECK: () -> (i32, i32)
   } : () -> (i32, i32, i32)
   // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
   tt.return %0#0, %0#2 : i32, i32

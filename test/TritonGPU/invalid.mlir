@@ -701,6 +701,17 @@ tt.func @warp_specialize_mismatch_partition_count() {
 
 // -----
 
+tt.func @warp_specialize_no_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // expected-error @below {{'ttg.warp_specialize' op requires at least one worker partition}}
+  %0 = ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield %arg1 : i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// -----
+
 tt.func @not_power_of_2() {
   // expected-error @below {{'ttg.warp_specialize' op partition #0 number of warps (3) must be a power of 2}}
   ttg.warp_specialize()
@@ -748,6 +759,9 @@ tt.func @bad_default_yields(%arg0: i32) {
   default {
     // expected-error @below {{'ttg.warp_yield' op has 0 operands but parent op expected 1}}
     ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> i32
   tt.return
 }
@@ -759,6 +773,9 @@ tt.func @bad_default_yields(%arg0: i32, %arg1: i64) {
   default {
     // expected-error @below {{'ttg.warp_yield' op operand #0 has type 'i64' but parent op expected 'i32'}}
     ttg.warp_yield %arg1 : i64
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> i32
   tt.return
 }
@@ -845,8 +862,14 @@ tt.func @illegal_ws_nest() {
     ttg.warp_specialize()
     default {
       ttg.warp_yield
+    }
+    partition0() num_warps(1) {
+      ttg.warp_return
     } : () -> ()
     ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }

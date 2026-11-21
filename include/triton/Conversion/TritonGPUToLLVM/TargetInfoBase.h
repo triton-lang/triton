@@ -1,14 +1,28 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
-#include "triton/Conversion/MLIRTypes.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include <functional>
 #include <memory>
+#include <utility>
 
-namespace mlir::triton {
+namespace mlir {
+class ModuleOp;
+class RewriterBase;
+class ValueRange;
+
+namespace triton {
+class ReduceOp;
+enum class MemSyncScope : uint32_t;
 enum class ProgramIDDim : uint32_t;
+
+namespace gpu {
+enum class AddrSpace : uint32_t;
+} // namespace gpu
 
 class TargetInfoBase {
 public:
@@ -48,6 +62,13 @@ public:
   virtual void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
                             Value value, Value pred,
                             MemSyncScope scope) const = 0;
+  // Release in every thread/warp before the CTA or cluster barrier that
+  // precedes a release atomic at `scope`; the atomic itself may run in a single
+  // thread after that barrier. Targets whose release by one thread does not
+  // cover global writes made earlier by other warps must release this thread's
+  // writes at `scope` here.
+  virtual void releaseBeforeAtomicBarrier(Location loc, RewriterBase &rewriter,
+                                          MemSyncScope scope) const {}
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
@@ -86,8 +107,13 @@ public:
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
-  virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                          int i) const = 0;
+  // Return the shuffled value and whether the source lane is in bounds.
+  virtual std::pair<Value, Value> shuffleUp(RewriterBase &rewriter,
+                                            Location loc, Value val,
+                                            int delta) const = 0;
+  virtual std::pair<Value, Value> shuffleDown(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -161,6 +187,8 @@ public:
   virtual unsigned getReductionTreeArity(Operation *combinerOp) const {
     return 2;
   }
+  // Whether to use three interleaved register chains for a Boolean reduction.
+  virtual bool preferThreePredicateChains() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Returns the shared memory partition size in bytes. A value of 0 means
@@ -176,5 +204,6 @@ public:
 
   virtual ~TargetInfoBase() {}
 };
-} // namespace mlir::triton
+} // namespace triton
+} // namespace mlir
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H

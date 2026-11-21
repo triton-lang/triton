@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -559,7 +560,7 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
 }
 
 bool mayOverlap(const BufferRegionFootprint *lhs,
-                const BufferRegionFootprint *rhs) {
+                const BufferRegionFootprint *rhs, AllocationOrigin origin) {
   if (!lhs || !rhs || !lhs->memorySpace || !rhs->memorySpace)
     return true;
   if (lhs->memorySpace != rhs->memorySpace)
@@ -573,7 +574,12 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
     return llvm::any_of(right.views, [&](const BufferRegionView &b) {
       bool sameFrame =
           a.allocationFrame && a.allocationFrame == b.allocationFrame;
-      return !sameFrame || a.region.intersects(b.region);
+      if (!sameFrame)
+        return true;
+      bool same = a.allocation && a.allocation == b.allocation;
+      return (origin == AllocationOrigin::Any ||
+              same == (origin == AllocationOrigin::Same)) &&
+             a.region.intersects(b.region);
     });
   });
 }
@@ -670,6 +676,40 @@ Allocation *BufferRegionAnalysis::getAllocation(Operation *op) const {
       moduleAllocation->getFuncData(op->getParentOfType<FunctionOpInterface>());
   assert(allocation && "function allocation must be available");
   return allocation;
+}
+
+const BufferRegionFootprint *BufferRegionAnalysis::getKernelFootprint(
+    const BufferRegionFootprint *footprint) {
+  if (!footprint)
+    return nullptr;
+  auto [it, inserted] = kernelFootprints.try_emplace(footprint);
+  if (inserted) {
+    RegionInfo::ViewList views;
+    for (const auto &view : footprint->regionInfo.views) {
+      // Distinct call paths can place the same view at the same frame offset.
+      llvm::SmallSetVector<std::pair<uint32_t, uint32_t>, 4> placements;
+      placements.insert({view.allocationFrame, 0});
+      for (unsigned i = 0; i < placements.size(); ++i) {
+        auto [frame, offset] = placements[i];
+        auto fn = cast<FunctionOpInterface>(operationInterner[frame]);
+        if (isKernel(fn)) {
+          views.insert(frame == view.allocationFrame
+                           ? view
+                           : view.translated(offset, frame));
+          continue;
+        }
+        auto *calls =
+            getOrCreate<dataflow::PredecessorState>(getProgramPointAfter(fn));
+        for (Operation *call : calls->getKnownPredecessors())
+          placements.insert(
+              {getOperationId(call->getParentOfType<FunctionOpInterface>()),
+               offset + getCallOffset(cast<CallOpInterface>(call))});
+      }
+    }
+    it->second = std::make_unique<BufferRegionFootprint>(BufferRegionFootprint{
+        footprint->memorySpace, RegionInfo(std::move(views))});
+  }
+  return it->second.get();
 }
 
 uint32_t BufferRegionAnalysis::getCallOffset(CallOpInterface call) const {

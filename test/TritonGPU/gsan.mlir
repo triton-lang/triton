@@ -373,6 +373,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #blockedLocalBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
 #blockedCTABroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: tt.func @atomic_result_barrier_scope
@@ -406,6 +407,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NEXT: ttng.cluster_barrier
     %cluster_relaxed = tt.atomic_rmw add, relaxed, gpu, %cluster_ptrs, %cluster_ones {allocation.offset = 0 : i32} : (tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>, tensor<128xi32, #blockedCTABroadcast>) -> tensor<128xi32, #blockedCTABroadcast>
     tt.store %cluster_ptrs, %cluster_relaxed : tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
+
+    %dst = ttg.local_alloc %cluster_ones : (tensor<128xi32, #blockedCTABroadcast>) -> !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_atomic_scatter_rmw
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%cluster_ones], %cluster_ones {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blockedCTABroadcast>, tensor<128xi32, #blockedCTABroadcast>) -> tensor<128xi32, #blockedCTABroadcast>
+    tt.store %cluster_ptrs, %old : tensor<128x!tt.ptr<i32>, #blockedCTABroadcast>
     tt.return
   }
 }
@@ -512,6 +520,43 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     // CHECK: tti.experimental_gsan_tensordesc_access %[[DESC]][%{{.*}}, %{{.*}}], false, %{{.*}}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @linear_bulk_range
+  tt.func @linear_bulk_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // CHECK-NOT: tt.make_range
+    // CHECK: tt.bitcast %arg0 : !tt.ptr<i32> -> !tt.ptr<i8>
+    // CHECK: tt.addptr
+    // CHECK: tti.experimental_gsan_load_range {{.*}}, 48, %arg3 : <i8>
+    // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @linear_bulk_store_range
+  tt.func @linear_bulk_store_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // CHECK-NOT: tt.make_range
+    // CHECK: [[PRED:%.*]] = arith.andi %arg3,
+    // CHECK: tt.bitcast %arg0 : !tt.ptr<i32> -> !tt.ptr<i8>
+    // CHECK: tt.addptr
+    // CHECK: tti.experimental_gsan_store_range {{.*}}, 48, [[PRED]] : <i8>
+    // CHECK-NEXT: ttng.async_bulk_copy_local_to_global
+    ttng.async_bulk_copy_local_to_global %src, %dst, 48, %pred : !tt.ptr<i32>, !dst
     tt.return
   }
 }

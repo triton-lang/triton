@@ -8,6 +8,8 @@
 // RUN: triton-opt %t/fp4.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100a -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
+// RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16-SM80 --dump-input-context=20 %s
+// RUN: triton-opt %t/clmul.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=93' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx93 | FileCheck %s --check-prefix=CLMUL
 
 //--- common.mlir
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
@@ -652,34 +654,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM80: prmt.b32
   // SM90: cvt.rn.satfinite.e5m2x2.f32
   // SM100: cvt.rn.satfinite.e5m2x2.f32
+  // SM90-NOT: prmt.b32
+  // SM100-NOT: prmt.b32
+  // CHECK: st.global.
   // VEC80-LABEL: llvm.func @fp32_to_fp8e5_rtne
   // VEC80: nvvm.convert.f32x2.to.f16x2 {{.*}}rnd = <rz>
   // VEC80: llvm.call_intrinsic "llvm.minimumnum"
   // VEC80: llvm.intr.copysign
-  tt.func public @fp32_to_fp8e5_rtne(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<256xf32, #blocked>) {
-    %result = tt.fp_to_fp %arg, rounding = rtne : tensor<256xf32, #blocked> -> tensor<256xf8E5M2, #blocked>
-    %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
-    %base = tt.splat %ptr : !tt.ptr<f8E5M2> -> tensor<256x!tt.ptr<f8E5M2>, #blocked>
-    %ptrs = tt.addptr %base, %offsets : tensor<256x!tt.ptr<f8E5M2>, #blocked>, tensor<256xi32, #blocked>
-    tt.store %ptrs, %result : tensor<256x!tt.ptr<f8E5M2>, #blocked>
+  tt.func public @fp32_to_fp8e5_rtne(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<512xf32, #blocked>) {
+    %result = tt.fp_to_fp %arg, rounding = rtne : tensor<512xf32, #blocked> -> tensor<512xf8E5M2, #blocked>
+    %offsets = tt.make_range {end = 512 : i32, start = 0 : i32} : tensor<512xi32, #blocked>
+    %base = tt.splat %ptr : !tt.ptr<f8E5M2> -> tensor<512x!tt.ptr<f8E5M2>, #blocked>
+    %ptrs = tt.addptr %base, %offsets : tensor<512x!tt.ptr<f8E5M2>, #blocked>, tensor<512xi32, #blocked>
+    tt.store %ptrs, %result : tensor<512x!tt.ptr<f8E5M2>, #blocked>
     tt.return
   }
 
   // CHECK-LABEL: .entry fp32_to_fp8e5_rtz(
   // CHECK: cvt.rz.f16.f32
-  // SM90: and.b32
-  // SM100: and.b32
   // CHECK: prmt.b32
   // VEC80-LABEL: llvm.func @fp32_to_fp8e5_rtz
   // VEC80: llvm.shufflevector {{.*}} [1, 3, 5, 7] : vector<8xi8>
   // VEC90-LABEL: llvm.func @fp32_to_fp8e5_rtz
-  // VEC90: llvm.inline_asm
-  // VEC90-SAME: and.b32
-  // VEC90-SAME: prmt.b32
+  // VEC90: nvvm.prmt
   // VEC100-LABEL: llvm.func @fp32_to_fp8e5_rtz
-  // VEC100: llvm.inline_asm
-  // VEC100-SAME: and.b32
-  // VEC100-SAME: prmt.b32
+  // VEC100: nvvm.prmt
   tt.func public @fp32_to_fp8e5_rtz(%ptr: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg: tensor<256xf32, #blocked>) {
     %result = tt.fp_to_fp %arg, rounding = rtz : tensor<256xf32, #blocked> -> tensor<256xf8E5M2, #blocked>
     %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
@@ -822,6 +821,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
   // F64BF16-LABEL: fp_trunc_f64_to_bf16_rtne(
   // F64BF16: cvt.rn.bf16.f64
+  // F64BF16-SM80-LABEL: fp_trunc_f64_to_bf16_rtne(
+  // F64BF16-SM80: cvt.rn.f32.f64
+  // F64BF16-SM80: cvt.f64.f32
+  // F64BF16-SM80: cvt.rn.bf16.f32
   tt.func public @fp_trunc_f64_to_bf16_rtne(%out: !tt.ptr<bf16>, %arg: f64) {
     %result = tt.fp_to_fp %arg, rounding = rtne : f64 -> bf16
     tt.store %out, %result : !tt.ptr<bf16>
@@ -830,9 +833,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 
   // F64BF16-LABEL: fp_trunc_f64_to_bf16_rtz(
   // F64BF16: cvt.rz.bf16.f64
+  // F64BF16-SM80-LABEL: fp_trunc_f64_to_bf16_rtz(
+  // F64BF16-SM80: cvt.rz.f32.f64
+  // F64BF16-SM80: cvt.rz.bf16.f32
   tt.func public @fp_trunc_f64_to_bf16_rtz(%out: !tt.ptr<bf16>, %arg: f64) {
     %result = tt.fp_to_fp %arg, rounding = rtz : f64 -> bf16
     tt.store %out, %result : !tt.ptr<bf16>
+    tt.return
+  }
+}
+
+//--- clmul.mlir
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CLMUL-LABEL: .visible .entry clmul_i64(
+  // CLMUL-NOT: xor.b64
+  // CLMUL: clmad.lo.u64 %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}}, 0;
+  // CLMUL-NOT: xor.b64
+  // CLMUL: ret;
+  tt.func public @clmul_i64(%x: i64, %y: i64, %out: !tt.ptr<i64>) {
+    %product = tt.clmul %x, %y : i64
+    tt.store %out, %product : !tt.ptr<i64>
+    tt.return
+  }
+
+  // CLMUL-LABEL: .visible .entry clmul_xor_i64(
+  // CLMUL-NOT: xor.b64
+  // CLMUL: clmad.lo.u64 %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}}, %rd{{[0-9]+}};
+  // CLMUL-NOT: xor.b64
+  // CLMUL: ret;
+  tt.func public @clmul_xor_i64(%x: i64, %y: i64, %acc: i64, %out: !tt.ptr<i64>) {
+    %product = tt.clmul %x, %y : i64
+    %result = arith.xori %product, %acc : i64
+    tt.store %out, %result : !tt.ptr<i64>
     tt.return
   }
 }

@@ -50,6 +50,7 @@ struct MemEffectsOpInfo {
     };
 
     RW rw;
+    bool isTensorCoreARead = false;
     std::optional<gpu::SharedKind> sharedKind;
     std::variant<Value, StaticSharedBuffer> buffer;
     std::string operandName = "";
@@ -163,6 +164,13 @@ public:
   // cluster rendezvous, which may consist of multiple operations.
   virtual SmallVector<Operation *>
   createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
+
+  // Whether shared-memory accesses may target another CTA of the cluster.
+  virtual bool supportsCrossCTASharedMemory() const { return true; }
+
+  virtual BarrierStages getClusterBarrierStages(Operation *op) const {
+    return {};
+  }
 
   // A call-frame summary cannot represent target-specific synchronization or
   // compiler scratch that crosses CTA boundaries.

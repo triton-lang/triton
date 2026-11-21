@@ -312,6 +312,16 @@ private:
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
+    // Extra operations in the combiner region may have observable effects.
+    bool isPureBooleanCombiner =
+        isa_and_nonnull<arith::AndIOp, arith::OrIOp, arith::XOrIOp,
+                        arith::MinSIOp, arith::MaxSIOp, arith::MinUIOp,
+                        arith::MaxUIOp>(combinerOp) &&
+        combinerOp->getResult(0).getType().isInteger(1) &&
+        llvm::hasSingleElement(combineRegion.front().without_terminator());
+    bool usePredicateChains =
+        isPureBooleanCombiner && targetInfo.preferThreePredicateChains();
+
     // Perform a tree reduction
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
@@ -324,7 +334,10 @@ private:
         for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
           cur[opIdx] = accs[opIdx][regBase + i];
         }
-        vals.push_back(std::move(cur));
+        if (usePredicateChains && i >= 3)
+          accumulate(loc, rewriter, combineRegion, vals[i % 3], cur);
+        else
+          vals.push_back(std::move(cur));
       }
       auto acc =
           treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);

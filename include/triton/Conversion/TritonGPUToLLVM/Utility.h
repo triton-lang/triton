@@ -403,7 +403,8 @@ Value emitThreadPredicate(ThreadDomainAttr domain,
                           ConversionPatternRewriter &rewriter, Location loc,
                           const TargetInfoBase &targetInfo);
 
-// Thread-local memory operations already execute in their owner's branch.
+// Inside an owner's branch, only redundant CTAs need a predicate.
+// An empty value means all participating threads can execute the operation.
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
@@ -799,7 +800,7 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
 /// acquire/release semantics and any ordering already provided by result
 /// staging.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  RewriterBase &rewriter,
+                                  MemSyncScope memScope, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
 void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,

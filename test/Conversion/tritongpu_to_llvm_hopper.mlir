@@ -718,3 +718,25 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
 }
 
 }
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // The block basis broadcasts when the first dimension has size 1.
+  // CHECK: nvvm.barrier
+  tt.func @convert_layout_broadcast_cta(%arg: tensor<1x16xf32, #src>, %out: tensor<1x16x!tt.ptr<f32>, #dst>) {
+    %0 = ttg.convert_layout %arg : tensor<1x16xf32, #src> -> tensor<1x16xf32, #dst>
+    tt.store %out, %0 : tensor<1x16x!tt.ptr<f32>, #dst>
+    tt.return
+  }
+
+  // With two rows the block basis splits the tensor.
+  // CHECK: nvvm.barrier
+  tt.func @convert_layout_split_cta(%arg: tensor<2x16xf32, #src>, %out: tensor<2x16x!tt.ptr<f32>, #dst>) {
+    %0 = ttg.convert_layout %arg : tensor<2x16xf32, #src> -> tensor<2x16xf32, #dst>
+    tt.store %out, %0 : tensor<2x16x!tt.ptr<f32>, #dst>
+    tt.return
+  }
+}

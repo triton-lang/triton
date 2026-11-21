@@ -1,6 +1,7 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -271,8 +272,18 @@ chooseWmmaInstruction(tt::DotOp dot, int wmmaVersion,
         {fp8e5, fp8e5, f32},
     });
   }
-  if (wmmaVersion == 3)
-    candidates.push_back({f32, f32, f32});
+  if (wmmaVersion == 3) {
+    Type fp8e4nv = b.getType<Float8E4M3FNType>();
+    Type fp8e5 = b.getType<Float8E5M2Type>();
+    candidates.append({
+        {f32, f32, f32},
+        {f16, f16, f16},
+        {fp8e4nv, fp8e4nv, f16},
+        {fp8e4nv, fp8e5, f16},
+        {fp8e5, fp8e4nv, f16},
+        {fp8e5, fp8e5, f16},
+    });
+  }
 
   // Use simple costmodel to define optimal set of the dot operands.
   // Most expensive - accuracy loss conversions:
@@ -818,6 +829,17 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
+    // 3) `amdgpu.scaled_upcast_fp4` uses a single `axis` for both the fp4
+    // unpacking and the scale grouping, so it can only express operands whose
+    // fp4 pairs are packed along K. When they are packed along M/N instead,
+    // reuse the common fp4_to_fp + multiply path, which keeps the two axes
+    // separate.
+    bool kPack = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
+    if (isFp4 && !kPack) {
+      return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
+                                                   computeType);
+    }
+
     unsigned groupSize =
         isFp4 ? 8 : (targetFeatures.supportsCvtPkScalePk8() ? 8 : 4);
 
@@ -1327,6 +1349,47 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+// Check whether large-K fp8 dot can fall back to the scaled WMMA with unit
+// scales. Used in gfx1250-strict.
+// Only checks for eligibility, does not rewrite to fallback instruction.
+static bool shouldUseUnitScaledWmma(tt::DotOp dotOp, int wmmaVersion,
+                                    ArrayRef<StringRef> unsupportedFeatures) {
+  constexpr unsigned kScaledKDim = 128;
+  if (wmmaVersion != 3 || unsupportedFeatures.empty())
+    return false;
+
+  RankedTensorType aType = dotOp.getA().getType();
+  if (aType.getRank() != 2)
+    return false;
+  Type aElemType = aType.getElementType();
+  Type bElemType = dotOp.getB().getType().getElementType();
+  Type cElemType = dotOp.getC().getType().getElementType();
+  Type dElemType = dotOp.getD().getType().getElementType();
+  auto isOcpFp8 = [](Type t) {
+    return isa<Float8E4M3FNType, Float8E5M2Type>(t);
+  };
+  if (!isOcpFp8(aElemType) || !isOcpFp8(bElemType) || !cElemType.isF32() ||
+      !dElemType.isF32())
+    return false;
+
+  int64_t kSize = aType.getShape().back();
+  if (kSize % kScaledKDim != 0)
+    return false;
+
+  FailureOr<WmmaIntrinsic> unrestricted =
+      WmmaIntrinsic::selectFor(wmmaVersion, /*mDim=*/16, /*nDim=*/16, kSize,
+                               aElemType, bElemType, dElemType);
+  if (failed(unrestricted) || unrestricted->kDim != kScaledKDim ||
+      !llvm::is_contained(unsupportedFeatures, unrestricted->requiredFeature))
+    return false;
+
+  FailureOr<WmmaScaleIntrinsic> scaled = WmmaScaleIntrinsic::get(
+      wmmaVersion, /*mDim=*/16, /*nDim=*/16, aElemType, bElemType, dElemType,
+      /*isScale16=*/false, /*isTransposed=*/true);
+  return succeeded(scaled) && scaled->kDim == kScaledKDim &&
+         !llvm::is_contained(unsupportedFeatures, scaled->requiredFeature);
+}
+
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
   SmallVector<StringRef> unsupportedFeatures;
@@ -1355,6 +1418,16 @@ public:
     if (dotOp.getA().getType().getShape().back() == 1) {
       return rewriter.notifyMatchFailure(dotOp,
                                          "Skipping WMMA for dot op with K=1");
+    }
+
+    if (shouldUseUnitScaledWmma(dotOp, wmmaVersion, unsupportedFeatures)) {
+      rewriter.replaceOpWithNewOp<tt::DotScaledOp>(
+          dotOp, oldRetType, dotOp.getA(), dotOp.getB(), dotOp.getC(), Value(),
+          Value(),
+          mlirTypeToScaledElemType(dotOp.getA().getType().getElementType()),
+          mlirTypeToScaledElemType(dotOp.getB().getType().getElementType()),
+          /*fastMath=*/false);
+      return success();
     }
 
     FailureOr<WmmaIntrinsic> wmmaInstr =
