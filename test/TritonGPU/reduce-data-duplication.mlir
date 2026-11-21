@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-reduce-data-duplication | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-reduce-data-duplication -cse | FileCheck %s --check-prefix=REUSE
 
 //       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 4, maxPhase = 2, order = [0, 1]}
 //       CHECK-LABEL: apply_swizzle
@@ -113,5 +114,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: ttg.local_load
     %0 = ttg.convert_layout %arg0 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>
     tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#trans = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 8]}>
+#rhs = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // REUSE-LABEL: tt.func @transposed_dot_operand
+  // REUSE: %[[TILE:.*]] = ttg.local_alloc %arg0
+  // REUSE: %[[VIEW:.*]] = ttg.memdesc_trans %[[TILE]]
+  // REUSE: ttg.local_load %[[VIEW]]
+  // REUSE: ttg.local_load %[[TILE]]
+  tt.func @transposed_dot_operand(%arg0: tensor<128x64xbf16, #src>) -> (tensor<64x128xbf16, #rhs>, tensor<128x64xbf16, #rhs>) {
+    %t = tt.trans %arg0 {order = array<i32: 1, 0>} : tensor<128x64xbf16, #src> -> tensor<64x128xbf16, #trans>
+    %a = ttg.convert_layout %t : tensor<64x128xbf16, #trans> -> tensor<64x128xbf16, #rhs>
+    %b = ttg.convert_layout %arg0 : tensor<128x64xbf16, #src> -> tensor<128x64xbf16, #rhs>
+    tt.return %a, %b : tensor<64x128xbf16, #rhs>, tensor<128x64xbf16, #rhs>
   }
 }
