@@ -730,7 +730,12 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        while (!stack.empty()) {
          auto node = stack.back();
          stack.pop_back();
-         if (isMMA(node) || (node->isOp() && isa<tt::DotOp>(node->getOp()))) {
+         // Any dot-like op ends the walk. tt.dot_scaled reaches this pass as
+         // itself where accelerate-matmul keeps it (sm_12x, whose scaled MMA
+         // accumulates in registers) and must stay with the accumulator like
+         // tt.dot does.
+         if (isMMA(node) ||
+             (node->isOp() && isa<tt::DotOpInterface>(node->getOp()))) {
            return false;
          } else {
            for (auto edge : node->getOutEdges()) {
