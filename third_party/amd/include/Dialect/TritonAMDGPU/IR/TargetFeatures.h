@@ -78,6 +78,7 @@ public:
   bool supportsMulticast() const;
   unsigned getMaxMulticastMaskPopcount() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
+  bool supportsCooperativeAtomics() const;
 
   bool supportsBufferAtomicRMW() const;
   bool supportsBufferAtomicFadd(Type elementType) const;

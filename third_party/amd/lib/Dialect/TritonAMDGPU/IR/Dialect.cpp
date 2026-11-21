@@ -1546,6 +1546,107 @@ LogicalResult BufferLoadToLocalOp::verify() {
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }
 
+// Returns the bytes each lane accesses per cooperative atomic instruction, or
+// emits why the offsets layout cannot form 128-byte lines.
+static FailureOr<unsigned>
+getCooperativeBytesPerLane(Operation *op, RankedTensorType offsetsType,
+                           Type elementType) {
+  auto fail = [&](const Twine &message) -> FailureOr<unsigned> {
+    if (op)
+      op->emitOpError(message);
+    return failure();
+  };
+  MLIRContext *ctx = offsetsType.getContext();
+  LinearLayout layout = gpu::toLinearLayout(offsetsType);
+  if (!layout.isInjective())
+    return fail("does not support replicated tensor elements");
+
+  // Check lines in the dense row-major order of the tensor, not the
+  // vectorization order.
+  auto dimensions = triton::standardOutDimNames(ctx, offsetsType.getRank());
+  LinearLayout flat =
+      layout.transposeOuts(llvm::to_vector(llvm::reverse(dimensions)))
+          .flattenOuts();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto out = *flat.getOutDimNames().begin();
+  unsigned elementBytes = elementType.getIntOrFloatBitWidth() / 8;
+  for (unsigned bytes : {16u, 8u, 4u}) {
+    unsigned elements = bytes / elementBytes;
+    if (elements == 0)
+      continue;
+    LinearLayout line = LinearLayout::identity1D(elements, kRegister, out) *
+                        LinearLayout::identity1D(128 / bytes, kLane, out);
+    if (divideLeft(flat, line))
+      return bytes;
+  }
+  return fail("layout must map consecutive lanes of 4, 8 or 16 contiguous "
+              "bytes to each 128-byte line");
+}
+
+static LogicalResult verifyCooperativeAtomic(Operation *op, Value ptr,
+                                             RankedTensorType offsetsType,
+                                             triton::MemSemantic sem,
+                                             bool isStore) {
+  if (isStore && sem != triton::MemSemantic::RELEASE &&
+      sem != triton::MemSemantic::RELAXED)
+    return op->emitOpError("only supports release and relaxed semantics");
+  if (!isStore && sem != triton::MemSemantic::ACQUIRE &&
+      sem != triton::MemSemantic::RELAXED)
+    return op->emitOpError("only supports acquire and relaxed semantics");
+
+  auto pointer = cast<triton::PointerType>(ptr.getType());
+  if (pointer.getAddressSpace() != triton::PtrAddrSpace::Global)
+    return op->emitOpError("requires a global memory base pointer");
+  Type elementType = pointer.getPointeeType();
+  unsigned elementBits = elementType.getIntOrFloatBitWidth();
+  if (elementBits != 8 && elementBits != 16 && elementBits != 32 &&
+      elementBits != 64)
+    return op->emitOpError("requires 8-, 16-, 32-, or 64-bit elements");
+
+  if (auto mod = op->getParentOfType<ModuleOp>()) {
+    TargetFeatures features = TargetFeatures::fromModuleOp(mod);
+    if (!features.getArch().empty() && !features.supportsCooperativeAtomics())
+      return op->emitOpError("requires a CDNA5 target");
+  }
+  return getCooperativeBytesPerLane(op, offsetsType, elementType);
+}
+
+static unsigned getVerifiedCooperativeBytesPerLane(Value ptr,
+                                                   RankedTensorType offsets) {
+  auto bytes = getCooperativeBytesPerLane(
+      nullptr, offsets,
+      cast<triton::PointerType>(ptr.getType()).getPointeeType());
+  assert(succeeded(bytes) && "verified cooperative atomic layout");
+  return *bytes;
+}
+
+LogicalResult CooperativeAtomicLoadOp::verify() {
+  if (getOther() && !getMask())
+    return emitOpError("other requires a mask");
+  return verifyCooperativeAtomic(getOperation(), getPtr(),
+                                 cast<RankedTensorType>(getOffsets().getType()),
+                                 getSem(),
+                                 /*isStore=*/false);
+}
+
+LogicalResult CooperativeAtomicStoreOp::verify() {
+  return verifyCooperativeAtomic(getOperation(), getPtr(),
+                                 cast<RankedTensorType>(getOffsets().getType()),
+                                 getSem(),
+                                 /*isStore=*/true);
+}
+
+unsigned CooperativeAtomicLoadOp::getBytesPerLane() {
+  return getVerifiedCooperativeBytesPerLane(
+      getPtr(), cast<RankedTensorType>(getOffsets().getType()));
+}
+
+unsigned CooperativeAtomicStoreOp::getBytesPerLane() {
+  return getVerifiedCooperativeBytesPerLane(
+      getPtr(), cast<RankedTensorType>(getOffsets().getType()));
+}
+
 // A buffer write's scalar base must be global memory (address space 1).
 // A descriptor's base is checked when the descriptor is made.
 static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {

@@ -117,11 +117,15 @@ def _cache_policy(cache_policy, cache_policy_type, scope, semantic):
     return policy, scope
 
 
-def _verify(desc, offsets):
-    _check(isinstance(desc, buffer_descriptor), lambda: f"expected a buffer descriptor, got {desc!r}")
+def _verify_offsets(offsets):
     _check(isinstance(offsets.type, ttgl.distributed_type), lambda: "expected offsets type to be a distributed_type")
     _check(offsets.dtype.is_int32() or offsets.dtype.is_uint32(),
            lambda: f"offsets element type must be int32 or uint32, got {offsets.dtype}")
+
+
+def _verify(desc, offsets):
+    _check(isinstance(desc, buffer_descriptor), lambda: f"expected a buffer descriptor, got {desc!r}")
+    _verify_offsets(offsets)
 
 
 def _broadcast_mask_other(offsets, mask, other, elem_ty, semantic):
