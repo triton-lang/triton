@@ -125,40 +125,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                                   std::numeric_limits<int>::max());
 }
 
-// On GFX9, lanes in a warp have to write contiguously to shared memory which
-// means we can only add padding at warp boundaries. With 64 lanes, this means:
-// - Padding intervals must be multiples of 256 bytes for 4-byte loads.
-// - Padding intervals must be multiples of 1024 bytes for 16-byte loads.
-// To avoid bank conflicts when reading tensors in MFMA layout, we stagger
-// continuous rows (non contig dimension) by adding padding that shifts their
-// start addresses to different shared memory banks.
-// take Mx64xbf16, k contiguous, kWidth=8, for example: (rX stands for row X)
-// padding here is set to 16 elements (32 bytes) to avoid bank conflicts
-// we can pack r0,r4,r8,r12,r16,r20,r24,r28 to compose a contiguous tile
-// r0[0:8), r0[8:16),
-//                   r1[0:8), r1[8:16),
-//                                     r2[0:8), r2[8:16),
-//                                                       r3[0:8), r3[8:16),
-// r4[0:8), r4[8:16),
-//                   r5[0:8), r5[8:16),
-//                                     r6[0:8), r6[8:16),
-//                                                       r7[0:8), r7[8:16),
-// r8[0:8), r8[8:16),
-// when composing padded layout, we first assemble the rows that are continuous.
-// in LDS, the rows are arranged as below
-//  r0,  r4, r8, r12, r16, r20, r24, r28
-// pad,  r1, r5,  r9, r13, r17, r21, r25
-// r29, pad, r2,  r6, r10, r14, r18, r22
-// r26, r30, pad, r3 ....
-//
-// Packed FP6 operands (kWidth = 32 bytes, K contiguous) are read with two
-// ds_read_b128 per lane: lane l reads row l % mfmaNonKDim at byte
-// 32 * (l / mfmaNonKDim). No stride or swizzle avoids conflicts for both MFMA
-// sizes under the ds_read_b128 lane grouping above, so the rows are reordered
-// within the 1 KiB padding intervals instead. The row orders below were found
-// by exhaustive search over row bit permutations with a model of that grouping
-// (it reproduces the measured SQ_LDS_BANK_CONFLICT counts), and are
-// conflict-free for 16x16x128 and 32x32x64 with 64 to 256 rows.
+// Bases for packed FP6 operands (kWidth = 32, K contiguous): rows are reordered
+// so that ds_read_b128 operand reads are conflict-free for both MFMA sizes.
 static std::optional<std::vector<std::vector<int>>>
 composeFp6PackedBases(unsigned contigDim, unsigned nonContigDim) {
   // Row bits in the order they appear in the offset, lowest first.
@@ -208,6 +176,31 @@ buildPaddedEncoding(std::vector<std::vector<int>> bases, bool swapDims,
                                             std::move(linearComponent));
 }
 
+// On GFX9, lanes in a warp have to write contiguously to shared memory which
+// means we can only add padding at warp boundaries. With 64 lanes, this means:
+// - Padding intervals must be multiples of 256 bytes for 4-byte loads.
+// - Padding intervals must be multiples of 1024 bytes for 16-byte loads.
+// To avoid bank conflicts when reading tensors in MFMA layout, we stagger
+// continuous rows (non contig dimension) by adding padding that shifts their
+// start addresses to different shared memory banks.
+// take Mx64xbf16, k contiguous, kWidth=8, for example: (rX stands for row X)
+// padding here is set to 16 elements (32 bytes) to avoid bank conflicts
+// we can pack r0,r4,r8,r12,r16,r20,r24,r28 to compose a contiguous tile
+// r0[0:8), r0[8:16),
+//                   r1[0:8), r1[8:16),
+//                                     r2[0:8), r2[8:16),
+//                                                       r3[0:8), r3[8:16),
+// r4[0:8), r4[8:16),
+//                   r5[0:8), r5[8:16),
+//                                     r6[0:8), r6[8:16),
+//                                                       r7[0:8), r7[8:16),
+// r8[0:8), r8[8:16),
+// when composing padded layout, we first assemble the rows that are continuous.
+// in LDS, the rows are arranged as below
+//  r0,  r4, r8, r12, r16, r20, r24, r28
+// pad,  r1, r5,  r9, r13, r17, r21, r25
+// r29, pad, r2,  r6, r10, r14, r18, r22
+// r26, r30, pad, r3 ....
 ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy, unsigned warpSize) {

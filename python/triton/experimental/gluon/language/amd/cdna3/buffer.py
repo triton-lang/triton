@@ -8,7 +8,7 @@ replace the deprecated pointer-based ``buffer_load`` / ``buffer_store`` in the p
 
 from __future__ import annotations
 
-from ..._core import builtin
+from ..._core import builtin, _unwrap_if_constexpr
 from .. import _buffer
 from .._buffer import buffer_descriptor, buffer_descriptor_type
 from ._cache_policy import CachePolicy as _CachePolicy
@@ -65,7 +65,8 @@ def _format_doc(fn):
 
 @builtin
 @_format_doc
-def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
+def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cache_policy=None, fp6_packed=False,
+         _semantic=None):
     """
     Load from global memory through a buffer descriptor into registers.
 
@@ -84,11 +85,13 @@ def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cach
             never hoists. Defaults to None (no coherence beyond the wave).
         {soffset_arg}
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
+        fp6_packed (bool): Expand each 12-byte packed FP6 group into 16 register bytes, zero-padded. Defaults to False.
 
     Returns:
         tensor: The loaded values, with the shape and layout of ``offsets``.
     """
-    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, _CachePolicy, _semantic)
+    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, _CachePolicy, _semantic,
+                        _unwrap_if_constexpr(fp6_packed))
 
 
 @builtin

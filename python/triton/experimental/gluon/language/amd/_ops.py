@@ -350,12 +350,9 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       packed into one output byte (even element -> low nibble, next element ->
       high nibble), so the result extent along ``axis`` is halved (the inverse
       of ``scaled_upcast``).
-    * ``"e2m3"`` / ``"e3m2"`` (packed fp6, CDNA4): the ``uint8`` output keeps
-      the shape and layout of ``input``; each group of 16 bytes along ``axis``
-      holds 16 codes packed into 12 bytes followed by 4 zero bytes, the operand
-      form of FP6 ``mfma_scaled`` operands. Each thread must hold runs of 32
-      consecutive values along ``axis``, and each scale block must span a
-      multiple of 32 values.
+    * ``"e2m3"`` / ``"e3m2"`` (packed fp6): the output keeps the shape and
+      layout of ``input``; each 16 bytes along ``axis`` hold 16 values in 12
+      bytes followed by 4 zero bytes.
 
     ``axis`` (default: last dim) selects the dimension along which scales are
     shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per

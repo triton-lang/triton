@@ -431,6 +431,6 @@ void mlir::triton::AMD::populateScaledDowncastOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const AMD::TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<ScaledDowncastFp4OpPattern>(typeConverter, targetInfo, benefit);
-  patterns.add<ScaledDowncastFp8OpPattern>(typeConverter, targetInfo, benefit);
   patterns.add<ScaledDowncastFp6OpPattern>(typeConverter, targetInfo, benefit);
+  patterns.add<ScaledDowncastFp8OpPattern>(typeConverter, targetInfo, benefit);
 }

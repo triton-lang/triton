@@ -76,9 +76,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 
-  // Each thread converts its 32 values with one instruction (even values as
-  // the first source, odd values as the second) and expands the 6 result dwords
-  // into two 16-byte groups with 4 zero padding bytes each.
   tt.func public @scaled_downcast_fp6_packed(
       %input: tensor<1x2048xf32, #fp6>,
       %scale: tensor<1x64xi8, #scale>,

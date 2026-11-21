@@ -812,8 +812,6 @@ void init_gluon_ir(py::module_ &m) {
             auto op = self.create<ttg::AsyncCopyGlobalToLocalOp>(
                 pointer, smem, mask, other, cachePolicy, isVolatile,
                 /*contiguity=*/1);
-            // Read by the AMD lowering, see `fp6_packed` of CDNA4's
-            // `async_copy.global_load_to_shared`.
             if (fp6Packed)
               op->setAttr("amdg.fp6_packed", UnitAttr::get(self.getContext()));
           },

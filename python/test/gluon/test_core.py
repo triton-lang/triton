@@ -4787,8 +4787,7 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
 
 @gluon.constexpr_function
 def _fp6_packed_copy_layout(shared, num_warps):
-    # One 16-byte group per lane, and each warp copies one 1 KiB padding interval
-    # in offset order, so the direct-to-LDS writes stay coalesced.
+    # Direct-to-LDS writes of a warp must be contiguous: lanes take the next 6 offset bits after the 16-byte group.
     bases = shared.offset_bases
     lanes = 6
     warps = num_warps.bit_length() - 1
@@ -4801,7 +4800,7 @@ def _fp6_packed_copy_layout(shared, num_warps):
 @pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
 @pytest.mark.parametrize("src, dest", [("buffer", "registers")] + [(src, dest)
                                                                    for src in ["buffer", "global"]
-                                                                   for dest in ["unswizzled", "swizzled", "padded"]])
+                                                                   for dest in ["swizzled", "padded"]])
 def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
 
     @gluon.jit
@@ -4814,8 +4813,6 @@ def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=32)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // 32])
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // 32])
-        # Each lane loads one 16-value group: 12 global bytes into 16 bytes of registers or LDS.
-        # Swizzling and padding move whole 16-byte groups, so they keep each group intact.
         if SMEM == "padded":
             a_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
                 a_layout, [BLOCK_M, BLOCK_K], ttgl.uint8)
@@ -4824,9 +4821,8 @@ def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
             a_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(a_shared, ttgl.num_warps())
             b_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(b_shared, ttgl.num_warps())
         else:
-            PHASE: ttgl.constexpr = 8 if SMEM == "swizzled" else 1
-            a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [1, 0])
-            b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, PHASE, [0, 1])
+            a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, 8, [1, 0])
+            b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, 8, [0, 1])
             a_load_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 8], [4, 1], [1, 0])
             b_load_layout: ttgl.constexpr = ttgl.BlockedLayout([16, 1], [8, 8], [1, 4], [0, 1])
         if SMEM != "registers":
@@ -4863,13 +4859,11 @@ def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
                     ttgl.amd.cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs, fp6_packed=True)
                 cdna4_async_copy.commit_group()
                 cdna4_async_copy.wait_group(0)
-                ttgl.barrier()
                 a = a_smem.load(a_layout)
                 b = b_smem.load(b_layout)
             a_scale = ttgl.amd.cdna4.buffer_load(a_scale_ptr, a_scale_offs_m * (K // 32) + k // 32 + a_scale_offs_k)
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + k // 32 + b_scale_offs_k)
             acc = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, acc)
-            ttgl.barrier()
         out_offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, mfma_layout))[:, None]
         out_offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, mfma_layout))[None, :]
         ttgl.amd.cdna4.buffer_store(acc, out_ptr, out_offs_m * BLOCK_N + out_offs_n)

@@ -1113,9 +1113,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       : ConvertOpToLLVMPattern(converter, benefit),
         DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // Name of the attribute set by the `fp6_packed` argument of Gluon's CDNA4
-  // `async_copy.global_load_to_shared`. It has the meaning of `fp6Packed` on
-  // `amdg.buffer_load_to_local`.
+  // Set by `fp6_packed` of Gluon's CDNA4 `async_copy.global_load_to_shared`.
   static constexpr llvm::StringLiteral kFp6PackedAttrName = "amdg.fp6_packed";
 
   LogicalResult

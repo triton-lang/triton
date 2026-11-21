@@ -1,8 +1,7 @@
 """
 Descriptor-based buffer memory ops for CDNA4.
 
-The same ops as :mod:`~triton.experimental.gluon.language.amd.cdna3.buffer`, plus :func:`load_to_shared` and packed FP6
-loads.
+The same ops as :mod:`~triton.experimental.gluon.language.amd.cdna3.buffer`, plus :func:`load_to_shared`.
 """
 
 from __future__ import annotations
@@ -10,46 +9,13 @@ from __future__ import annotations
 from ..._core import builtin, _unwrap_if_constexpr
 from .. import _buffer
 from ..cdna3._cache_policy import CachePolicy as _CachePolicy
-from ..cdna3.buffer import (buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, store, atomic_load,
-                            atomic_store, _format_doc)
+from ..cdna3.buffer import (buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store, atomic_load,
+                            atomic_store)
 
 __all__ = [
     "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store", "atomic_load",
     "atomic_store", "load_to_shared"
 ]
-
-
-@builtin
-@_format_doc
-def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cache_policy=None, fp6_packed=False,
-         _semantic=None):
-    """
-    Load from global memory through a buffer descriptor into registers.
-
-    Element ``i`` is read from ``base + soffset + offsets[i]``. Out-of-bounds elements read zero, and
-    masked-off elements read ``other``, or zero without it. See
-    :func:`~triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor` for the bounds.
-
-    Args:
-        desc (buffer_descriptor): Descriptor of the global memory to load from.
-        offsets (tensor): Offsets of the elements to load, in elements.
-        mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor or scalar, optional): Values for masked-off elements. Defaults to None.
-        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
-            scope. It is not atomic and orders nothing. Defaults to None.
-        {soffset_arg}
-        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
-        fp6_packed (bool): Load densely packed FP6 (4 codes per 3 bytes) into the operand form of
-            :func:`~triton.experimental.gluon.language.amd.cdna4.mfma_scaled`. The result is uint8, and each group
-            of 16 register-consecutive values holds 16 FP6 codes (12 bytes) followed by 4 zero bytes. A group is
-            loaded with one 96-bit transfer of the 12 bytes starting at the offset of its first element, and uses
-            that element's mask. Requires no ``other`` and a scalar ``soffset``. Defaults to False.
-
-    Returns:
-        tensor: The loaded values, with the shape and layout of ``offsets``.
-    """
-    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, _CachePolicy, _semantic,
-                        _unwrap_if_constexpr(fp6_packed))
 
 
 @builtin
@@ -77,11 +43,7 @@ def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, 
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
             scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
-        fp6_packed (bool): Load densely packed FP6 (4 codes per 3 bytes) into the operand form of
-            :func:`~triton.experimental.gluon.language.amd.cdna4.mfma_scaled`. ``dest`` is uint8, and each group of 16 bytes along its
-            contiguous dimension receives 16 FP6 codes (12 bytes) followed by 4 padding bytes, which are not
-            written. Each lane must hold whole groups; a group is loaded with one 96-bit transfer of the 12
-            bytes starting at the offset of its first element, and uses that element's mask. Defaults to False.
+        fp6_packed (bool): Expand each 12-byte packed FP6 group into a 16-byte slot of ``dest``. Defaults to False.
     """
     _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic,
                            _unwrap_if_constexpr(fp6_packed))

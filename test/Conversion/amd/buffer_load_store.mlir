@@ -454,9 +454,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// fp6Packed loads 12 bytes per 16-value group even though the offsets are not
-// known to be contiguous, uses one mask bit per group, and zero-fills the last
-// 4 bytes of each group.
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_load_fp6_packed

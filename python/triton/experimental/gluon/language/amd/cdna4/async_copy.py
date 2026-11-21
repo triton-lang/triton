@@ -81,12 +81,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *
         cache_modifier (str): Cache modifier specifier. Defaults to "".
         cache_policy (CachePolicy, optional): gfx9 cache hints. Cannot be combined with ``cache_modifier``.
             Defaults to None.
-        fp6_packed (bool): Load densely packed FP6 (4 codes per 3 bytes) into the operand form of
-            :func:`~triton.experimental.gluon.language.amd.cdna4.mfma_scaled`. ``dest`` is uint8, and each group of
-            16 bytes along its contiguous dimension receives 16 FP6 codes (12 bytes) followed by 4 padding bytes,
-            which are not written. Each lane must hold whole groups; a group is loaded with one 96-bit transfer of
-            the 12 bytes starting at the pointer of its first element, and uses that element's mask. Requires no
-            ``other``. Defaults to False.
+        fp6_packed (bool): Expand each 12-byte packed FP6 group into a 16-byte slot of ``dest``. Defaults to False.
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(ptr.type.layout, DistributedLayout), lambda: "expected ptr type layout to be a DistributedLayout")
