@@ -1,13 +1,14 @@
 # fmt: off
 
 
+import math
 import numpy as np
 import torch
 import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -276,8 +277,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    # On HIP, fp8e4nv upcasting to fp32 is only supported on CDNA4, and
-    # fp8e4nv upcasting to bf16 and fp16 is only supported on CDNA3 and CDNA4.
+    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA3, RDNA4m, and RDNA4.
     if is_cuda():
         if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
             or src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -286,9 +286,10 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if src_dtype in FP8_DTYPES and is_hip_rdna3():
+        if src_dtype in FP8_DTYPES and src_dtype != 'float8e4nv' and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
+        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m()
+                                               or is_hip_rdna4()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
@@ -310,6 +311,88 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     }[src_dtype]
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
+
+
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA E5M2 conversion")
+
+    # Cover every encoding and mix signs and magnitudes in packed conversions.
+    bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
+    expected = bits.view(torch.float8_e5m2).to(torch.bfloat16)
+    actual = launch_type_convert_triton(bits.to(device), tl.float8e5, tl.bfloat16, device,
+                                       BLOCK_SIZE=BLOCK_SIZE).cpu().view(torch.bfloat16)
+
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dst_dtype, dst_type", [
+    (torch.float16, tl.float16),
+    (torch.float32, tl.float32),
+])
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_e4m3_upcast_all_encodings(dst_dtype, dst_type, BLOCK_SIZE, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+    if is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4()):
+        pytest.skip("E4M3 upcasting is not supported in this architecture")
+
+    # Cover every encoding, including NaN, and mix signs and magnitudes in
+    # packed conversions.
+    bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
+    expected = bits.view(torch.float8_e4m3fn).to(dst_dtype)
+    actual = launch_type_convert_triton(bits.to(device), tl.float8e4nv, dst_type, device,
+                                       BLOCK_SIZE=BLOCK_SIZE).cpu().view(dst_dtype)
+
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    int_dtype = matching_int(dst_type)
+    torch.testing.assert_close(actual.view(int_dtype)[mask], expected.view(int_dtype)[mask], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("src_dtype, src_type", [
+    (torch.float16, tl.float16),
+    (torch.bfloat16, tl.bfloat16),
+    (torch.float32, tl.float32),
+])
+@pytest.mark.parametrize("dst_dtype, dst_type, max_code", [
+    (torch.float8_e5m2, tl.float8e5, 0x7b),
+    (torch.float8_e4m3fn, tl.float8e4nv, 0x7e),
+])
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type, max_code, BLOCK_SIZE, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA saturating FP8 conversion")
+    if dst_type == tl.float8e4nv and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires SM89")
+    if src_type.primitive_bitwidth == 16:
+        bits = torch.arange(65536, dtype=torch.int32, device=device)
+        # Permute every encoding to mix signs, NaNs and finite magnitudes in
+        # packed conversions. The odd multiplier makes this a bijection.
+        values = (bits * 25173 + 13849).to(torch.int16).view(src_dtype)
+    else:
+        levels = torch.arange(max_code + 1, dtype=torch.uint8, device=device).view(dst_dtype).float()
+        midpoints = (levels[:-1] + levels[1:]) / 2
+        # Exercise adjacent FP32 values and the carry into bit 16 used by the
+        # software E5M2 conversion, including its subnormal midpoints.
+        offsets = torch.tensor([-0x10001, -0x10000, -0xffff, -1, 0, 1, 0xffff, 0x10000, 0x10001],
+                               dtype=torch.int32, device=device)
+        neighbors = (midpoints.view(torch.int32)[:, None] + offsets).flatten().view(torch.float32)
+        values = torch.cat((neighbors, levels,
+                            torch.tensor([float("inf"), float("nan"), torch.finfo(src_dtype).max], device=device)))
+        values = torch.cat((values, -values))
+        values = torch.cat((values, torch.zeros(-values.numel() % BLOCK_SIZE, device=device)))
+    actual = launch_type_convert_triton(values, src_type, dst_type, device,
+                                       rounding="rtne", BLOCK_SIZE=BLOCK_SIZE).view(dst_dtype)
+    limit = torch.finfo(dst_dtype).max
+    expected = values.clamp(-limit, limit).to(dst_dtype)
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.uint8)[mask], expected.view(torch.uint8)[mask], rtol=0, atol=0)
+
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
@@ -338,11 +421,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+        if dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
 
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
@@ -372,19 +452,15 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 ])
 @pytest.mark.parametrize("dst_dtype", ["float8e4nv", "float8e5"])
 @pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
-def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
-    if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
+    if is_cuda() and dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
 
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
 
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
+    if mode in ('inf', '-inf') and is_hip_cdna5():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU CDNA5")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
@@ -401,7 +477,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
     torch_dst_dtype = converter[tl_dst_dtype]
 
     if mode in ('max', 'min'):
-        # Added to input to exceed the representation range to produce NaN
+        # Exceed the destination's finite range.
         exceed_value = 100.0
         test_value = torch.finfo(torch_dst_dtype).max + exceed_value
         expected_result = torch.finfo(torch_dst_dtype).max
@@ -425,7 +501,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
     type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](
         triton.reinterpret(src, torch_src_dtype),
         triton.reinterpret(dst, torch_dst_dtype),
-        rounding,
+        "rtne",
         BLOCK_SIZE
     )
 
@@ -458,3 +534,95 @@ def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
                  tl.float32: torch.float32}[tl_dst]
     assert torch.all(torch.isnan(dst.view(torch_dst))), \
         f"fnuz {src_dtype} NaN byte 0x80 -> {dst_dtype} should be NaN, got {dst[0].item():#x}"
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype", [
+    ("float32", "float16"), ("float32", "bfloat16"),
+    ("float64", "float16"), ("float64", "bfloat16"), ("float64", "float32"),
+])
+@pytest.mark.parametrize("rounding", ["rtne", "rtz"])
+def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
+    if not is_cuda():
+        pytest.skip("Tests NVIDIA explicit-rounding conversion lowering")
+    if dst_dtype == "bfloat16":
+        min_capability = 9 if src_dtype == "float64" else 8
+        if torch.cuda.get_device_capability()[0] < min_capability:
+            pytest.skip(f"Native {src_dtype} -> bf16 conversions require SM{min_capability}0")
+    src_ty = getattr(torch, src_dtype)
+    dst_ty = getattr(torch, dst_dtype)
+    info = torch.finfo(dst_ty)
+    # Values on and adjacent to rounding boundaries, including subnormals,
+    # signed zero, overflow, infinities, and NaNs.
+    positive = torch.tensor([
+        0.0, info.tiny * info.eps / 2, info.tiny * info.eps,
+        info.tiny * (1 - info.eps / 2), info.tiny,
+        1.0, 1 + info.eps / 2, 1 + 3 * info.eps / 2,
+        info.max, info.max * (1 + info.eps / 4), info.max * 2,
+        float("inf"), float("nan"),
+    ], dtype=src_ty)
+    values = torch.cat((positive, -positive))
+    values = torch.cat((values, torch.nextafter(values, torch.zeros_like(values)),
+                        torch.nextafter(values, torch.full_like(values, float("inf")))))
+    values = values.repeat((128 + values.numel() - 1) // values.numel())[:128]
+    # Scale by powers of two and round the significand directly. In particular,
+    # do not use a torch f64 -> bf16 cast, which may round through f32 first.
+    mantissa_bits = {"float16": 10, "bfloat16": 7, "float32": 23}[dst_dtype]
+    min_exponent = -14 if dst_dtype == "float16" else -126
+    max_exponent = 15 if dst_dtype == "float16" else 127
+    reference = []
+    for value in values.tolist():
+        magnitude = abs(value)
+        if not math.isfinite(value) or value == 0:
+            reference.append(value)
+            continue
+        exponent = max(math.frexp(magnitude)[1] - 1, min_exponent)
+        if exponent > max_exponent:
+            result = float("inf") if rounding == "rtne" else info.max
+            reference.append(math.copysign(result, value))
+            continue
+        significand = math.ldexp(magnitude, mantissa_bits - exponent)
+        significand = round(significand) if rounding == "rtne" else math.floor(significand)
+        result = math.ldexp(significand, exponent - mantissa_bits)
+        if result > info.max:
+            result = float("inf") if rounding == "rtne" else info.max
+        reference.append(math.copysign(result, value))
+    expected = torch.tensor(reference, dtype=dst_ty)
+    int_ty = torch.int32 if dst_dtype == "float32" else torch.int16
+    src = values.to(device)
+    dst = torch.empty(src.shape, dtype=dst_ty, device=device)
+    kernel = type_convert_triton[(1,)](src, dst, rounding, 128)
+    actual = dst.cpu()
+    finite_or_inf = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(int_ty)[finite_or_inf],
+                               expected.view(int_ty)[finite_or_inf], rtol=0, atol=0)
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    ptx_src = {"float32": "f32", "float64": "f64"}[src_dtype]
+    ptx_dst = {"float16": "f16", "bfloat16": "bf16", "float32": "f32"}[dst_dtype]
+    ptx_round = "rn" if rounding == "rtne" else "rz"
+    assert f"cvt.{ptx_round}.{ptx_dst}.{ptx_src}" in kernel.asm["ptx"]
+    if rounding == "rtz":
+        assert "llvm.fptrunc.round" in kernel.asm["llir"]
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype", [
+    ("float16", "bfloat16"), ("bfloat16", "float16"),
+])
+def test_typeconvert_fp16_bf16_direct(src_dtype, dst_dtype, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Direct f16/bf16 conversions require SM90")
+    # Cover every 16-bit input, including signed zero, subnormals and NaNs.
+    values = torch.arange(65536, dtype=torch.int32).to(torch.int16)
+    values = values.view(getattr(torch, src_dtype))
+    expected = values.to(getattr(torch, dst_dtype))
+    src = values.to(device)
+    dst = torch.empty_like(src, dtype=getattr(torch, dst_dtype))
+    # One element per thread keeps this a scalar conversion.
+    kernel = type_convert_triton[(512,)](src, dst, None, 128)
+    actual = dst.cpu()
+    non_nan = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.int16)[non_nan],
+                               expected.view(torch.int16)[non_nan], rtol=0, atol=0)
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    ptx_src = "f16" if src_dtype == "float16" else "bf16"
+    ptx_dst = "f16" if dst_dtype == "float16" else "bf16"
+    assert f"cvt.rn.{ptx_dst}.{ptx_src}" in kernel.asm["ptx"]

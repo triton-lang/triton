@@ -4,12 +4,116 @@
 #include "Runtime/Runtime.h"
 #include "Utility/Errors.h"
 
-#include <cstring>
+#include <bit>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 
 namespace proton {
+
+void GraphState::recordNode(uint64_t nodeId, const std::string &name,
+                            std::optional<MetricNodeState> metricNodeState,
+                            const std::set<Data *> &dataSet,
+                            bool isApiExternOp) {
+  auto &nodeState = nodeIdToState[nodeId];
+  nodeState.nodeId = nodeId;
+  if (name.empty())
+    nodeState.status.setMissingName();
+
+  const bool isMetricKernelNode = metricNodeState.has_value();
+  if (isMetricKernelNode) {
+    nodeState.status.setMetricNode();
+    metricNodeIdToState.insert_or_assign(nodeId, std::move(*metricNodeState));
+    const auto &storedMetricNodeState = metricNodeIdToState.at(nodeId);
+    metricSeqIdToNodeId.insert_or_assign(storedMetricNodeState.seqId, nodeId);
+    numMetricWords += storedMetricNodeState.numWords;
+  }
+
+  for (auto *data : dataSet) {
+    capturedData.insert(data);
+    auto currentContexts = data->getContexts();
+    std::vector<Context> contexts;
+    contexts.emplace_back(captureTag);
+    for (const auto &context : currentContexts)
+      contexts.push_back(context);
+
+    if (isMetricKernelNode) {
+      auto flexibleMetricContexts = data->getContexts(false);
+      std::vector<Context> flexibleMetricEntryContexts;
+      flexibleMetricEntryContexts.emplace_back(captureTag);
+      for (const auto &context : flexibleMetricContexts)
+        flexibleMetricEntryContexts.push_back(context);
+      if (!isApiExternOp)
+        flexibleMetricEntryContexts.emplace_back(name);
+      contexts.emplace_back(metricTag);
+      flexibleMetricEntryContexts.emplace_back(metricTag);
+
+      // For metric nodes, timing is attributed to a frame under the metadata
+      // state, while flexible metrics are attributed to the current GPU op.
+      auto staticEntry =
+          data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+      nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+      auto flexibleMetricEntry = data->addOp(
+          Data::kVirtualPhase, Data::kRootEntryId, flexibleMetricEntryContexts);
+      metricNodeIdToState.at(nodeId).dataToEntryId.insert_or_assign(
+          data, flexibleMetricEntry.id);
+    } else {
+      contexts.emplace_back(name);
+      auto staticEntry =
+          data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
+      nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
+    }
+  }
+}
+
+void GraphState::buildLaunchEntries(const DataToEntryMap &dataToEntry,
+                                    DataToEntryMap &dataToGraphEntry) const {
+  for (const auto &[data, entry] : dataToEntry) {
+    if (!capturedData.contains(data))
+      // This data object was not enabled during graph capture.
+      continue;
+    dataToGraphEntry.insert({data, entry});
+  }
+}
+
+void GraphState::queueMetrics(PendingGraphPool *pendingGraphPool,
+                              const DataToEntryMap *dataToGraphEntry,
+                              bool flushIfNeeded) const {
+  if (metricSeqIdToNodeId.empty())
+    return;
+
+  PendingGraphQueue::SeqIdToStateMap seqIdToState;
+  size_t phase = Data::kNoCompletePhase;
+  for (const auto &[seqId, nodeId] : metricSeqIdToNodeId) {
+    const auto &metricNodeState = metricNodeIdToState.at(nodeId);
+    if (dataToGraphEntry) {
+      for (const auto &[data, graphEntry] : *dataToGraphEntry) {
+        phase = graphEntry.phase;
+        auto &pendingMetricNode =
+            seqIdToState
+                .emplace(seqId,
+                         PendingGraphQueue::MetricNodeState{
+                             metricNodeState.metricId, {}})
+                .first->second;
+        auto entryId = Scope::DummyScopeId;
+        if (auto entryIdIt = metricNodeState.dataToEntryId.find(data);
+            entryIdIt != metricNodeState.dataToEntryId.end()) {
+          entryId = entryIdIt->second;
+        }
+        // DummyScopeId makes emitMetricRecords attach the flexible metric to
+        // the graph launch entry instead of a linked captured entry.
+        pendingMetricNode.dataToEntry.emplace(
+            data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
+      }
+    }
+  }
+
+  // Metric nodes write to the buffer even when no Data object is active, so
+  // retain the complete graph word count to keep buffer offsets aligned.
+  if (flushIfNeeded)
+    pendingGraphPool->flushIfNeeded(numMetricWords);
+  pendingGraphPool->push(phase, numMetricWords, std::move(seqIdToState));
+}
 
 namespace {
 constexpr size_t bytesForWords(size_t numWords) {
@@ -45,24 +149,15 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     MetricValueType metricValueVariant{};
     switch (metricTypeIndex) {
     case variant_index_v<uint64_t, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      uint64_t typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = readWord(wordOffset);
       break;
     }
     case variant_index_v<int64_t, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      int64_t typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = std::bit_cast<int64_t>(readWord(wordOffset));
       break;
     }
     case variant_index_v<double, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      double typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = std::bit_cast<double>(readWord(wordOffset));
       break;
     }
     case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
@@ -76,8 +171,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     case variant_index_v<std::vector<int64_t>, MetricValueType>: {
       std::vector<int64_t> values(metricDesc.size);
       for (size_t j = 0; j < metricDesc.size; ++j) {
-        const uint64_t bits = readWord(wordOffset + j);
-        std::memcpy(&values[j], &bits, sizeof(bits));
+        values[j] = std::bit_cast<int64_t>(readWord(wordOffset + j));
       }
       metricValueVariant = std::move(values);
       break;
@@ -85,8 +179,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     case variant_index_v<std::vector<double>, MetricValueType>: {
       std::vector<double> values(metricDesc.size);
       for (size_t j = 0; j < metricDesc.size; ++j) {
-        const uint64_t bits = readWord(wordOffset + j);
-        std::memcpy(&values[j], &bits, sizeof(bits));
+        values[j] = std::bit_cast<double>(readWord(wordOffset + j));
       }
       metricValueVariant = std::move(values);
       break;

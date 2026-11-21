@@ -1,19 +1,23 @@
 from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
-from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
-from .._ops import _load_shared_fp4_repacked, _wmma, _verify_wmma, _mma_scaled, _scaled_upcast
+from ..._core import builtin, int8, uint8, int32, float8e4nv, float8e8m0fnu, tensor, _unwrap_if_constexpr
+from .._ops import (_load_shared_fp4_repacked, _wmma, _verify_wmma, _mma_scaled, _scaled_upcast, scaled_downcast,
+                    get_scaled_upcast_fp4_scale_layout)
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
+from ._cache_policy import CachePolicy
 from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
 from . import tdm
 from . import async_copy
 from . import mbarrier
 from . import cluster
+from . import buffer
 
 __all__ = [
-    "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "buffer_load", "buffer_store",
-    "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts", "load_shared_fp4_repacked"
+    "async_copy", "buffer", "tdm", "mbarrier", "cluster", "CachePolicy", "wmma", "wmma_scaled", "scaled_upcast",
+    "scaled_downcast", "buffer_load", "buffer_store", "get_wmma_scale_layout", "PartitionedSharedLayout",
+    "make_partitioned_dot_layouts", "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout"
 ]
 
 
@@ -94,7 +98,7 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     scale_dtype_to_format = {float8e4nv: "e4m3"}
 
     # E8M0 scale has various representation in frontend.
-    scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8)})
+    scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8, float8e8m0fnu)})
 
     if isinstance(a_scale, tensor) and isinstance(b_scale, tensor):
         assert a_scale.dtype in scale_dtype_to_format, f"Unsupported a_scale dtype: {a_scale.dtype}"
@@ -130,10 +134,9 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
 
     * **Expanded scale:** one scale per output value. For example, fp4 bytes
       ``[M, K / 2]`` produce output ``[M, K]`` with scale ``[M, K]``.
-    * **Compact scale:** one scale per native scale block. For example, with
+    * **Compact scale:** one scale per scale block. For example, with
       ``axis=1`` and a 32-element scale block, output ``[M, K]`` uses scale
-      ``[M, K / 32]``. CDNA5 preserves those scale bytes in the native
-      ``cvt.scale.pk8`` payload form.
+      ``[M, K / 32]``.
 
     """
     axis = _unwrap_if_constexpr(axis)
@@ -184,6 +187,6 @@ def get_wmma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     transposed = parent.transposed
     reg_bases = parent.reg_bases
     warp_bases = parent.warp_bases
-    cga_bases = parent.cga_layout
+    cga_bases = [list(basis) for basis in dot_operand_layout.cga_layout]
     return _get_wmma_scale_layout_impl(op_idx, shape, mdim, ndim, transposed, scale_factor, reg_bases, warp_bases,
                                        cga_bases)

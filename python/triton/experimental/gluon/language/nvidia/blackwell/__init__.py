@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass, field
+from triton._instrumentation import is_enabled
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
@@ -9,8 +10,8 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, cluster, fence_async_shared, mbarrier
-from ..ampere import async_copy, mma_v2
+from ..hopper import async_store, bulk, cluster, fence_async_shared, gdc, mbarrier
+from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
 import triton._C.libtriton.gluon_ir as gluon_ir
@@ -19,14 +20,18 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
+    "CachePolicy",
+    "FractionalEvictionPolicy",
     "add2",
     "allocate_tensor_memory",
     "async_copy",
     "async_store",
+    "bulk",
     "clc",
     "cluster",
     "fence_async_shared",
     "fma2",
+    "gdc",
     "mbarrier",
     "max2",
     "min2",
@@ -44,33 +49,38 @@ __all__ = [
 
 def _packed_arith(operation, operands, dtype, semantic):
     """Build packed arithmetic with inferred result types and FP4 layouts."""
-    operands = tuple(semantic.to_tensor(operand) for operand in operands)
-    _check(any(isinstance(operand.type, ttgl.distributed_type) for operand in operands),
+    operands = tuple(_unwrap_if_constexpr(operand) for operand in operands)
+    operand_types = tuple(operand.type if isinstance(operand, ttgl.tensor) else semantic.to_tensor_type(operand)
+                          for operand in operands)
+    _check(any(isinstance(ty, ttgl.distributed_type) for ty in operand_types),
            lambda: "packed arithmetic requires at least one distributed tensor operand")
     floating = [
-        operand for operand in operands
-        if isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_floating()
+        operand for operand, ty in zip(operands, operand_types)
+        if isinstance(ty, ttgl.distributed_type) and ty.scalar.is_floating()
     ]
     reference = max(floating, key=lambda operand: operand.numel.value, default=None)
     dtype = _unwrap_if_constexpr(dtype)
 
     if reference is None:
         _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
-        shape = list(operands[0].type.shape)
+        shape = list(operand_types[0].shape)
         shape[-1] *= 2
     else:
         shape = reference.type.shape
         if dtype is None:
-            addend = operands[-1]
-            dtype = addend.dtype if operation in ("add", "sub", "fma") and addend.dtype.is_fp8() else reference.dtype
-            for operand in operands:
-                if not operand.dtype.is_floating() or (dtype.is_fp8() and operand.dtype.is_fp8()):
+            addend_dtype = operand_types[-1].scalar
+            dtype = addend_dtype if operation in ("add", "sub", "fma") and addend_dtype.is_fp8() else reference.dtype
+            for operand, ty in zip(operands, operand_types):
+                if not ty.scalar.is_floating() or (dtype.is_fp8() and ty.scalar.is_fp8()):
                     continue
-                dtype = semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
+                dtype = semantic.computation_type_impl(dtype, False, ty.scalar, not isinstance(operand, ttgl.tensor),
+                                                       False)
 
     _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
     normalized = []
     for operand in operands:
+        if not isinstance(operand, ttgl.tensor):
+            operand = semantic.scalar_constant(operand, dtype)
         is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
                          and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
         if not is_packed_fp4:
@@ -130,6 +140,9 @@ class TensorMemoryLayout:
 
     Args:
         block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
+            A full allocation narrower than ``block[1]`` retains the unused columns as padding.
+            For an MMA accumulator, ``block[1]`` selects the instruction N.
+            An N subslice can use a smaller instruction to fit its visible width.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
@@ -218,7 +231,9 @@ class _TensorMemoryLinearLayout:
         raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
 
     def mangle(self):
-        return f"TMLL_{self.shape}_TMLL"
+        rows = "_".join("~".join(map(str, b)) for b in self.rows)
+        cols = "_".join("~".join(map(str, b)) for b in self.cols)
+        return f"TMLL_{rows}_{cols}_{self.shape}_TMLL"
 
     def __hash__(self):
         return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
@@ -546,34 +561,59 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
-def tcgen05_copy(src, dst, _semantic=None):
+def tcgen05_copy(src, dst, pred=True, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
 
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
+        pred (bool): Scalar predicate. The copy is skipped if False. Defaults to True.
     """
     assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
     assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
-    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle, pred.handle)
+
+
+def _mma_operand_format(fmt, operand, acc, *, scaled=False):
+    if fmt != "fpsan_probability":
+        return fmt
+    _check(operand.dtype in (ttgl.float8e4nv, ttgl.float8e5) and acc.dtype == ttgl.float32,
+           lambda: "fpsan_probability requires E4M3 or E5M2 and an FP32 accumulator")
+    if scaled:
+        return "e4m3" if operand.dtype == ttgl.float8e4nv else "e5m2"
+    return None
+
+
+def _tag_probability_operands(builder, mma, a_type, b_type):
+    if is_enabled(builder.options, "fpsan"):
+        if a_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_a", builder.get_unit_attr())
+        if b_type == "fpsan_probability":
+            mma.set_attr("tti.fpsan_probability_b", builder.get_unit_attr())
 
 
 @builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarriers=None, mbarrier_preds=None,
-                _semantic=None):
+                a_type=None, b_type=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
+
+    For N smaller than the instruction width, the layouts must reserve the full
+    instruction tile.
 
     Args:
         a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
         b (shared_memory_descriptor): Right hand side operand in shared memory.
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_type, b_type (str, optional): Operand formats (e2m3, e3m2, e4m3, e5m2). Required for packed FP6.
+            Use "fpsan_probability" for an FP8 operand from gl.fpsan.probability_cast.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
@@ -592,8 +632,17 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     multicast = _unwrap_if_constexpr(multicast)
-    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, acc.layout.two_ctas, multicast)
+    a_type = _unwrap_if_constexpr(a_type)
+    b_type = _unwrap_if_constexpr(b_type)
+
+    lhs_format = _mma_operand_format(a_type, a, acc)
+    rhs_format = _mma_operand_format(b_type, b, acc)
+    lhs_type = _semantic._str_to_fp_type(lhs_format) if lhs_format is not None else None
+    rhs_type = _semantic._str_to_fp_type(rhs_format) if rhs_format is not None else None
+    builder = _semantic.builder
+    mma = builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
+                                     mbarrier_preds, acc.layout.two_ctas, multicast, lhs_type, rhs_type)
+    _tag_probability_operands(builder, mma, a_type, b_type)
 
 
 @builtin
@@ -609,12 +658,12 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
         a_scale (tensor): Scale factor for operand A.
         b_scale (tensor): Scale factor for operand B.
-        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
-        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        a_type (str): Type of operand A. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "fpsan_probability"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2", "fpsan_probability"}.
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
@@ -633,15 +682,21 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    allowed_formats = {"e2m1", "e4m3", "e5m2"}
-    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
-    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
-    a_type = _semantic._str_to_fp_type(a_type.value)
-    b_type = _semantic._str_to_fp_type(b_type.value)
+    allowed_formats = {"e2m1", "e2m3", "e3m2", "e4m3", "e5m2"}
+    a_type = _unwrap_if_constexpr(a_type)
+    b_type = _unwrap_if_constexpr(b_type)
+    lhs_format = _mma_operand_format(a_type, a, acc, scaled=True)
+    rhs_format = _mma_operand_format(b_type, b, acc, scaled=True)
+    assert lhs_format in allowed_formats, f"Unsupported lhs_format: {lhs_format}"
+    assert rhs_format in allowed_formats, f"Unsupported rhs_format: {rhs_format}"
+    lhs_type = _semantic._str_to_fp_type(lhs_format)
+    rhs_type = _semantic._str_to_fp_type(rhs_format)
     multicast = _unwrap_if_constexpr(multicast)
-    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
-                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast)
+    builder = _semantic.builder
+    mma = builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, lhs_type,
+                                            rhs_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
+                                            acc.layout.two_ctas, multicast)
+    _tag_probability_operands(builder, mma, a_type, b_type)
 
 
 @constexpr_function
@@ -680,11 +735,15 @@ def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
 
 
 @builtin
-def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
+def tcgen05_commit(barrier, pred=True, descs=(), *, completion="all", _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
-    of 1 when all async tcgen05 MMA and copy instructions previously issued by
-    the thread are complete.
+    of 1 when prior async tcgen05 operations issued by the thread are complete.
+
+    By default, this operation tracks completion of all prior asynchronous
+    tcgen05 operations. On Rubin, ``completion="a_read"`` modifies the operation
+    to track only the completion of the A operand read from shared memory for
+    a tcgen05 MMA operation.
 
     If `descs` are provided, the commit will be multicast across the CTA cluster
     based on the shared layouts of those descriptors. This should be used when
@@ -695,8 +754,12 @@ def tcgen05_commit(barrier, pred=True, descs=(), _semantic=None):
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         descs (Sequence[shared_memory_descriptor]): Shared memory descriptors for
             the preceding multiplication inputs. Defaults to ().
+        completion (str): "all" (default) or "a_read" (Rubin only).
     """
     pred = _semantic.to_tensor(pred)
     descs = _unwrap_if_constexpr(descs)
     descs = [d.handle for d in descs]
-    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs)
+    completion = _unwrap_if_constexpr(completion)
+    if completion not in ("all", "a_read"):
+        raise ValueError("completion must be 'all' or 'a_read'")
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle, descs, completion == "a_read")

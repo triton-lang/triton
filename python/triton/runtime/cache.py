@@ -7,6 +7,9 @@ import base64
 import hashlib
 import functools
 import sysconfig
+import threading
+import weakref
+from contextlib import contextmanager
 
 from triton import __version__, knobs
 
@@ -33,7 +36,30 @@ class CacheManager(ABC):
         pass
 
 
+_compile_lock_guard = threading.Lock()
+_compile_locks = weakref.WeakValueDictionary()
+_compile_owner = threading.local()
+
+
 class FileCacheManager(CacheManager):
+
+    @contextmanager
+    def _lock_compile(self, filename):
+        if getattr(_compile_owner, "compiling", False):
+            # Backend or frontend code can request another compile on this thread.
+            yield
+            return
+        key = (self.cache_dir, filename)
+        with _compile_lock_guard:
+            lock = _compile_locks.get(key)
+            if lock is None:
+                lock = _compile_locks[key] = threading.Lock()
+        with lock:
+            _compile_owner.compiling = True
+            try:
+                yield
+            finally:
+                _compile_owner.compiling = False
 
     def __init__(self, key, override=False, dump=False):
         self.key = key
@@ -86,7 +112,8 @@ class FileCacheManager(CacheManager):
         if child_paths is None:
             return None
         result = {}
-        for c, p in child_paths.items():
+        for c in child_paths:
+            p = self._make_path(c)
             if not os.path.exists(p):
                 return None
             result[c] = p
@@ -96,7 +123,8 @@ class FileCacheManager(CacheManager):
     def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
-        grp_contents = json.dumps({"child_paths": group})
+        # Store just the file names, like RemoteCacheManager, so a copied or moved cache dir still works.
+        grp_contents = json.dumps({"child_paths": sorted(group)})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 

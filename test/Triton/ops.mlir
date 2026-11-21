@@ -227,10 +227,6 @@ tt.func @inline_asm_scalar(%0: i32) {
 tt.func @reshape(%0: tensor<512xi32>) {
   // CHECK: tt.reshape %{{.+}} : tensor<512xi32> -> tensor<16x32xi32>
   %1 = tt.reshape %0 : tensor<512xi32> -> tensor<16x32xi32>
-  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
-  %2 = tt.reshape %0 allow_reorder : tensor<512xi32> -> tensor<16x32xi32>
-  // CHECK: tt.reshape %{{.+}} allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
-  %3 = tt.reshape %0 allow_reorder efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   // CHECK: tt.reshape %{{.+}} efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   %4 = tt.reshape %0 efficient_layout : tensor<512xi32> -> tensor<16x32xi32>
   tt.return
@@ -284,4 +280,11 @@ tt.func @unsplat(%arg0: tensor<1x1xf32>) -> f32 {
   // CHECK-NEXT: tt.unsplat %{{.+}} : tensor<1x1xf32>
   %0 = tt.unsplat %arg0 : tensor<1x1xf32>
   tt.return %0 : f32
+}
+
+// CHECK-LABEL: @ptr_addr_space
+tt.func @ptr_addr_space(%arg0: !tt.ptr<i8, "descriptor">, %arg1: !tt.ptr<f32>) {
+  // CHECK-SAME: %arg0: !tt.ptr<i8, "descriptor">
+  // CHECK-SAME: %arg1: !tt.ptr<f32>
+  tt.return
 }

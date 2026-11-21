@@ -221,3 +221,17 @@ tt.func public @descriptor_fallback(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32,
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK: #[[$FP4_PADDED:.*]] = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [32, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "hip:gfx1250"} {
+  // CHECK-LABEL: native_fp4_descriptor_fallback
+  tt.func @native_fp4_descriptor_fallback(%desc: !tt.tensordesc<32x32x!tt.fp4e2m1x2>) -> tensor<32x32x!tt.fp4e2m1x2, #blocked> {
+    %zero = arith.constant 0 : i32
+    // CHECK: tt.descriptor_load {{.*}} : !tt.tensordesc<32x32x!tt.fp4e2m1x2, #[[$FP4_PADDED]]>
+    %value = tt.descriptor_load %desc[%zero, %zero] : !tt.tensordesc<32x32x!tt.fp4e2m1x2> -> tensor<32x32x!tt.fp4e2m1x2, #blocked>
+    tt.return %value : tensor<32x32x!tt.fp4e2m1x2, #blocked>
+  }
+}

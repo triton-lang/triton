@@ -91,7 +91,7 @@ void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
 
     // Group block traces by proc id
     int procId = bt.procId;
-    if (!procToBlockTraces.count(procId)) {
+    if (!procToBlockTraces.contains(procId)) {
       procToBlockTraces[procId] = {};
     }
     procToBlockTraces[procId].push_back(&bt);
@@ -203,12 +203,12 @@ void writeProfileEvents(json &object, const BlockTrace &blockTrace,
     for (const auto &event : trace.profileEvents) {
       int lineId = eventLineIds.at(event.first.get());
       int scopeId = event.first->scopeId;
-      if (!scopeColor.count(scopeId)) {
+      if (!scopeColor.contains(scopeId)) {
         scopeColor[scopeId] = curColorIndex;
         curColorIndex = (curColorIndex + 1) % colors.size();
       }
       const std::string &color = colors[scopeColor[scopeId]];
-      std::string name = !metadata.scopeName.count(scopeId)
+      std::string name = !metadata.scopeName.contains(scopeId)
                              ? "scope_" + std::to_string(scopeId)
                              : metadata.scopeName.at(scopeId);
       std::string tid = "warp " + std::to_string(warpId) + " (line " +
@@ -250,12 +250,12 @@ void writeAsyncEvents(json &object, const BlockTrace &blockTrace,
   constexpr double freq = 1000.0;
   for (const auto &link : blockTrace.asyncLinks) {
     int scopeId = link.first.entry->scopeId;
-    if (!scopeColor.count(scopeId)) {
+    if (!scopeColor.contains(scopeId)) {
       scopeColor[scopeId] = curColorIndex;
       curColorIndex = (curColorIndex + 1) % colors.size();
     }
     const std::string &color = colors[scopeColor[scopeId]];
-    std::string name = !metadata.scopeName.count(scopeId)
+    std::string name = !metadata.scopeName.contains(scopeId)
                            ? "event_" + std::to_string(scopeId)
                            : metadata.scopeName.at(scopeId);
 

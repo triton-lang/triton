@@ -8,8 +8,9 @@ active_mode: ContextVar[Optional[AsyncCompileMode]] = ContextVar("async_compile_
 
 class FutureKernel:
 
-    def __init__(self, finalize_compile: Callable, future: Future):
+    def __init__(self, finalize_compile: Callable, cleanup_compile: Callable, future: Future):
         self.finalize_compile = finalize_compile
+        self.cleanup_compile = cleanup_compile
         self.kernel = None
         self.future = future
 
@@ -20,11 +21,14 @@ class FutureKernel:
         try:
             kernel = self.future.result()
         except Exception:
+            self.cleanup_compile(self)
+            self.future = None
             if ignore_errors:
                 return
             else:
                 raise
         self.finalize_compile(kernel)
+        self.future = None
         self.kernel = kernel
         return kernel
 
@@ -42,7 +46,7 @@ class AsyncCompileMode:
         self.raw_futures = []
         self.future_kernels = {}
 
-    def submit(self, key, compile_fn, finalize_fn):
+    def submit(self, key, compile_fn, finalize_fn, cleanup_fn):
         future = self.future_kernels.get(key)
         if future is not None:
             return future
@@ -50,7 +54,7 @@ class AsyncCompileMode:
         future = self.executor.submit(compile_fn)
         future._key = key
         self.raw_futures.append(future)
-        future_kernel = FutureKernel(finalize_fn, future)
+        future_kernel = FutureKernel(finalize_fn, cleanup_fn, future)
         self.future_kernels[key] = future_kernel
         return future_kernel
 
@@ -63,5 +67,13 @@ class AsyncCompileMode:
     def __exit__(self, exc_type, exc_value, traceback):
         active_mode.set(None)
         # Finalize any outstanding compiles
-        for future in as_completed(self.raw_futures):
-            self.future_kernels[future._key].result(self.ignore_errors)
+        try:
+            for future in as_completed(self.raw_futures):
+                future_kernel = self.future_kernels[future._key]
+                if future_kernel.future is not None:
+                    future_kernel.result(self.ignore_errors)
+        finally:
+            # Completed futures can still point back to compile frames so need
+            # to drop them to avoid resource leakage.
+            self.raw_futures = []
+            self.future_kernels = {}

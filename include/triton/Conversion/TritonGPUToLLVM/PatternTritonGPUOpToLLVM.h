@@ -8,7 +8,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::triton::gpu::BlockedEncodingAttr;
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
@@ -23,8 +22,7 @@ constexpr int patternBenefitNvidiaTensorCoreSubviewPattern = 20;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
-    PatternBenefit benefit);
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
 // The given callback is invoked at the end of a successful rewrite. The
 // callback receives 1) the current source op, 2) the number of issued LLVM
@@ -33,6 +31,7 @@ void populateElementwiseOpToLLVMPatterns(
 void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfoBase &targetInfo,
                                     RewritePatternSet &patterns,
+                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     PatternBenefit benefit);
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,

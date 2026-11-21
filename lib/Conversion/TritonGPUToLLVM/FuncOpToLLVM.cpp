@@ -1,6 +1,7 @@
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -132,8 +133,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      if (Attribute numWarps = funcOp->getAttr(triton::gpu::AttrNumWarpsName))
-        newFuncOp->setAttr("ws_num_warps", numWarps);
+      newFuncOp->setAttr(
+          "ws_num_warps",
+          rewriter.getI32IntegerAttr(triton::gpu::lookupNumWarps(funcOp)));
     }
 
     rewriter.eraseOp(funcOp);

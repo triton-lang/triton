@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 """
-Common utilities for GFX1250 GEMM kernels.
+Common utilities for CDNA5 GEMM kernels.
 
 This module contains shared functions, classes, and utilities used by both
 persistent and StreamK GEMM implementations.
@@ -158,7 +158,7 @@ def issue_l2_prefetches_prologue(distance, producer, a_desc, b_desc, off_am, off
     This skips iterations which are preloaded in the prologue because prefetching them does not make sense for GEMMs.
     """
     for i in ttgl.static_range(NUM_BUFFERS, NUM_BUFFERS + distance):
-        issue_l2_prefetches(i, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B, pred)
+        issue_l2_prefetches(i, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K, TRANSPOSE_B, pred)
 
 
 @gluon.jit

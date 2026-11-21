@@ -9,6 +9,8 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: gen5_mma_scaled_shmem_to_tmem
   tt.func public @gen5_mma_scaled_shmem_to_tmem(
+    // CHECK: %[[PRED:.*]]: i1,
+    %pred: i1,
     %A_sh: !ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>,
     %B_sh: !ttg.memdesc<256x64xf8E5M2, #shared, #ttg.shared_memory>,
     %C_tmem: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>,
@@ -19,11 +21,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     // Verify that the scale in tmem has the shape of (LHS) BlockM x BlockK / 32, (RHS) BlockN x BlockK / 32
     // CHECK: %[[A_SC_TMEM:.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
-    // CHECK: ttng.tmem_copy {{.*}}, %[[A_SC_TMEM]]
+    // CHECK: ttng.tmem_copy {{.*}}, %[[A_SC_TMEM]], %[[PRED]]
     // CHECK: %[[B_SC_TMEM:.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<64x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
-    // CHECK: ttng.tmem_copy {{.*}}, %[[B_SC_TMEM]]
+    // CHECK: ttng.tmem_copy {{.*}}, %[[B_SC_TMEM]], %[[PRED]]
     // CHECK: ttng.tc_gen5_mma_scaled {{.*}}, %[[A_SC_TMEM]], %[[B_SC_TMEM]]
-    ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %C_tmem, %A_scale_sh, %B_scale_sh, %true, %true lhs = e5m2 rhs = e5m2, %barrier[%true] {is_async} : !ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<256x64xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #shared1, #smem>, !ttg.memdesc<64x8xi8, #shared1, #smem>, !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %C_tmem, %A_scale_sh, %B_scale_sh, %true, %pred lhs = e5m2 rhs = e5m2, %barrier[%true] {is_async} : !ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<256x64xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #shared1, #smem>, !ttg.memdesc<64x8xi8, #shared1, #smem>, !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
     tt.return
   }
 }
@@ -175,6 +177,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tc_gen5_commit %barrier1, %barrierPred descs %a, %b : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>
     ttng.tc_gen5_commit %barrier2, %barrierPred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
     ttng.tc_gen5_commit %barrier3, %barrierPred descs %a, %b : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Both CTAs must observe completion before the barrier can be reused.
+  // CHECK-LABEL: @two_cta_sync_mma
+  // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, two_ctas}
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.inval_barrier
+  tt.func @two_cta_sync_mma(%a: !ttg.memdesc<256x64xf16, #sharedA, #smem>, %b: !ttg.memdesc<64x128xf16, #sharedB, #smem>,
+                            %acc: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %true = arith.constant true
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true {two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem>, !ttg.memdesc<64x128xf16, #sharedB, #smem>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#sharedT = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // CHECK-LABEL: @early_a_release_keeps_completion_order
+  tt.func @early_a_release_keeps_completion_order(
+      %a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #sharedT, #ttg.shared_memory>,
+      %d: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %early: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>,
+      %full: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>) {
+    %true = arith.constant true
+    // CHECK: ttng.tc_gen5_mma {{.*}} {is_async}
+    // CHECK-NEXT: ttng.tc_gen5_commit %{{[^ ]+}} {early_a_release}
+    // CHECK-NEXT: ttng.tc_gen5_commit
+    ttng.tc_gen5_mma %a, %b, %d, %true, %true {is_async} : !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #sharedT, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %early {early_a_release} : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_commit %full : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
     tt.return
   }
 }

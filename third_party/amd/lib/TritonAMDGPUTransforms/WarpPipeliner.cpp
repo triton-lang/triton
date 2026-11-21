@@ -1,4 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -26,6 +27,27 @@ namespace mlir {
 #define GEN_PASS_DEF_TRITONAMDGPUWARPPIPELINE
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
+static constexpr StringLiteral kBorderAttr = "triton.warp_pipeline.border";
+static constexpr StringLiteral kPriorityAttr = "triton.warp_pipeline.priority";
+
+LogicalResult triton::amdgpu::createSchedBarrier(OpBuilder &builder,
+                                                 Location loc, uint32_t mask) {
+  auto schedMask = ROCDL::symbolizeSchedGroupMask(mask);
+  if (!schedMask)
+    return failure();
+  ROCDL::SchedBarrier::create(builder, loc, *schedMask);
+  return success();
+}
+
+void triton::amdgpu::createWarpPipelineBorder(OpBuilder &builder, Location loc,
+                                              StringRef marker, int priority) {
+  auto border =
+      ROCDL::SchedBarrier::create(builder, loc, ROCDL::SchedGroupMask::none);
+  border->setAttr(kBorderAttr, builder.getStringAttr(marker));
+  if (priority > -1)
+    border->setAttr(kPriorityAttr, builder.getI32IntegerAttr(priority));
+}
+
 // Ops that may appear between pipeline stages but never inside one.  Pre-
 // existing memory-fence/wait ops at cluster boundaries are tolerated so that
 // prefetch patterns continue to work; encountering one mid-cluster is treated
@@ -36,9 +58,7 @@ static bool canSitBetweenStages(Operation *op) {
 }
 
 // True if `op` carries the cluster-end marker emitted by the frontend.
-static bool isPipelineBorder(Operation *op) {
-  return op->hasAttr("triton.warp_pipeline.border");
-}
+static bool isPipelineBorder(Operation *op) { return op->hasAttr(kBorderAttr); }
 
 // True if `op` is a structured loop (scf.for / scf.while).  Pipeline clusters
 // are straight-line scheduling units, so loops remain boundaries instead of
@@ -57,11 +77,9 @@ enum class PipelineResult { NotApplicable, Created, Malformed };
 // Read (cluster-name, priority) from a border marker op.  Priority defaults
 // to -1 when the marker doesn't carry the optional priority attribute.
 static std::pair<StringAttr, int> readBorderMarker(Operation *op) {
-  StringAttr clusterStr =
-      op->getAttrOfType<StringAttr>("triton.warp_pipeline.border");
+  StringAttr clusterStr = op->getAttrOfType<StringAttr>(kBorderAttr);
   int priority = -1;
-  if (auto intAttr =
-          op->getAttrOfType<IntegerAttr>("triton.warp_pipeline.priority"))
+  if (auto intAttr = op->getAttrOfType<IntegerAttr>(kPriorityAttr))
     priority = intAttr.getInt();
   return {clusterStr, priority};
 }
@@ -102,7 +120,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
   for (Operation *op : ops) {
     for (OpResult r : op->getResults()) {
       bool hasExternalUse = llvm::any_of(r.getUsers(), [&](Operation *u) {
-        return !opsLookup.count(u) && u->getParentOp() != nullptr;
+        return !opsLookup.contains(u) && u->getParentOp() != nullptr;
       });
       if (hasExternalUse) {
         yieldedTypes.push_back(r.getType());
@@ -155,8 +173,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
   exec.setNoInline(true);
   exec->setAttr("triton.warp_pipeline.stage", marker.first);
   if (marker.second > -1) {
-    exec->setAttr("triton.warp_pipeline.priority",
-                  b.getI32IntegerAttr(marker.second));
+    exec->setAttr(kPriorityAttr, b.getI32IntegerAttr(marker.second));
   }
 
   LLVM_DEBUG(llvm::dbgs() << "[warp-pipeline] created stage with " << ops.size()

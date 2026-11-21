@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -allow-unregistered-dialect -test-print-allocation="partition-size=65536" -verify-diagnostics -o /dev/null
 
-// Test allocation with shared memory partitioning enabled (64KB partition size like for AMD GFX1250)
+// Test allocation with shared memory partitioning enabled (64KB partition size like for AMD CDNA5)
 // With partition-size=65536, partition buffers should be placed in different 64KB physical partitions
 
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>

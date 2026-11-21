@@ -1,9 +1,119 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: triton-opt %t/success.mlir -split-input-file -symbol-dce -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: triton-opt %t/barrier-casts.mlir -split-input-file -tritoninstrument-fp-sanitizer -canonicalize | FileCheck %t/barrier-casts.mlir
 // RUN: triton-opt %t/canonicalize.mlir -canonicalize | FileCheck %t/canonicalize.mlir
 // RUN: not triton-opt %t/unsupported.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/unsupported.mlir --check-prefix=FPSANERR
 
 //--- success.mlir
+
+// CHECK-LABEL: @fpsan_barrier_mul_add
+tt.func public @fpsan_barrier_mul_add(%a: f32, %b: f32, %c: f32) -> f32 {
+  // CHECK-DAG: %[[SHIFT:.*]] = arith.constant 16 : i32
+  // CHECK-DAG: %[[TAG:.*]] = arith.constant 1151905845 : i32
+  // CHECK: %[[AB:.*]] = arith.muli
+  // CHECK: %[[TAGGED:.*]] = arith.xori %[[AB]], %[[TAG]]
+  // CHECK: arith.shrui %[[TAGGED]], %[[SHIFT]]
+  // CHECK: arith.xori
+  // CHECK: arith.muli
+  // CHECK: arith.shrui
+  // CHECK: arith.xori
+  // CHECK: arith.muli
+  // CHECK: arith.shrui
+  // CHECK: %[[BARRIER:.*]] = arith.xori
+  // CHECK: arith.addi %[[BARRIER]],
+  // CHECK-NOT: tt.fpsan_barrier
+  // CHECK: tt.return
+  %ab = arith.mulf %a, %b : f32
+  %barrier = tt.fpsan_barrier %ab : f32
+  %result = arith.addf %barrier, %c : f32
+  tt.return %result : f32
+}
+
+// -----
+
+// CHECK-LABEL: @fpsan_barrier_f64
+tt.func public @fpsan_barrier_f64(%x: f64) -> f64 {
+  // CHECK-DAG: arith.constant -8577902394587172811 : i64
+  // CHECK-DAG: arith.constant 32 : i64
+  // CHECK: tti.experimental_fpsan_embed {{.*}} : (f64) -> i64
+  // CHECK: arith.shrui
+  // CHECK: arith.muli
+  // CHECK: arith.shrui
+  // CHECK: arith.muli
+  // CHECK: arith.shrui
+  // CHECK: tti.experimental_fpsan_unembed {{.*}} : (i64) -> f64
+  // CHECK-NOT: tt.fpsan_barrier
+  // CHECK: tt.return
+  %result = tt.fpsan_barrier %x : f64
+  tt.return %result : f64
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @fpsan_barrier_f16
+  tt.func public @fpsan_barrier_f16(%x: tensor<128xf16, #blocked>) -> tensor<128xf16, #blocked> {
+    // CHECK-DAG: arith.constant dense<-20427> : tensor<128xi16, #blocked>
+    // CHECK-DAG: arith.constant dense<8> : tensor<128xi16, #blocked>
+    // CHECK: tti.experimental_fpsan_embed {{.*}} : (tensor<128xf16, #blocked>) -> tensor<128xi16, #blocked>
+    // CHECK: arith.shrui
+    // CHECK: arith.muli
+    // CHECK: arith.shrui
+    // CHECK: arith.muli
+    // CHECK: arith.shrui
+    // CHECK: tti.experimental_fpsan_unembed {{.*}} : (tensor<128xi16, #blocked>) -> tensor<128xf16, #blocked>
+    // CHECK-NOT: tt.fpsan_barrier
+    // CHECK: tt.return
+    %result = tt.fpsan_barrier %x : tensor<128xf16, #blocked>
+    tt.return %result : tensor<128xf16, #blocked>
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @fpsan_homomorphic_cast
+tt.func @fpsan_homomorphic_cast(%x: f32) -> f16 {
+  // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed %arg0 : (f32) -> i32
+  // CHECK-NEXT: %[[LOW:.*]] = arith.trunci %[[PAYLOAD]] : i32 to i16
+  // CHECK-NEXT: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[LOW]] : (i16) -> f16
+  // CHECK-NEXT: tt.return %[[OUT]]
+  %result = tt.fpsan_homomorphic_cast %x : f32 -> f16
+  tt.return %result : f16
+}
+
+// -----
+
+// CHECK-LABEL: @fpsan_homomorphic_same_width
+tt.func @fpsan_homomorphic_same_width(%x: f16) -> bf16 {
+  // CHECK: %[[PAYLOAD:.*]] = tti.experimental_fpsan_embed %arg0 : (f16) -> i16
+  // CHECK-NEXT: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]] : (i16) -> bf16
+  // CHECK-NEXT: tt.return %[[OUT]]
+  %result = tt.fpsan_homomorphic_cast %x : f16 -> bf16
+  tt.return %result : bf16
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: @call_arithmetic
+  tt.func public @call_arithmetic(%x: f32, %y: f32) -> f32 {
+    // CHECK: tt.call @arithmetic
+    %result = tt.call @arithmetic(%x, %y) : (f32, f32) -> f32
+    tt.return %result : f32
+  }
+  // CHECK-LABEL: tt.func private @arithmetic
+  // CHECK-SAME: noinline = true
+  tt.func private @arithmetic(%x: f32, %y: f32) -> f32 attributes {noinline = true} {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: tti.experimental_fpsan_unembed
+    %result = arith.addf %x, %y : f32
+    tt.return %result : f32
+  }
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
@@ -13,7 +123,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @dot_emulation() -> tensor<16x16xf32, #blocked> {
     // CHECK: scf.for
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
     %cst = arith.constant 1.000000e+00 : f16
     %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
     %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_operand_a>
@@ -316,7 +427,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttg.barrier global_read|global_write
     // CHECK-NOT: ttg.dot_scaled
     // CHECK-NOT: tt.dot
-    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.return
      %cst = arith.constant 1.000000e+00 : f16
      %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
      %a = tt.splat %cst : f16 -> tensor<16x16xf16, #dot_A>
@@ -343,6 +455,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %a = tt.splat %one : f16 -> tensor<32x64xf16, #dot_A>
     %b = tt.splat %one : f16 -> tensor<64x32xf16, #dot_B>
     %out = tt.dot_scaled %a, %b, %zero lhs = fp16 rhs = fp16 {fastMath = false} : tensor<32x64xf16, #dot_A> * tensor<64x32xf16, #dot_B> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_A = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_B = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:107", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_scaled_e8m0_i8_decomposition
+  tt.func public @dot_scaled_e8m0_i8_decomposition(
+      %a: tensor<32x32xi8, #dot_A>, %scale_a: tensor<32x2xi8, #blocked>,
+      %b: tensor<32x32xi8, #dot_B>, %scale_b: tensor<32x2xi8, #blocked>) -> tensor<32x32xf32, #blocked> {
+    // CHECK: arith.constant dense<64> : tensor<{{.*}}xi16,
+    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
+    // CHECK: arith.maxui
+    // CHECK: tti.dot_i8
+    // CHECK: tt.return
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x2xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x2xi8, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_A = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_B = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // AMD group-16 integer scales still use E8M0.
+  // CHECK-LABEL: @dot_scaled_e8m0_group16_amd
+  tt.func public @dot_scaled_e8m0_group16_amd(
+      %a: tensor<32x32xi8, #dot_A>, %scale_a: tensor<32x4xi8, #blocked>,
+      %b: tensor<32x32xi8, #dot_B>, %scale_b: tensor<32x4xi8, #blocked>) -> tensor<32x32xf32, #blocked> {
+    // CHECK: arith.constant dense<64> : tensor<{{.*}}xi16,
+    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
+    // CHECK: arith.maxui
+    // CHECK-NOT: tti.dot_i8
+    // CHECK: tt.return
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x4xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x4xi8, #blocked> -> tensor<32x32xf32, #blocked>
     tt.return %out : tensor<32x32xf32, #blocked>
   }
 }
@@ -493,6 +652,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The mask maps INT_MIN (negative zero) to zero after integer abs.
+  // CHECK-LABEL: @absf
+  tt.func public @absf(%x: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[MASK:.*]] = arith.constant dense<2147483647> : tensor<4xi32>
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[ABS:.*]] = math.absi %[[X]] : tensor<4xi32>
+    // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: math.absf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = math.absf %x : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @chained_ops
   tt.func public @chained_ops(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
@@ -526,6 +703,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module {
+  // CHECK-LABEL: @approx_div
+  tt.func public @approx_div(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_unembed
+    // CHECK-NOT: tt.approx_divf
+    // CHECK: tt.return
+    %result = tt.approx_divf %a, %b : tensor<4xf32>
+    tt.return %result : tensor<4xf32>
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @fma_op
   tt.func public @fma_op(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
@@ -552,6 +744,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %l = math.log %a : tensor<4xf32>
     %s = math.sqrt %l : tensor<4xf32>
     tt.return %s : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @trig_ops
+  tt.func public @trig_ops(%x: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
+    // CHECK-NOT: scf.for
+    // CHECK-NOT: math.cos
+    // CHECK-NOT: math.sin
+    // CHECK: tt.return
+    %c = math.cos %x : tensor<4xf32>
+    %s = math.sin %x : tensor<4xf32>
+    tt.return %c, %s : tensor<4xf32>, tensor<4xf32>
   }
 }
 
@@ -760,6 +967,20 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
 
 // -----
 
+// CHECK-LABEL: @extern_tf32_rna
+tt.func public @extern_tf32_rna(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK: tti.experimental_fpsan_unembed
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tt.return
+  %result = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rna"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %result : tensor<4xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @inline_asm_unary
 tt.func public @inline_asm_unary(%a: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: arith.constant dense<-2010648817> : tensor<4xi32>
@@ -780,6 +1001,20 @@ tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf3
   // CHECK-NOT: tt.elementwise_inline_asm
   %0 = tt.elementwise_inline_asm "cvt.rn.tf32.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_ue8m0_to_bf16
+tt.func public @inline_asm_ue8m0_to_bf16(%scale: tensor<4xi8>) -> tensor<4xbf16> {
+  // CHECK: %[[TAG:.*]] = arith.constant dense<-23530> : tensor<4xi16>
+  // CHECK: %[[SCALE:.*]] = arith.extsi %arg0 : tensor<4xi8> to tensor<4xi16>
+  // CHECK: %[[PAYLOAD:.*]] = arith.xori %[[SCALE]], %[[TAG]] : tensor<4xi16>
+  // CHECK: %[[RESULT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]]
+  // CHECK-NOT: tt.elementwise_inline_asm
+  // CHECK: tt.return %[[RESULT]]
+  %decoded = tt.elementwise_inline_asm "cvt.rn.bf16x2.ue8m0x2 $0, $1;" {constraints = "=r,h", packed_element = 2 : i32, pure = true} %scale : tensor<4xi8> -> tensor<4xbf16>
+  tt.return %decoded : tensor<4xbf16>
 }
 
 // -----
@@ -883,4 +1118,99 @@ module {
     %out = tt.dot %a, %b, %c : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
     tt.return %out : tensor<16x16xf32>
   }
+}
+
+//--- barrier-casts.mlir
+
+// Each function checks cast(barrier(x)), barrier(cast(x)), and
+// cast(barrier(widen(cast(x)))) on a payload with nonzero discarded bits.
+
+// CHECK-LABEL: @barrier_cast_32_to_16
+tt.func @barrier_cast_32_to_16() -> (i16, i16, i16) {
+  // CHECK-DAG: %[[AFTER:.*]] = arith.constant 25440 : i16
+  // CHECK-DAG: %[[BEFORE:.*]] = arith.constant -9870 : i16
+  // CHECK-DAG: %[[ROUNDTRIP:.*]] = arith.constant -13583 : i16
+  // CHECK: tt.return %[[AFTER]], %[[BEFORE]], %[[ROUNDTRIP]]
+  %bits = arith.constant -1985229329 : i32
+  %x = tti.experimental_fpsan_unembed %bits : (i32) -> f32
+  %wide_barrier = tt.fpsan_barrier %x : f32
+  %after = tt.fpsan_homomorphic_cast %wide_barrier : f32 -> f16
+  %narrow = tt.fpsan_homomorphic_cast %x : f32 -> f16
+  %before = tt.fpsan_barrier %narrow : f16
+  %wide = arith.extf %narrow : f16 to f32
+  %roundtrip_barrier = tt.fpsan_barrier %wide : f32
+  %roundtrip = tt.fpsan_homomorphic_cast %roundtrip_barrier : f32 -> f16
+  %a = tti.experimental_fpsan_embed %after : (f16) -> i16
+  %b = tti.experimental_fpsan_embed %before : (f16) -> i16
+  %c = tti.experimental_fpsan_embed %roundtrip : (f16) -> i16
+  tt.return %a, %b, %c : i16, i16, i16
+}
+
+// -----
+
+// CHECK-LABEL: @barrier_cast_64_to_32
+tt.func @barrier_cast_64_to_32() -> (i32, i32, i32) {
+  // CHECK-DAG: %[[AFTER:.*]] = arith.constant -1005981811 : i32
+  // CHECK-DAG: %[[BEFORE:.*]] = arith.constant 1407673184 : i32
+  // CHECK-DAG: %[[ROUNDTRIP:.*]] = arith.constant 1266292691 : i32
+  // CHECK: tt.return %[[AFTER]], %[[BEFORE]], %[[ROUNDTRIP]]
+  %bits = arith.constant 81985529216486895 : i64
+  %x = tti.experimental_fpsan_unembed %bits : (i64) -> f64
+  %wide_barrier = tt.fpsan_barrier %x : f64
+  %after = tt.fpsan_homomorphic_cast %wide_barrier : f64 -> f32
+  %narrow = tt.fpsan_homomorphic_cast %x : f64 -> f32
+  %before = tt.fpsan_barrier %narrow : f32
+  %wide = arith.extf %narrow : f32 to f64
+  %roundtrip_barrier = tt.fpsan_barrier %wide : f64
+  %roundtrip = tt.fpsan_homomorphic_cast %roundtrip_barrier : f64 -> f32
+  %a = tti.experimental_fpsan_embed %after : (f32) -> i32
+  %b = tti.experimental_fpsan_embed %before : (f32) -> i32
+  %c = tti.experimental_fpsan_embed %roundtrip : (f32) -> i32
+  tt.return %a, %b, %c : i32, i32, i32
+}
+
+// -----
+
+// CHECK-LABEL: @barrier_cast_16_to_8
+tt.func @barrier_cast_16_to_8() -> (i8, i8, i8) {
+  // CHECK-DAG: %[[AFTER:.*]] = arith.constant 114 : i8
+  // CHECK-DAG: %[[BEFORE:.*]] = arith.constant 79 : i8
+  // CHECK-DAG: %[[ROUNDTRIP:.*]] = arith.constant -14 : i8
+  // CHECK: tt.return %[[AFTER]], %[[BEFORE]], %[[ROUNDTRIP]]
+  %bits = arith.constant -12817 : i16
+  %x = tti.experimental_fpsan_unembed %bits : (i16) -> f16
+  %wide_barrier = tt.fpsan_barrier %x : f16
+  %after = tt.fpsan_homomorphic_cast %wide_barrier : f16 -> f8E5M2
+  %narrow = tt.fpsan_homomorphic_cast %x : f16 -> f8E5M2
+  %before = tt.fpsan_barrier %narrow : f8E5M2
+  %wide = tt.fp_to_fp %narrow : f8E5M2 -> f16
+  %roundtrip_barrier = tt.fpsan_barrier %wide : f16
+  %roundtrip = tt.fpsan_homomorphic_cast %roundtrip_barrier : f16 -> f8E5M2
+  %a = tti.experimental_fpsan_embed %after : (f8E5M2) -> i8
+  %b = tti.experimental_fpsan_embed %before : (f8E5M2) -> i8
+  %c = tti.experimental_fpsan_embed %roundtrip : (f8E5M2) -> i8
+  tt.return %a, %b, %c : i8, i8, i8
+}
+
+// -----
+
+// CHECK-LABEL: @barrier_cast_64_to_8
+tt.func @barrier_cast_64_to_8() -> (i8, i8, i8) {
+  // CHECK-DAG: %[[AFTER:.*]] = arith.constant -115 : i8
+  // CHECK-DAG: %[[BEFORE:.*]] = arith.constant 79 : i8
+  // CHECK-DAG: %[[ROUNDTRIP:.*]] = arith.constant 1 : i8
+  // CHECK: tt.return %[[AFTER]], %[[BEFORE]], %[[ROUNDTRIP]]
+  %bits = arith.constant 81985529216486895 : i64
+  %x = tti.experimental_fpsan_unembed %bits : (i64) -> f64
+  %wide_barrier = tt.fpsan_barrier %x : f64
+  %after = tt.fpsan_homomorphic_cast %wide_barrier : f64 -> f8E5M2
+  %narrow = tt.fpsan_homomorphic_cast %x : f64 -> f8E5M2
+  %before = tt.fpsan_barrier %narrow : f8E5M2
+  %wide = tt.fp_to_fp %narrow : f8E5M2 -> f64
+  %roundtrip_barrier = tt.fpsan_barrier %wide : f64
+  %roundtrip = tt.fpsan_homomorphic_cast %roundtrip_barrier : f64 -> f8E5M2
+  %a = tti.experimental_fpsan_embed %after : (f8E5M2) -> i8
+  %b = tti.experimental_fpsan_embed %before : (f8E5M2) -> i8
+  %c = tti.experimental_fpsan_embed %roundtrip : (f8E5M2) -> i8
+  tt.return %a, %b, %c : i8, i8, i8
 }

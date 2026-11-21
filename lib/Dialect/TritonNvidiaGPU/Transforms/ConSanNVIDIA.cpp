@@ -1,3 +1,4 @@
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -32,7 +33,8 @@ Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
 uint32_t getBlockBroadcastMask(Type type) {
   auto memDescTy = cast<ttg::MemDescType>(type);
   auto kBlock = StringAttr::get(type.getContext(), "block");
-  return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(memDescTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 } // namespace
@@ -40,7 +42,9 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
+    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp,
+               ttng::AsyncBulkCopyGlobalToLocalOp,
+               ttng::AsyncBulkCopyLocalToGlobalOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {
@@ -75,13 +79,12 @@ public:
     return std::nullopt;
   }
 
-  std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const tti::AuxDataMap &) const override {
+  SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
-      return WaitOpInfo{tti::CommitKind::TmaStore,
-                        static_cast<int>(tmaStoreWaitOp.getPendings()),
-                        /*transferWrites=*/false, /*transferReads=*/true};
-    return std::nullopt;
+      return {WaitOpInfo{tti::CommitKind::TmaStore,
+                         static_cast<int>(tmaStoreWaitOp.getPendings()),
+                         /*transferWrites=*/false, /*transferReads=*/true}};
+    return {};
   }
 
   std::optional<AsyncProxyFenceInfo>
@@ -99,21 +102,18 @@ public:
     return needed;
   }
 
+  bool needsPtxasMaskedStoreBarrierWorkaround() const override { return true; }
+
   Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                          Operation *op) const override {
     // mask = 0 means no CTA predication.
     uint32_t mask = 0;
-    auto getBarrierMask = [&](Value barrier) {
-      auto barrierTy = cast<ttg::MemDescType>(barrier.getType());
-      auto kBlock = StringAttr::get(op->getContext(), "block");
-      return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
-      mask = getBarrierMask(initOp.getAlloc());
+      mask = getBlockBroadcastMask(initOp.getAlloc().getType());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
-      mask = getBarrierMask(waitOp.getAlloc());
+      mask = getBlockBroadcastMask(waitOp.getAlloc().getType());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
-      mask = getBarrierMask(invalOp.getAlloc());
+      mask = getBlockBroadcastMask(invalOp.getAlloc().getType());
     if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
       std::optional<uint32_t> fromCTA;
       if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
@@ -123,12 +123,14 @@ public:
       if (fromCTA)
         mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
     }
-    if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (auto loadOp = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
-    if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
+    if (auto storeOp = dyn_cast<ttng::AsyncStoreOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
+    if (op->hasAttr("allocation.size"))
+      mask = getResultScratchBroadcastMask(op).value_or(mask);
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -146,13 +148,29 @@ public:
     return getLeaderCTAPredicate(b, mask);
   }
 
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
+  }
+
+  BarrierStages getClusterBarrierStages(Operation *op) const override {
+    return ttng::getClusterBarrierStages(op);
+  }
+
+  bool hasUnsummarizableCalleeState(Operation *op) const override {
+    if (isa<ClusterBarrierOp>(op))
+      return true;
+    return op->hasAttr("allocation.size") &&
+           getResultScratchBroadcastMask(op).value_or(0) != 0;
+  }
+
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
     std::optional<MemEffectsOpInfo> info =
         ConSanTargetHooks::getMemEffectsOpInfo(op);
     if (!info) {
       if (!isa<ttng::BarrierExpectOp, ttng::TCGen5CommitOp,
-               ttng::ArriveBarrierOp>(op))
+               ttng::ArriveBarrierOp, ttng::AsyncCopyMbarrierArriveOp>(op))
         return std::nullopt;
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
@@ -163,10 +181,12 @@ public:
       info->pred = expectOp.getPred();
       info->barriers.push_back(
           {expectOp.getBarrier(), nullptr,
-           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           expectOp.getPerWarp() ? ttg::lookupNumWarps(expectOp) : 1,
+           MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+      info->pred = copyOp.getPred();
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
@@ -214,6 +234,13 @@ public:
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/-txCount});
     }
+    if (auto copyOp = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+      info->pred = copyOp.getPred();
+      info->barriers.push_back(
+          {copyOp.getBarrier(), nullptr, /*count=*/0,
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/-static_cast<int>(copyOp.getNumBytesPerCTA())});
+    }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(
           {storeOp.getBarrier(), nullptr, /*count=*/0,
@@ -228,15 +255,23 @@ public:
            /*txCount=*/
            -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
     }
-    if (isa<ttng::TMAStoreLikeOpInterface>(op)) {
+    if (isa<ttng::AsyncStoreOpInterface>(op)) {
       info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info->commitKind = tti::CommitKind::TmaStore;
       info->implicitCommit = true;
     }
+    if (auto storeOp = dyn_cast<ttng::AsyncBulkCopyLocalToGlobalOp>(op))
+      info->pred = storeOp.getPred();
     if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
           {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
+    }
+    if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op)) {
+      int count = arriveOp.getNoIncrement() ? ttg::lookupNumWarps(op) * 32 : 0;
+      info->barriers.push_back(
+          {arriveOp.getBarrier(), nullptr, count,
+           MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies});
     }
 
     if (!namedOperands.empty()) {
@@ -244,8 +279,14 @@ public:
       for (auto [value, name] : namedOperands)
         for (auto it = info->operandEffects.begin();
              it != info->operandEffects.end(); ++it)
-          if (it->buf == value) {
-            effects.emplace_back(*it).operandName = name.str();
+          if (auto *buffer = std::get_if<Value>(&it->buffer);
+              buffer && *buffer == value) {
+            auto &effect = effects.emplace_back(*it);
+            effect.operandName = name.str();
+            effect.isTensorCoreARead =
+                isa<ttng::MMAv5OpInterface>(op) && name == "A" &&
+                isa<ttg::SharedMemorySpaceAttr>(
+                    cast<ttg::MemDescType>(value.getType()).getMemorySpace());
             break;
           }
       info->operandEffects = std::move(effects);
@@ -253,8 +294,7 @@ public:
     return info;
   }
 
-  SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const tti::AuxDataMap &) const override {
+  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }
@@ -265,7 +305,7 @@ public:
     bool needsTmaStore = false;
     bool needsWgmma = false;
     module.walk([&](Operation *op) {
-      if (isa<ttng::TMAStoreLikeOpInterface, ttng::TMAStoreWaitOp>(op))
+      if (isa<ttng::AsyncStoreOpInterface, ttng::TMAStoreWaitOp>(op))
         needsTmaStore = true;
       if (isa<ttng::WarpGroupDotOp, ttng::WarpGroupDotWaitOp>(op))
         needsWgmma = true;

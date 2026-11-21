@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
@@ -25,6 +26,10 @@ namespace tti = mlir::triton::instrument;
 bool hasSharedMemoryBuffers(ModuleOp mod) {
   bool result = false;
   mod.walk([&](ttg::LocalAllocOp op) { result |= op.isSharedMemoryAlloc(); });
+  // Warp specialization itself uses compiler-owned shared scratch. ConSan's
+  // lock capture adds another scratch user, so reserve the shared-memory state
+  // captures whenever a warp-specialized region is present.
+  mod.walk([&](ttg::WarpSpecializeOp) { result = true; });
   return result;
 }
 
@@ -94,15 +99,30 @@ public:
       return signalPassFailure();
     }
 
-    int numActiveMemTypes = (hasSharedMemoryBuffers(mod) ? 1 : 0) +
-                            (hasTensorMemoryBuffers(mod) ? 1 : 0);
+    bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
+    int numActiveMemTypes =
+        (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
     // NVIDIA inserts a terminal cluster barrier after this pass.
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
+    if (hasClusterBarriers) {
+      // Expose implicit barriers to ConSan through the entire call chain.
+      DenseSet<Operation *> barrierCalls;
+      auto markCall = [&](CallOpInterface call, FunctionOpInterface callee) {
+        callee.walk([&](Operation *op) {
+          if (barrierCalls.contains(op) ||
+              (!isa<ttng::ClusterBarrierOp>(op) &&
+               hooks->getClusterBarrierStages(op).hasBarrier())) {
+            callee->removeAttr("noinline");
+            barrierCalls.insert(call);
+          }
+        });
+      };
+      CallGraph<int>(mod).walk<WalkOrder::PostOrder>(markCall, [](auto) {});
+    }
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, *hooks),
-        hasSharedMemoryBuffers(mod) &&
-            hooks->needsAsyncProxyFenceTracking(mod));
+        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
 
     auto i32Ty = IntegerType::get(mod.getContext(), 32);

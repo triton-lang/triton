@@ -35,6 +35,18 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
 // -----
 
+// Invalid negative offset
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @negative_offset(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
+    // expected-error @+1 {{offset must be non-negative at dimension 0}}
+    %1 = amdg.extract_slice %arg0 [-1,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
 // Invalid result layout
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>

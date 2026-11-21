@@ -42,7 +42,6 @@ void unload_{kernel_name}(void) {{
 void load_{kernel_name}() {{
     int dev = 0;
     void *bin = (void *)&HSACO_NAME;
-    int shared = {shared};
     HIP_CHECK(hipModuleLoadData(&{kernel_name}_mod, bin));
     HIP_CHECK(hipModuleGetFunction(&{kernel_name}_func, {kernel_name}_mod, "{triton_kernel_name}"));
 }}
@@ -56,13 +55,11 @@ hipError_t {kernel_name}(hipStream_t stream, {signature}) {{
     unsigned int gX = {gridX};
     unsigned int gY = {gridY};
     unsigned int gZ = {gridZ};
+    if (gX == 0 || gY == 0 || gZ == 0)
+       return hipSuccess;
     hipDeviceptr_t global_scratch = 0;
     hipDeviceptr_t profile_scratch = 0;
     void *args[{num_args}] = {{ {arg_pointers} }};
 
-    // TODO: shared memory
-    if(gX * gY * gZ > 0)
-      return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, {shared}, stream, args, NULL);
-    else
-      return hipErrorInvalidValue;
+    return hipModuleLaunchKernel({kernel_name}_func, gX, gY, gZ, {num_warps} * {warp_size}, 1, 1, 0, stream, args, NULL);
 }}

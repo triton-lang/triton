@@ -3,7 +3,6 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
@@ -48,4 +47,4 @@ fitToValidDirectToLdsVecSize(unsigned maxVecSize, unsigned elemBitwidth,
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_ASYNCUTILITY_H_

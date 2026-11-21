@@ -65,5 +65,10 @@
 
 // -----
 
-// Broadcasting in block dim is allowed
+// expected-error@+1 {{Broadcasting across CTAs requires zero block bases.}}
 #shared = #ttg.padded_shared<[2:+1] {offset = [[1, 0], [0, 1]], block = [[1, 0], [2, 0]]}>
+
+// -----
+
+// A zero block basis replicates the same offsets across CTAs.
+#shared = #ttg.padded_shared<[2:+1] {offset = [[1, 0], [0, 1]], block = [[0, 0], [2, 0]]}>

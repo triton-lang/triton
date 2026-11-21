@@ -4,6 +4,7 @@
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -118,6 +119,13 @@ private:
     } else if (calleeName == "__triton_hip_fast_tanhf") {
       assert(operands.size() == 1);
       assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
+      if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::CDNA5) {
+        const char *intrinsic = "llvm.amdgcn.tanh.f32";
+        replacementOp = LLVM::createLLVMIntrinsicCallOp(
+            rewriter, loc, intrinsic, returnType, operands[0]);
+        rewriter.replaceOp(callOp, replacementOp);
+        return mlir::success();
+      }
       LLVM::FastmathFlagsAttr defaultFlags{};
 
       // Numerically stable tanh implementation:
@@ -169,12 +177,6 @@ private:
       replacementOp = LLVM::FMulOp::create(rewriter, loc, returnType,
                                            posResult->getResult(0),
                                            sign->getResult(0), defaultFlags);
-    } else if (calleeName == "__ocml_tanh_f32") {
-      if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::GFX1250) {
-        const char *intrinsic = "llvm.amdgcn.tanh.f32";
-        replacementOp = LLVM::createLLVMIntrinsicCallOp(
-            rewriter, loc, intrinsic, returnType, operands[0]);
-      }
     }
 
     if (replacementOp) {

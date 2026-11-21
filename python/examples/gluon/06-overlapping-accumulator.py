@@ -529,7 +529,7 @@ def mma_scaled_epilogue_partition(p):
             if p.USE_OVERLAP and s == tmem_plan.early_release_subtile:
                 mbarrier.arrive(p.overlap_bar.index(0), count=1)
 
-            tma.store_wait(pendings=subtile_stages - 1)
+            tma.store_wait(pendings=subtile_stages - 1, deps=[acc_smem])
             acc_smem.store(acc)
             tma.async_store(p.c_desc, [off_m, store_n], acc_smem)
             sub_acc_state = sub_acc_state.next()
@@ -537,7 +537,7 @@ def mma_scaled_epilogue_partition(p):
         acc_state = acc_state.next()
         scheduler = scheduler.step()
         i += 1
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smems])
 
 
 # ---------------------------------------------------------------------------

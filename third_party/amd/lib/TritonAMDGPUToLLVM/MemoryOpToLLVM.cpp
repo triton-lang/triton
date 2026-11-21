@@ -43,7 +43,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   const auto numElemsI32 = (vTy.getNumElements() * physicalBitWidth / 32);
   const auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
 
-  // GFX1250 uses opaque LLVM intrinsic calls; their results cannot be cast to
+  // CDNA5 uses opaque LLVM intrinsic calls; their results cannot be cast to
   // AliasAnalysisOpInterface, so no no-alias scope is attached.
   auto callIntrinsic = [&](StringRef name, VectorType retTy) -> Value {
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, {retTy},
@@ -52,7 +52,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   };
 
   switch (isaFamily) {
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
     if (logicalBitWidth == 16)
       return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
     if (logicalBitWidth == 8)
@@ -63,11 +63,14 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   case ISAFamily::CDNA4: {
     Value dsReadTr;
     if (logicalBitWidth == 16)
-      dsReadTr = ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr16_b64::create(
+          rewriter, loc, vTy, vecAddr, ROCDL::ds_read_tr16_b64::Properties{});
     else if (logicalBitWidth == 8)
-      dsReadTr = ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr8_b64::create(
+          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr8_b64::Properties{});
     else if (logicalBitWidth == 4)
-      dsReadTr = ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
+      dsReadTr = ROCDL::ds_read_tr4_b64::create(
+          rewriter, loc, vTyI32, vecAddr, ROCDL::ds_read_tr4_b64::Properties{});
     else
       return {};
     AMD::addLocalLoadNoAliasScope(
@@ -211,6 +214,115 @@ lowerDsReadTr(Operation *op,
   assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
          addrToOffset.getInDimSizeLog2(kAddr) <= 6);
 
+  if (isPartitioned) {
+    // A transposing load reads one contiguous chunk per issuing lane and
+    // shuffles the elements across lanes, so the lane that provides an address
+    // is generally not the lane that receives the data. `fullTile` maps
+    // destination (register, lane) to source (contiguous offset, issuing lane),
+    // the latter named `addr`. Its inverse therefore tells which destination
+    // elements each issuing lane reads, and composing it with `partitionLayout`
+    // gives their partitions.
+    //
+    // Example: ds_load_tr8_b64 on CDNA5 (gfx1250), from the test
+    // `ds_transpose_partitioned_remaps_lane` in ds_transpose_cdna5.mlir.
+    //
+    //   fullTile:
+    //     - lane=1 -> (1, 0)
+    //       lane=2 -> (2, 0)
+    //       lane=4 -> (4, 0)
+    //       lane=8 -> (0, 4)
+    //       lane=16 -> (0, 16)
+    //     - register=1 -> (0, 1)
+    //       register=2 -> (0, 2)
+    //       register=4 -> (0, 8)
+    //     where out dims are: [offset (size 8), addr (size 32)]
+    //
+    // `addr` identifies the issuing lane, and `offset` counts the contiguous
+    // 8-bit elements it reads. The full inverse gives the destination lane,
+    // register, and warp in that order. The warp is zero within this tile:
+    //
+    //   fullTile.invert():
+    //     - offset=1 -> (1, 0, 0)
+    //       offset=2 -> (2, 0, 0)
+    //       offset=4 -> (4, 0, 0)
+    //     - addr=1 -> (0, 1, 0)
+    //       addr=2 -> (0, 2, 0)
+    //       addr=4 -> (8, 0, 0)
+    //       addr=8 -> (0, 4, 0)
+    //       addr=16 -> (16, 0, 0)
+    //     where out dims are:
+    //       [lane (size 32), register (size 8), warp (size 1)]
+    //
+    // For this test, partitionLayout chooses the partition from the
+    // destination-lane basis `lane=8`:
+    //
+    //     - register=1 -> (0)
+    //       ...
+    //       register=32 -> (0)
+    //     - lane=1 -> (0)
+    //       lane=2 -> (0)
+    //       lane=4 -> (0)
+    //       lane=8 -> (1)
+    //       lane=16 -> (0)
+    //     - warp=1 -> (0)
+    //       warp=2 -> (0)
+    //     where out dims are: [partition (size 2)]
+    //
+    // Querying this with the runtime issuing lane asks for the partition of the
+    // wrong destination lane. Composing the full inverse with partitionLayout
+    // expresses the partition in terms of the issuing lane and contiguous
+    // offset:
+    //
+    //   sourceToPartition = fullTile.invert().compose(partitionLayout):
+    //     - offset=1 -> (0)
+    //       offset=2 -> (0)
+    //       offset=4 -> (0)
+    //     - addr=1 -> (0)
+    //       addr=2 -> (0)
+    //       addr=4 -> (1)
+    //       addr=8 -> (0)
+    //       addr=16 -> (0)
+    //     where out dims are: [partition (size 2)]
+    //
+    // All offset bases contribute zero, so each issuing lane's entire
+    // contiguous read belongs to one partition. A nonzero offset contribution
+    // would require multiple partitions within that read, which this lowering
+    // must reject.
+    //
+    // Use the addr bases for runtime issuing-lane queries, preserving the
+    // original register and warp contributions.
+    // Destination basis `lane=8` is reached from source basis `addr=4`, so each
+    // issuing lane selects the LDS base expected by the destinations of its
+    // data. For example, issuing lane 4 supplies destination lanes 8-15, which
+    // require partition 1. Querying the original partitionLayout with lane=4
+    // gives 0.
+    //
+    // Partition selection can also depend on a destination-register bit.
+    // For ds_load_tr16_b128 on CDNA5, destination-register bit 0 corresponds
+    // to issuing-lane bit 0. If that register bit selects the partition,
+    // issuing-lane bit 0 selects the LDS base.
+    // The partition stays constant across each issuing lane's contiguous read.
+    //
+    // See ds_transpose_partitioned_register_varying in
+    // ds_transpose_cdna5.mlir.
+    //
+    // For packed fp4, `fullTile` is expressed in nibble coordinates, so this
+    // must run before the nibble basis is dropped below.
+    auto sourceToPartition = fullTile.invert().compose(partitionLayout);
+    if (!sourceToPartition.sublayoutIsZero({kOffset}, {kPartition}))
+      return failure();
+
+    // The partition is queried with the issuing lane, and with register
+    // indices that are multiples of `elemsPerInstr`. The register bits within
+    // one instruction are therefore never queried directly; they select the
+    // partition through the remapped lane bases.
+    auto partitionBases = partitionLayout.getBases();
+    partitionBases[kLane] = sourceToPartition.getBases().lookup(kAddr);
+    partitionLayout =
+        LinearLayout(std::move(partitionBases), partitionLayout.getOutDims(),
+                     /*requireSurjective=*/false);
+  }
+
   // ds_read_tr* shuffles data across lanes so the lane issuing the load
   // matches the kAddr decomposition of fullTile. Using addrToOffset's
   // kAddr bases as the kLane bases of this layout lets us use laneId
@@ -260,99 +372,10 @@ lowerDsReadTr(Operation *op,
       actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset,
                             /*maskSpanBlocks=*/0, elemsPerInstr);
   reps = permStrides.apply(reps);
-  if (isPartitioned) {
+  if (isPartitioned)
     partitionLayout = permStrides.apply(partitionLayout);
 
-    // One ds_read_tr* instruction produces `elemsPerInstr` consecutive
-    // physical values along kReg from a single LDS base pointer. We only
-    // select a partition once per instruction, so all of those register
-    // positions must map to the same partition. For a LinearLayout that holds
-    // iff the low log2(elemsPerInstr) register bases contribute 0 to
-    // kPartition. Bail out if not, so a generic lowering can take over.
-    for (unsigned pos = 0; pos < llvm::Log2_32(elemsPerInstr); ++pos) {
-      if (partitionLayout.getBasis(kReg, pos, kPartition) != 0)
-        return failure();
-    }
-
-    // partitionLayout's kLane is the destination lane which is the lane that
-    // owns the loaded data in the destination tensor. The laneId is the
-    // source lane issuing the load. For ds_read_tr* the hardware shuffles
-    // data across lanes, so the two differ: we need to remap.
-    //
-    // Example: ds_load_tr8_b64 on gfx1250, from the test
-    // `ds_transpose_partitioned_remaps_lane`.
-    //
-    //  fullTile:
-    //   - lane=1 -> (1, 0)
-    //     lane=2 -> (2, 0)
-    //     lane=4 -> (4, 0)
-    //     lane=8 -> (0, 4)
-    //     lane=16 -> (0, 16)
-    //   - register=1 -> (0, 1)
-    //     register=2 -> (0, 2)
-    //     register=4 -> (0, 8)
-    //   where out dims are: [offset (size 8), addr (size 32)]
-    //
-    // `addr` is the non-contiguous part of the source lane's access.
-    // `lane` in the inverse tile is the destination lane after the hardware
-    // transpose. `fullTile.invert().sublayout({kAddr}, {kLane})` gives:
-    //
-    //   - addr=1 -> (0)
-    //     addr=2 -> (0)
-    //     addr=4 -> (8)
-    //     addr=8 -> (0)
-    //     addr=16 -> (16)
-    //   where out dims are: [lane (size 32)]
-    //
-    // Then rename the input dimension from `addr` to `lane` so the map can
-    // compose with partitionLayout.
-    //
-    // For this test, partitionLayout would choose the partition from the
-    // destination-lane basis `lane=8`:
-    //
-    //   - register=1 -> (0)
-    //     ...
-    //     register=32 -> (0)
-    //   - lane=1 -> (0)
-    //     lane=2 -> (0)
-    //     lane=4 -> (0)
-    //     lane=8 -> (1)
-    //     lane=16 -> (0)
-    //   - warp=1 -> (0)
-    //     warp=2 -> (0)
-    //   where out dims are: [partition (size 2)]
-    //
-    // Querying this with the runtime source lane asks for the partition of
-    // the wrong lane. Composing with laneRemap rewrites the partition basis
-    // through the transpose:
-    //
-    //   - register=1 -> (0)
-    //     ...
-    //     register=32 -> (0)
-    //   - lane=1 -> (0)
-    //     lane=2 -> (0)
-    //     lane=4 -> (1)
-    //     lane=8 -> (0)
-    //     lane=16 -> (0)
-    //   - warp=1 -> (0)
-    //     warp=2 -> (0)
-    //   where out dims are: [partition (size 2)]
-    //
-    // Destination basis `lane=8` is reached from source basis `addr=4`, so
-    // each source lane selects the LDS base expected by its destination lane.
-
-    auto regIdentity = LinearLayout::identity1D(
-        partitionLayout.getInDimSize(kReg), kReg, kReg);
-    auto srcToDstLaneMap =
-        fullTile.invert().sublayout({kAddr}, {kLane}).renameInDim(kAddr, kLane);
-    auto warpIdentity = LinearLayout::identity1D(
-        partitionLayout.getInDimSize(kWarp), kWarp, kWarp);
-    auto laneRemap = regIdentity * srcToDstLaneMap * warpIdentity;
-    partitionLayout = laneRemap.compose(partitionLayout);
-  }
-
   // Perform computation in bytes, LLVM optimises this better
-  assert(bitWidth >= 8);
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;
@@ -446,7 +469,7 @@ public:
 
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
+    unsigned bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
     unsigned logicalBitWidth = bitWidth;
     if constexpr (isPackedTransposed) {
@@ -599,7 +622,6 @@ struct LocalAtomicScatterRMWOpConversion
         rmwMask = b.true_val();
 
       Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
-                                        /*sharedMemBase=*/std::nullopt,
                                         /*enableIntraWaveReduce=*/false);
       if (returnOld)
         results.push_back(old);
@@ -610,9 +632,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
-                                info.llvmElemTy, b, info.threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -632,7 +653,13 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
+    // A local-only fence omits the vector cache invalidate. This is safe only
+    // when all waves share one L0, so an acquire in one wave covers the others.
+    auto isaFamily = targetInfo.getISAFamily();
+    bool workgroupSharesOneL0 =
+        mlir::triton::amdgpu::isCDNA(isaFamily) ||
+        (mlir::triton::amdgpu::isRDNA(isaFamily) && targetInfo.isCuMode());
+    if (op.isWarp() || !workgroupSharesOneL0)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
@@ -673,124 +700,6 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-/// Encodes the waitcnt value for AMDGPU architectures.
-///
-/// Note: This function duplicates the bitpacking logic from AMDGPU backend
-/// (llvm/lib/Target/AMDGPU/Utils/AMDGPUBaseInfo.h), as it's not accessible from
-/// llvm/include. The logic handles different encoding schemes across
-/// various GPU architecture versions (pre-gfx9 to gfx11).
-///
-/// The waitcnt encoding uses different bit positions for each counter
-/// based on the ISA version:
-/// - Vmcnt (vector memory counter): tracks pending vector memory operations
-/// - Expcnt (export counter): tracks pending export operations
-/// - Lgkmcnt (LDS/GDS/scalar memory counter): tracks pending LDS/GDS/scalar
-/// memory ops
-///
-/// Each architecture version has its own bit layout, Vmcnt, Expcnt and Lgkmcnt
-/// are decoded as follows:
-///     Vmcnt = Waitcnt[3:0]        (pre-gfx9)
-///     Vmcnt = Waitcnt[15:14,3:0]  (gfx9,10)
-///     Vmcnt = Waitcnt[15:10]      (gfx11)
-///     Expcnt = Waitcnt[6:4]       (pre-gfx11)
-///     Expcnt = Waitcnt[2:0]       (gfx11)
-///     Lgkmcnt = Waitcnt[11:8]     (pre-gfx10)
-///     Lgkmcnt = Waitcnt[13:8]     (gfx10)
-///     Lgkmcnt = Waitcnt[9:4]      (gfx11)
-static FailureOr<unsigned> encodeWaitcnt(llvm::AMDGPU::IsaVersion isaVersion,
-                                         unsigned vmcnt, unsigned lgkmcnt) {
-  if (isaVersion.Major == 9) {
-    vmcnt = std::min(63u, vmcnt);
-    unsigned expcnt = 0x7;
-    lgkmcnt = std::min(15u, lgkmcnt);
-    unsigned lowBits = vmcnt & 0xF;
-    unsigned highBits = (vmcnt >> 4) << 14;
-    unsigned otherCnts = (expcnt << 4) | (lgkmcnt << 8);
-    return lowBits | highBits | otherCnts;
-  }
-  if (isaVersion.Major == 10) {
-    vmcnt = std::min(63u, vmcnt);
-    unsigned expcnt = 0x7;
-    lgkmcnt = std::min(63u, lgkmcnt);
-    unsigned lowBits = vmcnt & 0xF;
-    unsigned highBits = (vmcnt >> 4) << 14;
-    unsigned otherCnts = (expcnt << 4) | (lgkmcnt << 8);
-    return lowBits | highBits | otherCnts;
-  }
-  if (isaVersion.Major == 11) {
-    vmcnt = std::min(63u, vmcnt);
-    unsigned expcnt = 0x7;
-    lgkmcnt = std::min(63u, lgkmcnt);
-    return (vmcnt << 10) | expcnt | (lgkmcnt << 4);
-  }
-  return failure();
-}
-
-struct MemoryCounterWaitOpConversion
-    : public ConvertOpToLLVMPattern<amdgpu::MemoryCounterWaitOp> {
-  MemoryCounterWaitOpConversion(const LLVMTypeConverter &converter,
-                                const AMD::TargetInfo &targetInfo,
-                                PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(amdgpu::MemoryCounterWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // amdgpu::MemoryCounterWaitOp supports gfx9 onwards
-    auto isaVersion = targetInfo.getIsaVersion();
-
-    /// If major version >= gfx12, lower to
-    ///   * ROCDL::WaitDscntOp if ds is present
-    ///   * ROCDL::WaitLoadcntOp if load is present
-    ///   * ROCDL::WaitStorecntOp if store is present
-    if (isaVersion.Major >= 12) {
-      Location loc = op.getLoc();
-      if (std::optional<int> ds = adaptor.getDs())
-        ROCDL::WaitDscntOp::create(rewriter, loc, *ds);
-
-      if (std::optional<int> load = adaptor.getLoad())
-        ROCDL::WaitLoadcntOp::create(rewriter, loc, *load);
-
-      if (std::optional<int> store = adaptor.getStore())
-        ROCDL::WaitStorecntOp::create(rewriter, loc, *store);
-
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    /// Otherwise, lower to ROCDL::SWaitcntOp
-    auto getVal = [](Attribute attr) -> unsigned {
-      if (attr)
-        return cast<IntegerAttr>(attr).getInt();
-
-      // This value will be clamped to the maximum value for the target version.
-      return 1024;
-    };
-    unsigned ds = getVal(adaptor.getDsAttr());
-
-    unsigned vmcnt = 1024;
-    Attribute load = adaptor.getLoadAttr();
-    Attribute store = adaptor.getStoreAttr();
-    if (load && store) {
-      vmcnt = getVal(load) + getVal(store);
-    } else if (load) {
-      vmcnt = getVal(load);
-    } else if (store) {
-      vmcnt = getVal(store);
-    }
-
-    FailureOr<unsigned> waitcnt = encodeWaitcnt(isaVersion, vmcnt, ds);
-    if (failed(waitcnt))
-      return op.emitOpError("unsupported chipset");
-
-    rewriter.replaceOpWithNewOp<ROCDL::SWaitcntOp>(op, *waitcnt);
-    return success();
-  }
-
-private:
-  const AMD::TargetInfo &targetInfo;
-};
-
 } // namespace
 
 void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
@@ -806,6 +715,5 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
       typeConverter, targetInfo, benefit);
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit.getBenefit() + 1);
-  patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
-      typeConverter, targetInfo, barrierBenefit);
+  patterns.add<BarrierOpConversion>(typeConverter, targetInfo, barrierBenefit);
 }

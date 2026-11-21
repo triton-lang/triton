@@ -110,14 +110,14 @@ void CircularLayoutParser::parseSegment(
         trace.asyncEvents.push_back(entry);
         continue;
       }
-      if (!activeEvent.count(entry->scopeId)) {
+      if (!activeEvent.contains(entry->scopeId)) {
         activeEvent[entry->scopeId] =
             CircularLayoutParserResult::ProfileEvent();
       }
       auto &activeProfileEvent = activeEvent[entry->scopeId];
 
       auto prevState = ParseState::INIT;
-      if (scopeState.count(entry->scopeId))
+      if (scopeState.contains(entry->scopeId))
         prevState = scopeState[entry->scopeId];
 
       if (entry->isStart) {
@@ -174,7 +174,7 @@ void CircularLayoutParser::pairAsyncEvents(
     if (endpoint.entry->isStart) {
       // A warp cannot have two outstanding instances of the same static event
       // because a later end would not identify which instance it completes.
-      if (activeEndpoints.byWarp.count(endpoint.uid)) {
+      if (activeEndpoints.byWarp.contains(endpoint.uid)) {
         reportException(
             ScopeMisMatchException("Async event mismatch: start after start"),
             buffer.position());

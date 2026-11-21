@@ -239,6 +239,27 @@ def test_returns_branched_on_non_constexpr():
     assert "at 1:0:" in str(e.value.__cause__), "error should point to function definition"
 
 
+@triton.jit
+def returns_tuples_of_different_lengths(N: int):
+    values = tl.arange(0, 4)
+    if N == 0:
+        return values, values + 1
+    else:
+        return (values, )
+
+
+def test_returns_tuples_of_different_lengths():
+
+    @triton.jit
+    def kernel(N: int):
+        returns_tuples_of_different_lengths(N)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'N': 'i32'}, constexprs={}))
+
+    assert "Return type mismatch" in str(e.value.__cause__)
+
+
 def test_power_of_two_shapes():
 
     @triton.jit
@@ -384,7 +405,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
     elif dtype in supported_dtypes:
         ctx = contextlib.nullcontext()
     else:
-        ctx = pytest.raises(CompilationError, match="")
+        ctx = pytest.raises(CompilationError)
 
     with ctx as e:
         triton.compile(

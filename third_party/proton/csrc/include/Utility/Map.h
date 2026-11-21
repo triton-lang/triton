@@ -65,12 +65,9 @@ public:
     map[key] = value;
   }
 
-  bool contain(const Key &key) const {
+  bool contains(const Key &key) const {
     std::shared_lock<std::shared_mutex> lock(mutex);
-    auto it = map.find(key);
-    if (it == map.end())
-      return false;
-    return true;
+    return map.contains(key);
   }
 
   bool erase(const Key &key) {

@@ -258,7 +258,7 @@ def tma_im2col_kernel(in_desc, out_desc, coord_n: int, coord_h: int, coord_w: in
     mbarrier.invalidate(bar)
 
     tma.async_store(out_desc, [0, 0], smem)
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, deps=[smem])
 
 
 def run_tma_im2col(title, pixel_box_lower_corner, pixel_box_upper_corner, coord, offsets):
@@ -952,7 +952,7 @@ def store_output_tile(mma, dtype, out_desc, offs_m, offs_n):
     c_smem.store(acc.to(dtype))
     fence_async_shared()
     tma.async_store(out_desc, [offs_m, offs_n], c_smem)
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, deps=[c_smem])
 
 
 @gluon.jit
@@ -1003,6 +1003,9 @@ def conv2d_im2col_kernel(
         #   offsets = [r, s]
         # TMA applies offsets to the spatial coords, so start is:
         #   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
+        # The input tiles are single-buffered. Wait for the previous MMA to
+        # finish reading them before overwriting them with the next TMA loads.
+        mma = mma.wait_num_outstanding(0)
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
         tma.async_load_im2col(
             in_desc,
@@ -1021,7 +1024,6 @@ def conv2d_im2col_kernel(
         mbarrier.wait(tma_bar, phase=phase)
 
         # acc += A @ B^T
-        mma = mma.wait_num_outstanding(0)
         mma = mma.issue_async_mma(a_smem, b_smem.permute((1, 0)))
 
         phase ^= 1

@@ -1,5 +1,6 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/IR/Dominance.h"
 
 #include <deque>
 
@@ -201,7 +202,7 @@ void ScopeIdAllocation::reachability() {
       }
     }
     // Skip successor propagation if the output state is unchanged.
-    if (outputBlockInfoMap.count(virtualBlock) &&
+    if (outputBlockInfoMap.contains(virtualBlock) &&
         inputBlockInfo == outputBlockInfoMap[virtualBlock]) {
       continue;
     }

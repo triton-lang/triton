@@ -119,13 +119,13 @@ def TTI_ExperimentalLocalGatherOp
 def TTI_ExperimentalGSanInitOp
     : TTI_Op<"experimental_gsan_init"> {
   let summary = "Initialize GSan thread";
-  let arguments = (ins BoolAttr:$acquireStreamClock);
-  let assemblyFormat = "$acquireStreamClock attr-dict";
+  let arguments = (ins);
+  let assemblyFormat = "attr-dict";
 }
 
 def TTI_ExperimentalGSanKernelExitOp
     : TTI_Op<"experimental_gsan_kernel_exit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Publish a completed GSan thread clock to its launch stream";
+  let summary = "Publish a completed GSan thread clock to its launch";
   let arguments = (ins);
   let assemblyFormat = "attr-dict";
 }
@@ -137,23 +137,187 @@ def TTI_ExperimentalGSanGridDependencyWaitOp
   let assemblyFormat = "attr-dict";
 }
 
-def TTI_ExperimentalGSanTensorDescInfoOp
-    : TTI_Op<"experimental_gsan_tensordesc_info", [Pure]> {
-  let summary = "Decode GSan descriptor metadata from a native tensor descriptor";
+def TTI_ExperimentalGSanClusterBarrierInitOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_init",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize a GSan cluster-barrier rendezvous";
   let description = [{
-    Decodes a native tensor descriptor into the underlying
-    base pointer, shape and stride values.
+    Initializes cluster-shared profile scratch used to synchronize GSan vector
+    clocks. This operation is internal to GSan instrumentation.
   }];
-  let arguments = (ins TT_AnyTensorDescType:$desc);
-  let results = (outs Variadic<AnyType>:$result);
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanClusterBarrierSyncOp
+    : TTI_Op<"experimental_gsan_cluster_barrier_sync",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Synchronize GSan clocks at a cluster barrier";
+  let description = [{
+    Joins the vector clocks of all CTAs participating in a non-relaxed cluster
+    barrier. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch);
+  let assemblyFormat = "$scratch attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanMBarrierTableInitOp
+    : TTI_Op<"experimental_gsan_mbarrier_table_init",
+             [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize GSan mbarrier release state";
+  let description = [{
+    Initializes GSan's internal mbarrier table, used to sequence memory accesses
+    through cluster mbarriers. This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
+  let assemblyFormat = "$scratch `,` $capacity attr-dict `:` type($scratch)";
+}
+
+def TTI_ExperimentalGSanMBarrierInitOp
+    : TTI_Op<"experimental_gsan_mbarrier_init",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Initialize an mbarrier in GSan";
+  let description = [{
+    Associates an mbarrier with its expected arrival count.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
+                       I32Attr:$expectedCount);
   let assemblyFormat = [{
-    $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+    $scratch `,` $barrier `,` $expectedCount attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanMBarrierArriveOp
+    : TTI_Op<"experimental_gsan_mbarrier_arrive",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Record an mbarrier arrival in GSan";
+  let description = [{
+    Records an arrival for every mbarrier targeted by the corresponding
+    hardware operation. When `publishClock` is true, the issuing CTA's vector
+    clock is also published without advancing its local epoch. Waiters acquire
+    the issuing CTA's completed epochs and its imported clocks, but not its
+    current epoch. A false value records only phase
+    progress for asynchronous completion signals that provide no generic
+    memory ordering. `multicastMasks` contains CTA-id broadcast masks whose
+    recipient bitsets are unioned. When `multicast` is false, the arrival
+    targets the leader selected by the barrier's CGA layout.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier, I1:$pred,
+                       I32Attr:$count, DenseI32ArrayAttr:$multicastMasks,
+                       BoolAttr:$multicast,
+                       I32Attr:$sourceBroadcastMask,
+                       DefaultValuedAttr<BoolAttr, "true">:$publishClock);
+  let assemblyFormat = [{
+    $scratch `,` $barrier `,` $pred `,` $count attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanMBarrierWaitOp
+    : TTI_Op<"experimental_gsan_mbarrier_wait",
+             [MemoryEffects<[MemRead<GlobalMemory>,
+                             MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire GSan clocks after an mbarrier wait";
+  let description = [{
+    Acquires the clocks published to the completed mbarrier phase, excluding
+    each publisher's current epoch. Global-memory handoffs that rely solely on
+    an mbarrier may therefore be conservatively reported as races.
+    This operation is internal to GSan instrumentation.
+  }];
+  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
+                       I32:$phase, I1:$pred);
+  let assemblyFormat = [{
+    $scratch `,` $barrier `,` $phase `,` $pred attr-dict `:` type($scratch) `,`
+    qualified(type($barrier))
+  }];
+}
+
+def TTI_ExperimentalGSanTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_tensordesc_access",
+             [AttrSizedOperandSegments, FoldTruePredicate]> {
+  let summary = "Instrument a TMA tensor descriptor access for GSan";
+  let description = [{
+    Passes the native tensor descriptor and its coordinates directly to the
+    GSan runtime, which decodes the descriptor and iterates over the tile.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $desc `[` $coords `]` `,` $isStore (`,` $pred^)? attr-dict `:`
+    qualified(type($desc))
+  }];
+}
+
+def TTI_ExperimentalGSanIndexedTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_indexed_tensordesc_access", [FoldTruePredicate]> {
+  let summary = "Instrument an indexed TMA gather or scatter for GSan";
+  let description = [{
+    Passes a native tensor descriptor and its row indices directly to the GSan
+    runtime, which checks row and column bounds before updating shadow memory.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc,
+                   RankedTensorOf<[I32]>:$indices, I32:$offset,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $desc `[` $indices `,` $offset `]` `,` $isStore (`,` $pred^)? attr-dict
+    `:` qualified(type($desc)) `,` type($indices)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_atomic_tensordesc_access"> {
+  let summary = "Instrument an atomic TMA descriptor access for GSan";
+  let description = [{
+    Passes a native tensor descriptor and coordinates to the GSan runtime for
+    atomic instrumentation with the specified memory semantics and scope.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let assemblyFormat = [{
+    $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
+    qualified(type($desc))
+  }];
+}
+
+def TTI_ExperimentalGSanLoadRangeOp
+    : TTI_Op<"experimental_gsan_load_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory read for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanStoreRangeOp
+    : TTI_Op<"experimental_gsan_store_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory write for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
   }];
 }
 
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+             [FoldTruePredicate, TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
                              "getI1SameShape(getPointeeType($_self))",
                              "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "Instrument a tensor load/store access for GSan";
@@ -168,33 +332,72 @@ def TTI_ExperimentalGSanTensorAccessOp
   }];
 }
 
-def TTI_ExperimentalGSanAtomicTensorAccessOp
-    : TTI_Op<"experimental_gsan_atomic_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
-                             "getI1SameShape(getPointeeType($_self))",
-                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
-  let summary = "Instrument a tensor atomic access for GSan";
-  let description = [{
-    Emits runtime instrumentation for a tensor pointer access whose individual
-    elements are atomic read-modify-write operations.
-  }];
-  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
-                   Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+def TTI_ExperimentalGSanAtomicLoadOp
+    : TTI_Op<"experimental_gsan_atomic_load", [
+  AtomicOpInterface,
+  FoldTruePredicate,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic load";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
   let assemblyFormat = [{
-    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicStoreOp
+    : TTI_Op<"experimental_gsan_atomic_store", [
+  AtomicOpInterface,
+  FoldTruePredicate,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic store";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+    type($ptr)
   }];
 }
 
 def TTI_ExperimentalGSanAtomicPollOp
-    : TTI_Op<"experimental_gsan_atomic_poll"> {
+    : TTI_Op<"experimental_gsan_atomic_poll", [
+        SameOperandsEncoding,
+        TypesMatchWith<"matched type matches pointer shape", "ptr", "matched",
+                       "getI1SameShape($_self)">
+      ]> {
   let summary = "Instrument a completed atomic poll for GSan";
   let description = [{
     Records the successful read performed by an atomic poll after the hardware
     polling loop has completed.
   }];
   let arguments = (ins
-    Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-    I1:$matched,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_BoolLike:$matched,
     TT_MemSemanticAttr:$sem,
     TT_MemSyncScopeAttr:$scope
   );
@@ -205,6 +408,7 @@ def TTI_ExperimentalGSanAtomicPollOp
 
 def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
@@ -257,24 +461,34 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
 // ===== Critical section lock ops =====
 
 
-def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
 }
 
 
-def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
@@ -307,6 +521,16 @@ def TTI_DotI8Op : TTI_Op<"dot_i8", [
     $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
     attr-dict `:` type($a) `*` type($b) `->` type($d)
   }];
+  let hasVerifier = 1;
+}
+
+def TTI_ExperimentalFPSanProbabilityCastOp : TTI_Op<"experimental_fpsan_probability_cast", [
+  Pure, Elementwise, SameOperandsAndResultShape, SameOperandsAndResultEncoding
+]> {
+  let summary = "Pack or expand compact FPSan probability payloads";
+  let arguments = (ins RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$src);
+  let results = (outs RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$result);
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

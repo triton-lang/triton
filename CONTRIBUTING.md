@@ -40,10 +40,11 @@ The core maintainers as a group have the power to veto any decision made at a Mo
 
 The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
 
-__List of core maintainers (as of 01/30/2025, alphabetical order):__
+__List of core maintainers (as of 09/18/2026, alphabetical order):__
 * Jeff Niu
 * Keren Zhou
 * Mario Lezcano-Casado
+* Neil Dhar
 * Pawel Szczerbuk
 * Peter Bell
 * Phil Tillet

@@ -1,4 +1,6 @@
 #include <atomic>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -20,6 +22,18 @@
 namespace py = nanobind;
 
 namespace {
+
+// A load or compare-exchange failure may not use release or acq_rel.
+static std::memory_order load_order(std::memory_order order) {
+  switch (order) {
+  case std::memory_order_acq_rel:
+    return std::memory_order_acquire;
+  case std::memory_order_release:
+    return std::memory_order_relaxed;
+  default:
+    return order;
+  }
+}
 
 // Bit-compatible half storage used by the interpreter's atomic fadd path.
 struct triton_half {
@@ -60,9 +74,10 @@ T atomic_cmp(T *ptr, T val, std::memory_order order) {
   T old_val;
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     std::atomic<T> *atomic_ptr = reinterpret_cast<std::atomic<T> *>(ptr);
-    old_val = atomic_ptr->load(order);
+    old_val = atomic_ptr->load(load_order(order));
     while (cmp(old_val, val)) {
-      if (atomic_ptr->compare_exchange_weak(old_val, val, order, order)) {
+      if (atomic_ptr->compare_exchange_weak(old_val, val, order,
+                                            load_order(order))) {
         break;
       }
     }
@@ -84,11 +99,11 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     T new_value;
     std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
-    old_value = atomic_loc->load(order);
+    old_value = atomic_loc->load(load_order(order));
     do {
       new_value = old_value + value;
-    } while (
-        !atomic_loc->compare_exchange_weak(old_value, new_value, order, order));
+    } while (!atomic_loc->compare_exchange_weak(old_value, new_value, order,
+                                                load_order(order)));
   } else {
     const std::lock_guard<std::mutex> lock(atomic_op_guard);
     old_value = *loc;
@@ -96,30 +111,6 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   }
 
   return old_value;
-}
-
-/** Create a value of type `To` from the bits of `from`.
- *
- * similar to `std::bit_cast` but compatible with C++17,
- * should perform similar to `*reinterpret_cast<To*>(&from)`
- * or through punning without expecting any undefined behaviors.
- *
- * Note: taken from
- * https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/utils.hpp#L32
- * with simplification.
- */
-template <typename To, typename From>
-inline To BitCast(const From &from) noexcept {
-  static_assert(sizeof(To) == sizeof(From),
-                "both data types must have the same size");
-
-  static_assert(std::is_trivially_copyable_v<To> &&
-                    std::is_trivially_copyable_v<From>,
-                "both data types must be trivially copyable");
-
-  To to;
-  memcpy(&to, &from, sizeof(from));
-  return to;
 }
 
 // Taken from
@@ -283,11 +274,11 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
 }
 
 triton_half npy_float_to_half(float f) {
-  return {FromFloatBits(BitCast<uint32_t>(f))};
+  return {FromFloatBits(std::bit_cast<uint32_t>(f))};
 }
 
 float npy_half_to_float(triton_half h) {
-  return BitCast<float>(ToFloatBits(h.value));
+  return std::bit_cast<float>(ToFloatBits(h.value));
 }
 
 template <>
@@ -519,7 +510,7 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
   if constexpr (is_reinterpret_cast_to_atomic_safe<T>) {
     std::atomic<T> *atomic_loc = reinterpret_cast<std::atomic<T> *>(loc);
     atomic_loc->compare_exchange_strong(*expected_uint, desired_val, order,
-                                        order);
+                                        load_order(order));
   } else {
     const std::lock_guard<std::mutex> lock(atomic_op_guard);
     T *atomic_loc = static_cast<T *>(loc);
@@ -639,6 +630,30 @@ void require_dtype(const AnyArray &array, const char *name) {
     throw std::invalid_argument(std::string(name) + " has unsupported dtype");
 }
 
+template <typename T>
+py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
+  AnyArray x = py::cast<AnyArray>(x_obj);
+  AnyArray y = py::cast<AnyArray>(y_obj);
+  AnyArray z = py::cast<AnyArray>(z_obj);
+  require_dtype<T>(x, "x");
+  require_dtype<T>(y, "y");
+  require_dtype<T>(z, "z");
+  if (x.size() != y.size() || x.size() != z.size())
+    throw std::invalid_argument("fma operands must have the same size");
+  py::object ret = numpy_empty(x.size(), x_obj.attr("dtype"));
+  auto ret_array = py::cast<MutableArray>(ret);
+  auto *out = static_cast<T *>(ret_array.data());
+  for (size_t i = 0; i < x.size(); ++i) {
+    T a, b, c;
+    memcpy(&a, const_element_data(x, i), sizeof(T));
+    memcpy(&b, const_element_data(y, i), sizeof(T));
+    memcpy(&c, const_element_data(z, i), sizeof(T));
+    // Select the overload that rounds directly to the operand type.
+    out[i] = std::fma(a, b, c);
+  }
+  return ret.attr("reshape")(shape_list(x));
+}
+
 std::vector<uint64_t> copy_uint64_array(const AnyArray &array) {
   std::vector<uint64_t> data(array.size());
   for (size_t i = 0; i < array.size(); ++i)
@@ -721,6 +736,9 @@ void init_triton_interpreter(py::module_ &m) {
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX)
       .export_values();
+
+  m.def("fma_fp32", &fma_array<float>);
+  m.def("fma_fp64", &fma_array<double>);
 
   m.def("load",
         [](py::object ptr_obj, py::object mask_obj, py::object other_obj,
@@ -805,7 +823,7 @@ void init_triton_interpreter(py::module_ &m) {
             MAKE_ATOMIC_RMW_OP(RMWOp::MIN, int32_t, int64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::UMIN, uint32_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::XCHG, int32_t, uint32_t, int64_t,
-                               uint64_t)
+                               uint64_t, float, double)
           default:
             throw std::invalid_argument("Unsupported RMW operation");
           }

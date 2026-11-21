@@ -1,8 +1,7 @@
 #ifndef TRITON_CONVERSION_MLIR_TYPES_H
 #define TRITON_CONVERSION_MLIR_TYPES_H
 
-#include "mlir/Transforms/DialectConversion.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 
 // This file redefines some common MLIR types for easy usage.
 namespace mlir {
@@ -28,7 +27,7 @@ inline Type bf16Ty(MLIRContext *ctx) { return BFloat16Type::get(ctx); }
 
 inline bool isFloat8(Type type) {
   return isa<Float8E4M3B11FNUZType, Float8E4M3FNType, Float8E4M3FNUZType,
-             Float8E5M2Type, Float8E5M2FNUZType>(type);
+             Float8E5M2Type, Float8E5M2FNUZType, Float8E8M0FNUType>(type);
 }
 
 inline bool isFloat(Type type) {

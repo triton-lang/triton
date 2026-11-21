@@ -170,7 +170,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #padded = #ttg.padded_shared<[4:+2] {order = [1, 0], shape = [4, 4]}>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 184 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 368 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @padded_shared_reinterpret_region() {
     %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x4xf16, #padded, #smem, mutable>
     %view = ttg.memdesc_reinterpret %alloc : !ttg.memdesc<4x4xf16, #padded, #smem, mutable> -> !ttg.memdesc<4x4xbf16, #padded, #smem, mutable>
@@ -197,11 +197,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
-  tt.func public @padded_shared_pipeline_stages(%index: i32) {
-    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x4x4xi32, #padded, #smem, mutable>
-    %view = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<2x4x4xi32, #padded, #smem, mutable> -> !ttg.memdesc<4x4xi32, #padded, #smem, mutable>
-    // expected-remark @below {{Buffers: [0, 88], [96, 88]}}
-    ttg.local_load %view : !ttg.memdesc<4x4xi32, #padded, #smem, mutable> -> tensor<4x4xi32>
+  tt.func public @padded_shared_pointer_pipeline_stages(%index: i32) {
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x4x4x!tt.ptr<i32>, #padded, #smem, mutable>
+    %view = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<2x4x4x!tt.ptr<i32>, #padded, #smem, mutable> -> !ttg.memdesc<4x4x!tt.ptr<i32>, #padded, #smem, mutable>
+    // expected-remark @below {{Buffers: [0, 176], [192, 176]}}
+    ttg.local_load %view : !ttg.memdesc<4x4x!tt.ptr<i32>, #padded, #smem, mutable> -> tensor<4x4x!tt.ptr<i32>>
     tt.return
   }
 }
@@ -231,7 +231,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @tensor_memory_regions() {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
     %true = arith.constant true
@@ -261,7 +261,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @tensor_memory_indexed(%idx: i32) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
     %true = arith.constant true
@@ -352,6 +352,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
@@ -372,6 +373,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8], [8200, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8], [8200, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
@@ -383,7 +385,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @tcgen5_commit_barrier_regions() {
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // expected-remark @below {{Buffers: [8192, 8]}}
@@ -391,6 +393,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
@@ -610,7 +613,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func public @select_tensor_memory_regions(%cond: i1) {
     %tm0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %tm1 = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
@@ -652,6 +655,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
   // expected-remark @below {{All Shared Regions: [49152, 4096]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // Pointer storage and its views have exact byte geometry.
+  tt.func public @shared_pointer_views() {
+    %pointers = ttg.local_alloc {allocation.offset = 128 : i32} : () -> !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+    // expected-remark @below {{Buffers: [128, 32]}}
+    ttg.local_load %pointers : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable> -> tensor<4x!tt.ptr<i32>>
+    %view = ttg.memdesc_subslice %pointers [2] : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable> -> !ttg.memdesc<2x!tt.ptr<i32>, #shared, #smem, mutable, 4>
+    // expected-remark @below {{Buffers: [144, 16]}}
+    ttg.local_load %view : !ttg.memdesc<2x!tt.ptr<i32>, #shared, #smem, mutable, 4> -> tensor<2x!tt.ptr<i32>>
     tt.return
   }
 }

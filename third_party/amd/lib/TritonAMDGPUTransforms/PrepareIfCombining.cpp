@@ -12,9 +12,11 @@
 // they can be combined by the canonicalizer.
 //===----------------------------------------------------------------------===//
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir {
@@ -51,6 +53,15 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
       if (!domInfo.properlyDominates(defOp, currentIf))
         return;
     }
+    bool capturesAvailable = true;
+    visitUsedValuesDefinedAbove(op->getRegions(), [&](OpOperand *operand) {
+      auto *defOp = operand->get().getDefiningOp();
+      if (defOp && !opsBetween.contains(defOp) &&
+          !domInfo.properlyDominates(defOp, currentIf))
+        capturesAvailable = false;
+    });
+    if (!capturesAvailable)
+      return;
   }
 
   // Move all ops before the current if.
@@ -61,9 +72,8 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
 } // namespace
 
 struct TritonAMDGPUPrepareIfCombiningPass
-    : public impl::TritonAMDGPUPrepareIfCombiningBase<
+    : impl::TritonAMDGPUPrepareIfCombiningBase<
           TritonAMDGPUPrepareIfCombiningPass> {
-
   void runOnOperation() override {
     triton::FuncOp funcOp = getOperation();
     DominanceInfo domInfo(funcOp);

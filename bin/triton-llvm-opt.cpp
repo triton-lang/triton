@@ -42,6 +42,20 @@ static cl::opt<bool>
                         llvm::cl::desc("run pass to break phi struct"),
                         cl::init(false));
 
+static cl::opt<bool> MergeNVPTXAssertBlocks(
+    "merge-nvptx-assert-blocks",
+    cl::desc("share identical NVPTX assertion failure blocks"));
+
+static cl::opt<bool> NVPTXVectorize(
+    "nvptx-vectorize",
+    llvm::cl::desc("run hardware-aware NVPTX arithmetic vectorization"),
+    cl::init(false));
+
+static cl::opt<unsigned> NVPTXComputeCapability(
+    "nvptx-compute-capability",
+    llvm::cl::desc("NVIDIA compute capability used for vectorization"),
+    cl::init(90));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -62,6 +76,10 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
+    if (MergeNVPTXAssertBlocks)
+      fpm.addPass(MergeNVPTXAssertBlocksPass());
+    if (NVPTXVectorize)
+      fpm.addPass(NVPTXVectorizerPass(NVPTXComputeCapability));
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

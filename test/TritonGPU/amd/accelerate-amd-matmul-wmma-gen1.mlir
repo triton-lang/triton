@@ -157,3 +157,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: wmma_dot_scaled_fp8_bf16
+// CHECK: amdg.scaled_upcast_fp8
+// CHECK-NOT: tt.dot_scaled
+// CHECK: tt.dot
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_scaled_fp8_bf16(
+      %a_ptr: tensor<32x128x!tt.ptr<f8E4M3FN>, #lhs>,
+      %scale_ptr: tensor<32x4x!tt.ptr<i8>, #scale>,
+      %b_ptr: tensor<128x32x!tt.ptr<bf16>, #blocked>,
+      %output: tensor<32x32x!tt.ptr<f32>, #blocked>
+    ) {
+    %a = tt.load %a_ptr : tensor<32x128x!tt.ptr<f8E4M3FN>, #lhs>
+    %scale_value = tt.load %scale_ptr : tensor<32x4x!tt.ptr<i8>, #scale>
+    %b = tt.load %b_ptr : tensor<128x32x!tt.ptr<bf16>, #blocked>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_value, %b, %c lhs = e4m3 rhs = bf16 {fastMath = false} : tensor<32x128xf8E4M3FN, #lhs>, tensor<32x4xi8, #scale> * tensor<128x32xbf16, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.store %output, %result : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: wmma_dot_scaled_fp4_bf16
+// CHECK: amdg.scaled_upcast_fp4
+// CHECK-NOT: tt.dot_scaled
+// CHECK: tt.dot
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_scaled_fp4_bf16(
+      %a_ptr: tensor<32x64x!tt.ptr<i8>, #lhs>,
+      %scale_ptr: tensor<32x4x!tt.ptr<i8>, #scale>,
+      %b_ptr: tensor<128x32x!tt.ptr<bf16>, #blocked>,
+      %output: tensor<32x32x!tt.ptr<f32>, #blocked>
+    ) {
+    %a = tt.load %a_ptr : tensor<32x64x!tt.ptr<i8>, #lhs>
+    %scale_value = tt.load %scale_ptr : tensor<32x4x!tt.ptr<i8>, #scale>
+    %b = tt.load %b_ptr : tensor<128x32x!tt.ptr<bf16>, #blocked>
+    %c = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %result = tt.dot_scaled %a scale %scale_value, %b, %c lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<32x64xi8, #lhs>, tensor<32x4xi8, #scale> * tensor<128x32xbf16, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.store %output, %result : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

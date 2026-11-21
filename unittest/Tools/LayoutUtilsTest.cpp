@@ -113,5 +113,27 @@ TEST_F(LayoutUtilsTest, GetRepsWithSubsetOfOutputDims) {
                                 /*requireSurjective=*/false));
 }
 
+TEST_F(LayoutUtilsTest, GetRepsWithInputSubview) {
+  auto tile = LinearLayout::identity1D(2, S("K"), S("offset")) *
+              LinearLayout::identity1D(2, S("N"), S("offset"));
+  auto padded = (tile * LinearLayout::identity1D(2, S("K"), S("offset")))
+                    .resizeInDim(S("N"), 1);
+
+  auto reps = getReps(padded, tile);
+  ASSERT_TRUE(reps);
+  EXPECT_EQ(*reps,
+            LinearLayout({{S("K"), {{0}, {4}}}, {S("N"), {}}},
+                         {{S("offset"), 8}}, /*requireSurjective=*/false));
+
+  // Compact repetitions overlap the N bases omitted by the view.
+  auto compact = LinearLayout::identity1D(4, S("K"), S("offset")) *
+                 LinearLayout::identity1D(1, S("N"), S("offset"));
+  EXPECT_FALSE(getReps(compact, tile));
+
+  // Even a single-tile view must reserve the full tile's four offsets.
+  auto view = tile.resizeInDim(S("N"), 1);
+  EXPECT_FALSE(getReps(view.resizeOutDim(S("offset"), 2), tile));
+}
+
 } // namespace
 } // namespace mlir::triton

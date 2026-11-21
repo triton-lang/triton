@@ -137,6 +137,7 @@ Math Ops
     cdiv
     ceil
     clamp
+    clmul
     cos
     div_rn
     erf
@@ -166,6 +167,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     reduce
     reduce_or
     sum
@@ -182,6 +185,8 @@ Scan Ops
     :nosignatures:
 
     associative_scan
+    cumprod
+    cumsum
     histogram
 
 
@@ -222,6 +227,7 @@ Inline Assembly
     :toctree: generated
     :nosignatures:
 
+    inline_asm
     inline_asm_elementwise
 
 

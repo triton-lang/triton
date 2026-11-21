@@ -328,7 +328,7 @@ CubinData *CuptiPCSampling::getCubinData(uint64_t cubinCrc) {
 void CuptiPCSampling::initialize(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  doubleCheckedLock([&]() { return !contextInitialized.contain(contextId); },
+  doubleCheckedLock([&]() { return !contextInitialized.contains(contextId); },
                     contextMutex,
                     [&]() {
                       enablePCSampling(context);
@@ -365,7 +365,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
       auto *cubinData = getCubinData(pcData->cubinCrc);
       auto key =
           CubinData::LineInfoKey{pcData->functionIndex, pcData->pcOffset};
-      if (cubinData->lineInfo.find(key) == cubinData->lineInfo.end()) {
+      if (!cubinData->lineInfo.contains(key)) {
         auto [lineNumber, fileName, dirName] =
             getSassToSourceCorrelation(pcData->functionName, pcData->pcOffset,
                                        cubinData->cubin, cubinData->cubinSize);
@@ -376,7 +376,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
       auto &lineInfo = cubinData->lineInfo[key];
       for (size_t j = 0; j < pcData->stallReasonCount; ++j) {
         auto *stallReason = &pcData->stallReason[j];
-        if (!configureData->stallReasonIndexToMetricIndex.count(
+        if (!configureData->stallReasonIndexToMetricIndex.contains(
                 stallReason->pcSamplingStallReasonIndex))
           throw makeOutOfRange("Invalid stall reason index");
         for (const auto &[data, baseEntry] : dataToEntry) {
@@ -392,7 +392,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
                   [stallReason->pcSamplingStallReasonIndex]);
           auto samples = stallReason->samples;
           auto stalledSamples =
-              configureData->notIssuedStallReasonIndices.count(
+              configureData->notIssuedStallReasonIndices.contains(
                   stallReason->pcSamplingStallReasonIndex)
                   ? 0
                   : samples;
@@ -426,7 +426,7 @@ void CuptiPCSampling::stop(CUcontext context,
 void CuptiPCSampling::finalize(CUcontext context) {
   uint32_t contextId = 0;
   cupti::getContextId<true>(context, &contextId);
-  if (!contextInitialized.contain(contextId))
+  if (!contextInitialized.contains(contextId))
     return;
   contextIdToConfigureData.erase(contextId);
   contextInitialized.erase(contextId);

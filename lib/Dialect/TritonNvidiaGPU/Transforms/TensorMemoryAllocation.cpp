@@ -1,5 +1,6 @@
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -120,12 +121,16 @@ private:
 static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
                                       DenseMap<Operation *, int> &operationId) {
   auto liveOperations = liveness.resolveLiveness(value);
-  // Merge the alloc liverange with the liverange of any subview of the
-  // allocation.
+  // Views and selects keep their possible source allocations live.
   SmallVector<Operation *> users(value.getUsers());
+  // Select/view paths can converge on shared users.
+  DenseSet<Operation *> seen;
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!user->hasTrait<OpTrait::MemDescViewTrait>())
+    if (!user->hasTrait<OpTrait::MemDescViewTrait>() &&
+        !isa<arith::SelectOp>(user))
+      continue;
+    if (!seen.insert(user).second)
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),

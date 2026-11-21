@@ -58,10 +58,6 @@ def saturatef(arg0):
     ...
 
 
-def fma_rn(arg0, arg1, arg2):
-    ...
-
-
 def fma_rz(arg0, arg1, arg2):
     ...
 
@@ -751,10 +747,6 @@ def fmod(arg0, arg1):
 
 
 def remainder(arg0, arg1):
-    ...
-
-
-def fma(arg0, arg1, arg2):
     ...
 
 

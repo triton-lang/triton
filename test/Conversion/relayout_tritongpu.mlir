@@ -56,7 +56,8 @@ tt.func @async_tma_gather(%desc: !tt.tensordesc<1x128xbf16, #shared>, %y_offset:
                           %pred: i1) {
   %x_offsets = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
+  // CHECK: ttng.async_tma_gather {{.*}} {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>}
+  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
   tt.return
 }
 
@@ -65,6 +66,7 @@ tt.func @async_tma_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared>, %y_offset
                            %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
   %x_offsets = arith.constant dense<1> : tensor<32xi32>
   // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
+  // CHECK: ttng.async_tma_scatter {{.*}} {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>}
+  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
   tt.return
 }

@@ -1,5 +1,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
@@ -37,6 +40,26 @@ bool tt::isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
+llvm::SetVector<Operation *> tt::getTensorCallbackOps(ModuleOp mod) {
+  llvm::SetVector<Operation *> roots;
+  mod.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (!isa<MapElementwiseOp, ReduceOp, ScanOp>(op))
+      return WalkResult::advance();
+    roots.insert(op);
+    return WalkResult::skip();
+  });
+  SymbolTableCollection symbolTable;
+  for (unsigned i = 0; i < roots.size(); ++i) {
+    Operation *root = roots[i];
+    root->walk([&](CallOpInterface call) {
+      Operation *callee = call.resolveCallableInTable(&symbolTable);
+      assert(callee && "verified Gluon calls must resolve to a function");
+      roots.insert(callee);
+    });
+  }
+  return roots;
+}
+
 bool tt::isHostSideDescriptor(Value v) {
   auto arg = dyn_cast<BlockArgument>(v);
   if (!arg)
@@ -48,8 +71,7 @@ bool tt::isHostSideDescriptor(Value v) {
 }
 
 unsigned tt::getBitwidth(RankedTensorType ty) {
-  auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
+  return std::max(getIntOrFloatOrPtrBitWidth(ty.getElementType()), 8);
 }
 
 std::optional<ConstantIntRanges> tt::getBoundFromCmpOp(arith::CmpIOp cmpOp,

@@ -1,10 +1,14 @@
 #include "mlir/Transforms/Passes.h"
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
-#include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
@@ -22,14 +26,6 @@
 namespace py = nanobind;
 
 namespace {
-
-void init_triton_analysis(py::module_ &m) {
-  py::class_<mlir::ModuleAllocation>(m, "allocation")
-      .def(py::init<mlir::ModuleOp>());
-  py::class_<mlir::ModuleMembarAnalysis>(m, "membar")
-      .def(py::init<mlir::ModuleAllocation &>())
-      .def("run", &mlir::ModuleMembarAnalysis::run);
-}
 
 void init_triton_passes_common(py::module_ &m) {
   using namespace mlir;
@@ -89,6 +85,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_allocate_warp_groups",
                             createTritonGPUAllocateWarpGroups, bool);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory", createAllocateSharedMemory);
+  ADD_PASS_WRAPPER_0("add_optimize_thread_regions",
+                     createTritonGPUOptimizeThreadRegions);
   ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
                      createTritonGPUGlobalScratchAllocationPass);
   ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",
@@ -177,8 +175,6 @@ void init_gluon_passes(py::module_ &m) {
 } // namespace
 
 void init_triton_passes(py::module_ &m) {
-  auto analysis_m = m.def_submodule("analysis");
-  init_triton_analysis(analysis_m);
   auto common_m = m.def_submodule("common");
   init_triton_passes_common(common_m);
   auto convert_m = m.def_submodule("convert");

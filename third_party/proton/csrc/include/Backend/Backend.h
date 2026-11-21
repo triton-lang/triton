@@ -125,6 +125,9 @@ private:
 };
 
 const std::vector<BackendRegistration> &getBackendRegistrations();
+// Adds a backend not built into Proton, e.g. one shipped as a separate library.
+// Call before profiling starts; its device type is DeviceType::EXTERNAL.
+void registerBackend(BackendRegistration registration);
 const std::vector<ProfilerRegistration> getProfilerRegistrations();
 const std::vector<DeviceRegistration> getDeviceRegistrations();
 const std::vector<RuntimeRegistration> getRuntimeRegistrations();

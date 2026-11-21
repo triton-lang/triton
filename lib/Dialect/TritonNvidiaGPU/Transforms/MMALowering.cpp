@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -48,6 +49,9 @@ public:
     Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
                           op.getPredicate());
+    // Both CTAs must observe completion
+    if (op.getTwoCtas())
+      ClusterBarrierOp::create(rewriter, loc);
     InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
@@ -60,7 +64,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
   // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
   // N of the MMA operation (for LHS or RHS respectively).
   bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter, int rows,
-                        TensorMemoryScalesBlockRepOrder blockRepOrder) const {
+                        TensorMemoryScalesBlockRepOrder blockRepOrder,
+                        Value pred) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
@@ -76,7 +81,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
-    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc);
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc, pred);
     operand.set(tmemAlloc);
     return true;
   }
@@ -101,12 +106,12 @@ struct TCGen5MMAScaleSharedToTmemConversion
     bool anyChanged = false;
     if (isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM,
-                                    aScaleBlockRepOrder) ||
+                                    aScaleBlockRepOrder, op.getPred()) ||
                    anyChanged;
     }
     if (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN,
-                                    bScaleBlockRepOrder) ||
+                                    bScaleBlockRepOrder, op.getPred()) ||
                    anyChanged;
     }
     return LogicalResult::success(anyChanged);
@@ -132,6 +137,9 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
+      // Do not merge or reorder early A release.
+      if (commit.getEarlyARelease())
+        break;
       // If the mma predicate is true, or mma and commit ops use the same
       // predicate, it is safe to merge them. Otherwise, keep commit order by
       // not merging later commits across this one.

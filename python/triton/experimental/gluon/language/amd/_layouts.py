@@ -30,7 +30,6 @@ class AMDMFMALayout(DistributedLayout):
 
     Current supported versions:
 
-    - 1: gfx908
     - 2: gfx90a
     - 3: gfx942
     - 4: gfx950
@@ -81,7 +80,7 @@ class AMDMFMALayout(DistributedLayout):
         return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{self.element_bitwidth}_{stringify(self.tiles_per_warp)}_{cga_layout}_MFMA"
 
     def verify(self):
-        assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
+        assert self.version >= 2 and self.version <= 4, "version must be in the [2, 4] range"
         assert len(self.instr_shape) == 3, "instr_shape must follow the (M, N, K) format"
         valid_shapes = [[32, 32], [16, 16], [64, 4], [4, 64]]
         assert self.instr_shape[0:2] in valid_shapes, f"invalid intrinsic shape {self.instr_shape}"

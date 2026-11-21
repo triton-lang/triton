@@ -1,4 +1,7 @@
 #include "Utility.h"
+#include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
@@ -320,8 +323,8 @@ static bool getBackwardSliceToPartition(Value v,
       partitionScheme.opPartitionDims[ifOp.elseYield()] = currentDim;
       auto thenYieldArg = ifOp.thenYield().getOperand(resultIndex);
       auto elseYieldArg = ifOp.elseYield().getOperand(resultIndex);
-      if (getBackwardSliceToPartition(thenYieldArg, partitionScheme,
-                                      currentDim))
+      if (!getBackwardSliceToPartition(thenYieldArg, partitionScheme,
+                                       currentDim))
         return false;
       if (!getBackwardSliceToPartition(elseYieldArg, partitionScheme,
                                        currentDim))

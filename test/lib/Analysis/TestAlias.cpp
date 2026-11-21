@@ -1,3 +1,4 @@
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Alias.h"
@@ -57,8 +58,7 @@ struct TestAliasPass
       if (latticeElement) {
         auto &info = latticeElement->getValue();
         for (auto &alias : info.getAllocs()) {
-          auto opName =
-              getValueOperandName(alias.getDefiningOp()->getResult(0), state);
+          auto opName = getValueOperandName(alias, state);
           opNames.push_back(std::move(opName));
         }
       }

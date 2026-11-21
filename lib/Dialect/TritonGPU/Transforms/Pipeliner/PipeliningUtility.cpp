@@ -1,7 +1,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -177,6 +179,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
+  if (isa<ttng::ClusterBarrierOp>(op))
+    return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
   if (op->hasTrait<OpTrait::LocalLoadTrait>())
@@ -186,11 +190,29 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    rewriter.setInsertionPoint(op);
-    Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
-                            ifOp.getCondition(), pred);
-    ifOp.getConditionMutable().assign(cnd);
-    return op;
+    auto isPureRegion = [](Region &region) {
+      return region.empty() ||
+             llvm::all_of(region.front().without_terminator(),
+                          [](Operation &op) { return isPure(&op); });
+    };
+    bool elseIsPure = isPureRegion(ifOp.getElseRegion());
+    if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
+      rewriter.setInsertionPoint(op);
+      Value cnd = ifOp.getCondition();
+      if (elseIsPure) {
+        // We can execute the else branch whenever cond && pred is false
+        cnd = getPredMask(rewriter, cnd.getType(), cnd, pred);
+      } else {
+        // We can execute the then branch whenever cond || !pred is true
+        Value vTrue =
+            arith::ConstantIntOp::create(rewriter, op->getLoc(), 1, 1);
+        Value inactivePred =
+            arith::XOrIOp::create(rewriter, op->getLoc(), pred, vTrue);
+        cnd = arith::OrIOp::create(rewriter, op->getLoc(), cnd, inactivePred);
+      }
+      ifOp.getConditionMutable().assign(cnd);
+      return op;
+    }
   }
   if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
     rewriter.setInsertionPoint(op);
@@ -205,9 +227,28 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
-  op->emitOpError("pipeliner doesn't know how to predicate this op.");
-  llvm::report_fatal_error("Fatal pipeliner error");
-  return op;
+  // General fallback: wrap the op in an scf.if gated on the predicate.
+  rewriter.setInsertionPoint(op);
+  Location loc = op->getLoc();
+  SmallVector<Type> resultTypes(op->getResultTypes());
+  auto ifOp = scf::IfOp::create(rewriter, loc, resultTypes, pred);
+  Block *thenBlock = rewriter.createBlock(&ifOp.getThenRegion());
+  op->moveBefore(thenBlock, thenBlock->end());
+  rewriter.setInsertionPointToEnd(thenBlock);
+  scf::YieldOp::create(rewriter, loc, op->getResults());
+  Block *elseBlock = rewriter.createBlock(&ifOp.getElseRegion());
+  rewriter.setInsertionPointToEnd(elseBlock);
+  SmallVector<Value> poisonResults;
+  for (Type ty : resultTypes) {
+    poisonResults.push_back(ub::PoisonOp::create(rewriter, loc, ty));
+  }
+  scf::YieldOp::create(rewriter, loc, poisonResults);
+  for (auto [oldRes, newRes] : llvm::zip(op->getResults(), ifOp.getResults())) {
+    oldRes.replaceUsesWithIf(newRes, [&](OpOperand &use) {
+      return use.getOwner() != ifOp.thenYield();
+    });
+  }
+  return ifOp;
 }
 
 Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
@@ -289,7 +330,7 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-  return vecElems * registerTy.getElementTypeBitWidth() / 8;
+  return vecElems * getIntOrFloatOrPtrBitWidth(registerTy.getElementType()) / 8;
 }
 
 bool mlir::triton::canBeConvertedToAsyncLoad(
@@ -303,11 +344,9 @@ bool mlir::triton::canBeConvertedToAsyncLoad(
   unsigned width = 0;
   if (tensorTy) {
     auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
-    width = vec * ty.getIntOrFloatBitWidth();
+    width = vec * getIntOrFloatOrPtrBitWidth(ty);
   } else {
-    width = cast<tt::PointerType>(ptr.getType())
-                .getPointeeType()
-                .getIntOrFloatBitWidth();
+    width = tt::getPointeeBitWidth(ptr.getType());
   }
 
   // We do not pipeline all loads for the following reasons:
@@ -350,28 +389,34 @@ DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
 }
 
 Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
-                                      unsigned numBuffers) {
+                                      unsigned numBuffers, bool twoCTAs) {
+  unsigned numCTAs =
+      triton::gpu::lookupNumCTAs(rewriter.getBlock()->getParentOp());
   MLIRContext *ctx = rewriter.getContext();
-  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
-      rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
-  auto barrierCGALayout = ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
+  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto dim = tt::standardOutDimNames(ctx, /*rank=*/1)[0];
+  auto barrierCGALayout =
+      twoCTAs
+          ? ttg::CGAEncodingAttr::get(
+                ctx, tt::LinearLayout::zeros1D(2, kBlock, dim) *
+                         tt::LinearLayout::identity1D(numCTAs / 2, kBlock, dim))
+          : ttg::CGAEncodingAttr::get1DLayout(ctx, numCTAs);
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
+  int numBarrierSlots = twoCTAs ? numCTAs / 2 : numCTAs;
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers, numCTAs}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, numBarrierSlots}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
 }
 
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
-                                       int arriveCount) {
+                                       int arriveCount, bool twoCTAs) {
   ImplicitLocOpBuilder rewriter(op->getLoc(), op);
-
   Value barrierAlloc =
-      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
+      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);
@@ -410,7 +455,7 @@ bool mlir::triton::canPipelineTMALoad(Operation *op) {
   auto sharedEncoding = getSharedEncoding(op);
   int64_t stageSizeInBits =
       ttg::getAllocationElems(sharedEncoding, tensorTy.getShape()) *
-      tensorTy.getElementTypeBitWidth();
+      getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
   return stageSizeInBits % (ttng::TMA_ALIGN * 8) == 0;
 }
 
@@ -437,7 +482,7 @@ void mlir::triton::combineRedundantWaitOps(
         createWait) {
   llvm::MapVector<Operation *, Operation *> toDelete;
   for (Operation *waitOp : waitOps) {
-    if (toDelete.count(waitOp))
+    if (toDelete.contains(waitOp))
       continue;
     StringRef waitName = waitOp->getName().getStringRef();
     auto getNum = [](Operation *op) {
@@ -791,7 +836,8 @@ static Operation *getUseOfPipelinedOp(
     topLevelUsers.insert(users.begin(), users.end());
   }
   for (Operation *topLevelUser : topLevelUsers) {
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    assert(schedule.contains(topLevelUser) &&
+           "op user not found in the schedule");
     if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
       selectedUser = topLevelUser;
     }

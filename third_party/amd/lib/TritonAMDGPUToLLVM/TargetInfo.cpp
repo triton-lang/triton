@@ -1,15 +1,28 @@
 #include "TargetInfo.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::LLVM::AMD::DppCtrl;
 using mlir::triton::amdgpu::ISAFamily;
 namespace mlir::triton::AMD {
+
+void registerTargetInfo() {
+  TargetInfoBase::registerFactory("hip", [](ModuleOp moduleOp) {
+    return std::make_unique<TargetInfo>(getAMDArch(moduleOp));
+  });
+}
+
+void registerROCDLDialect(DialectRegistry &registry) {
+  registry.insert<ROCDL::ROCDLDialect>();
+}
 
 namespace {
 template <typename T>
@@ -119,36 +132,18 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 }
 } // namespace
 
-llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
-  return llvm::AMDGPU::getIsaVersion(getArch());
-}
-
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(getArch());
 }
 
-int TargetInfo::getWarpSize() const { return targetFeatures.getWarpSize(); }
-
-int TargetInfo::getSharedMemorySize() const {
-  return targetFeatures.getSharedMemorySize();
-}
-
 int TargetInfo::getSharedMemoryBanks() const {
   switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
   case ISAFamily::CDNA4:
     return 64;
   default:
     return 32;
   }
-}
-
-size_t TargetInfo::getSharedMemoryPartitionSize() const {
-  return targetFeatures.getSharedMemoryPartitionSize();
-}
-
-bool TargetInfo::supportMaximumMinimum() const {
-  return targetFeatures.supportMaximumMinimum();
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -172,7 +167,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
-  case ISAFamily::GFX1250: {
+  case ISAFamily::CDNA5: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     timer = LLVM::createLLVMIntrinsicCallOp(
                 rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
@@ -201,21 +196,121 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false,
+                          LLVM::AtomicOrdering::monotonic,
+                          getAtomicSyncScope(scope));
+    return SmallVector<Value>{};
+  });
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(targets);
 }
 
+void TargetInfo::releaseBeforeAtomicBarrier(Location loc,
+                                            RewriterBase &rewriter,
+                                            MemSyncScope scope) const {
+  // The workgroup fences around s_barrier do not wait for this wave's global
+  // writes: within a workgroup they are already ordered (the waves share one
+  // L1, or one L0 in CU mode). The release fence of a GPU or system scope
+  // atomic waits only for the issuing wave's writes, so writes other waves
+  // still have in flight could become visible after the atomic.
+  if (scope == MemSyncScope::CTA)
+    return;
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    // Only wait for this wave's writes to reach L2 (s_waitcnt vmcnt(0); the
+    // gfx9 encoding leaves expcnt and lgkmcnt at their maximum). The atomic's
+    // own release, issued after the barrier, then writes back L2 once for all
+    // waves; a release fence here would repeat that writeback in every wave.
+    ROCDL::SWaitcntOp::create(rewriter, loc, /*bitfield=*/0x0F70);
+    return;
+  case ISAFamily::CDNA5:
+  case ISAFamily::RDNA4:
+    // Same as above with gfx12 counters: wait for this wave's stores, and let
+    // the atomic's release write back L2 (global_wb) once for all waves.
+    ROCDL::WaitStorecntOp::create(rewriter, loc, /*count=*/0);
+    return;
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m: {
+    // gfx11 has no store-counter wait intrinsic. Its releases never write
+    // back L2, so an agent-scope release lowers to just the vmcnt/vscnt waits
+    // at every scope. Agent scope also keeps this fence distinct from the
+    // workgroup fences around the barrier: InstCombine merges adjacent fences
+    // of equal scope and ordering regardless of their MMRA tags, which would
+    // drop this one.
+    auto fence = LLVM::FenceOp::create(
+        rewriter, loc, LLVM::AtomicOrdering::release, /*syncscope=*/"agent");
+    Attribute globalMMRA =
+        rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "global");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), globalMMRA);
+    return;
+  }
+  default: {
+    auto fence =
+        LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                              getAtomicSyncScope(scope));
+    Attribute globalMMRA =
+        rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "global");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), globalMMRA);
+    return;
+  }
+  }
+}
+
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
+  // Always insert a workgroup barrier before each cluster barrier. In the case
+  // when there are multiple cluster barriers, a faster warp can pass more
+  // than one cluster signal, while the slower warps have not reached the first
+  // cluster barrier, which leads to a hang. The workgroup barrier ensures
+  // warps stay in sync across cluster barriers.
+  barrier(loc, rewriter, triton::gpu::AddrSpace::None);
+
   triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
   triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier", {},
-                                  {});
+  Attribute localMMRA =
+      rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "local");
+  auto emitFence = [&](LLVM::AtomicOrdering ordering) {
+    auto fence = LLVM::FenceOp::create(rewriter, loc, ordering,
+                                       /*syncscope=*/"wavefront");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), localMMRA);
+  };
+
+  emitFence(LLVM::AtomicOrdering::release);
+  ROCDL::WaveBarrierOp::create(rewriter, loc);
+  emitFence(LLVM::AtomicOrdering::acquire);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -223,6 +318,12 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (ctaId) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
+  }
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(val.getType()))) {
+    Type storeTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(val.getType()))
+      storeTy = vecTy.clone(i64_ty);
+    val = TritonLLVMOpBuilder(loc, rewriter).ptrtoint(storeTy, val);
   }
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
@@ -242,6 +343,14 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(elemTy))) {
+    Type loadTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy))
+      loadTy = vecTy.clone(i64_ty);
+    Value result =
+        loadDShared(rewriter, loc, ptr, ctaId, loadTy, pred, localLoadOp);
+    return TritonLLVMOpBuilder(loc, rewriter).inttoptr(elemTy, result);
+  }
   Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                             rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
@@ -256,9 +365,28 @@ Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
 }
 
-Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
-                            int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
+std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
+                                              Location loc, Value val,
+                                              int delta) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value laneId = getLaneId(rewriter, loc);
+  Value offset = b.i32_val(delta);
+  Value sourceInBounds = b.icmp_sge(laneId, offset);
+  Value index = b.select(sourceInBounds, b.sub(laneId, offset), laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
+}
+
+std::pair<Value, Value> TargetInfo::shuffleDown(RewriterBase &rewriter,
+                                                Location loc, Value val,
+                                                int delta) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value laneId = getLaneId(rewriter, loc);
+  auto mod = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value source = b.add(laneId, b.i32_val(delta));
+  Value sourceInBounds = b.icmp_ult(source, b.i32_val(warpSize));
+  Value index = b.select(sourceInBounds, source, laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
@@ -317,7 +445,8 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   Value toVal = val;
 
   if (originalBits < fromBits) {
-    toVal = b.trunc(int_ty(originalBits), toVal);
+    toVal =
+        b.trunc(int_ty(originalBits), toVal, LLVM::IntegerOverflowFlags::nsw);
   }
 
   if (!valType.isIntOrIndex()) {
@@ -409,7 +538,8 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned /*broadcastLaneIdMask*/) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
@@ -417,11 +547,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
 
   if (reduceLaneIdMask != (getWarpSize() - 1))
-    return false;
-  // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
-  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
-  auto v = getIsaVersion();
-  if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -631,12 +756,6 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   }
 }
 
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__ockl_mul_hi_u32" : "__ockl_mul_hi_u64";
-  return funcName;
-}
-
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int formatStrByteCount, ValueRange args,
                         ArrayRef<bool> isSigned) const {
@@ -678,21 +797,21 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       rewriter, loc, IntegerType::get(ctx, 64), msgBuffer.size_in_bytes());
   SmallVector<Value> callArgs = {msgValue, msgLen};
   b.call(assertFailFunc, callArgs);
+}
 
-  // Set block barrier before aborting kernel, give a chance for all
-  // the threads in a block to check/print the assert failure.
-  b.barrier(triton::gpu::AddrSpace::All);
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
   // Perform the trap to abort the kernel.
   // Use inline asm "s_trap 2" instead of LLVM::Trap because llvm.trap is
   // noreturn, inserting 'unreachable' which causes StructurizeCFG to defer
   // the block past convergence points, making ConSan lock releases
-  // unreachable and causing deadlocks. The noinline helper above prevents
-  // the printf code from being inlined and bloating the kernel.
+  // unreachable and causing deadlocks. The noinline helper in assertFail
+  // prevents the printf code from being inlined and bloating the kernel.
+  auto *ctx = rewriter.getContext();
   LLVM::InlineAsmOp::create(
       rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
       "s_trap 2", /*constraints=*/"",
       /*has_side_effects=*/true, /*is_align_stack=*/false,
-      LLVM::TailCallKind::None,
+      LLVM::TailCallKind::None, /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
       /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }
@@ -715,17 +834,9 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-bool TargetInfo::supportBitwidth16Elementwise() const {
-  return targetFeatures.supportBitwidth16Elementwise();
-}
-
-bool TargetInfo::supportBitwidth32Elementwise() const {
-  return targetFeatures.supportBitwidth32Elementwise();
-}
-
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   // AMD has native ternary max/min instructions: v_max3/v_min3 on all GFX9+,
-  // and v_maximum3/v_minimum3 additionally on GFX950 and GFX1250.
+  // and v_maximum3/v_minimum3 additionally on GFX950 and CDNA5.
   // Use a ternary reduction tree so these map 1:1 to hardware.
   if (isa<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
           arith::MinNumFOp>(combinerOp))
@@ -733,97 +844,18 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   return 2;
 }
 
-bool TargetInfo::supportsDirectToLdsScatter() const {
-  return targetFeatures.supportsDirectToLdsScatter();
-}
-
-bool TargetInfo::requiresAliasInfoForAsyncOps() const {
-  return targetFeatures.requiresAliasInfoForAsyncOps();
-}
-
-bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsMultiCTALaunch() const {
-  return targetFeatures.supportsMultiCTALaunch();
-}
-
-unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
-  return targetFeatures.getMaxMulticastMaskPopcount();
-}
-
-bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
-
-bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
-  return targetFeatures.supportsClusterLoadBitWidth(biwWidth);
-}
-
-bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsBufferLoadToLocal() const {
-  return targetFeatures.supportsBufferLoadToLocal();
-}
-
-bool TargetInfo::useAsyncMarks() const {
-  return targetFeatures.useAsyncMarks();
-}
-
-bool TargetInfo::supportsBufferAtomicRMW() const {
-  return targetFeatures.supportsBufferAtomicRMW();
-}
-
-bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
-  return targetFeatures.supportsBufferAtomicFadd(elementType);
-}
-
-int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
-  return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
-}
-
-bool TargetInfo::supportsWaveId() const {
-  return targetFeatures.supportsWaveId();
-}
-
-bool TargetInfo::supportsPermlaneSwap() const {
-  return targetFeatures.supportsPermlaneSwap();
-}
-
-bool TargetInfo::supportsCvtPkScalePk8() const {
-  return targetFeatures.supportsCvtPkScalePk8();
-}
-
-bool TargetInfo::supportsHwScaledUpcast() const {
-  return targetFeatures.supportsHwScaledUpcast();
-}
-
-void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                       Operation *llLoadOp) const {
-  if (requiresAliasInfoForAsyncOps())
-    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
-}
-
-bool TargetInfo::supportDppBroadcast() const {
-  return targetFeatures.supportDppBroadcast();
-}
-
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 20}}, /*store tile*/ {}};
     break;
   case ISAFamily::CDNA4:
-  case ISAFamily::GFX1250:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 12, 20}}, /*store tile*/ {}};
     break;
   default:
     break;

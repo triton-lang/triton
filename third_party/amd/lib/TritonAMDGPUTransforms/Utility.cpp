@@ -3,6 +3,7 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
@@ -21,8 +22,8 @@ int deduceMinCountInBlock(Block &block,
 
 // Returns the minimum found when accumulating countFunc(op) between begin and
 // end (inclusive)
-int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
-                            const std::function<int(Operation *)> &countFunc) {
+int deduceMinCountBetweenOps(Operation *beginOp, Operation *endOp,
+                             const std::function<int(Operation *)> &countFunc) {
   assert(beginOp && endOp);
   assert(beginOp == endOp || beginOp->isBeforeInBlock(endOp));
   int count = 0;
@@ -60,7 +61,7 @@ int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc) {
   if (block.empty())
     return 0;
-  return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
+  return deduceMinCountBetweenOps(&block.front(), &block.back(), countFunc);
 }
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
@@ -69,8 +70,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
-                                       consumerOp, countFunc);
+    pathSum += deduceMinCountBetweenOps(&consumerOp->getBlock()->front(),
+                                        consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -78,7 +79,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // ops between producer and consumer
   if (Operation *defOp = defValue.getDefiningOp()) {
     pathSum +=
-        deduceMinCountBetweeOps(defOp->getNextNode(), consumerOp, countFunc);
+        deduceMinCountBetweenOps(defOp->getNextNode(), consumerOp, countFunc);
     foundMin = std::min(foundMin, pathSum);
     return foundMin;
   }
@@ -94,7 +95,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
     }
 
     Operation *firstOpInLoop = &*forOp.getBody()->begin();
-    pathSum += deduceMinCountBetweeOps(firstOpInLoop, consumerOp, countFunc);
+    pathSum += deduceMinCountBetweenOps(firstOpInLoop, consumerOp, countFunc);
 
     // Break recursion early if we exceed previous min
     if (pathSum >= foundMin)
@@ -238,7 +239,9 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     padding = elemsPer8Bytes;
   }
 
-  unsigned contigLanes = contigDim / vecSize;
+  // Clamped to [1, warpSize]: a row wider than a warp still counts as one row
+  // per warp below, and a row narrower than a vector cannot make it zero.
+  unsigned contigLanes = std::clamp(contigDim / vecSize, 1u, warpSize);
   unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {
@@ -357,7 +360,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 
 // LDS padding strategy for TDM (descriptor) loads.
 //
-// Currently only invoked for gfx1250 TDM loads (via
+// Currently only invoked for CDNA5 TDM loads (via
 // getSharedEncIfAllUsersAreDotEncPadded in LowerLoops.cpp when useTDM is
 // true).
 //
@@ -414,7 +417,7 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   bool loadTransposed = (order[0] != (1 - opIdx));
 
   // Fallback: assume padding to match widest load width
-  unsigned typeWidthInBit = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned typeWidthInBit = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned padAmount = 128 / typeWidthInBit;
   if (loadTransposed) {
     // Transposed path: pad by twice the elements-per-lane of the transposed
@@ -440,7 +443,7 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
     //   MFMA 32x32x2 f32 (kWidth=2): pad=2 → conflict-free
     //
     // For sub-dword elements (fp16/fp8): keep pad = 128/elemBits (4 dwords).
-    // On architectures with dual-address LDS loads (e.g. gfx1250
+    // On architectures with dual-address LDS loads (e.g. CDNA5
     // ds_load_2addr_b64 for fp8), two addresses are served simultaneously,
     // requiring the full 4-dword stride separation to avoid cross-address
     // bank conflicts.
@@ -521,7 +524,7 @@ composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
                                                 targetFeatures.getWarpSize());
   }
 
-  if (targetFeatures.isGFX1250()) {
+  if (targetFeatures.isCDNA5()) {
     if (!srcTy.getElementType().isIntOrFloat())
       return {};
     return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,
@@ -538,4 +541,122 @@ Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
       /*set_bounds=*/ValueRange{}, pred);
   updateOp.setClampBounds(true);
   return updateOp.getResult();
+}
+
+int bankConflictsMemDescPadded(const tt::LinearLayout &reg,
+                               ttg::PaddedSharedEncodingAttr padded,
+                               int32_t bitwidth, int32_t numBanks,
+                               ttg::LocalMemOpTile laneTile) {
+  auto *ctx = padded.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kOffset = StringAttr::get(ctx, "offset");
+
+  auto cvt = reg.invertAndCompose(padded.getLinearComponent());
+  auto [elemsPerVec, perm] =
+      tt::largestVectorisation(ctx, cvt, bitwidth, padded.getMinInterval());
+  constexpr int maxVecBitwidth = 128;
+  elemsPerVec = std::min(elemsPerVec, maxVecBitwidth / bitwidth);
+  auto dwordsPerVec = std::max(1, elemsPerVec * bitwidth / 32);
+
+  // Find the offsets read by the lanes that are served together with lane 0
+  // in one cycle. For example, for ds_read_b128 on CDNA4 these are lanes 1, 2,
+  // 12 and 20 and their XOR combinations.
+  SmallVector<int32_t> laneOffsets;
+  for (int i = 0; i < cvt.getInDimSizeLog2(kLane); i++)
+    laneOffsets.push_back(cvt.getBasis(kLane, i, kOffset));
+  auto phase =
+      ttg::getLaneTile(laneTile, laneOffsets, elemsPerVec, bitwidth, numBanks);
+
+  // ys is the set containing all XOR combinations from phase. It means all
+  // the offsets read by the first group. Offsets in other groups can be
+  // obtained by their first offset t with t XOR ys.
+  SmallVector<uint32_t> ys = {0};
+  // basis is a different form of phase where each element has distinct
+  // leading bits. The same ys can also be constructed from basis using all
+  // XOR combinations.
+  SmallVector<uint32_t> basis;
+  // dedup(x) XORs x with the elements of basis, from the largest down,
+  // whenever that makes x smaller. It returns 0 when x is in ys.
+  auto dedup = [&](uint32_t x) {
+    for (uint32_t b : llvm::reverse(basis))
+      x = std::min(x, x ^ b);
+    return x;
+  };
+  // For example, if phase is (2, 3), then
+  // - ys is (0, 1, 2, 3)
+  // - basis is (1, 2) - 3 is reduced to 3 ^ 2 = 1
+  // phase and basis build the same ys, but basis has distinct leading bits.
+  // We need to use this property of basis to make dedup correct. With basis,
+  // dedup(1) = 1 ^ 1 = 0, so 1 is found in ys. With phase, each single XOR
+  // makes 1 larger (1 ^ 3 = 2, 1 ^ 2 = 3), so dedup(1) stays 1, although
+  // 1 = 2 ^ 3 is in ys.
+  for (uint32_t y : phase) {
+    for (int i = 0, n = ys.size(); i < n; i++)
+      ys.push_back(ys[i] ^ y);
+
+    uint32_t b = dedup(y);
+    if (b != 0) {
+      basis.push_back(b);
+      llvm::sort(basis);
+    }
+  }
+
+  // As mentioned above, a group reads the offsets t XOR ys, and t can be
+  // obtained from cvt. Not every bit of t changes the bank conflicts. Take a
+  // bit position i that is 0 in every element of ys. Setting bit i in t adds
+  // 2^i to every offset of the group, so after padding every offset moves by
+  // the same applyPadding(2^i). If that is a whole number of dwords, every
+  // lane moves by the same number of banks, and the conflicts do not change.
+  // keyBits holds the other bit positions: those that are 1 in some element of
+  // ys and those whose applyPadding(2^i) is not a whole number of dwords.
+  auto shifts =
+      getPaddedSharedShifts(padded, bitwidth, /*offsetInBytes=*/false);
+  uint32_t groupBits = 0;
+  for (uint32_t y : ys)
+    groupBits |= y;
+  uint32_t keyBits = groupBits;
+  for (int k = 0; k < cvt.getOutDimSizeLog2(kOffset); k++)
+    if (applyPadding(1u << k, shifts) * bitwidth % 32 != 0)
+      keyBits |= 1u << k;
+
+  // Now collect the groups to check. Only t & keyBits matters, so each group
+  // is represented by a value of t & keyBits. t is a XOR combination of the
+  // bases of cvt, except the register bases inside the vector, which are
+  // elements of one access. Define ts as the XOR combinations of these bases
+  // masked by keyBits. Build ts one base at a time. If dedup(base & keyBits)
+  // is 0, the base only moves t to a group that ts already has, so skip it.
+  // Otherwise it reaches new groups, so add it to basis and double ts with it.
+  SmallVector<uint32_t> ts = {0};
+  for (auto dim : cvt.getInDimNames()) {
+    int first = dim == kReg ? llvm::Log2_32(elemsPerVec) : 0;
+    for (int i = first; i < cvt.getInDimSizeLog2(dim); i++) {
+      uint32_t g = dedup(cvt.getBasis(dim, i, kOffset) & keyBits);
+      if (!g)
+        continue;
+      basis.push_back(g);
+      llvm::sort(basis);
+      for (int j = 0, n = ts.size(); j < n; j++)
+        ts.push_back(ts[j] ^ g);
+    }
+  }
+
+  // Finally, check each group. Every value in ts is a start offset t of one
+  // group, which reads the offsets t XOR ys. Pad these offsets and collect
+  // the dwords they cover, dwordsPerVec per lane. Lanes that read the same
+  // dword share one access, so count the different dwords in each bank.
+  int maxWays = 1;
+  for (uint32_t t : ts) {
+    llvm::DenseSet<int64_t> dwords;
+    for (uint32_t y : ys) {
+      int64_t dword = applyPadding(t ^ y, shifts) * bitwidth / 32;
+      for (int d = 0; d < dwordsPerVec; d++)
+        dwords.insert(dword + d);
+    }
+    SmallVector<int> ways(numBanks, 0);
+    for (int64_t dword : dwords)
+      maxWays = std::max(maxWays, ++ways[dword % numBanks]);
+  }
+
+  return maxWays - 1;
 }

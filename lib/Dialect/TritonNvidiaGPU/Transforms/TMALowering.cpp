@@ -49,13 +49,17 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
-                    tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+                    getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) / 8;
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
                                               sizeInBytes, pred);
   createLoad(desc, barrierAlloc, alloc, pred);
   Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
   WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase);
+  // Conservatively synchronize CTAs for two-CTA MMA, since these completion
+  // barriers are per-CTA.
+  if (getModuleTwoCTAs(op))
+    ClusterBarrierOp::create(rewriter, loc);
   InvalBarrierOp::create(rewriter, loc, barrierAlloc);
   replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
   op->erase();
@@ -71,7 +75,7 @@ public:
                           Value pred) {
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
           rewriter, op.getLoc(), desc, op.getIndices(), barrierAlloc, alloc,
-          pred);
+          pred, /*multicast=*/false, op.getCachePolicyAttr());
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
@@ -111,10 +115,10 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
       tensorType.getShape(), tensorType.getElementType(), encoding,
       sharedMemorySpace, /*mutableMemory=*/false);
   Value alloc = gpu::LocalAllocOp::create(rewriter, loc, memDescType, src);
-  triton::nvidia_gpu::FenceAsyncSharedOp::create(rewriter, loc, false);
   createStore(desc, alloc);
   triton::nvidia_gpu::TMAStoreWaitOp::create(rewriter, loc, 0,
-                                             /*read_only=*/false);
+                                             /*read_only=*/false,
+                                             ValueRange{alloc});
   rewriter.eraseOp(op);
 }
 

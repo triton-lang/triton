@@ -11,6 +11,23 @@ if TYPE_CHECKING:
 TRITON_MAX_TENSOR_NUMEL = 1048576
 
 
+def fp6_logical_shape(shape):
+    if shape[-1] % 48:
+        raise ValueError("packed FP6 rows must contain a multiple of 48 bytes")
+    return [*shape[:-1], shape[-1] // 3 * 4]
+
+
+def validate_fp6_box(width, inner, outer_strides, padding, *, host=False):
+    widths = (64, 128) if host else (128, )
+    if width not in widths or padding != "zero":
+        raise ValueError("FP6 requires zero padding and a 128-value box or a 64-value host store box")
+    if (host or isinstance(inner, int)) and inner % width:
+        raise ValueError("FP6 inner extent must be a multiple of the box width")
+    alignment = width // 4
+    if any((host or isinstance(s, int)) and s % alignment for s in outer_strides):
+        raise ValueError(f"FP6 outer byte strides must be multiples of {alignment}")
+
+
 def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:
     return reduce(lambda a, idx: a[idx], path, iterable)  # type: ignore[index]
 
@@ -90,6 +107,10 @@ type_canonicalisation_dict = {
     "float8_e5m2": "fp8e5",
     "float8e5b16": "fp8e5b16",
     "float8_e5m2fnuz": "fp8e5b16",
+    "float4e2m1x2": "fp4e2m1x2",
+    "float4_e2m1fn_x2": "fp4e2m1x2",
+    "float8e8m0fnu": "fp8e8m0fnu",
+    "float8_e8m0fnu": "fp8e8m0fnu",
     "half": "fp16",
     "float16": "fp16",
     "bfloat16": "bf16",
@@ -133,6 +154,8 @@ BITWIDTH_DICT: Dict[str, int] = {
        for n in (16, 32, 64)},
     **{f"fp8{suffix}": 8
        for suffix in ("e4nv", "e4b15", "e4b8", "e5", "e5b16")},
+    "fp4e2m1x2": 8,
+    "fp8e8m0fnu": 8,
     "bf16": 16,
     "void": 0,
 }

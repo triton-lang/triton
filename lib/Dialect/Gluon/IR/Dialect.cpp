@@ -1,5 +1,6 @@
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -53,6 +54,12 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
   }
 
   LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const override {
+    return success(srcType.getEncoding() == dstType.getEncoding());
+  }
+
+  LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute resultEncoding,
                      std::optional<Location> location) const override {
@@ -65,10 +72,6 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
     return success();
   }
 
-  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
-    return success();
-  }
-
   LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
                                       Attribute expected, Attribute got,
                                       std::optional<Location> loc,
@@ -78,7 +81,7 @@ struct GluonInferLayoutInterface : public triton::DialectInferLayoutInterface {
 
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                         ArrayRef<int64_t> dstShape, Attribute &dstEnc, bool,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
     return inferAutoEncoding(srcEnc, dstEnc);
   }

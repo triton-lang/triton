@@ -2,6 +2,7 @@ import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
+from pathlib import Path
 from types import SimpleNamespace
 
 import cloudpickle
@@ -21,7 +22,13 @@ from triton._compile_warmup import (
 from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, SharedWarmupCoordinator, _jit_dumps
 from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
-from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -133,6 +140,31 @@ def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypat
     assert [spec.env[variable] for spec in specs] == expected
 
 
+def test_runner_assigns_unique_junit_reports(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TRITON_TEST_JUNIT_DIR", raising=False)
+    assert not any(argument.startswith("--junitxml=") for argument in _test_runner._pytest("test.py"))
+
+    commands = []
+    monkeypatch.setattr(
+        _test_runner, "_unit", lambda args: commands.extend(
+            (_test_runner._pytest("first.py"), _test_runner._pytest("second.py"))) or 0)
+    assert _test_runner._suite(SimpleNamespace(name="unit", junit_dir="reports")) == 0
+
+    reports = [
+        Path(argument.removeprefix("--junitxml="))
+        for command in commands
+        for argument in command
+        if argument.startswith("--junitxml=")
+    ]
+    assert len(reports) == len(set(reports)) == 2
+    assert all(report.parent == (tmp_path / "reports").resolve() for report in reports)
+    assert reports[0].name.startswith("pytest-first-")
+    assert reports[1].name.startswith("pytest-second-")
+    assert all(report.name.endswith("-results.xml") for report in reports)
+    assert (tmp_path / "reports").is_dir()
+
+
 @pytest.mark.parametrize(("capability", "num_gpus", "kernel_workers"), [(8, 1, 6), (9, 1, 4), (10, 2, 6), (10, 4, 12)])
 def test_unit_runner_balances_requested_gpu_shards(monkeypatch, capability, num_gpus, kernel_workers):
     concurrent = []
@@ -193,7 +225,7 @@ def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(m
     assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
     assert len(commands) == num_gpus
     assert commands[0][0][commands[0][0].index("-n") + 1] == str(8 * num_gpus)
-    assert all(kwargs["timeout"] == 180 for _, kwargs in commands)
+    assert all(kwargs["timeout"] == 300 for _, kwargs in commands)
     assert all(kwargs["environment"]["TRITON_TEST_PROCESS_TIMEOUT"] == "90" for _, kwargs in commands)
     if num_gpus == 1:
         assert "not xdist_group" not in commands[0][0]
@@ -399,13 +431,25 @@ def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
 
 def test_is_lazy():
     from importlib import reload
-    reload(sys.modules["triton.runtime.driver"])
-    reload(sys.modules["triton.runtime"])
-    assert triton.runtime.driver._active is None
-    assert triton.runtime.driver._default is None
-    assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
-    assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
-    utils = triton.runtime.driver.active.utils  # noqa: F841
+    driver_module = sys.modules["triton.runtime.driver"]
+    original = driver_module.driver
+    try:
+        reload(driver_module)
+        reload(sys.modules["triton.runtime"])
+        assert triton.runtime.driver._active is None
+        assert triton.runtime.driver._default is None
+        assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
+        assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
+        utils = triton.runtime.driver.active.utils  # noqa: F841
+    finally:
+        # The reloads build a second DriverConfig. Modules that imported the
+        # singleton by value keep the first one, so leaving the second in place
+        # splits the process: patching one config is then invisible to code
+        # reading the other.
+        driver_module.driver = original
+        triton.runtime.driver = original
+
+    assert triton.runtime.driver is triton.compiler.compiler.driver
 
 
 def test_profile_scratch_stream_zero_uses_default_stream(monkeypatch):
@@ -483,20 +527,41 @@ def test_kernel_in_thread(device):
         future.result()
 
 
+def test_kernel_argument_layout_nested():
+    signature = ("constexpr", ("i64", ("*fp32", "constexpr", "i32"), ()), "u64")
+    assert get_kernel_argument_layout(signature) == [
+        ((1, 0), "i64"),
+        ((1, 1, 0), "*fp32"),
+        ((1, 1, 2), "i32"),
+        ((2, ), "u64"),
+    ]
+
+
+@pytest.mark.parametrize("tensordesc_abi,expected", [
+    (TensorDescABI.DECOMPOSED, ["*fp16", *["i64"] * 4, "i1", "i1", "i32", "i32", "i64", "i64"]),
+    (TensorDescABI.CUDA_TMA, ["nvTmaDesc", "i32", "i32", "i64", "i64"]),
+    (TensorDescABI.HIP_TDM, ["tensordesc", "i32", "i32", "i64", "i64"]),
+])
+def test_kernel_argument_layout_tensordesc(tensordesc_abi, expected):
+    signature = (("constexpr", "tensordesc<fp16[16,32]>", "i64"), "i32")
+    expected_layout = [((0, 1), ty) for ty in expected] + [((0, 2), "i64"), ((1, ), "i32")]
+    assert get_kernel_argument_layout(signature, tensordesc_abi) == expected_layout
+
+
 def test_expand_signature_with_aggregate_tensordesc():
     signature = (
         "i32",
         ("tensordesc<fp16[16,32]>", "i64"),
         "tensordesc_im2col<fp32[1,16],input_rank=4,'layout'>",
     )
-    expanded = expand_signature(signature, [], "nvTmaDesc")
+    expanded = expand_signature(signature, TensorDescABI.DECOMPOSED)
 
     assert expanded[0] == "i32"
     assert expanded[1] == ("*fp16", *["i64"] * 4, *["i1"] * 2, *["i32"] * 2, *["i64"] * 3)
     # input_rank=4 drives the number of shape/stride entries for im2col.
     assert expanded[2:] == ["*fp32", *["i64"] * 8, *["i1"] * 2, *["i32"] * 4, *["i64"] * 4]
 
-    expanded = expand_signature(signature, [{}, {}], "nvTmaDesc")
+    expanded = expand_signature(signature, TensorDescABI.CUDA_TMA)
     assert expanded[0] == "i32"
     assert expanded[1] == ("nvTmaDesc", *["i32"] * 2, *["i64"] * 3)
     assert expanded[2:] == ["nvTmaDesc", *["i32"] * 4, *["i64"] * 4]

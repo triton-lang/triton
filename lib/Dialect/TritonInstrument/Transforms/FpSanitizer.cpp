@@ -1,3 +1,5 @@
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
@@ -14,6 +16,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/bit.h"
 #include <cassert>
 #include <functional>
 
@@ -31,6 +34,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 Type getIntTypeLike(Type ty);
+Region *getScratchScopeRegion(Operation *anchor);
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
 
@@ -65,7 +69,9 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (getAMDArch(moduleOp))
+  // The decomposition emits NVIDIA MMA layouts.
+  auto target = moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+  if (target && target.getValue().split(':').first != "cuda")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }
@@ -135,6 +141,7 @@ enum class UnaryOpId : uint64_t {
   Floor,
   Ceil,
   PreciseSqrt,
+  Barrier,
 };
 
 constexpr uint64_t getUnaryOpId(UnaryOpId opId) {
@@ -162,9 +169,11 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
     sizePerThread[dim] =
         static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
   }
-  return ttg::BlockedEncodingAttr::get(
-      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  // Recompute lane and warp distribution after increasing vector width;
+  // retaining the scalar layout can duplicate a narrow row across many lanes.
+  return ttg::BlockedEncodingAttr::get(rewriter.getContext(), shape,
+                                       sizePerThread, order, numWarps,
+                                       threadsPerWarp, base.getCGALayout());
 }
 
 struct ScratchInfo {
@@ -179,6 +188,7 @@ struct MmaOperandSource {
   RankedTensorType tileType;
   int64_t rowStride;
   int64_t stride;
+  Type probabilityFormat{};
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -228,6 +238,45 @@ Operation *storeFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
   return createStoreScratchMemory(rewriter, loc, alloc, stored, storageTy);
+}
+
+// Return one forwarding step, preserving view operations for scratch emission.
+static Value getFpSanTmemSource(Value value) {
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    Operation *parent = arg.getOwner()->getParentOp();
+    if (auto partitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(parent))
+      return partitions.getExplicitCaptures()[arg.getArgNumber()];
+    if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+      if (arg.getArgNumber() != 0)
+        return loop.getInitArgs()[arg.getArgNumber() - 1];
+    }
+  }
+  if (auto view = value.getDefiningOp<ttng::TMEMSubSliceOp>())
+    return view.getSrc();
+  if (auto view = value.getDefiningOp<ttg::MemDescIndexOp>())
+    return view.getSrc();
+  if (auto view = value.getDefiningOp<ttg::MemDescReinterpretOp>())
+    return view.getSrc();
+  return {};
+}
+
+static bool hasTwoCTAMma(ModuleOp module) {
+  bool twoCTAs = false;
+  module.walk([&](ttng::MMAv5OpInterface mma) { twoCTAs |= mma.getTwoCtas(); });
+  return twoCTAs;
+}
+
+enum class FpSanMmaKind { Integer, Floating, Mixed };
+
+static FpSanMmaKind getFpSanMmaKind(ttng::TCGen5MMAOp mma) {
+  bool aIsFloat = isa<FloatType>(mma.getA().getType().getElementType());
+  bool bIsFloat = isa<FloatType>(mma.getB().getType().getElementType());
+  bool dIsFloat = isa<FloatType>(mma.getD().getType().getElementType());
+  if (aIsFloat && bIsFloat && dIsFloat)
+    return FpSanMmaKind::Floating;
+  if (!aIsFloat && !bIsFloat && !dIsFloat)
+    return FpSanMmaKind::Integer;
+  return FpSanMmaKind::Mixed;
 }
 
 class TmemScratchManager {
@@ -287,19 +336,9 @@ public:
 
   std::optional<ScratchInfo>
   getOrCreate(Value memdesc, PatternRewriter &rewriter, Region *scope) {
-    if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
-      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-              arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getExplicitCaptures()[arg.getArgNumber()];
-        return getOrCreate(capture, rewriter, scope);
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        unsigned argNum = arg.getArgNumber();
-        if (argNum == 0)
-          return std::nullopt;
-        Value init = forOp.getInitArgs()[argNum - 1];
-        return getOrCreate(init, rewriter, scope);
-      }
+    if (isa<BlockArgument>(memdesc)) {
+      if (Value source = getFpSanTmemSource(memdesc))
+        return getOrCreate(source, rewriter, scope);
       return std::nullopt;
     }
 
@@ -355,12 +394,16 @@ public:
       return info;
     }
 
+    // Build view pointers in the scope of their definitions, then remap the
+    // completed pointers to the consumer's scope.
+    Value source = getFpSanTmemSource(memdesc);
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      auto baseInfo = getOrCreate(subslice.getSrc(), rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(subslice));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (baseTy.getRank() != memTy.getRank() ||
           baseTy.getRank() != baseInfo->tensorType.getRank())
         return std::nullopt;
@@ -391,11 +434,12 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (baseTy.getRank() < 2)
         return std::nullopt;
 
@@ -421,17 +465,22 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
-          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
-        return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
+          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding())) {
+        Value ptr = remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
+        return ScratchInfo{ptr, baseInfo->tensorType, baseTy};
+      }
       if (baseInfo->scaleSourceType) {
         if (isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
           return std::nullopt;
+        baseInfo->ptr =
+            remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
         return baseInfo;
       }
 
@@ -681,13 +730,6 @@ Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
   return scalar;
 }
 
-uint64_t getLowBitsMask(unsigned bitWidth) {
-  assert(bitWidth > 0 && bitWidth <= 64);
-  if (bitWidth == 64)
-    return ~uint64_t{0};
-  return (uint64_t{1} << bitWidth) - 1;
-}
-
 uint64_t invOddU64(uint64_t a) {
   assert((a & 1) == 1);
   uint64_t x = 2 - a;
@@ -731,6 +773,24 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
   uint64_t opIdHash = murmur64Mixer(getUnaryOpId(opId));
   auto opIdVal = getIntConstantLike(rewriter, loc, inI.getType(),
                                     static_cast<int64_t>(opIdHash));
+  if (opId == UnaryOpId::Barrier) {
+    // Unlike the other unary tags, a barrier must not commute with payload
+    // truncation. Each xor-right-shift mixes high bits into low bits; odd
+    // multipliers and xor-right-shifts keep the full-width mapping bijective.
+    Value mixed = arith::XOrIOp::create(rewriter, loc, inI, opIdVal);
+    Value shift = getUIntConstantLike(rewriter, loc, inI.getType(),
+                                      getIntBitwidth(inI.getType()) / 2);
+    for (uint64_t multiplier : {0xff51afd7ed558ccdULL, 0xc4ceb9fe1a85ec53ULL}) {
+      Value high = arith::ShRUIOp::create(rewriter, loc, mixed, shift);
+      mixed = arith::XOrIOp::create(rewriter, loc, mixed, high);
+      mixed = arith::MulIOp::create(
+          rewriter, loc, mixed,
+          getUIntConstantLike(rewriter, loc, inI.getType(), multiplier));
+    }
+    Value high = arith::ShRUIOp::create(rewriter, loc, mixed, shift);
+    mixed = arith::XOrIOp::create(rewriter, loc, mixed, high);
+    return unembedToFloat(rewriter, loc, mixed, input.getType());
+  }
   auto multiplier =
       getU32ConstantLike(rewriter, loc, inI.getType(), kUnaryTagMultiplier);
   auto mixedIn = arith::MulIOp::create(rewriter, loc, inI, multiplier);
@@ -740,22 +800,25 @@ Value fpsanUnaryTagged(PatternRewriter &rewriter, Location loc, Value input,
 }
 
 Value fpsanIntInv(PatternRewriter &rewriter, Location loc, Value u) {
-  auto one = getU32ConstantLike(rewriter, loc, u.getType(), 1u);
-  auto two = getU32ConstantLike(rewriter, loc, u.getType(), 2u);
-  auto evenMask = getIntConstantLike(rewriter, loc, u.getType(), -2);
+  // For u = 2^k * t with t odd, return 2^k * inv(t). Setting the high bit
+  // before counting trailing zeros keeps both shifts in range for u = 0.
+  unsigned width = getIntBitwidth(u.getType());
+  Value highBit = getUIntConstantLike(rewriter, loc, u.getType(),
+                                      uint64_t{1} << (width - 1));
+  Value nonzero = arith::OrIOp::create(rewriter, loc, u, highBit);
+  Value k = math::CountTrailingZerosOp::create(rewriter, loc, nonzero);
+  Value t = arith::ShRUIOp::create(rewriter, loc, u, k);
 
-  Value a = arith::OrIOp::create(rewriter, loc, u, one);
-  Value x = arith::SubIOp::create(rewriter, loc, two, a);
-  for (unsigned correctBits = 2; correctBits < getIntBitwidth(u.getType());
-       correctBits *= 2) {
-    Value ax = arith::MulIOp::create(rewriter, loc, a, x);
-    Value factor = arith::SubIOp::create(rewriter, loc, two, ax);
+  // Every odd t is its own inverse modulo 8. Starting Newton iteration at t
+  // also keeps x = 0 throughout when u = 0.
+  Value two = getUIntConstantLike(rewriter, loc, u.getType(), 2);
+  Value x = t;
+  for (unsigned correctBits = 3; correctBits < width; correctBits *= 2) {
+    Value tx = arith::MulIOp::create(rewriter, loc, t, x);
+    Value factor = arith::SubIOp::create(rewriter, loc, two, tx);
     x = arith::MulIOp::create(rewriter, loc, x, factor);
   }
-
-  Value evenPart = arith::AndIOp::create(rewriter, loc, x, evenMask);
-  Value originalParity = arith::AndIOp::create(rewriter, loc, u, one);
-  return arith::OrIOp::create(rewriter, loc, evenPart, originalParity);
+  return arith::ShLIOp::create(rewriter, loc, x, k);
 }
 
 Value fpsanFDiv(PatternRewriter &rewriter, Location loc, Value num, Value den) {
@@ -785,52 +848,69 @@ Value fpsanSRem(PatternRewriter &rewriter, Location loc, Value num, Value den) {
   return unembedToFloat(rewriter, loc, resI, num.getType());
 }
 
-// A fixed-base modular exponential in payload space.  For payload width N, set
-// k = ceil(N/4) and c = 1 + 2^k.  Then c^x mod 2^N has the exact closed form
-// below because all terms from the fourth binomial term onward vanish. This
-// preserves exp2(a + b) = exp2(a) * exp2(b) without a per-element
-// exponentiation loop. If N <= 8, then this has the maximal possible period
-// of 2^(N-2); if N > 8, then this has a large but non-maximal period of
-// 2^(N-k) = 2^floor(3N/4) instead.
+// Interpolate base^(u/stride) at multiples u of stride, where base = 3^stride.
+// The kth binomial term is delta^k / k! times u(u-stride)...(u-(k-1)*stride)
+// for delta = (base-1)/stride. Generate its coefficients on the host.
+SmallVector<uint64_t, 8> getExp2Coefficients(uint64_t base, unsigned stride,
+                                             unsigned degree) {
+  // delta is divisible by 4, enough to cancel the powers of two in each
+  // divisor k <= 7 before taking the modular inverse of its odd part.
+  uint64_t delta = (base - 1) / stride;
+  assert(degree <= 7 && delta % 4 == 0);
+  SmallVector<uint64_t, 8> coeffs{1};
+  for (unsigned k = 1; k <= degree; ++k) {
+    int twos = llvm::countr_zero(k);
+    coeffs.push_back(coeffs.back() * (delta >> twos) * invOddU64(k >> twos));
+  }
+  // Expand the Newton basis into powers of u for Horner evaluation.
+  for (unsigned k = degree; k > 0; --k) {
+    uint64_t node = (k - 1) * stride;
+    for (unsigned i = k; i <= degree; ++i)
+      coeffs[i - 1] -= node * coeffs[i];
+  }
+  return coeffs;
+}
+
+// Use 3^x modulo 2^w at every width. Its period is 2^(w-2), maximal
+// for an odd base, and truncating the payload commutes with exponentiation.
 Value fpsanExp2FromInt(PatternRewriter &rewriter, Location loc, Value xI,
                        Type floatTy) {
   unsigned bitWidth = getIntBitwidth(xI.getType());
-  unsigned shift = (bitWidth + 3) / 4;
-  auto one = getIntConstantLike(rewriter, loc, xI.getType(), 1);
-  auto shiftBase = getIntConstantLike(rewriter, loc, xI.getType(), shift);
-  auto shiftBase2 = getIntConstantLike(rewriter, loc, xI.getType(), 2 * shift);
+  assert(bitWidth >= 4 && bitWidth <= 64);
+  auto constant = [&](uint64_t value) {
+    return getUIntConstantLike(rewriter, loc, xI.getType(), value);
+  };
 
-  Value xMinusOne = arith::SubIOp::create(rewriter, loc, xI, one);
-  Value choose2Twice = arith::MulIOp::create(rewriter, loc, xI, xMinusOne);
-  Value choose2 = arith::ShRUIOp::create(rewriter, loc, choose2Twice, one);
+  // Split off the low s bits r. For stride = 2^s, base = 3^stride is
+  // 1 mod 2^(s+2) since each squaring after 3^2 = 9 adds one trailing
+  // zero to base-1. The kth binomial term vanishes when k*(s+2) >= w.
+  // Taking s = 2 for FP32 and s = 6 for FP64 limits the degree to seven.
+  unsigned lowBits = bitWidth > 32 ? 6 : 2;
+  unsigned stride = 1u << lowBits;
+  SmallVector<uint64_t, 7> powers{3};
+  for (unsigned i = 0; i < lowBits; ++i)
+    powers.push_back(powers.back() * powers.back());
 
-  Value term1 = arith::ShLIOp::create(rewriter, loc, xI, shiftBase);
-  Value term2 = arith::ShLIOp::create(rewriter, loc, choose2, shiftBase2);
-  Value result = arith::AddIOp::create(rewriter, loc, one, term1);
-  result = arith::AddIOp::create(rewriter, loc, result, term2);
+  // u = x-r modulo the period. Evaluate directly in u to avoid shifting it.
+  uint64_t period = uint64_t{1} << (bitWidth - 2);
+  Value u = arith::AndIOp::create(rewriter, loc, xI, constant(period - stride));
+  unsigned degree = (bitWidth - 1) / (lowBits + 2);
+  auto coeffs = getExp2Coefficients(powers.back(), stride, degree);
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, u);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
 
-  unsigned choose3Bits = bitWidth - 3 * shift;
-  uint64_t choose3InputMask = (uint64_t{1} << (choose3Bits + 1)) - 1;
-  auto choose3Mask =
-      getIntConstantLike(rewriter, loc, xI.getType(), choose3InputMask);
-  auto two = getIntConstantLike(rewriter, loc, xI.getType(), 2);
-  auto six = getIntConstantLike(rewriter, loc, xI.getType(), 6);
-  auto shiftBase3 = getIntConstantLike(rewriter, loc, xI.getType(), 3 * shift);
-
-  // Only the low choose3Bits bits of C(x, 3) survive the final shift. C(x, 3)
-  // modulo 2^choose3Bits has period 2^(choose3Bits + 1), so reducing x first
-  // keeps the products small.
-  Value xLow = arith::AndIOp::create(rewriter, loc, xI, choose3Mask);
-  Value xLowMinusOne = arith::SubIOp::create(rewriter, loc, xLow, one);
-  Value xLowMinusTwo = arith::SubIOp::create(rewriter, loc, xLow, two);
-  Value choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, xLow, xLowMinusOne);
-  choose3Numerator =
-      arith::MulIOp::create(rewriter, loc, choose3Numerator, xLowMinusTwo);
-  Value choose3 = arith::DivUIOp::create(rewriter, loc, choose3Numerator, six);
-
-  Value term3 = arith::ShLIOp::create(rewriter, loc, choose3, shiftBase3);
-  result = arith::AddIOp::create(rewriter, loc, result, term3);
+  // Multiply by 3^r, one set bit at a time.
+  for (unsigned i = 0; i < lowBits; ++i) {
+    Value bit = arith::AndIOp::create(rewriter, loc, xI, constant(1u << i));
+    Value set = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ne,
+                                      bit, constant(0));
+    Value next =
+        arith::MulIOp::create(rewriter, loc, result, constant(powers[i]));
+    result = arith::SelectOp::create(rewriter, loc, set, next, result);
+  }
   return unembedToFloat(rewriter, loc, result, floatTy);
 }
 
@@ -854,83 +934,69 @@ Value fpsanExp(PatternRewriter &rewriter, Location loc, Value input) {
   return fpsanExp2FromInt(rewriter, loc, scaledI, input.getType());
 }
 
-struct FpSanCosSin {
-  Value cos;
-  Value sin;
-};
+// Let C(x) + i S(x) = z^x for z = (-3 + 4i)/5 and t = z + 1/z - 2 = -16/5.
+// By Pascal's identity the sums below satisfy f(x+1) - 2f(x) + f(x-1) = t f(x)
+// with the same values at 0 and 1 as the real and imaginary parts of z^x.
+//   C(x) = sum_k t^k (binom(x+k, 2k) + binom(x+k-1, 2k)) / 2
+//   S(x) = (4/5) sum_k t^k binom(x+k, 2k+1)
+// The kth terms vanish modulo 2^w for 4k-1 >= w and 4k+2 >= w respectively.
+// Factoring the binomials gives C(x) = P(x^2) and S(x) = x Q(x^2) in the
+// Newton basis at consecutive squares starting at 0 for P and 1 for Q.
+SmallVector<uint64_t, 17> getTrigCoefficients(int bitWidth, bool isSin) {
+  assert(bitWidth > 0 && bitWidth <= 64);
+  int degree = isSin ? (bitWidth - 3) / 4 : bitWidth / 4;
+  int firstNode = isSin ? 1 : 0;
 
-FpSanCosSin fpsanCosSinPayload(PatternRewriter &rewriter, Location loc,
-                               Value xI) {
-  Type intTy = xI.getType();
-  unsigned bitWidth = getIntBitwidth(intTy);
-  uint64_t mask = getLowBitsMask(bitWidth);
-  uint64_t rcp5 = invOddU64(5) & mask;
-  uint64_t aValue = (uint64_t{0} - ((uint64_t{3} * rcp5) & mask)) & mask;
-  uint64_t bValue = (uint64_t{4} * rcp5) & mask;
+  // The Newton coefficients are t^k/(2k)! for P and (4/5)t^k/(2k+1)! for Q.
+  // Each step multiplies by -16/(5n(n-1)). Track powers of two separately
+  // so we only invert odd denominators.
+  uint64_t odd = isSin ? invOddU64(5) : 1;
+  int shift = isSin ? 2 : 0;
+  SmallVector<uint64_t, 17> coeffs{odd << shift};
+  for (int k = 1; k <= degree; ++k) {
+    int n = 2 * k + firstNode;
+    unsigned denominator = 5 * n * (n - 1);
+    int twos = llvm::countr_zero(denominator);
+    odd *= uint64_t{0} - invOddU64(denominator >> twos);
+    shift += 4 - twos;
+    coeffs.push_back(odd << shift);
+  }
 
-  auto zero = getUIntConstantLike(rewriter, loc, intTy, 0);
-  auto one = getUIntConstantLike(rewriter, loc, intTy, 1);
-  auto two = getUIntConstantLike(rewriter, loc, intTy, 2);
-  auto a = getUIntConstantLike(rewriter, loc, intTy, aValue);
-  auto b = getUIntConstantLike(rewriter, loc, intTy, bValue);
+  // Expand the nested factors (x^2 - j^2) into powers of x^2 on the host.
+  for (int k = degree - 1; k >= 0; --k) {
+    int j = k + firstNode;
+    for (int i = k; i < degree; ++i)
+      coeffs[i] -= j * j * coeffs[i + 1];
+  }
+  return coeffs;
+}
 
-  auto lower =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(0));
-  auto upper = arith::ConstantOp::create(rewriter, loc,
-                                         rewriter.getI32IntegerAttr(bitWidth));
-  auto step =
-      arith::ConstantOp::create(rewriter, loc, rewriter.getI32IntegerAttr(1));
-  auto topBit = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getI32IntegerAttr(bitWidth - 1));
-  SmallVector<Value> initArgs{one, zero};
-  auto loop = scf::ForOp::create(rewriter, loc, lower, upper, step, initArgs);
-  rewriter.setInsertionPointToStart(loop.getBody());
-
-  Value bit = loop.getInductionVar();
-  Value c = loop.getRegionIterArgs()[0];
-  Value s = loop.getRegionIterArgs()[1];
-  Value cc = arith::MulIOp::create(rewriter, loc, c, c);
-  Value ss = arith::MulIOp::create(rewriter, loc, s, s);
-  Value cDouble = arith::SubIOp::create(rewriter, loc, cc, ss);
-  Value cs = arith::MulIOp::create(rewriter, loc, c, s);
-  Value sDouble = arith::MulIOp::create(rewriter, loc, two, cs);
-
-  Value ac = arith::MulIOp::create(rewriter, loc, a, cDouble);
-  Value bs = arith::MulIOp::create(rewriter, loc, b, sDouble);
-  Value cInc = arith::SubIOp::create(rewriter, loc, ac, bs);
-  Value as = arith::MulIOp::create(rewriter, loc, a, sDouble);
-  Value bc = arith::MulIOp::create(rewriter, loc, b, cDouble);
-  Value sInc = arith::AddIOp::create(rewriter, loc, as, bc);
-
-  Value bitIndex =
-      arith::SubIOp::create(rewriter, loc, rewriter.getI32Type(), topBit, bit);
-  Value shift = castScalarIntToIntLike(rewriter, loc, bitIndex, intTy);
-  Value bitMask = arith::ShLIOp::create(rewriter, loc, one, shift);
-  auto masked = arith::AndIOp::create(rewriter, loc, xI, bitMask);
-  auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
-                                      masked, zero);
-  c = arith::SelectOp::create(rewriter, loc, isZero, cDouble, cInc);
-  s = arith::SelectOp::create(rewriter, loc, isZero, sDouble, sInc);
-  scf::YieldOp::create(rewriter, loc, ValueRange{c, s});
-  rewriter.setInsertionPointAfter(loop);
-
-  return {loop.getResult(0), loop.getResult(1)};
+Value fpsanTrig(PatternRewriter &rewriter, Location loc, Value input,
+                bool isSin) {
+  if (!isFloatLike(input.getType()))
+    return Value();
+  Value x = embedToInt(rewriter, loc, input);
+  Value x2 = arith::MulIOp::create(rewriter, loc, x, x);
+  auto coeffs = getTrigCoefficients(getIntBitwidth(x.getType()), isSin);
+  auto constant = [&](uint64_t c) {
+    return getUIntConstantLike(rewriter, loc, x.getType(), c);
+  };
+  Value result = constant(coeffs.pop_back_val());
+  for (uint64_t c : llvm::reverse(coeffs)) {
+    result = arith::MulIOp::create(rewriter, loc, result, x2);
+    result = arith::AddIOp::create(rewriter, loc, result, constant(c));
+  }
+  if (isSin)
+    result = arith::MulIOp::create(rewriter, loc, result, x);
+  return unembedToFloat(rewriter, loc, result, input.getType());
 }
 
 Value fpsanCos(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.cos, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/false);
 }
 
 Value fpsanSin(PatternRewriter &rewriter, Location loc, Value input) {
-  if (!isFloatLike(input.getType()))
-    return Value();
-  auto cosSin =
-      fpsanCosSinPayload(rewriter, loc, embedToInt(rewriter, loc, input));
-  return unembedToFloat(rewriter, loc, cosSin.sin, input.getType());
+  return fpsanTrig(rewriter, loc, input, /*isSin=*/true);
 }
 
 bool hasNumericOperands(ValueRange operands) {
@@ -1028,9 +1094,7 @@ static Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc,
   auto storageTy = getScratchStorageType(tensorTy);
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  Value stored =
-      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                         EvictionPolicy::NORMAL, false);
+  Value stored = tt::LoadOp::create(rewriter, loc, ptrTensor);
   if (isFloatLike(tensorTy))
     return unembedToFloat(rewriter, loc, stored, tensorTy);
   return stored;
@@ -1055,7 +1119,6 @@ static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
-                             CacheModifier::NONE, EvictionPolicy::NORMAL,
                              ignoreCTA);
 }
 
@@ -1101,6 +1164,90 @@ std::optional<ScratchInfo> createWGMMAScratch(PatternRewriter &rewriter,
 Value createAsyncToken(PatternRewriter &rewriter, Location loc,
                        ValueRange deps) {
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
+}
+
+struct CompactExp2Pattern : OpRewritePattern<tt::FpSanCompactExp2Op> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(tt::FpSanCompactExp2Op op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value x = embedToInt(rw, loc, op.getInput());
+    // (1 + 2^25)^x = 1 + (x << 25) modulo 2^32.
+    Value high = arith::ShLIOp::create(
+        rw, loc, x, getIntConstantLike(rw, loc, x.getType(), 25));
+    Value power = arith::AddIOp::create(
+        rw, loc, high, getIntConstantLike(rw, loc, x.getType(), 1));
+    rw.replaceOp(op, unembedToFloat(rw, loc, power, op.getType()));
+    return success();
+  }
+};
+
+// 0 encodes a masked weight. 128..255 encode the 128 compact powers.
+// Keep other inputs in a disjoint range so a perturbation that leaves the
+// family is observable even when it preserves the top seven bits.
+Value packProbability(PatternRewriter &rw, Location loc, Value payload) {
+  auto ty = cast<RankedTensorType>(payload.getType());
+  auto constant = [&](uint32_t n) {
+    return getUIntConstantLike(rw, loc, ty, n);
+  };
+  Value low = arith::AndIOp::create(rw, loc, payload, constant((1u << 25) - 1));
+  Value compact = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, low,
+                                        constant(1));
+  Value power = arith::ShRUIOp::create(rw, loc, payload, constant(25));
+  Value encoded = arith::OrIOp::create(rw, loc, power, constant(128));
+  Value hash = arith::RemUIOp::create(rw, loc, payload, constant(127));
+  Value other = arith::AddIOp::create(rw, loc, hash, constant(1));
+  Value zero = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, payload,
+                                     constant(0));
+  other = arith::SelectOp::create(rw, loc, zero, constant(0), other);
+  Value code = arith::SelectOp::create(rw, loc, compact, encoded, other);
+  return arith::TruncIOp::create(rw, loc, ty.clone(rw.getI8Type()), code);
+}
+
+Value expandProbability(PatternRewriter &rw, Location loc, Value byte,
+                        Type format) {
+  auto ty = cast<RankedTensorType>(byte.getType()).clone(rw.getI32Type());
+  Value code = arith::ExtUIOp::create(rw, loc, ty, byte);
+  Value live =
+      arith::ShRUIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 7));
+  Value exponent =
+      arith::ShLIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 25));
+  Value payload = arith::OrIOp::create(rw, loc, exponent, live);
+  // An odd format marker commutes with rescaling and preserves all 128
+  // powers of the compact exponential.
+  int tag = isa<Float8E5M2Type>(format) ? 0x71b39a53 : 0x5b7a9d23;
+  return arith::MulIOp::create(rw, loc, payload,
+                               getIntConstantLike(rw, loc, ty, tag));
+}
+
+struct ProbabilityCastPattern
+    : OpRewritePattern<ExperimentalFPSanProbabilityCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ExperimentalFPSanProbabilityCastOp op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value payload = embedToInt(rw, loc, op.getSrc());
+    Type format = op.getSrc().getType().getElementType();
+    payload = format.isF32() ? packProbability(rw, loc, payload)
+                             : expandProbability(rw, loc, payload, format);
+    rw.replaceOp(op, unembedToFloat(rw, loc, payload, op.getType()));
+    return success();
+  }
+};
+
+LogicalResult setProbabilityFormats(Operation *op, Type a, Type b, Type d,
+                                    MmaOperandSource &lhs,
+                                    MmaOperandSource &rhs) {
+  if (op->hasAttr("tti.fpsan_probability_a"))
+    lhs.probabilityFormat = a;
+  if (op->hasAttr("tti.fpsan_probability_b"))
+    rhs.probabilityFormat = b;
+  for (Type format : {lhs.probabilityFormat, rhs.probabilityFormat})
+    if (format &&
+        (!isa<Float8E4M3FNType, Float8E5M2Type>(format) || !d.isF32()))
+      return op->emitOpError(
+          "expected FP8 probability operand and FP32 accumulator");
+  return success();
 }
 
 Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
@@ -1248,6 +1395,10 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
+  if (computeElem == rewriter.getBF16Type()) {
+    auto minScale = getUIntConstantLike(rewriter, loc, computeIntTy, 0x0040);
+    rawCompute = arith::MaxUIOp::create(rewriter, loc, rawCompute, minScale);
+  }
   return embedFloatBitsToInt(rewriter, loc, rawCompute, computeElem);
 }
 
@@ -1305,34 +1456,44 @@ Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
   return loadScratchStrided2D(rewriter, loc, slicePtr, tileTy, loadStride);
 }
 
-Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
-                     Value bSlice, Value aScaleSlice, Value bScaleSlice,
-                     int64_t m, int64_t n,
-                     ttg::DistributedEncodingTrait accLayout,
-                     IntegerType accElem, const DotScaleConfig &scale = {}) {
+Value getMmaOperandPayload(PatternRewriter &rw, Location loc, Value raw,
+                           const MmaOperandSource &source, bool isLhs,
+                           const DotScaleConfig &scale) {
+  if (source.probabilityFormat)
+    return expandProbability(rw, loc, embedToInt(rw, loc, raw),
+                             source.probabilityFormat);
+  if (scale.computeElem)
+    return castDotScaledOperandToComputePayload(
+        rw, loc, raw, isLhs ? scale.aElemType : scale.bElemType,
+        scale.computeElem);
+  return embedToInt(rw, loc, raw);
+}
+
+// Keep the usual interpretation of the block scale. Multiply a tagged
+// weight in its expanded ring so the scale preserves its exponent bits.
+Value getMmaScalePayload(PatternRewriter &rw, Location loc, Value raw,
+                         const DotScaleConfig &scale, Type elem) {
+  Value payload =
+      castDotScaledScaleToComputePayload(rw, loc, raw, scale.computeElem);
+  return castFloatPayloadToType(rw, loc, payload,
+                                getTypeWithElement(payload.getType(), elem));
+}
+
+Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aI,
+                     Value bI, Value aScaleSlice, Value bScaleSlice, int64_t m,
+                     int64_t n, ttg::DistributedEncodingTrait accLayout,
+                     IntegerType accElem, const DotScaleConfig &scale) {
   OpBuilder::InsertionGuard guard(rewriter);
   auto fullTy = RankedTensorType::get({m, n}, accElem, accLayout);
-
-  Value aI;
-  Value bI;
-  if (scale.computeElem) {
-    aI = castDotScaledOperandToComputePayload(
-        rewriter, loc, aSlice, scale.aElemType, scale.computeElem);
-    bI = castDotScaledOperandToComputePayload(
-        rewriter, loc, bSlice, scale.bElemType, scale.computeElem);
-    if (aScaleSlice) {
-      auto aScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, aScaleSlice, scale.computeElem);
-      aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
-    }
-    if (bScaleSlice) {
-      auto bScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, bScaleSlice, scale.computeElem);
-      bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
-    }
-  } else {
-    aI = embedToInt(rewriter, loc, aSlice);
-    bI = embedToInt(rewriter, loc, bSlice);
+  if (aScaleSlice) {
+    Value factor = getMmaScalePayload(rewriter, loc, aScaleSlice, scale,
+                                      getElementTypeOrSelf(aI));
+    aI = arith::MulIOp::create(rewriter, loc, aI, factor);
+  }
+  if (bScaleSlice) {
+    Value factor = getMmaScalePayload(rewriter, loc, bScaleSlice, scale,
+                                      getElementTypeOrSelf(bI));
+    bI = arith::MulIOp::create(rewriter, loc, bI, factor);
   }
   aI = castFloatPayloadToType(rewriter, loc, aI,
                               getTypeWithElement(aI.getType(), accElem));
@@ -1444,8 +1605,8 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
   Value compact = loadScratchStrided2D(rewriter, loc, groupPtr, compactLoadTy,
                                        /*stride0=*/isLhs ? 1 : scaleStride,
                                        /*stride1=*/isLhs ? scaleStride : 1);
-  compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
-                                               scale.computeElem);
+  compact = getMmaScalePayload(rewriter, loc, compact, scale,
+                               targetTy.getElementType());
 
   auto expandedShape = compactShape;
   expandedShape.insert(expandedShape.begin() + expandAxis, 1);
@@ -1461,17 +1622,16 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
   return reshaped;
 }
 
-Value loadScaledOperandK32(PatternRewriter &rewriter, Location loc, bool isLhs,
-                           const MmaOperandSource &source,
-                           const DotScaleConfig &scale, Value tileIdx,
-                           Value kI32, ttg::NvidiaMmaEncodingAttr mmaLayout) {
+Value loadOperandPayloadK32(PatternRewriter &rewriter, Location loc, bool isLhs,
+                            const MmaOperandSource &source,
+                            const DotScaleConfig &scale, Value tileIdx,
+                            Value kI32, ttg::NvidiaMmaEncodingAttr mmaLayout) {
   int64_t packFactor = isLhs ? scale.aKPackFactor : scale.bKPackFactor;
-  tt::ScaleDotElemType elemType = isLhs ? scale.aElemType : scale.bElemType;
   Value chunk = loadOperandK32(rewriter, loc, isLhs, source, tileIdx, kI32,
                                mmaLayout, packFactor);
 
-  Value payload = castDotScaledOperandToComputePayload(
-      rewriter, loc, chunk, elemType, scale.computeElem);
+  Value payload =
+      getMmaOperandPayload(rewriter, loc, chunk, source, isLhs, scale);
   auto payloadTy = cast<RankedTensorType>(payload.getType());
   Value scalePayload =
       loadScaledScaleK32(rewriter, loc, isLhs, scale, tileIdx, kI32, payloadTy);
@@ -1734,23 +1894,13 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     rewriter.setInsertionPointToStart(kLoop.getBody());
     Value kIdx = kLoop.getInductionVar();
     Value kI32 = arith::IndexCastOp::create(rewriter, loc, i32Ty, kIdx);
-    Value aChunk;
-    Value bChunk;
-    if (scale.computeElem) {
-      aChunk = loadScaledOperandK32(rewriter, loc, /*isLhs=*/true, aSource,
-                                    scale, mIdxI32, kI32, mmaLayout);
-      bChunk = loadScaledOperandK32(rewriter, loc, /*isLhs=*/false, bSource,
-                                    scale, nIdxI32, kI32, mmaLayout);
-    } else {
-      aChunk = loadOperandK32(rewriter, loc, /*isLhs=*/true, aSource, mIdxI32,
-                              kI32, mmaLayout);
-      bChunk = loadOperandK32(rewriter, loc, /*isLhs=*/false, bSource, nIdxI32,
-                              kI32, mmaLayout);
-    }
-    Value next =
-        emitI8DotDecomposition(rewriter, loc, embedToInt(rewriter, loc, aChunk),
-                               embedToInt(rewriter, loc, bChunk), accElem,
-                               kLoop.getRegionIterArgs()[0]);
+    Value aChunk = loadOperandPayloadK32(rewriter, loc, /*isLhs=*/true, aSource,
+                                         scale, mIdxI32, kI32, mmaLayout);
+    Value bChunk =
+        loadOperandPayloadK32(rewriter, loc, /*isLhs=*/false, bSource, scale,
+                              nIdxI32, kI32, mmaLayout);
+    Value next = emitI8DotDecomposition(rewriter, loc, aChunk, bChunk, accElem,
+                                        kLoop.getRegionIterArgs()[0]);
     scf::YieldOp::create(rewriter, loc, next);
     rewriter.setInsertionPointAfter(kLoop);
     sum = kLoop.getResult(0);
@@ -1799,9 +1949,13 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
       bScaleSlice =
           loadScaleSlice(rewriter, loc, /*isLhs=*/false, scale, nIdxI32, kI32);
     }
+    Value aPayload =
+        getMmaOperandPayload(rewriter, loc, aSlice, aSource, true, scale);
+    Value bPayload =
+        getMmaOperandPayload(rewriter, loc, bSlice, bSource, false, scale);
     Value partial =
-        emulateDotStep(rewriter, loc, aSlice, bSlice, aScaleSlice, bScaleSlice,
-                       tileM, tileN, accLayout, accElem, scale);
+        emulateDotStep(rewriter, loc, aPayload, bPayload, aScaleSlice,
+                       bScaleSlice, tileM, tileN, accLayout, accElem, scale);
     Value acc = kLoop.getRegionIterArgs()[0];
     Value next = arith::AddIOp::create(rewriter, loc, acc, partial);
     scf::YieldOp::create(rewriter, loc, next);
@@ -1907,6 +2061,26 @@ struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   }
 };
 
+struct AbsFOpPattern : public OpRewritePattern<math::AbsFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::AbsFOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto inputI = embedToInt(rewriter, loc, op.getOperand());
+    // Use integer abs to preserve NaN bits.
+    auto absI = math::AbsIOp::create(rewriter, loc, inputI);
+    unsigned width =
+        getElementTypeOrSelf(inputI.getType()).getIntOrFloatBitWidth();
+    auto mask = getIntConstantLike(rewriter, loc, inputI.getType(),
+                                   (uint64_t{1} << (width - 1)) - 1);
+    // Map INT_MIN (negative zero) to zero.
+    auto result = arith::AndIOp::create(rewriter, loc, absI, mask);
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, op.getType()));
+    return success();
+  }
+};
+
 struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::DivFOp op,
@@ -1919,9 +2093,10 @@ struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   }
 };
 
-struct PreciseDivFOpPattern : public OpRewritePattern<tt::PreciseDivFOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(tt::PreciseDivFOp op,
+template <typename OpTy>
+struct TritonDivFOpPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
@@ -2059,6 +2234,22 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
                                        getIntTypeLike(op.getType()));
     auto outF = unembedToFloat(rewriter, loc, outI, op.getType());
     rewriter.replaceOp(op, outF);
+    return success();
+  }
+};
+
+struct FpSanHomomorphicCastPattern
+    : public OpRewritePattern<tt::FpSanHomomorphicCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tt::FpSanHomomorphicCastOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value payload = embedToInt(rewriter, loc, op.getInput());
+    payload = castSignedIntValueToType(rewriter, loc, payload,
+                                       getIntTypeLike(op.getType()));
+    rewriter.replaceOp(op,
+                       unembedToFloat(rewriter, loc, payload, op.getType()));
     return success();
   }
 };
@@ -2631,17 +2822,24 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     auto srcRegTy = RankedTensorType::get(
         srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
     if (scratch->usesSharedClusterState()) {
-      // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
+      // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
-    Value srcReg =
-        ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
-            .getResult();
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                               /*stride0=*/1,
-                               info->tensorType.getShape().front(),
-                               /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Value pred = op.getPred()) {
+        auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      }
+      Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
+                                              op.getSrc(), Value())
+                         .getResult();
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                                 /*stride0=*/1,
+                                 info->tensorType.getShape().front(),
+                                 /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());
@@ -2655,12 +2853,12 @@ private:
 };
 
 struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
-  TCGen5CommitPattern(MLIRContext *ctx, bool twoCTAs)
-      : OpRewritePattern(ctx), twoCTAs(twoCTAs) {}
+  TCGen5CommitPattern(MLIRContext *ctx, bool sharedClusterState)
+      : OpRewritePattern(ctx), sharedClusterState(sharedClusterState) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5CommitOp op,
                                 PatternRewriter &rewriter) const override {
-    if (twoCTAs)
+    if (sharedClusterState)
       createGlobalScratchBarrier(rewriter, op.getLoc(),
                                  /*sharedClusterState=*/true);
     createSynchronousCompletionArrive(rewriter, op.getLoc(), op.getBarrier(),
@@ -2670,7 +2868,7 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
   }
 
 private:
-  bool twoCTAs;
+  bool sharedClusterState;
 };
 
 struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
@@ -2779,12 +2977,10 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
 
-    bool aIsFloat = isa<FloatType>(aMemTy.getElementType());
-    bool bIsFloat = isa<FloatType>(bMemTy.getElementType());
-    bool dIsFloat = isa<FloatType>(dMemTy.getElementType());
-    if (!aIsFloat && !bIsFloat && !dIsFloat)
+    auto kind = getFpSanMmaKind(op);
+    if (kind == FpSanMmaKind::Integer)
       return failure();
-    if (!aIsFloat || !bIsFloat || !dIsFloat)
+    if (kind == FpSanMmaKind::Mixed)
       return emitFpSanUnsupported(op.getOperation());
 
     auto scope = getScratchScopeRegion(op);
@@ -2847,6 +3043,10 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
                                           /*rowStride=*/1, /*stride=*/k);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
+    if (failed(setProbabilityFormats(
+            op, aMemTy.getElementType(), bMemTy.getElementType(),
+            dMemTy.getElementType(), *aSource, *bSource)))
+      return failure();
 
     // TMEM and D scratch are written cooperatively. In two-CTA mode, the
     // cluster barrier also makes both CTAs' shared operands visible before the
@@ -3009,6 +3209,10 @@ struct TCGen5MMAScaledPattern
                                           /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
+    if (failed(setProbabilityFormats(
+            op, aMemTy.getElementType(), bMemTy.getElementType(),
+            dMemTy.getElementType(), *aSource, *bSource)))
+      return failure();
 
     DotScaleConfig scale;
     scale.aElemType = op.getAType();
@@ -3216,6 +3420,94 @@ struct ElementwiseInlineAsmPattern
   }
 };
 
+// These are the operands whose scratch storage the FPSan patterns resolve.
+static SmallVector<Value> getFpSanTmemOperands(Operation *op) {
+  if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
+    return {load.getSrc()};
+  if (auto store = dyn_cast<ttng::TMEMStoreOp>(op))
+    return {store.getDst()};
+  if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op))
+    return {copy.getDst()};
+  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    if (getFpSanMmaKind(mma) == FpSanMmaKind::Floating)
+      return {mma.getA(), mma.getB(), mma.getD()};
+  }
+  if (auto mma = dyn_cast<ttng::TCGen5MMAScaledOp>(op))
+    return {mma.getA(), mma.getB(), mma.getD(), mma.getAScale(),
+            mma.getBScale()};
+  return {};
+}
+
+struct FpSanInliningRequirement {
+  Operation *cause;
+  StringRef reason;
+};
+
+using FpSanCallsRequiringInlining =
+    SmallVector<std::pair<tt::CallOp, FpSanInliningRequirement>>;
+
+static FpSanCallsRequiringInlining
+getFpSanCallsRequiringInlining(ModuleOp module) {
+  DenseMap<Operation *, FpSanInliningRequirement> functions;
+  DenseMap<Operation *, FpSanInliningRequirement> producers;
+  bool sharedClusterState = ttg::lookupNumCTAs(module) > 1;
+
+  module.walk([&](Operation *op) {
+    auto operands = getFpSanTmemOperands(op);
+    for (Value operand : operands) {
+      auto type = cast<ttg::MemDescType>(operand.getType());
+      if (!isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
+        continue;
+      Value origin = operand;
+      while (Value source = getFpSanTmemSource(origin))
+        origin = source;
+      if (auto arg = dyn_cast<BlockArgument>(origin)) {
+        if (auto function = dyn_cast<tt::FuncOp>(arg.getOwner()->getParentOp());
+            function && arg.getOwner()->isEntryBlock())
+          functions.try_emplace(
+              function, FpSanInliningRequirement{
+                            op, "FPSan needs the allocation behind this tensor "
+                                "memory argument"});
+      } else if (auto call = origin.getDefiningOp<tt::CallOp>()) {
+        producers.try_emplace(
+            call,
+            FpSanInliningRequirement{
+                op, "FPSan needs the allocation behind this tensor memory "
+                    "call result"});
+      }
+    }
+
+    auto function = op->getParentOfType<tt::FuncOp>();
+    if (!function || function.isPublic())
+      return;
+    if (isa<ttg::WarpSpecializeOp>(op))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "warp specialization requires kernel context"});
+    // A callee receives a per-CTA scratch base, not the cluster base needed by
+    // TMEM emulation. Its generated cluster barriers also need kernel context.
+    if (sharedClusterState &&
+        (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "FPSan cluster scratch and barriers require kernel "
+                            "context"});
+  });
+
+  FpSanCallsRequiringInlining calls;
+  module.walk([&](tt::CallOp call) {
+    auto producer = producers.find(call);
+    if (producer != producers.end()) {
+      calls.emplace_back(call, producer->second);
+      return;
+    }
+    auto function = functions.find(call.resolveCallable());
+    if (function != functions.end())
+      calls.emplace_back(call, function->second);
+  });
+  return calls;
+}
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3223,6 +3515,16 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    auto calls = getFpSanCallsRequiringInlining(getOperation());
+    for (auto [call, requirement] : calls) {
+      auto diagnostic = call.emitOpError("must be inlined before FPSan");
+      diagnostic.attachNote(requirement.cause->getLoc()) << requirement.reason;
+    }
+    if (!calls.empty()) {
+      signalPassFailure();
+      return;
+    }
+
     bool fpSanErrorEmitted = false;
     ScopedDiagnosticHandler diagnosticHandler(
         &getContext(), [&](Diagnostic &diagnostic) {
@@ -3231,30 +3533,31 @@ public:
           return failure();
         });
 
-    bool twoCTAs = false;
-    getOperation().walk(
-        [&](ttng::MMAv5OpInterface op) { twoCTAs |= op.getTwoCtas(); });
+    bool twoCTAs = hasTwoCTAMma(getOperation());
 
     getOperation()->setAttr(ttng::AttrTwoCTAsName,
                             BoolAttr::get(&getContext(), twoCTAs));
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
 
-    TmemScratchManager scratch(twoCTAs);
+    // MMA emulation can redistribute accumulator elements across all CTAs.
+    bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
+    TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
-                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 ClampFOpPattern, NegFOpPattern, DivFOpPattern,
-                 PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
-                 Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 PackedArithPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+             BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
+             ClampFOpPattern, NegFOpPattern, AbsFOpPattern, DivFOpPattern,
+             TritonDivFOpPattern<tt::PreciseDivFOp>,
+             TritonDivFOpPattern<tt::ApproxDivFOp>, RemFOpPattern, FmaPattern,
+             ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+             ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+             PackedArithPattern, DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
@@ -3264,13 +3567,17 @@ public:
     patterns.add<UnaryPattern<math::CeilOp>>(&getContext(), UnaryOpId::Ceil);
     patterns.add<UnaryPattern<tt::PreciseSqrtOp>>(&getContext(),
                                                   UnaryOpId::PreciseSqrt);
+    patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
+                                                   UnaryOpId::Barrier);
+    patterns.add<FpSanHomomorphicCastPattern, CompactExp2Pattern,
+                 ProbabilityCastPattern>(&getContext());
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
     patterns.add<WarpGroupDotPattern>(&getContext());
-    patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
+    patterns.add<TCGen5CommitPattern>(&getContext(), sharedClusterState);
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));

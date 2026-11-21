@@ -161,6 +161,11 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_hip_cdna4_above():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "hip" and target.arch in ("gfx950", "gfx1250")
+
+
 def get_cuda_autotune_config():
     return [
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
@@ -372,7 +377,7 @@ else:
     print("❌ Triton and Torch differ")
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-if TORCH_HAS_FP8 and is_cuda():
+if TORCH_HAS_FP8 and (is_cuda() or is_hip_cdna4_above()):
     torch.manual_seed(0)
     a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
     b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
@@ -403,7 +408,7 @@ ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:
-    if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
+    if fp8_inputs and (not TORCH_HAS_FP8 or not (is_cuda() or is_hip_cdna4_above())):
         continue
     configs.append(
         triton.testing.Benchmark(

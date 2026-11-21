@@ -214,6 +214,47 @@ bool ttng::hasAccReadModifyWrite(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   return false;
 }
 
+static std::optional<bool> inferNextAccOnRead(Value value, Operation *read,
+                                              scf::ForOp forOp) {
+  if (matchPattern(value, m_Zero()))
+    return false;
+  if (matchPattern(value, m_One()))
+    return true;
+
+  // 1. If value guards an enclosing if, the branch containing read determines
+  // its truth value: true in the then branch and false in the else branch.
+  for (Operation *op = read; op != forOp; op = op->getParentOp()) {
+    auto enclosingIf = dyn_cast<scf::IfOp>(op->getParentOp());
+    if (enclosingIf && enclosingIf.getCondition() == value)
+      return op->getParentRegion() == &enclosingIf.getThenRegion();
+  }
+
+  // 2. For a select or if result, first infer its selector on the read path:
+  //   next_use_acc = select read_cond, false, true
+  //   if read_cond:
+  //     tmem_read  // next_use_acc is false here, so the next MMA switches.
+  Value condition, trueValue, falseValue;
+  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
+    condition = select.getCondition();
+    trueValue = select.getTrueValue();
+    falseValue = select.getFalseValue();
+  } else if (auto ifOp = value.getDefiningOp<scf::IfOp>()) {
+    unsigned resultIdx = cast<OpResult>(value).getResultNumber();
+    condition = ifOp.getCondition();
+    trueValue = ifOp.thenYield().getOperand(resultIdx);
+    falseValue = ifOp.elseYield().getOperand(resultIdx);
+  } else {
+    return std::nullopt;
+  }
+
+  auto conditionOnReadPath = inferNextAccOnRead(condition, read, forOp);
+  if (!conditionOnReadPath.has_value())
+    return std::nullopt;
+  // 3. Infer the selected operand
+  Value branchValue = *conditionOnReadPath ? trueValue : falseValue;
+  return inferNextAccOnRead(branchValue, read, forOp);
+}
+
 static bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   Value accUseFlag = mma.useAccumulator();
   if (matchPattern(accUseFlag, m_Zero())) {
@@ -239,14 +280,38 @@ static bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
          forOp->isAncestor(accUseFlag.getDefiningOp());
 }
 
+static bool accReadsForceBufferSwitch(ttng::MMAv5OpInterface mma,
+                                      scf::ForOp forOp) {
+  Value accUseFlag = mma.useAccumulator();
+  if (matchPattern(accUseFlag, m_Zero()))
+    return true;
+  auto blockArg = dyn_cast<BlockArgument>(accUseFlag);
+  if (!blockArg || blockArg.getOwner() != forOp.getBody())
+    return false;
+
+  // Every in-loop read must imply nextUseAcc == false
+  Value nextUseAcc = forOp.getYieldedValues()[blockArg.getArgNumber() - 1];
+  Value acc = mma.getAccumulator();
+  for (Operation *user : acc.getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user)) {
+      auto nextUseAccOnRead = inferNextAccOnRead(nextUseAcc, user, forOp);
+      if (/* Unknown on this path. */ !nextUseAccOnRead.has_value() ||
+          /* Next MMA keeps the current buffer. */ *nextUseAccOnRead)
+        return false;
+    }
+  }
+  return true;
+}
+
 static bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
     return false;
   }
   for (auto user : tmemAlloc->getUsers()) {
-    if (isa<ttng::TMEMStoreOp>(user) &&
-        forOp->isAncestor(user->getParentOp())) {
+    if (auto store = dyn_cast<ttng::TMEMStoreOp>(user);
+        store && store->getBlock() == mma->getBlock() &&
+        matchPattern(store.getPred(), m_One())) {
       return true;
     }
   }
@@ -258,7 +323,9 @@ bool ttng::isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
   // If the accumulator is never overwritten in the loop, we can't multibuffer
   // it, as the overwrite point is the only place where we can swap the
   // buffer.
-  return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
+  return (accReadsForceBufferSwitch(mma, forOp) &&
+          accUseFlagSetToFalse(mma, forOp)) ||
+         accOverwrittenInLoop(mma, forOp);
 }
 
 bool ttng::requiresAccMultiBuffering(ttng::MMAv5OpInterface mma,

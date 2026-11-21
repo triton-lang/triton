@@ -34,7 +34,7 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   int numThreads = numWarps * threadsPerWarp;
   int numElemsPerThread = std::max(numElems / numThreads, 1);
 
-  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+  int maxVectorSize = 128 / getIntOrFloatOrPtrBitWidth(type.getElementType());
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
@@ -78,6 +78,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // Run axis info analysis
     ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
+    CoalescedEncodingAnalysis coalescedEncodingAnalysis(axisInfoAnalysis);
 
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
@@ -98,9 +99,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       auto tensorType = cast<RankedTensorType>(ptr.getType());
       CGAEncodingAttr cgaLayout = getCGALayout(tensorType.getEncoding());
       SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
-      auto layout =
-          buildCoalescedEncoding(axisInfoAnalysis, curr, numWarps,
-                                 threadsPerWarp, cgaLayout, shapePerCTA);
+      auto layout = coalescedEncodingAnalysis.getEncoding(
+          curr, numWarps, threadsPerWarp, cgaLayout, shapePerCTA);
       layoutMap[curr] = layout;
     });
 

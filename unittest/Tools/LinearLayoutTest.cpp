@@ -394,6 +394,26 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
+TEST_F(LinearLayoutTest, InvertAndCompose_OverlappingIdentityDims) {
+  auto layout = [&](int warpBasis) {
+    return LinearLayout({{S("register"), {{32}}},
+                         {S("lane"), {{1}, {2}, {4}, {8}, {16}}},
+                         {S("warp"), {{warpBasis}, {128}}},
+                         {S("block"), {}}},
+                        {S("dim0")});
+  };
+  auto src = layout(64);
+  auto dst = layout(96);
+  EXPECT_EQ(dst.invertAndCompose(src).compose(src), dst);
+  EXPECT_EQ(src.invertAndCompose(dst).compose(dst), src);
+}
+
+TEST_F(LinearLayoutTest, Invert_UnitInputDim) {
+  LinearLayout layout({{S("x"), {{1}}}, {S("unit"), {}}}, {S("x")});
+  EXPECT_EQ(layout.invert(),
+            LinearLayout({{S("x"), {{1, 0}}}}, {S("x"), S("unit")}));
+}
+
 TEST_F(LinearLayoutTest, Lstsq) {
   LinearLayout superset({{S("storage"), {{1, 1}, {2, 0}}}},
                         {{S("x"), 4}, {S("y"), 2}},
@@ -585,7 +605,7 @@ TEST_F(LinearLayoutTest, InvertAndComposeBlockLocal) {
 
   EXPECT_FALSE(
       regLayout.invertAndCompose(memLayout).isIdentityOnOutDim(S("block")));
-  auto local = invertAndComposeBlockLocal(memLayout, regLayout);
+  auto local = invertAndComposeLocal(memLayout, regLayout, {S("block")});
   auto expected =
       LinearLayout({{S("register"), {}},
                     {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}},
@@ -608,8 +628,8 @@ TEST_F(LinearLayoutTest, InvertAndComposeBlockLocal) {
                    {S("dim")});
   EXPECT_FALSE(partiallyDistributedReg.invertAndCompose(partiallyBroadcastMem)
                    .isIdentityOnOutDim(S("block")));
-  auto partiallyLocal = invertAndComposeBlockLocal(partiallyBroadcastMem,
-                                                   partiallyDistributedReg);
+  auto partiallyLocal = invertAndComposeLocal(
+      partiallyBroadcastMem, partiallyDistributedReg, {S("block")});
   auto partiallyExpected =
       LinearLayout({{S("register"), {}},
                     {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}},
@@ -629,8 +649,40 @@ TEST_F(LinearLayoutTest, InvertAndComposeBlockLocal) {
                                      {S("warp"), {}},
                                      {S("block"), {{1}}}},
                                     {S("dim")});
-  EXPECT_EQ(invertAndComposeBlockLocal(partitionedMem, transposedReg),
+  EXPECT_EQ(invertAndComposeLocal(partitionedMem, transposedReg, {S("block")}),
             transposedReg.invertAndCompose(partitionedMem));
+}
+
+TEST_F(LinearLayoutTest, LocalStoreReplicasSkipOffsetHoles) {
+  auto reg = S("register");
+  auto offset = S("offset");
+  auto block = S("block");
+  auto dim = S("dim");
+  LinearLayout shared({{offset, {{1}, {0}}}, {block, {{0}, {0}}}}, {dim});
+  LinearLayout sharded({{reg, {}}, {block, {{1}, {0}}}}, {dim});
+
+  auto store = invertAndComposeStore(shared, sharded);
+  // CTA bit 1 already has a source copy. Repeat the value only across CTA
+  // bit 0, leaving the high offset bit clear.
+  EXPECT_EQ(store, LinearLayout({{reg, {{0, 1}}}, {block, {{1, 1}, {0, 2}}}},
+                                {{offset, 4}, {block, 4}},
+                                /*requireSurjective=*/false));
+}
+
+TEST_F(LinearLayoutTest, LocalStoreReplicasWithCorrelatedBlockBits) {
+  auto reg = S("register");
+  auto offset = S("offset");
+  auto block = S("block");
+  auto dim = S("dim");
+  LinearLayout src({{reg, {}}, {block, {{1}, {1}, {2}}}}, {dim});
+  LinearLayout shared({{offset, {{1}}}, {block, {{0}, {2}, {0}}}}, {dim});
+
+  // Source CTAs 0 and 3 already store element 0 in CTAs 0 and 1.
+  // A single register basis reaches the remaining copies in CTAs 4 and 5.
+  auto store = invertAndComposeStore(shared, src);
+  EXPECT_EQ(store,
+            LinearLayout({{reg, {{0, 4}}}, {block, {{1, 1}, {1, 0}, {0, 6}}}},
+                         {offset, block}));
 }
 
 TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
@@ -975,7 +1027,7 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
 
   LinearLayout layoutSwizzled({{S("offset"), bases2D}}, {S("row"), S("col")});
   layoutSwizzled = ensureLayoutNotSmallerThan(
-      layoutSwizzled, {{S("row"), M}, {S("col"), KPacked8b}});
+      layoutSwizzled, {S("row"), S("col")}, {M, KPacked8b}, S("offset"));
 
   auto layoutInverseSwizzled = layoutSwizzled.pseudoinvert();
 

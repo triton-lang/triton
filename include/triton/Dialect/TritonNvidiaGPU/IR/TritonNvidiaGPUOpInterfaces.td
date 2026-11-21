@@ -19,9 +19,9 @@ def TMAOpInterface : OpInterface<"TMAOpInterface"> {
   ];
 }
 
-def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface]> {
+def AsyncLoadOpInterface : OpInterface<"AsyncLoadOpInterface"> {
   let description = [{
-    Common interface for asynchronous TMA operations that write shared memory.
+    Common interface for asynchronous global-to-shared loads with barrier completion.
   }];
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
@@ -38,6 +38,11 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
       /*methodName=*/"getBarrier",
       /*args=*/(ins)>,
     InterfaceMethod<
+      /*desc=*/"Get the completion barrier operand",
+      /*retType=*/"::mlir::OpOperand&",
+      /*methodName=*/"getBarrierMutable",
+      /*args=*/(ins)>,
+    InterfaceMethod<
       /*desc=*/"Get the predicate",
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getPred",
@@ -50,9 +55,14 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
   ];
 }
 
-def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface]> {
+def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface, AsyncLoadOpInterface]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
+def AsyncStoreOpInterface : OpInterface<"AsyncStoreOpInterface"> {
   let description = [{
-    Common interface for asynchronous TMA operations that read shared memory.
+    Common interface for asynchronous stores that read shared memory and commit
+    to the bulk async-group queue.
   }];
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
@@ -69,6 +79,10 @@ def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInter
       /*methodName=*/"getSrcMutable",
       /*args=*/(ins)>,
   ];
+}
+
+def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface, AsyncStoreOpInterface]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
 def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {

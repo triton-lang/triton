@@ -1,11 +1,98 @@
 # End-to-end tests to check the correctness of the pipeliner
 
+import re
+
 import pytest
 import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_cdna5
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires Hopper")
+def test_wgmma_register_operand_lifetime(device):
+    """Regression test for #9433: RS WGMMA inputs stay live until their group completes.
+
+    Track physical A registers through two iterations to check loop-carried
+    lifetimes as well as writes within an iteration. Each m64n128k16 BF16
+    instruction reads four A registers per thread.
+    """
+
+    @triton.jit
+    def kernel(a_ptr, b_ptr, c_ptr, K: tl.constexpr):
+        pid = tl.program_id(0)
+        rows = tl.arange(0, 64)
+        cols = tl.arange(0, 128)
+        reduction = tl.arange(0, 64)
+        a_ptrs = a_ptr + rows[:, None] * K + reduction[None, :]
+        b_ptrs = b_ptr + reduction[:, None] + cols[None, :] * K
+        acc = tl.zeros((64, 128), tl.float32)
+        for iteration in range(K // 64):
+            # The uniform conditional forces A through registers loaded by ldmatrix.
+            if pid >= 0:
+                lhs = tl.load(a_ptrs)
+            else:
+                lhs = tl.load(a_ptrs)
+            rhs = tl.load(b_ptrs)
+            acc = tl.dot(lhs, rhs, acc)
+            a_ptrs += 64
+            b_ptrs += 64
+        tl.store(c_ptr + pid * 64 * 128 + rows[:, None] * 128 + cols[None, :], acc)
+
+    torch.manual_seed(0)
+    lhs = torch.randn((64, 4096), device=device, dtype=torch.bfloat16)
+    rhs = torch.randn((128, 4096), device=device, dtype=torch.bfloat16)
+    output = torch.empty((512, 64, 128), device=device, dtype=torch.float32)
+    compiled = kernel[(512, )](lhs, rhs, output, 4096)
+    expected = (lhs.float() @ rhs.float().T).expand_as(output)
+    torch.testing.assert_close(output, expected, atol=1.0, rtol=0)
+
+    sass = compiled.asm["sass"].replace("\\t", "\t")
+    loop = re.search(r"(LBB\d+):\n(.*?BRA \1;)", sass, re.DOTALL)
+    assert loop is not None, sass
+    instructions = [line.split("\t")[-1] for line in loop[2].splitlines()]
+    assert any("LDSM.16.M88.4" in instruction for instruction in instructions), sass
+    assert any("WARPGROUP.DEPBAR.LE gsb0, 0x1" in instruction for instruction in instructions), sass
+    pending_groups = []
+    current_group = set()
+    mma_count = 0
+    # Check two consecutive iterations to catch register overwrites at the start
+    # of the next iteration while the previous iteration's WGMMA is still running.
+    for instruction in instructions * 2:
+        # A wait's hexadecimal immediate gives the number of newest groups allowed
+        # to remain in flight; discard the older groups whose inputs are now reusable.
+        wait = re.search(r"WARPGROUP.DEPBAR.LE gsb0, (0x[0-9a-f]+)", instruction)
+        if wait:
+            outstanding = int(wait[1], 16)
+            pending_groups = pending_groups[-outstanding:] if outstanding else []
+            continue
+        # Match RS HGMMA and capture its second operand, the base A register.
+        # This instruction shape reads four consecutive registers per thread.
+        mma = re.search(r"HGMMA\.64x128x16\.F32\.BF16 R\d+, R(\d+), gdesc", instruction)
+        if mma:
+            current_group.update(range(int(mma[1]), int(mma[1]) + 4))
+            mma_count += 1
+            # The gsb0 suffix commits the accumulated instructions as one group.
+            if "gsb0" in instruction:
+                pending_groups.append(current_group)
+                current_group = set()
+            continue
+        # Skip an optional predicate such as @P0 or @!P0, then capture the opcode
+        # and first operand when it is a general-purpose destination register.
+        write = re.match(r"(?:@!?\w+ )?([\w.]+) R(\d+)\b", instruction)
+        if write:
+            opcode, destination = write[1], int(write[2])
+            # Expand vector destinations: LDSM.x4 and 128-bit writes cover four
+            # registers, 64-bit writes cover two, and scalar writes cover one.
+            width = 4 if opcode.startswith("LDSM.16.M88.4") or ".128" in opcode else 2 if ".64" in opcode else 1
+            written = set(range(destination, destination + width))
+            # Inputs of both uncommitted and outstanding groups must remain intact.
+            live = current_group.union(*pending_groups)
+            assert not written & live, f"WGMMA input overwritten before wait: {instruction}\n{sass}"
+    assert mma_count >= 8, sass
+    assert mma_count == 2 * sum("HGMMA" in instruction for instruction in instructions), sass
+    assert not current_group, sass
 
 
 def check_capabilities():
@@ -148,7 +235,7 @@ def mxfp_to_bf16_kernel(
     tl.static_assert(scale.dtype == tl.uint8)
     tl.static_assert(x.dtype == tl.uint8)
 
-    scale_bf16 = (scale.to(tl.uint16) << 7).to(tl.bfloat16, bitcast=True)
+    scale_bf16 = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.uint16).to(tl.bfloat16, bitcast=True)
     if is_fp8:
         if e_bits == 5 and m_bits == 2:
             x_f8 = x.to(tl.float8e5, bitcast=True)
@@ -544,11 +631,11 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
 def _supports_descriptor_scatter():
     if is_cuda():
         return torch.cuda.get_device_capability()[0] == 10
-    return is_hip_gfx1250()
+    return is_hip_cdna5()
 
 
 @pytest.mark.skipif(not _supports_descriptor_scatter(),
-                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD gfx1250")
+                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD CDNA5")
 def test_scatter_pipeline(device):
 
     def alloc_fn(size, alignment, stream):

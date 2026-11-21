@@ -236,7 +236,7 @@ def simple_mma_scaled_kernel(a_desc, b_desc, c_desc, a_scale_ptr, a_scale_stride
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_store(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
 
 
 def make_operand_descriptor(value: torch.Tensor, BLOCK_MN: int, BLOCK_K: int, MIXED_PREC: bool):
@@ -532,7 +532,7 @@ def mma_scaled_contig_kernel(a_desc, b_desc, c_desc, a_scale_ptr, b_scale_ptr, V
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_store(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
 
 
@@ -771,7 +771,7 @@ def mma_scaled_packed_block_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_store(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
     # ======= End unchanged code from `simple_mma_scaled_kernel` =======
 
 
@@ -1040,7 +1040,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     acc_smem.store(acc)
     fence_async_shared()
     tma.async_store(c_desc, [off_m, off_n], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
     # ======= End unchanged code from `mma_scaled_packed_block_kernel` =======
 
 
@@ -1141,8 +1141,8 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     scale_layout: gl.constexpr = TensorMemoryScalesLayout()
     a_scale_tmem = allocate_tensor_memory(a_scale.dtype, a_scale.type.shape, scale_layout)
     b_scale_tmem = allocate_tensor_memory(b_scale.dtype, b_scale.type.shape, scale_layout)
-    tcgen05_copy(a_scale, a_scale_tmem)
-    tcgen05_copy(b_scale, b_scale_tmem)
+    tcgen05_copy(a_scale, a_scale_tmem, pred=pred)
+    tcgen05_copy(b_scale, b_scale_tmem, pred=pred)
 
     a_format: gl.constexpr = "e2m1" if a_smem.dtype == gl.uint8 else "e4m3"
     b_format: gl.constexpr = "e2m1" if b_smem.dtype == gl.uint8 else "e4m3"
@@ -1315,13 +1315,13 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
 
         acc = acc.to(c_desc.dtype)
         # Pipeline the store by waiting for the previous store to complete.
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[acc_smem])
         acc_smem.store(acc)
         fence_async_shared()
         tma.async_store(c_desc, [epilogue_pid_m * BLOCK_M, epilogue_pid_n * BLOCK_N], acc_smem)
 
     # Wait for the last store.
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
     for i in gl.static_range(num_buffers):
         mbarrier.invalidate(load_bars.index(i))
     for i in gl.static_range(num_mma_bars):
@@ -1400,11 +1400,11 @@ def mma_scaled_epilogue_partition(p):
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
 
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[acc_smem])
         acc_smem.store(acc.to(p.c_desc.dtype))
         fence_async_shared()
         tma.async_store(p.c_desc, [pid_m * p.BLOCK_M, pid_n * p.BLOCK_N], acc_smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[acc_smem])
 
 
 @gluon.jit

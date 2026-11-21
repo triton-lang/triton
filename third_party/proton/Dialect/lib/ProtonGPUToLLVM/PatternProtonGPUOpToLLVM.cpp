@@ -4,6 +4,7 @@
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -751,7 +752,8 @@ void populateTypeConversions(LLVMTypeConverter &typeConverter,
   typeConverter.addConversion(
       [&](triton::PointerType type) -> std::optional<Type> {
         auto ctx = type.getContext();
-        return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+        return LLVM::LLVMPointerType::get(
+            ctx, targetInfo.getPtrAddressSpace(type.getAddressSpace()));
       });
 }
 

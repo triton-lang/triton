@@ -92,9 +92,9 @@ nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 // `inDimNames`. The latter does not modify the output sizes.
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 
-// Combines the layout of a CTA (input dims [register, lane, warp]) with the
-// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
-// given shape.
+// Combines CTA and CGA layouts and fits the result to shape. Repetitions grow
+// "col" for TMEM, "offset" for shared layouts, and "register" otherwise,
+// following the CTA layout's output dimension order.
 //
 // See the nomenclature note at the top of LinearLayoutConversions.cpp for why
 // the variable with type CGAEncodingAttr is called cgaLayoutAttr.
@@ -140,6 +140,9 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
+// Create LinearLayout for scale in scaled wmma. `ctaLayout` and `cgaLayout`
+// describe the dot operand itself, i.e. they are given in the operand's
+// dimension order (will be transposed for scale b)
 LinearLayout chooseScaledWmmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,

@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <numeric>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
@@ -53,8 +56,9 @@ TritonGPUTypeConverter::TritonGPUTypeConverter(MLIRContext *context,
   // NOTE: only for remapped values.
   addTargetMaterialization([](OpBuilder &builder, RankedTensorType tensorType,
                               ValueRange inputs, Location loc) {
-    auto cast =
-        triton::gpu::ConvertLayoutOp::create(builder, loc, tensorType, inputs);
+    auto cast = triton::gpu::ConvertLayoutOp::create(
+        builder, loc, tensorType, inputs,
+        triton::gpu::ConvertLayoutOp::Properties{});
     return cast.getResult();
   });
 }

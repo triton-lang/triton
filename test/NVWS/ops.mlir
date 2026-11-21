@@ -88,6 +88,26 @@ tt.func @warp_2_partition() {
   tt.return
 }
 
+// CHECK-LABEL: @warp_group_results
+tt.func @warp_group_results(%x: i32, %y: f32) -> (i32, f32) {
+  // CHECK-NEXT: [[R:%.*]]:2 = nvws.warp_group
+  %r:2 = nvws.warp_group
+  // CHECK-NEXT: partition0 num_warps(4) {
+  partition0 num_warps(4) {
+  // CHECK-NEXT: nvws.warp_group.yield %{{.*}}, %{{.*}} : i32, f32
+    nvws.warp_group.yield %x, %y : i32, f32
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition1 num_warps(4) {
+  partition1 num_warps(4) {
+  // CHECK-NEXT: nvws.warp_group.return
+    nvws.warp_group.return
+  // CHECK-NEXT: } -> (i32, f32)
+  } -> (i32, f32)
+  // CHECK-NEXT: tt.return [[R]]#0, [[R]]#1
+  tt.return %r#0, %r#1 : i32, f32
+}
+
 // CHECK-LABEL: @token_producer_consumer
 tt.func @token_producer_consumer() {
 

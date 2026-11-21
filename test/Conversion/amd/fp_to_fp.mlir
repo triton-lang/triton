@@ -1,5 +1,6 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 | FileCheck --check-prefixes=RDNA3 %s
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -253,4 +254,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 tt.func @test_scalar_conversion(%arg0: f32) -> f8E4M3FN {
   %0 = tt.fp_to_fp %arg0, rounding = rtne : f32 -> f8E4M3FN
   tt.return %0 : f8E4M3FN
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // COMMON-LABEL: @bf16_to_fp16
+  // GFX942: llvm.fptrunc {{.*}} : f32 to f16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xf16>
+  // COMMON: rocdl.cvt.pkrtz
+  tt.func private @bf16_to_fp16(%arg: bf16) -> (f16, f16) {
+    %rn = tt.fp_to_fp %arg : bf16 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
+    tt.return %rn, %rz : f16, f16
+  }
+
+  // COMMON-LABEL: @fp16_to_bf16
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // GFX942: llvm.add
+  // GFX942: llvm.trunc {{.*}} : i32 to i16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xbf16>
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // COMMON: llvm.lshr
+  // COMMON: llvm.trunc {{.*}} : i32 to i16
+  tt.func private @fp16_to_bf16(%arg: f16) -> (bf16, bf16) {
+    %rn = tt.fp_to_fp %arg : f16 -> bf16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
+    tt.return %rn, %rz : bf16, bf16
+  }
+}
+
+// -----
+
+//  RDNA3-LABEL: upcast_fp8e4m3fn_to_fp16_rdna3
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @upcast_fp8e4m3fn_to_fp16_rdna3(%arg0: tensor<1x64xf8E4M3FN, #blocked2>) {
+    // Two values are packed per i32 and rebiased by one vector<2xf16>
+    // multiply, plus a single NaN compare-and-select per element.
+    // RDNA3: llvm.and %{{.+}}, %{{.+}} : i32
+    // RDNA3: llvm.lshr %{{.+}}, %{{.+}} : i32
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i32 to vector<2xf16>
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : vector<2xf16>
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : vector<2xf16> to i32
+    // RDNA3-NEXT: llvm.or %{{.+}}, %{{.+}} : i32
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.and %{{.+}}, %{{.+}} : i32
+    // RDNA3: llvm.lshr %{{.+}}, %{{.+}} : i32
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i32 to vector<2xf16>
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : vector<2xf16>
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : vector<2xf16> to i32
+    // RDNA3-NEXT: llvm.or %{{.+}}, %{{.+}} : i32
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3-NOT: llvm.select
+    // RDNA3: llvm.return
+    %0 = tt.fp_to_fp %arg0 : tensor<1x64xf8E4M3FN, #blocked2> -> tensor<1x64xf16, #blocked2>
+    tt.return
+  }
 }

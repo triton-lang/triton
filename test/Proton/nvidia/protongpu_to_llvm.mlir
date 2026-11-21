@@ -152,7 +152,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %[[SMID]], %[[SMID_PTR]] : i32, !llvm.ptr<1>
 
-  // CHECK-DAG: %[[INIT_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-DAG: %[[INIT_TIME:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-DAG: %[[INIT_TIME_OFFSET:.*]] = llvm.mlir.constant(4 : i32) : i32
   // CHECK-DAG: %[[INIT_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[INIT_TIME_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
   // CHECK-DAG: llvm.store %[[INIT_TIME]], %[[INIT_TIME_PTR]] : i64, !llvm.ptr<1>
@@ -177,7 +177,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb2
   // CHECK: ^bb1: // pred: ^bb0
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK: nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
   // CHECK: llvm.br ^bb2
   // CHECK: ^bb2: // 2 preds: ^bb0, ^bb1
@@ -198,7 +198,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: ^[[POST]]:
   // CHECK: %{{.*}} = llvm.mlir.constant(8 : i32) : i32
   // CHECK: %[[POST_FINAL_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%{{.*}}{{\]}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
-  // CHECK: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK: %[[POST_FINAL_TIME:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK: llvm.store %[[POST_FINAL_TIME]], %[[POST_FINAL_TIME_PTR]] : i64, !llvm.ptr<1>
   // CHECK: llvm.br ^[[RET]]
   // CHECK: ^[[RET]]:

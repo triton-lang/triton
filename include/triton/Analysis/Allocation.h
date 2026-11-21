@@ -9,6 +9,7 @@
 #include "llvm/ADT/SetVector.h"
 
 #include <limits>
+#include <optional>
 
 namespace mlir {
 
@@ -20,6 +21,17 @@ class AllocationAnalysis;
 using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
+
+unsigned getAtomicResultScratchSize(Value result);
+
+/// Returns whether an operation uses scratch memory across CTAs.
+bool hasCrossCTAScratch(Operation *op);
+
+/// For result-broadcast scratch, returns the CTA bits broadcast from
+/// each group leader. Physical scratch owners have these bits clear.
+/// Scalar atomic results are broadcast from CTA0 across all CTAs.
+/// Callers check whether scratch has been allocated.
+std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
@@ -137,9 +149,9 @@ public:
 
   /// Returns the scratch buffer id of the given value.
   BufferId getBufferId(Operation *operation) const {
-    if (opScratch.count(operation)) {
+    if (opScratch.contains(operation)) {
       return opScratch.lookup(operation)->id;
-    } else if (opVirtual.count(operation)) {
+    } else if (opVirtual.contains(operation)) {
       return opVirtual.lookup(operation)->id;
     } else {
       return InvalidBufferId;
@@ -149,11 +161,6 @@ public:
   /// Returns if the given buffer is a virtual buffer.
   bool isVirtualBuffer(BufferId bufferId) const {
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
-  }
-
-  /// Returns if the given buffer is an explicit buffer.
-  bool isExplicitBuffer(BufferId bufferId) const {
-    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Explicit;
   }
 
   /// Returns the size of total shared memory allocated

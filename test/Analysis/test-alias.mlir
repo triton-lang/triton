@@ -64,6 +64,8 @@ tt.func @subview(%A : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory>) 
   %a = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // expected-remark @below {{%1 -> %0}}
   %cst1 = ttg.memdesc_index %a[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{%2 -> %arg0}}
+  %arg_view = ttg.memdesc_index %A[%index] : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory>
   tt.return
 }
 

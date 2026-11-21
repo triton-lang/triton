@@ -265,9 +265,12 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     pid_n = pid // num_pid_m
 
     N_PACKED = N * ACTIVATION_REDUCTION_N
-    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am,
-                                               pid_n * BLOCK_N_PACKED * stride_bn, stride_am, stride_ak, stride_bn,
-                                               stride_bk, SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N_PACKED, K, BLOCK_M,
+    # Descriptor base stays at tensor origin, tile offsets are passed as coordinates.
+    # Otherwise kernel prefetch is out of bounds and fails
+    off_am = pid_m * BLOCK_M
+    off_bn = pid_n * BLOCK_N_PACKED
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
+                                               SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N_PACKED, K, BLOCK_M,
                                                BLOCK_N_PACKED, BLOCK_K, TRANSPOSE_B)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
@@ -277,16 +280,18 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     accumulator = ttgl.zeros((BLOCK_M, BLOCK_N_PACKED), dtype=c_ptr.type.element_ty, layout=ACCUMULATOR_LAYOUT)
 
     # Prefetching buffers we load in the prologue does not make sense
-    issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, 0, 0, BLOCK_K, NUM_BUFFERS,
+    issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K, NUM_BUFFERS,
                                  TRANSPOSE_B)
 
     for _ in ttgl.static_range(NUM_BUFFERS - 1):
-        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+        producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                               TRANSPOSE_B)
 
     for _ in range(0, ttgl.cdiv(K, BLOCK_K) - (NUM_BUFFERS - 1)):
-        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+        producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                               TRANSPOSE_B)
         # We prefetch distance - 1 iterations ahead because producer is already incremented by 1
-        issue_l2_prefetches(L2_PREFETCH_DISTANCE - 1, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B)
+        issue_l2_prefetches(L2_PREFETCH_DISTANCE - 1, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K, TRANSPOSE_B)
         consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                            accumulator, (NUM_BUFFERS - 1) * 2, NUM_BUFFERS, TRANSPOSE_B)
 
@@ -338,9 +343,12 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
 
-    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am, pid_n * BLOCK_N * stride_bn,
-                                               stride_am, stride_ak, stride_bn, stride_bk, SHARED_LAYOUT_A,
-                                               SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
+    # Same as gemm_tdm_pipelined_kernel: descriptor base at tensor origin, tile offsets as coordinates.
+    off_am = pid_m * BLOCK_M
+    off_bn = pid_n * BLOCK_N
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
+                                               SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                               TRANSPOSE_B)
     c_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                                        block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT_ACC)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
@@ -350,11 +358,12 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
     consumer = 0
     accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=WMMA_LAYOUT)
 
-    issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, 0, 0, BLOCK_K, NUM_BUFFERS,
+    issue_l2_prefetches_prologue(L2_PREFETCH_DISTANCE, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K, NUM_BUFFERS,
                                  TRANSPOSE_B)
 
     for _ in ttgl.static_range(NUM_BUFFERS - 1):
-        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+        producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                               TRANSPOSE_B)
 
     ttgl.amd.cdna5.tdm.async_wait((NUM_BUFFERS - 2) * 2)
     # LDS load SubIteration0
@@ -366,8 +375,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
 
     pred = 0 - epilogue_lb
     pred = (pred >> 31) & 1
-    producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                           pred=pred)
+    producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                           TRANSPOSE_B, pred=pred)
 
     ttgl.assume(loop_ub > 0)
     num_ctas: ttgl.constexpr = ttgl.num_ctas()
@@ -381,7 +390,7 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
 
         # SubIteration1
         # We prefetch distance - 1 iterations ahead because producer is already incremented by 1
-        issue_l2_prefetches(L2_PREFETCH_DISTANCE - 1, producer, a_desc, b_desc, 0, 0, BLOCK_K, TRANSPOSE_B)
+        issue_l2_prefetches(L2_PREFETCH_DISTANCE - 1, producer, a_desc, b_desc, off_am, off_bn, BLOCK_K, TRANSPOSE_B)
 
         # LDS load SubIteration2
         a2, b2 = lds_subtile_load(consumer, 2 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
@@ -407,8 +416,8 @@ def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,
         # If we are in epilogue, we have already issued our tile loads
         pred = (i + 1) - epilogue_lb
         pred = (pred >> 31) & 1
-        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B,
-                               pred=pred)
+        producer = issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                               TRANSPOSE_B, pred=pred)
         # LDS load SubIteration0 for next tile
         a0, b0 = lds_subtile_load(consumer, 0, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
                                   TRANSPOSE_B, SUBTILE_LEN)

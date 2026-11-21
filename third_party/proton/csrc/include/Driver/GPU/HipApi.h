@@ -17,6 +17,8 @@ hipError_t launchKernel(hipFunction_t f, unsigned int gridDimX,
 
 template <bool CheckSuccess> hipError_t ctxGetDevice(hipDevice_t *device);
 
+template <bool CheckSuccess> hipError_t init(unsigned int flags);
+
 template <bool CheckSuccess> hipError_t deviceSynchronize();
 
 template <bool CheckSuccess>
