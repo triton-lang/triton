@@ -1,9 +1,11 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_TARGETFEATURES_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_DIALECT_TRITONAMDGPU_IR_TARGETFEATURES_H_
 
+#include "mlir/Dialect/LLVMIR/ROCDLTargetInfo.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <optional>
 #include <string>
 
@@ -12,6 +14,7 @@ namespace mlir::triton::amdgpu {
 inline constexpr llvm::StringLiteral kWmmaRestrictedInstsFeature =
     "wmma-restricted-insts";
 
+// For tuning heuristics only; query capabilities with has() or supports*().
 enum class ISAFamily {
   Unknown,
   CDNA2,
@@ -23,6 +26,8 @@ enum class ISAFamily {
   RDNA4,
 };
 
+// Parsed by ROCDL::TargetInfo, so processors, target IDs and triples all work.
+// An empty or unknown arch yields a target with no features.
 class TargetFeatures {
 public:
   struct LDSTransLoadParams {
@@ -51,6 +56,12 @@ public:
 
   ISAFamily getISAFamily() const;
 
+  const ::mlir::ROCDL::TargetInfo &getTargetInfo() const { return info; }
+  llvm::AMDGPU::GPUKind getGPUKind() const { return info.getGPUKind(); }
+  bool has(llvm::AMDGPU::AMDGPUFeature feature) const {
+    return info.has(feature);
+  }
+
   bool isCDNA() const;
   bool isRDNA() const;
   bool isCDNA3() const;
@@ -61,6 +72,7 @@ public:
   int getWarpSize() const;
   bool supportsWaveId() const;
   int getSharedMemorySize() const;
+  int getSharedMemoryBanks() const;
   size_t getSharedMemoryPartitionSize() const;
 
   std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
@@ -102,6 +114,7 @@ private:
 
   std::string arch;
   std::string baseArch;
+  ::mlir::ROCDL::TargetInfo info;
   ISAFamily isaFamily;
 };
 

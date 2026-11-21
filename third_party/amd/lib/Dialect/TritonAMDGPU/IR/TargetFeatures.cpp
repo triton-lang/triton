@@ -9,42 +9,16 @@
 namespace mlir::triton::amdgpu {
 
 namespace {
-struct GfxArch {
-  unsigned major;
-  unsigned minor;
-  unsigned patch;
-};
-
-std::optional<GfxArch> parseGfxArch(StringRef arch) {
-  if (!arch.consume_front("gfx"))
-    return std::nullopt;
-
-  bool strict = arch.consume_back("-strict");
-
-  if (arch.size() < 3)
-    return std::nullopt;
-
-  unsigned patch;
-  if (arch.take_back(1).getAsInteger(16, patch))
-    return std::nullopt;
-  arch = arch.drop_back();
-
-  unsigned minor;
-  if (arch.take_back(1).getAsInteger(10, minor))
-    return std::nullopt;
-  arch = arch.drop_back();
-
-  unsigned major;
-  if (arch.getAsInteger(10, major))
-    return std::nullopt;
-
-  if (strict && !(major == 12 && minor == 5))
-    return std::nullopt;
-
-  return GfxArch{major, minor, patch};
+::mlir::ROCDL::TargetInfo parseTargetInfo(StringRef arch) {
+  // Passes may run without a target.
+  if (arch.empty())
+    return {};
+  FailureOr<::mlir::ROCDL::TargetInfo> info =
+      ::mlir::ROCDL::TargetInfo::get(arch);
+  return succeeded(info) ? *info : ::mlir::ROCDL::TargetInfo();
 }
 
-ISAFamily computeISAFamily(StringRef arch);
+ISAFamily computeISAFamily(const ::mlir::ROCDL::TargetInfo &info);
 } // namespace
 
 TargetFeatures::TargetFeatures(std::optional<StringRef> arch)
@@ -52,7 +26,7 @@ TargetFeatures::TargetFeatures(std::optional<StringRef> arch)
 
 TargetFeatures::TargetFeatures(StringRef arch)
     : arch(arch.str()), baseArch(arch.split("-strict").first),
-      isaFamily(computeISAFamily(arch)) {}
+      info(parseTargetInfo(arch)), isaFamily(computeISAFamily(info)) {}
 
 TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
   auto targetAttr =
@@ -74,36 +48,32 @@ StringRef TargetFeatures::getBaseArch() const { return baseArch; }
 ISAFamily TargetFeatures::getISAFamily() const { return isaFamily; }
 
 namespace {
-ISAFamily computeISAFamily(StringRef arch) {
-  std::optional<GfxArch> gfxArch = parseGfxArch(arch);
-  if (!gfxArch)
-    return ISAFamily::Unknown;
-  auto [major, minor, patch] = *gfxArch;
-
-  // See https://llvm.org/docs/AMDGPUUsage.html#processors for how to
-  // categorize the following target gfx architectures. Parse the gfx number
-  // directly here instead of depending on LLVM's target parser.
-  if (major == 12 && minor == 5)
-    return ISAFamily::CDNA5;
-
-  // CDNA ISA cases.
-  if (major == 9) {
-    if (minor == 5 && patch == 0)
+ISAFamily computeISAFamily(const ::mlir::ROCDL::TargetInfo &info) {
+  // Classify by generation and feature rather than by processor name, so that
+  // generic targets and processors added to LLVM later land in the family
+  // whose instructions they have. See
+  // https://llvm.org/docs/AMDGPUUsage.html#processors for the grouping.
+  using namespace llvm::AMDGPU;
+  if (info.isGeneration(9)) {
+    if (info.has(FEAT_GFX950_INSTS))
       return ISAFamily::CDNA4;
-    if (minor == 4 && patch == 2)
+    if (info.has(FEAT_GFX940_INSTS))
       return ISAFamily::CDNA3;
-    if (minor == 0 && patch == 10)
+    if (info.has(FEAT_GFX90A_INSTS))
       return ISAFamily::CDNA2;
+    return ISAFamily::Unknown;
   }
-
-  // RDNA ISA cases.
-  if (major == 12 && minor == 0)
-    return ISAFamily::RDNA4;
-  if (major == 11 && minor == 7)
-    return ISAFamily::RDNA4m;
-  if (major == 11)
+  if (info.isGeneration(11)) {
+    // gfx11.7 carries the gfx12-style 128-bit-operand WMMA instructions.
+    if (info.has(FEAT_WMMA_128B_INSTS))
+      return ISAFamily::RDNA4m;
     return ISAFamily::RDNA3;
-
+  }
+  if (info.isGeneration(12)) {
+    if (info.has(FEAT_GFX1250_INSTS))
+      return ISAFamily::CDNA5;
+    return ISAFamily::RDNA4;
+  }
   return ISAFamily::Unknown;
 }
 } // namespace
@@ -129,18 +99,11 @@ bool TargetFeatures::isCDNA5() const {
 }
 
 bool TargetFeatures::isGFX1250Strict() const {
-  return isCDNA5() && arch != baseArch;
+  return getGPUKind() == llvm::AMDGPU::GK_GFX1250_STRICT;
 }
 
 int TargetFeatures::getWarpSize() const {
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA2:
-  case ISAFamily::CDNA3:
-  case ISAFamily::CDNA4:
-    return 64;
-  default:
-    return 32;
-  }
+  return info.getWavefrontSize().value_or(32);
 }
 
 bool TargetFeatures::supportsWaveId() const {
@@ -149,15 +112,11 @@ bool TargetFeatures::supportsWaveId() const {
 }
 
 int TargetFeatures::getSharedMemorySize() const {
-  // Should return the maximum capacity in bytes.
-  switch (getISAFamily()) {
-  case ISAFamily::CDNA5:
-    return 320 * 1024;
-  case ISAFamily::CDNA4:
-    return 160 * 1024;
-  default:
-    return 64 * 1024;
-  }
+  return info.getMaxAddressableLocalMemorySize().value_or(64 * 1024);
+}
+
+int TargetFeatures::getSharedMemoryBanks() const {
+  return info.getLDSBankCount().value_or(32);
 }
 
 size_t TargetFeatures::getSharedMemoryPartitionSize() const {
