@@ -163,7 +163,7 @@ tt.func @hoist_above_fptofp(%arg0: tensor<1024xf8E4M3FNUZ, #layout0>) -> tensor<
 // CHECK: tt.fp_to_fp %[[CVT]]
 // CHECK-NOT: ttg.convert_layout
 // CHECK: tt.return
-  %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<1024xf8E4M3FNUZ, #layout0> -> tensor<1024xf32, #layout0>
+  %0 = tt.fp_to_fp %arg0 : tensor<1024xf8E4M3FNUZ, #layout0> -> tensor<1024xf32, #layout0>
   %1 = ttg.convert_layout %0 : tensor<1024xf32, #layout0> -> tensor<1024xf32, #layout1>
   tt.return %1 : tensor<1024xf32, #layout1>
 }
