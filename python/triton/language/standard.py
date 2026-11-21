@@ -480,18 +480,8 @@ def _bitonic_merge(x, stage: core.constexpr, order: core.constexpr, n_dims: core
 
 @jit
 def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
-    """
-    Sorts a tensor along a specified dimension.
-
-    :param x: The input tensor to be sorted.
-    :type x: Tensor
-    :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
-    :type dim: int, optional
-    :param k: the number of top elements to select. If none, assume k = x.shape[dim]
-    :type k: int, optional
-    :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
-    :type descending: bool, optional
-    """
+    # Shared implementation of `sort` (k is None) and `topk`; see their docstrings
+    # for the user-facing contract.
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else _wrap_axis(dim, len(x.shape))
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
@@ -531,6 +521,28 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
 
 @jit
 def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    """
+    Sorts a tensor along a specified dimension.
+
+    Floating-point elements are compared with IEEE-754 :code:`<` and :code:`>`.
+    If a row contains a NaN, the result for that row is unspecified: elements
+    can be duplicated or dropped, and a single NaN can overwrite every other
+    element. A row that holds both :code:`-0.0` and :code:`+0.0` can likewise
+    come back with one of them duplicated. To sort such data, sort an integer
+    key instead: bitcast to the signed integer type of the same width, flip
+    the non-sign bits of negative values, sort, then apply the same map to the
+    result (for a :py:func:`topk` of an 8- or 16-bit key, cast the result back
+    to the key dtype first). This orders :code:`-0.0` before :code:`+0.0` and
+    NaNs with the sign bit clear after :code:`+inf`. :code:`float8e8m0fnu` has
+    no sign bit: its bits, bitcast to :code:`uint8`, already sort in value order.
+
+    :param x: The input tensor to be sorted.
+    :type x: Tensor
+    :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
+    :type descending: bool, optional
+    """
     return sort_impl(x, dim=dim, descending=descending)
 
 
@@ -539,7 +551,12 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
     """
     Returns the k largest (or smallest) elements of the input tensor along the specified dimension.
 
-    The elements are returned in sorted order (largest first).
+    The elements are returned in sorted order: largest first if :code:`descending`
+    is True, smallest first otherwise.
+
+    NaN and signed zeros are handled as described in :py:func:`sort`. In
+    particular, if a row contains a NaN, which elements are returned for that
+    row is unspecified.
 
     :param x: The input tensor.
     :type x: Tensor
@@ -550,7 +567,7 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
     :type dim: int, optional
     :param descending: If set to True, returns k largest elements. If set to False, returns k smallest elements.
     :type descending: bool, optional
-    :return: A tensor containing the k largest elements along the specified dimension.
+    :return: A tensor containing the k largest (or smallest) elements along the specified dimension.
     :rtype: Tensor
 
     Example::
