@@ -48,3 +48,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// This pass used to assert that only a single CTA was supported. Split the
+// CTAs over the most significant dims instead, like getDefaultBlockedEncoding.
+// CHECK: [[$CTA2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @infer_two_ctas
+  tt.func public @infer_two_ctas(%in_ptr : !tt.ptr<f32>, %out_ptr : !tt.ptr<f32>) {
+    // CHECK: %[[IN:.+]] = gluon.set_auto_layout {{.*}} : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, [[$CTA2]]>
+    // CHECK: tt.load %[[IN]], {{.*}} : tensor<128x256x!tt.ptr<f32>, [[$CTA2]]>
+    %mask = arith.constant dense<0> : tensor<128x256xi1, #gluon.auto_encoding>
+    %in_ptrs_1 = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding>
+    %in_ptrs_2 = gluon.set_auto_layout %in_ptrs_1 : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    %mask_in = gluon.set_auto_layout %mask : tensor<128x256xi1, #gluon.auto_encoding> -> tensor<128x256xi1, #gluon.coalesced_encoding>
+    %value = tt.load %in_ptrs_2, %mask_in : tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    %out_ptrs_1 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding>
+    %out_ptrs_2 = gluon.set_auto_layout %out_ptrs_1 : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    %mask_out = gluon.set_auto_layout %mask : tensor<128x256xi1, #gluon.auto_encoding> -> tensor<128x256xi1, #gluon.coalesced_encoding>
+    // CHECK: %[[OUT:.+]] = gluon.set_auto_layout {{.*}} : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, [[$CTA2]]>
+    // CHECK: tt.store %[[OUT]], %{{.*}}, {{.*}} : tensor<128x256x!tt.ptr<f32>, [[$CTA2]]>
+    tt.store %out_ptrs_2, %value, %mask_out : tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK: [[$CTA4:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\], \[2, 0\]\]}}}
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @infer_four_ctas
+  tt.func public @infer_four_ctas(%in_ptr : !tt.ptr<f32>) {
+    // CHECK: %[[IN:.+]] = gluon.set_auto_layout {{.*}} : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, [[$CTA4]]>
+    %in_ptrs_1 = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding>
+    %in_ptrs_2 = gluon.set_auto_layout %in_ptrs_1 : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    %mask_in = arith.constant dense<0> : tensor<128x256xi1, #gluon.coalesced_encoding>
+    %value = tt.load %in_ptrs_2, %mask_in : tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    tt.return
+  }
+}
