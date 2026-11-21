@@ -5,6 +5,7 @@
 #include "ProfileAllocatorRuntime.h"
 
 #include <mutex>
+#include <optional>
 
 using namespace triton::cuda_allocator;
 
@@ -15,7 +16,7 @@ struct ProfileAllocator {
 };
 std::unique_ptr<ProfileAllocator> allocator;
 std::mutex mutex;
-CUmemAllocationHandleType handleType = CU_MEM_HANDLE_TYPE_NONE;
+std::optional<drv::HandleType> handleType;
 bool configFrozen = false;
 
 CUresult ensureInitialized() {
@@ -34,11 +35,11 @@ CUresult ensureInitialized() {
   return CUDA_SUCCESS;
 }
 
-CUmemAllocationHandleType freezeConfig() {
-  if (handleType == CU_MEM_HANDLE_TYPE_NONE)
+drv::HandleType freezeConfig() {
+  if (!handleType)
     handleType = defaultShareableHandleType();
   configFrozen = true;
-  return handleType;
+  return *handleType;
 }
 
 AllocNode *findAllocation(uintptr_t address) {
@@ -72,19 +73,14 @@ extern "C" void *gsanProfileMalloc(ssize_t size, int device, void *stream) {
   if (err == CUDA_SUCCESS)
     err = ensureInitialized();
   if (err != CUDA_SUCCESS) {
-    printCUDAError(err);
+    printDriverError(err);
     return nullptr;
   }
-  CUmemAllocationProp prop = {};
-  prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-  prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  prop.location.id = device;
-  prop.requestedHandleTypes = freezeConfig();
+  const auto type = freezeConfig();
   size_t pageSize = 0;
-  err = cuMemGetAllocationGranularity(&pageSize, &prop,
-                                      CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+  err = drv::allocationGranularity(device, type, &pageSize);
   if (err != CUDA_SUCCESS) {
-    printCUDAError(err);
+    printDriverError(err);
     return nullptr;
   }
   // Round data so that its quarter-sized metadata is page aligned too.
@@ -92,11 +88,12 @@ extern "C" void *gsanProfileMalloc(ssize_t size, int device, void *stream) {
   auto *node = allocateNode(&allocator->root, allocSize);
   if (!node)
     return nullptr;
-  err = createAllocation(
-      node, allocSize, gsan_profile::metadataAddress(node->virtualAddress),
-      metadataSize(allocSize), prop, reinterpret_cast<CUstream>(stream));
+  err = createAllocation(node, allocSize,
+                         gsan_profile::metadataAddress(node->virtualAddress),
+                         metadataSize(allocSize), device, type,
+                         reinterpret_cast<CUstream>(stream));
   if (err != CUDA_SUCCESS) {
-    printCUDAError(err);
+    printDriverError(err);
     freeNode(node);
     return nullptr;
   }
@@ -152,7 +149,7 @@ PyObject *pyFree(PyObject *, PyObject *args) {
 }
 
 PyObject *pyConfigure(PyObject *, PyObject *arg) {
-  CUmemAllocationHandleType requested;
+  drv::HandleType requested;
   if (!parseShareableHandleTypeArg(arg, "handle_type", &requested))
     return nullptr;
   std::lock_guard guard(mutex);
@@ -211,7 +208,7 @@ PyObject *pyExport(PyObject *, PyObject *args) {
   if (!PyArg_ParseTuple(args, "OO", &pointer, &kind))
     return nullptr;
   void *ptr;
-  CUmemAllocationHandleType type;
+  drv::HandleType type;
   if (!parseVoidPtrArg(pointer, &ptr) ||
       !parseShareableHandleTypeArg(kind, "handle_type", &type))
     return nullptr;
@@ -237,7 +234,7 @@ PyObject *pyImport(PyObject *, PyObject *args) {
   if (!PyArg_ParseTuple(args, "OOKiO", &realObj, &shadowObj, &size, &device,
                         &kind))
     return nullptr;
-  CUmemAllocationHandleType type;
+  drv::HandleType type;
   ShareableHandle real = {}, shadow = {};
   if (!parseShareableHandleTypeArg(kind, "handle_type", &type) ||
       !parseShareableHandleArg(realObj, "real_handle", type, &real) ||
@@ -288,7 +285,7 @@ PyObject *pyReset(PyObject *, PyObject *) {
     allocator.reset();
   }
   configFrozen = false;
-  handleType = CU_MEM_HANDLE_TYPE_NONE;
+  handleType.reset();
   Py_RETURN_NONE;
 }
 

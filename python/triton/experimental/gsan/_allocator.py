@@ -81,11 +81,14 @@ def configure(
         clock_buffer_size (int, optional): When doing an atomic release operation, GSan uses a
             circular buffer to record what memory accesses have been released. If the writing CTA
             has done more release writes than there are circular buffer entries, then the atomic
-            flag cannot be read and you will need to increase the buffer size. If omitted, GSan
-            first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to 1024.
+            flag cannot be read and you will need to increase the buffer size. Must be in
+            ``[1, 65535]``, and small enough for the per-device runtime state to fit in 1 GiB. If
+            omitted, GSan first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to
+            1024, or the largest size that fits when the topology has too many SMs for 1024.
         handle_type (ShareableHandleType, optional): Type of shareable handle requested for GSan
             allocations. If omitted, GSan uses fabric handles when ``PYTORCH_CUDA_ALLOC_CONF``
-            contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors.
+            contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors. Fabric
+            handles are CUDA-only.
     """
     _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type)
 
