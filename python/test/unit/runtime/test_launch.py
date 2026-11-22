@@ -343,8 +343,9 @@ def test_launch_with_options(options, monkeypatch) -> None:
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("grid_type", [tuple, list])
 @pytest.mark.parametrize("keyword", [False, True])
-def test_callable_grid_launch_arguments(device, keyword):
+def test_callable_grid_launch_arguments(device, keyword, grid_type):
 
     @triton.jit
     def kernel(X, N, VALUE: tl.constexpr = 7):
@@ -357,12 +358,16 @@ def test_callable_grid_launch_arguments(device, keyword):
         assert args["X"] is x
         assert isinstance(args["N"], int)
         assert args["VALUE"] == 7
-        return (args["X"].numel() // args["N"], args["X"].shape[1])
+        return grid_type((args["X"].numel() // args["N"], args["X"].shape[1]))
 
     if keyword:
         kernel[grid](N=x.shape[1], X=x)
     else:
         kernel[grid](x, x.shape[1])
+    torch.testing.assert_close(x, torch.full_like(x, 7))
+
+    x.zero_()
+    kernel[grid_type((2, 4))](x, x.shape[1])
     torch.testing.assert_close(x, torch.full_like(x, 7))
 
 

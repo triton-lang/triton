@@ -1548,7 +1548,7 @@ class GridExecutor:
             args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
             # iterate through grid
             assert len(grid) <= 3, "grid must have at most 3 dimensions"
-            grid = grid + (1, ) * (3 - len(grid))
+            grid = tuple(grid) + (1, ) * (3 - len(grid))
             interpreter_builder.set_grid_dim(*grid)
             try:
                 for x in range(grid[0]):
