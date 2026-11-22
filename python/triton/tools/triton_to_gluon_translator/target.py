@@ -68,6 +68,6 @@ class TranslatorTarget(str, Enum):
             if self in (TranslatorTarget.SM90):
                 return f"{base}.hopper_helpers"
             if self in (TranslatorTarget.SM80):
-                return f"{base}.nvidia_helpers"
+                return f"{base}.ampere_helpers"
 
         return f"{base}.common_helpers"
