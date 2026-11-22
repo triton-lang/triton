@@ -635,8 +635,7 @@ def test_err_range_zero_step():
         tl.store(ptr, acc)
 
     with pytest.raises(CompilationError) as e:
-        triton.compile(
-            triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*i32"}, constexprs={"STEP": 0}))
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*i32"}, constexprs={"STEP": 0}))
 
     err_msg = format_exception(e.type, value=e.value, tb=e.tb)
     assert "must not be zero" in err_msg, "error should explain the zero step"
