@@ -4,6 +4,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
+from triton.language.target_info import current_target
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.common_helpers import (
@@ -104,14 +105,21 @@ def get_shared_memory_mma_operand(value, operand_index, allow_transpose, is_fp4_
 # ---- NVIDIA TMA tensor descriptors ----
 
 
+@gluon.constexpr_function
+def _supports_tma(target=None):
+    return target is not None and target.backend == "cuda" and target.arch >= 90
+
+
 @gluon.jit
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
+    ttgl.static_assert(_supports_tma(current_target()), "tensor descriptors require TMA (sm90+)")
     layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
     return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
 
 
 @gluon.jit
 def tl_store_tensor_descriptor(desc, offsets, value):
+    ttgl.static_assert(_supports_tma(current_target()), "tensor descriptors require TMA (sm90+)")
     alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     fence_async_shared()
     tma.async_store(desc, offsets, alloc)
@@ -120,6 +128,7 @@ def tl_store_tensor_descriptor(desc, offsets, value):
 
 @gluon.jit
 def tl_load_tensor_descriptor(desc, offsets):
+    ttgl.static_assert(_supports_tma(current_target()), "tensor descriptors require TMA (sm90+)")
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)

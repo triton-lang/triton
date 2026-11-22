@@ -7,6 +7,7 @@ import pytest
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
+from triton.compiler.errors import CompilationError
 from triton.tools.triton_to_gluon_translator.translator import convert_triton_to_gluon
 from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
 from triton._internal_testing import (
@@ -36,9 +37,10 @@ def _convert_host_descriptor(desc):
     return convert_host_descriptor(desc)
 
 
-def convert_kernel(kernel, kernel_name, tmp_path):
-    t = current_target()
-    target = TranslatorTarget(f"sm{t.arch}" if t.backend == "cuda" else t.arch)
+def convert_kernel(kernel, kernel_name, tmp_path, target=None):
+    if target is None:
+        t = current_target()
+        target = TranslatorTarget(f"sm{t.arch}" if t.backend == "cuda" else t.arch)
 
     converted = convert_triton_to_gluon([kernel], target=target)
 
@@ -558,6 +560,20 @@ def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
     kernel[grid](x, y, M, N, M, N)
 
     torch.testing.assert_close(y, x, atol=0, rtol=0)
+
+
+def test_triton_to_gluon_make_tensor_descriptor_requires_tma(tmp_path):
+    if not is_cuda() or is_hopper_or_newer():
+        pytest.skip("Requires a pre-Hopper NVIDIA GPU")
+    kernel = convert_kernel(make_tensor_descriptor_copy_kernel, "make_tensor_descriptor_copy_kernel", tmp_path,
+                            target=TranslatorTarget("sm80"))
+
+    M = N = 64
+    x = torch.randn((M, N), device="cuda", dtype=torch.float16)
+    y = torch.zeros_like(x)
+    with pytest.raises(CompilationError) as e:
+        kernel[(1, )](x, y, M, N, M, N)
+    assert "tensor descriptors require TMA (sm90+)" in str(e.value.__cause__)
 
 
 @triton.jit
