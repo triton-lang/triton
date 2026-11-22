@@ -930,6 +930,46 @@ public:
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
+      // LLVM's atomicrmw is unconditional.  On pre-Hopper NVIDIA targets a
+      // BF16 add has no native PTX instruction, so mirror the predicated CAS
+      // fallback used by the normal tt.atomic_rmw lowering in
+      // LoadStoreOpToLLVM.cpp.  Going through emitAtomicRMW with a predicate
+      // would emit inline `atom.add.bf16.global`, which ptxas rejects below
+      // sm_90.
+      if (pred && valueElemTy.isBF16() &&
+          !targetInfo->supportNativeBF16AtomicAdd()) {
+        auto llvmAtomicBinOp = matchAtomicOp(rmwOp);
+        auto llvmAtomicMemOrdering = getMemoryOrdering(sem);
+        if (!llvmAtomicBinOp || !llvmAtomicMemOrdering)
+          return failure();
+
+        Value undefVal = b.undef(valueElemTy);
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+        endBlock->addArgument({valueElemTy}, {loc});
+
+        rewriter.setInsertionPointToEnd(curBlock);
+        LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock,
+                               undefVal);
+
+        rewriter.setInsertionPointToEnd(atomicBlock);
+        Value atom = LLVM::AtomicRMWOp::create(
+                         rewriter, loc, *llvmAtomicBinOp, rmwPtr, rmwVal,
+                         *llvmAtomicMemOrdering,
+                         targetInfo->getAtomicSyncScope(scope))
+                         .getResult();
+        LLVM::BrOp::create(rewriter, loc, atom, endBlock);
+
+        rewriter.setInsertionPointToStart(endBlock);
+        emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
+                              /*isRmw=*/true, static_cast<int32_t>(sem),
+                              static_cast<int32_t>(scope), sourceLoc);
+        resultVals[i] = endBlock->getArgument(0);
+        continue;
+      }
+
       SmallVector<Value> rmwVals{rmwVal};
       auto old =
           NVIDIA::emitAtomicRMW(rewriter, loc, valueElemTy, rmwPtr, rmwVals,

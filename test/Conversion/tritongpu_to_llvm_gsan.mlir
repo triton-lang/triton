@@ -72,6 +72,21 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 // -----
 
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.target" = "cuda:86", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @bf16_atomic_add_prehopper
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.atomicrmw fadd
+  // CHECK-NOT: atom.add.bf16
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @bf16_atomic_add_prehopper(%ptr: !tt.ptr<bf16>, %val: bf16) {
+    %0 = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val : (!tt.ptr<bf16>, bf16) -> bf16
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @atomic_load_store
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
