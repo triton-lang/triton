@@ -1095,10 +1095,20 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK-LABEL: @sm120_dot_scaled_fp16_fp8_fallback
   // CHECK-NOT: tt.dot_scaled
   // CHECK: %[[SCALE_BITS:.*]] = arith.shli
-  // CHECK: %[[SCALE_F32:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xf32,
-  // CHECK: %[[DECODED_SCALE:.*]] = math.fma %[[SCALE_F32]], %{{.*}}, %[[SCALE_F32]]
-  // CHECK: arith.truncf %[[DECODED_SCALE]] : {{.*}} to tensor<{{.*}}xf16,
-  // CHECK: tt.dot
+  // CHECK: %[[CLAMPED_BITS:.*]] = arith.maxui %[[SCALE_BITS]],
+  // CHECK: %[[SCALE_F32:.*]] = tt.bitcast %[[CLAMPED_BITS]] : {{.*}} -> tensor<{{.*}}xf32,
+  // CHECK: math.fma %[[SCALE_F32]], %{{.*}}, %[[SCALE_F32]]
+  // CHECK-NOT: arith.truncf
+  // CHECK: %[[LHS_PRODUCT:.*]] = arith.mulf {{.*}} : tensor<{{.*}}xf32,
+  // CHECK: %[[LHS_F16:.*]] = arith.truncf %[[LHS_PRODUCT]] : {{.*}} to tensor<{{.*}}xf16,
+  // CHECK: %[[LHS:.*]] = ttg.convert_layout %[[LHS_F16]] :
+  // CHECK-NOT: arith.truncf
+  // CHECK: %[[RHS_PRODUCT:.*]] = arith.mulf {{.*}} : tensor<{{.*}}xf32,
+  // CHECK: %[[RHS_F16:.*]] = arith.truncf %[[RHS_PRODUCT]] : {{.*}} to tensor<{{.*}}xf16,
+  // CHECK: %[[RHS:.*]] = ttg.convert_layout %[[RHS_F16]] :
+  // CHECK-DAG: %[[DOT_A:.*]] = ttg.convert_layout %[[LHS]] :
+  // CHECK-DAG: %[[DOT_B:.*]] = ttg.convert_layout %[[RHS]] :
+  // CHECK: tt.dot %[[DOT_A]], %[[DOT_B]],
   // CHECK-NOT: tt.dot_scaled
   // CHECK: tt.return
   tt.func public @sm120_dot_scaled_fp16_fp8_fallback(

@@ -1391,6 +1391,42 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             assert "kind::mxf8f6f4" in ptx
 
 
+@pytest.mark.parametrize("scaled_side", ["lhs", "rhs"])
+def test_dot_scaled_fp16_e8m0_range(scaled_side, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("Requires NVIDIA compute capability >= 8")
+
+    @triton.jit
+    def kernel(A, B, Scale, Out, SCALE_LHS: tl.constexpr):
+        i = tl.arange(0, 32)
+        offsets = i[:, None] * 32 + i[None, :]
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        scale = tl.load(Scale + i[:, None])
+        if SCALE_LHS:
+            c = tl.dot_scaled(a, scale, "fp16", b, None, "fp16")
+        else:
+            c = tl.dot_scaled(a, None, "fp16", b, scale, "fp16")
+        tl.store(Out + offsets, c)
+
+    # Scale each row of A or column of B. The other operand is all ones.
+    # E8M0 byte zero represents 2^-127, so multiplying +inf by it still gives +inf.
+    values = torch.tensor([0., 0.5, 2., float("inf")] + [1.] * 28, dtype=torch.float16, device=device)
+    scales = torch.tensor([143, 143, 102, 0x00] + [127] * 28, dtype=torch.uint8, device=device)
+    expected = torch.tensor([0., 2**20, 2**-19, float("inf")] + [32.] * 28, dtype=torch.float32, device=device)
+    ones = torch.ones((32, 32), dtype=torch.float16, device=device)
+    if scaled_side == "lhs":
+        a, b = values[:, None].expand_as(ones).contiguous(), ones
+        expected = expected[:, None].expand_as(ones)
+    else:
+        a, b = ones, values[None, :].expand_as(ones).contiguous()
+        expected = expected[None, :].expand_as(ones)
+    out = torch.empty_like(ones, dtype=torch.float32)
+    kernel[(1, )](a, b, scales, out, SCALE_LHS=scaled_side == "lhs")
+    if not is_compile_warmup():
+        torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
 @triton.jit
 def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
     a = tl.load(A + tl.arange(0, 128)[:, None] * 32 + tl.arange(0, 32)[None, :])
