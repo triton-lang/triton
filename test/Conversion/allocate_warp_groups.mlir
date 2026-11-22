@@ -156,3 +156,201 @@ tt.func @steal_from_default() {
 }
 
 }
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 168 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 168 : i32} {
+
+tt.func @cap_default_and_redistribute_surplus() {
+  // CHECK: actualRegisters = array<i32: 256, 200, 48>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 88, 24>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 256 : i32
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+tt.func @cap_default_single_worker_full_budget() {
+  // CHECK: actualRegisters = array<i32: 256, 256, 256, 256>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 24, 24, 24>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition1() num_warps(1) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition2() num_warps(2) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 224 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 224 : i32} {
+
+tt.func @cap_default_overflow_to_second_warpgroup() {
+  // CHECK: actualRegisters = array<i32: 256, 256, 160>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 200, 24>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 168 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 168 : i32} {
+
+tt.func @cap_default_prefers_active_over_padding() {
+  // CHECK: actualRegisters = array<i32: 168, 168, 168>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 168, 168>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+
+  // CHECK: actualRegisters = array<i32: 256, 224, 24>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 80>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 256 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 256 : i32} {
+
+tt.func @clamp_excessive_requested_registers() {
+  // CHECK: actualRegisters = array<i32: 256, 256>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 300>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 256 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 300 : i32} {
+
+tt.func @clamp_excessive_user_maxnreg() {
+  // CHECK: actualRegisters = array<i32: 256, 256>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 24>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 184 : i32
+module attributes {"ttg.num-warps" = 8 : i32, ttg.maxnreg = 184 : i32} {
+
+tt.func @cap_default_rounding_surplus_boundary() {
+  // Budget = 184*12 - 32*4 = 2080 warp-regs (260/thread -> rounds to 256),
+  // leaving 32 warp-regs (+8 regs for the 4-warp worker).
+  // CHECK: actualRegisters = array<i32: 256, 40>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 32>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}
+
+// -----
+
+// CHECK: module attributes {ttg.maxnreg = 90 : i32
+module attributes {"ttg.num-warps" = 4 : i32, ttg.maxnreg = 90 : i32} {
+
+tt.func @cap_default_unequal_warps_remainder_order() {
+  // Budget = 90*16 - 24*8 - 40*4 = 1088 warp-regs -> 64 warp-regs surplus.
+  // Proportional shares truncate to 0; remainder favors higher per-thread
+  // demand (40 > 24) even though the 8-warp group has a larger warp-reg weight.
+  // CHECK: actualRegisters = array<i32: 256, 24, 56>
+  ttg.warp_specialize() attributes {requestedRegisters = array<i32: 24, 40>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(8) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    %0 = arith.constant 0 : i32
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+}

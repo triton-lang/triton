@@ -174,6 +174,21 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       int giveRegs = (defRegs - startRegs) * defaultNumWarps / numWorkerWarps;
       lowRegs = (startRegs - giveRegs) / 8 * 8;
     }
+
+    // If every warpgroup stays at the kernel's starting register limit both
+    // outside and inside every warp_specialize region, dynamic reallocation is
+    // a no-op and emitting setmaxnreg instructions only adds overhead.
+    int cappedStartRegs = std::min(256, startRegs);
+    if (defRegs == cappedStartRegs &&
+        std::min(256, lowRegs) == cappedStartRegs &&
+        llvm::all_of(wsOps, [&](WarpSpecializeOp ws) {
+          auto actRegs = ws.getActualRegisters();
+          return !actRegs || llvm::all_of(*actRegs, [&](int32_t r) {
+            return std::min(256, r) == cappedStartRegs;
+          });
+        })) {
+      emitDynamicRegRealloc = false;
+    }
   }
 
   // Attempt to elide captures of trivial computations by hoisting them into the

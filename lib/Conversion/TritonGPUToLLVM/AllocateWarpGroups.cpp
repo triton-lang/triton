@@ -17,6 +17,7 @@ using namespace mlir::triton::gpu;
 
 constexpr int32_t kMinRegisters = 24;
 constexpr int32_t kMinRegistersForAssertOrPrint = 32;
+constexpr int32_t kMaxRegisters = 256;
 
 static bool regionUsesAssertOrPrint(Region &region) {
   return region
@@ -119,6 +120,100 @@ static LogicalResult annotateWarpIdOffsets(ModuleOp mod) {
 }
 
 namespace {
+struct WarpGroupInfo {
+  SmallVector<Region *> partitions;
+  int maxRequestedRegs = 0;
+  unsigned numWarps = 0;
+  bool hasWork = false;
+};
+
+struct WarpGroupPartition {
+  int startId;
+  Region *partition;
+  int32_t estRegs;
+  int numWarps;
+};
+
+void distributeSurplusToTargets(ArrayRef<WarpGroupInfo *> targets,
+                                int &surplusWarpRegs) {
+  SmallVector<int> initialRegs;
+  SmallVector<int> weights;
+  initialRegs.reserve(targets.size());
+  weights.reserve(targets.size());
+  for (WarpGroupInfo *wg : targets) {
+    initialRegs.push_back(wg->maxRequestedRegs);
+    weights.push_back(wg->maxRequestedRegs * static_cast<int>(wg->numWarps));
+  }
+
+  while (surplusWarpRegs > 0) {
+    int64_t totalWeight = 0;
+    for (auto [wg, weight] : llvm::zip(targets, weights)) {
+      if (wg->maxRequestedRegs < kMaxRegisters)
+        totalWeight += weight;
+    }
+    if (totalWeight == 0)
+      break;
+
+    int distributed = 0;
+    for (auto [wg, weight] : llvm::zip(targets, weights)) {
+      int headroom = kMaxRegisters - wg->maxRequestedRegs;
+      if (headroom <= 0)
+        continue;
+      int64_t shareWarpRegs =
+          (static_cast<int64_t>(surplusWarpRegs) * weight) / totalWeight;
+      int addRegs = static_cast<int>(shareWarpRegs / wg->numWarps) / 8 * 8;
+      addRegs = std::min(addRegs, headroom);
+      if (addRegs > 0) {
+        wg->maxRequestedRegs += addRegs;
+        distributed += addRegs * static_cast<int>(wg->numWarps);
+      }
+    }
+    if (distributed == 0)
+      break;
+    surplusWarpRegs -= distributed;
+  }
+
+  // Allocate any leftover 8-register quanta truncated by rounding, cycling
+  // through warpgroups in descending order of initial per-thread demand.
+  SmallVector<size_t> order = llvm::to_vector(llvm::seq(targets.size()));
+  llvm::stable_sort(order, [&](size_t lhs, size_t rhs) {
+    return initialRegs[lhs] > initialRegs[rhs];
+  });
+  bool progress = true;
+  while (progress && surplusWarpRegs > 0) {
+    progress = false;
+    for (size_t idx : order) {
+      WarpGroupInfo *wg = targets[idx];
+      int quantum = 8 * static_cast<int>(wg->numWarps);
+      if (wg->maxRequestedRegs + 8 <= kMaxRegisters &&
+          surplusWarpRegs >= quantum) {
+        wg->maxRequestedRegs += 8;
+        surplusWarpRegs -= quantum;
+        progress = true;
+      }
+    }
+  }
+}
+
+// Redistribute surplus CTA register budget (in registers * warps) above
+// kMaxRegisters back to worker warpgroups while keeping every allocation a
+// multiple of 8 capped at kMaxRegisters.
+void redistributeSurplusRegisters(MutableArrayRef<WarpGroupInfo> groups,
+                                  int surplusWarpRegs) {
+  SmallVector<WarpGroupInfo *> activeGroups;
+  SmallVector<WarpGroupInfo *> emptyGroups;
+  for (WarpGroupInfo &wg : groups) {
+    if (wg.hasWork)
+      activeGroups.push_back(&wg);
+    else
+      emptyGroups.push_back(&wg);
+  }
+  if (!activeGroups.empty())
+    distributeSurplusToTargets(activeGroups, surplusWarpRegs);
+  if (!emptyGroups.empty() && surplusWarpRegs > 0)
+    distributeSurplusToTargets(emptyGroups, surplusWarpRegs);
+}
+
 struct AllocateWarpGroups
     : public mlir::triton::gpu::impl::TritonGPUAllocateWarpGroupsBase<
           AllocateWarpGroups> {
@@ -195,18 +290,7 @@ struct AllocateWarpGroups
                 threadsPerWarp;
       maxnreg = maxnreg / 8 * 8;
     }
-
-    struct WarpGroupInfo {
-      SmallVector<Region *> partitions;
-      int maxRequestedRegs = 0;
-      unsigned numWarps = 0;
-    };
-    struct WarpGroupPartition {
-      int startId;
-      Region *partition;
-      int32_t estRegs;
-      int numWarps;
-    };
+    maxnreg = std::min(maxnreg, kMaxRegisters);
 
     // Compute register allocation for each warp specialize op.
     mod.walk([&](WarpSpecializeOp op) {
@@ -231,37 +315,50 @@ struct AllocateWarpGroups
 
       // Iterate over the partitions and assign them to warp groups. Determine
       // the maximum number of requested registers per warp group.
+      SmallVector<Region *> nonEmptyPartitions =
+          op.getNonEmptyPartitionRegions();
       SmallVector<WarpGroupInfo> warpGroups;
       for (auto [startId, partition, estRegs, numWarps] : orderedPartitions) {
         if (startId % 4 == 0) {
           warpGroups.push_back(WarpGroupInfo{});
         }
         warpGroups.back().partitions.push_back(partition);
-        // Round up the nearest multiple of 8.
-        int estRegsCeil8 = llvm::divideCeil(estRegs, 8) * 8;
+        // Round up to the nearest multiple of 8, clamped to hardware max.
+        int estRegsCeil8 =
+            std::min<int>(llvm::divideCeil(estRegs, 8) * 8, kMaxRegisters);
         warpGroups.back().maxRequestedRegs =
             std::max<int>(warpGroups.back().maxRequestedRegs, estRegsCeil8);
         warpGroups.back().numWarps += numWarps;
+        warpGroups.back().hasWork |=
+            llvm::is_contained(nonEmptyPartitions, partition);
       }
 
-      // Compute the register deficit over the partition warp groups.
-      int registerBudget = maxnreg * baseNumWarps * threadsPerWarp;
+      // Compute the register budget (in registers * warps) available to the
+      // default warp group after satisfying worker requests.
+      int registerBudgetWarpRegs = maxnreg * baseNumWarps;
       for (const WarpGroupInfo &wg : warpGroups) {
         assert(wg.numWarps % 4 == 0);
-        registerBudget +=
-            (maxnreg - wg.maxRequestedRegs) * wg.numWarps * threadsPerWarp;
+        registerBudgetWarpRegs +=
+            (maxnreg - wg.maxRequestedRegs) * static_cast<int>(wg.numWarps);
       }
-      if (registerBudget <= 0)
+      if (registerBudgetWarpRegs <= 0)
         return;
 
-      // Determine the number of extra registers that we can distribute to the
+      // Determine the number of registers that we can distribute to the
       // default warp group.
-      int leftover = registerBudget / (baseNumWarps * threadsPerWarp);
-      // Round down to the nearest multiple of 8.
-      leftover = leftover / 8 * 8;
+      int leftover = (registerBudgetWarpRegs / baseNumWarps) / 8 * 8;
       if (leftover < minRegistersForRegion(op.getDefaultRegion(),
                                            laterInstrumentation, kMinRegisters))
         return; // too few registers
+
+      // Hardware caps per-thread registers at kMaxRegisters (256). Rather than
+      // discarding surplus above kMaxRegisters, redistribute it back to worker
+      // warpgroups while preserving the total CTA register budget.
+      if (registerBudgetWarpRegs > kMaxRegisters * baseNumWarps) {
+        leftover = kMaxRegisters;
+        redistributeSurplusRegisters(
+            warpGroups, registerBudgetWarpRegs - kMaxRegisters * baseNumWarps);
+      }
 
       // Generate setmaxnreg in each partition according to its warp group.
       SmallVector<int32_t> maxnregsPerPartition(1 + arr.size());

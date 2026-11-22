@@ -1290,3 +1290,97 @@ llvm.func @gsan_dynamic_register_reallocation_disabled() attributes {allocation.
 }
 
 }
+
+// -----
+
+module attributes {ttg.maxnreg = 256 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 8 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @elide_noop_dynamic_register_reallocation
+llvm.func @elide_noop_dynamic_register_reallocation(%run: i1) attributes {allocation.offset = 0 : i32} {
+  // CHECK-NOT: nvvm.setmaxregister
+  // CHECK: llvm.return
+  // CHECK-NOT: nvvm.setmaxregister
+  // CHECK: llvm.return
+  llvm.cond_br %run, ^launch, ^exit
+^launch:
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>, actualRegisters = array<i32: 256, 256>}
+  default {
+    "default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "partition0"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.br ^exit
+^exit:
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {ttg.maxnreg = 128 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 8 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @keep_dynamic_register_reallocation_when_outside_differs
+llvm.func @keep_dynamic_register_reallocation_when_outside_differs(%run: i1) attributes {allocation.offset = 0 : i32} {
+  // CHECK: nvvm.setmaxregister decrease 24
+  // CHECK: nvvm.setmaxregister increase 128
+  // CHECK: nvvm.setmaxregister increase 232
+  // CHECK: nvvm.setmaxregister decrease 128
+  llvm.cond_br %run, ^launch, ^exit
+^launch:
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>, actualRegisters = array<i32: 128, 128>}
+  default {
+    "default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "partition0"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.br ^exit
+^exit:
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {ttg.maxnreg = 256 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 8 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @keep_dynamic_register_reallocation_when_second_ws_differs
+llvm.func @keep_dynamic_register_reallocation_when_second_ws_differs() attributes {allocation.offset = 0 : i32} {
+  // CHECK: nvvm.setmaxregister increase 256
+  // CHECK: nvvm.setmaxregister decrease 128
+  // CHECK: nvvm.setmaxregister increase 256
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>, actualRegisters = array<i32: 256, 256>}
+  default {
+    "ws0_default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "ws0_partition0"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>, actualRegisters = array<i32: 256, 128>}
+  default {
+    "ws1_default"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "ws1_partition0"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}
