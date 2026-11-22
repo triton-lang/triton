@@ -53,6 +53,26 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.fl
     return result
 
 
+# ---- NVIDIA dot dispatch (Ampere) ----
+
+
+@gluon.jit
+def tl_dot(
+    a,
+    b,
+    acc=None,
+    input_precision=None,
+    allow_tf32=None,
+    max_num_imprecise_acc=None,
+    out_dtype=ttgl.float32,
+):
+    # The translator rewrites tl.dot to helpers.tl_dot for every target.  SM80
+    # selects this module, so it must expose the same entry point as the Hopper,
+    # Blackwell and AMD helpers.  Ampere only supports mma.sync, whose signature
+    # omits allow_tf32 / max_num_imprecise_acc.
+    return tl_dot_mma_sync(a, b, acc, input_precision, out_dtype)
+
+
 @gluon.constexpr_function
 def get_shared_memory_mma_layout(type, operand_index, allow_transpose, is_fp4_padded=False, force_transpose=False):
     if not allow_transpose:

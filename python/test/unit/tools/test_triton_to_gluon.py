@@ -97,6 +97,26 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
     impl_matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M, BLOCK_N, BLOCK_K)
 
 
+def test_triton_to_gluon_dot_sm80_helper(tmp_path):
+    # The translator rewrites tl.dot -> helpers.tl_dot for every target.  SM80
+    # selects nvidia_helpers.py, which used to define only tl_dot_mma_sync, so
+    # translating a dot kernel for Ampere produced source that failed to compile
+    # with AttributeError.  This test needs no GPU: it only checks that the
+    # generated module can resolve the helper it references.
+    converted = convert_triton_to_gluon([matmul_tile_kernel], target=TranslatorTarget("sm80"))
+    assert "helpers.tl_dot(" in converted
+
+    mod_path = tmp_path / "converted_sm80.py"
+    mod_path.write_text(converted)
+    spec = importlib.util.spec_from_file_location("converted_sm80", mod_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["converted_sm80"] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert callable(module.helpers.tl_dot)
+
+
 def test_triton_to_gluon_dot_minimal(tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna3_or_newer() or is_hip_cdna5()):
         pytest.skip("Requires Hopper, Blackwell, CDNA3+, or CDNA5")
