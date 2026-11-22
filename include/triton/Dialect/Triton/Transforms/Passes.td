@@ -44,6 +44,12 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-ten
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"rewriteOnlyGatherScatter", "rewrite-only-gather-scatter", "bool",
+           /*default*/"false",
+           "Rewrite only descriptor gather/scatter ops, leaving other descriptor ops for hardware acceleration">
+  ];
 }
 
 def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::ModuleOp"> {

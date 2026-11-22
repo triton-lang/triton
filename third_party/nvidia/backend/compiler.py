@@ -294,7 +294,11 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         if capability // 10 < 9:
-            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, False)
+        elif capability < 100:
+            # Hopper has TMA load/store/reduce, but gather/scatter require the
+            # Blackwell-only .tile::gather4/.tile::scatter4 instructions.
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, True)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)

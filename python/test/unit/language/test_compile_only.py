@@ -603,6 +603,82 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
 
 
+@triton.jit
+def descriptor_gather_compile_kernel(x_ptr, xoffs_ptr, out_ptr, M, N, y_off):
+    desc = tl.make_tensor_descriptor(x_ptr, shape=[M, N], strides=[N, 1], block_shape=[1, 64])
+    x_offs = tl.load(xoffs_ptr + tl.arange(0, 16))
+    tile = desc.gather(x_offs, y_off)
+    i = tl.arange(0, 16)
+    j = tl.arange(0, 64)
+    tl.store(out_ptr + i[:, None] * 64 + j[None, :], tile)
+
+
+@triton.jit
+def descriptor_scatter_compile_kernel(src_ptr, xoffs_ptr, out_ptr, M, N, y_off):
+    desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[1, 64])
+    x_offs = tl.load(xoffs_ptr + tl.arange(0, 16))
+    i = tl.arange(0, 16)
+    j = tl.arange(0, 64)
+    data = tl.load(src_ptr + i[:, None] * 64 + j[None, :])
+    desc.scatter(data, x_offs, y_off)
+
+
+@triton.jit
+def descriptor_load_store_compile_kernel(x_ptr, out_ptr, M, N):
+    src_desc = tl.make_tensor_descriptor(x_ptr, shape=[M, N], strides=[N, 1], block_shape=[16, 64])
+    dst_desc = tl.make_tensor_descriptor(out_ptr, shape=[M, N], strides=[N, 1], block_shape=[16, 64])
+    dst_desc.store([0, 0], src_desc.load([0, 0]))
+
+
+DESCRIPTOR_GATHER_SIGNATURE = {
+    "x_ptr": "*fp16", "xoffs_ptr": "*i32", "out_ptr": "*fp16",
+    "M": "i32", "N": "i32", "y_off": "i32",
+}
+DESCRIPTOR_SCATTER_SIGNATURE = {
+    "src_ptr": "*fp16", "xoffs_ptr": "*i32", "out_ptr": "*fp16",
+    "M": "i32", "N": "i32", "y_off": "i32",
+}
+DESCRIPTOR_LOAD_STORE_SIGNATURE = {
+    "x_ptr": "*fp16", "out_ptr": "*fp16", "M": "i32", "N": "i32",
+}
+
+
+@pytest.mark.parametrize(
+    "fn,signature,illegal_marker",
+    [
+        (descriptor_gather_compile_kernel, DESCRIPTOR_GATHER_SIGNATURE, ".tile::gather4"),
+        (descriptor_scatter_compile_kernel, DESCRIPTOR_SCATTER_SIGNATURE, ".tile::scatter4"),
+    ],
+)
+def test_descriptor_gather_scatter_fallback_on_hopper(fn, signature, illegal_marker):
+    src = ASTSource(fn=fn, signature=signature, constexprs={})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
+                              options={"num_warps": 4})
+    assert illegal_marker not in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize(
+    "fn,signature,tma_marker",
+    [
+        (descriptor_gather_compile_kernel, DESCRIPTOR_GATHER_SIGNATURE, ".tile::gather4"),
+        (descriptor_scatter_compile_kernel, DESCRIPTOR_SCATTER_SIGNATURE, ".tile::scatter4"),
+    ],
+)
+def test_descriptor_gather_scatter_keep_hardware_tma_on_blackwell(fn, signature, tma_marker):
+    src = ASTSource(fn=fn, signature=signature, constexprs={})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 100, 32),
+                              options={"num_warps": 4})
+    assert tma_marker in compiled.asm["ptx"]
+
+
+def test_descriptor_load_store_keeps_tma_on_hopper():
+    src = ASTSource(fn=descriptor_load_store_compile_kernel,
+                    signature=DESCRIPTOR_LOAD_STORE_SIGNATURE, constexprs={})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
+                              options={"num_warps": 4})
+    assert "cp.async.bulk.tensor" in compiled.asm["ptx"]
+
+
 def test_ir_module_lifetime(tmp_path):
     import gc
     from triton._C.libtriton import ir
