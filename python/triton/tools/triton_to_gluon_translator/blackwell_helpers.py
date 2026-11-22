@@ -25,6 +25,53 @@ from triton.tools.triton_to_gluon_translator.nvidia_helpers import (
     get_shared_memory_mma_operand,
 )
 
+# ---- NVIDIA TMA tensor descriptors ----
+
+
+@gluon.jit
+def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
+    layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
+    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
+
+
+@gluon.jit
+def tl_store_tensor_descriptor(desc, offsets, value):
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+    fence_async_shared()
+    tma.async_store(desc, offsets, alloc)
+    tma.store_wait(0, read_only=False, deps=[alloc])
+
+
+@gluon.jit
+def tl_load_tensor_descriptor(desc, offsets):
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, desc.block_type.nbytes)
+    tma.async_load(desc, offsets, bar, smem)
+    mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
+    ret_layout: ttgl.constexpr = default_blocked_layout(desc.block_shape, ttgl.num_warps())
+    out = smem.load(ret_layout)
+    return out
+
+
+@gluon.jit
+def tl_obj_store(obj, offsets, value):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_store_tensor_descriptor(obj, offsets, value)
+    else:
+        return obj.store(offsets, value)
+
+
+@gluon.jit
+def tl_obj_load(obj, offsets):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        return tl_load_tensor_descriptor(obj, offsets)
+    else:
+        return obj.load(offsets)
+
+
 # ---- NVIDIA Blackwell dot ----
 
 

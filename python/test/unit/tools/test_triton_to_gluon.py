@@ -561,6 +561,44 @@ def test_triton_to_gluon_make_tensor_descriptor(tmp_path, with_allocator):
 
 
 @triton.jit
+def sm80_descriptor_kernel(x_ptr, y_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    in_desc = tl.make_tensor_descriptor(x_ptr, [BLOCK_M, BLOCK_N], [BLOCK_N, 1], [BLOCK_M, BLOCK_N])
+    out_desc = tl.make_tensor_descriptor(y_ptr, [BLOCK_M, BLOCK_N], [BLOCK_N, 1], [BLOCK_M, BLOCK_N])
+    tile = in_desc.load([0, 0])
+    out_desc.store([0, 0], tile)
+
+
+def test_triton_to_gluon_descriptor_sm80_rejected_cleanly(tmp_path):
+    """SM80 translation must reject TMA descriptors instead of emitting sm90 PTX."""
+    from triton.tools.triton_to_gluon_translator import blackwell_helpers, hopper_helpers, nvidia_helpers
+
+    # Hopper/Blackwell must keep the real TMA helpers, not the SM80 rejection stubs.
+    assert hopper_helpers.tl_make_tensor_descriptor is not nvidia_helpers.tl_make_tensor_descriptor
+    assert blackwell_helpers.tl_make_tensor_descriptor is not nvidia_helpers.tl_make_tensor_descriptor
+    assert hopper_helpers.tl_obj_load is not nvidia_helpers.tl_obj_load
+    assert blackwell_helpers.tl_obj_load is not nvidia_helpers.tl_obj_load
+
+    converted = convert_triton_to_gluon([sm80_descriptor_kernel], target=TranslatorTarget("sm80"))
+    mod_path = tmp_path / "sm80_descriptor.py"
+    mod_path.write_text(converted)
+    spec = importlib.util.spec_from_file_location("sm80_descriptor", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["sm80_descriptor"] = mod
+    spec.loader.exec_module(mod)
+
+    source = gluon.GluonASTSource(
+        mod.sm80_descriptor_kernel,
+        {"x_ptr": "*fp16", "y_ptr": "*fp16"},
+        {"BLOCK_M": 32, "BLOCK_N": 32},
+    )
+    from triton.compiler.errors import CompilationError
+
+    with pytest.raises(CompilationError) as exc_info:
+        triton.compile(source, target=GPUTarget("cuda", 80, 32))
+    assert "requires Hopper" in str(exc_info.value.__cause__)
+
+
+@triton.jit
 def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr, TRANS_KIND: tl.constexpr):
     pid = tl.program_id(0)
     offsets = pid * BLOCK + tl.arange(0, BLOCK)

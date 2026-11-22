@@ -3,7 +3,6 @@
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import mma_v2
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared, mbarrier, tma
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.common_helpers import (
@@ -102,34 +101,25 @@ def get_shared_memory_mma_operand(value, operand_index, allow_transpose, is_fp4_
 
 
 # ---- NVIDIA TMA tensor descriptors ----
+# TMA is a Hopper+ (sm90+) feature.  These helpers are the SM80 variant, which is
+# also imported by the Hopper/Blackwell helpers; those targets override them with
+# the real TMA implementations below.  On SM80 we must fail cleanly at trace time
+# rather than emitting sm90-only intrinsics that abort NVPTX SelectionDAG.
 
 
 @gluon.jit
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
-    layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
-    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option)
+    ttgl.static_assert(False, "tl.make_tensor_descriptor requires Hopper or newer NVIDIA GPUs (sm90+)")
 
 
 @gluon.jit
 def tl_store_tensor_descriptor(desc, offsets, value):
-    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
-    fence_async_shared()
-    tma.async_store(desc, offsets, alloc)
-    tma.store_wait(0, read_only=False, deps=[alloc])
+    ttgl.static_assert(False, "tl.store_tensor_descriptor requires Hopper or newer NVIDIA GPUs (sm90+)")
 
 
 @gluon.jit
 def tl_load_tensor_descriptor(desc, offsets):
-    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
-    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-    mbarrier.init(bar, count=1)
-    mbarrier.expect(bar, desc.block_type.nbytes)
-    tma.async_load(desc, offsets, bar, smem)
-    mbarrier.wait(bar, phase=0)
-    mbarrier.invalidate(bar)
-    ret_layout: ttgl.constexpr = default_blocked_layout(desc.block_shape, ttgl.num_warps())
-    out = smem.load(ret_layout)
-    return out
+    ttgl.static_assert(False, "tl.load_tensor_descriptor requires Hopper or newer NVIDIA GPUs (sm90+)")
 
 
 # ---- NVIDIA obj dispatch ----
@@ -155,6 +145,11 @@ def tl_obj_load(obj, offsets):
 
 
 def convert_host_descriptor(desc):
+    from triton.language.target_info import current_target
+
+    target = current_target()
+    if target is not None and target.backend == "cuda" and target.arch < 90:
+        raise RuntimeError("Tensor descriptors require Hopper or newer NVIDIA GPUs (sm90+)")
 
     def torch_dtype_to_triton(dtype):
         import torch
