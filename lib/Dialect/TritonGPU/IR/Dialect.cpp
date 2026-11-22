@@ -4,6 +4,7 @@
 #include <numeric>
 #include <utility>
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -314,10 +315,13 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return linearEnc.getOrder();
   }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (shape.size() == 1) {
-      return {0};
+    auto order = getMatrixOrder(shape.size(), /*rowMajor=*/true);
+    if (sharedLayout.getTransposed()) {
+      // Move the first layout axis to the front, skipping pipeline stages.
+      auto end = order.begin() + sharedLayout.getRank();
+      std::rotate(order.begin(), end - 1, end);
     }
-    return getMatrixOrder(shape.size(), !sharedLayout.getTransposed());
+    return order;
   }
   if (auto sharedLayout = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());

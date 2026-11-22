@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"

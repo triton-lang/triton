@@ -1,3 +1,5 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
@@ -155,13 +157,35 @@ bool isConstantZeroTensor(Value v) {
 std::optional<std::pair<Operation *, int>>
 findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
+  // Only the MMA sees its use-accumulator flag. To fold a loop-carried reset
+  // into that flag, we require this use pattern:
+  //
+  //   ret = for (arg = init) {          // ret is unused after the loop
+  //     acc = mma(a, b, arg)            // arg only feeds the MMA accumulator
+  //     v = select(reset, zero, acc)
+  //     yield v                         // the yield is the only use of v
+  //   }
+  //
+  // A reset before the MMA has this shape:
+  //
+  //   ret = for (arg = init) {
+  //     v = select(reset, zero, arg)
+  //     acc = mma(a, b, v)              // the MMA is the only use of v
+  //     yield acc
+  //   }
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
-    if (isConstantZeroTensor(forOp.getInitArgs()[arg.getArgNumber() - 1])) {
+    unsigned index = arg.getArgNumber() - 1;
+    if (isConstantZeroTensor(forOp.getInitArgs()[index])) {
       loopArgIsZero = true;
     }
-    v = forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+    if (!arg.hasOneUse() || !forOp.getResult(index).use_empty())
+      return std::nullopt;
+    v = forOp.getBody()->getTerminator()->getOperand(index);
   }
+
+  if (!v.hasOneUse())
+    return std::nullopt;
 
   auto defOp = v.getDefiningOp();
   if (!defOp) {
@@ -246,14 +270,6 @@ public:
       bool loopArgIsZero = false;
       std::optional<std::pair<Operation *, int>> zeroInitOp =
           findZeroInitOp(accUse, forOp, loopArgIsZero);
-
-      auto accArg = dyn_cast<BlockArgument>(accUse);
-      if (zeroInitOp && accArg &&
-          !forOp.getResult(accArg.getArgNumber() - 1).use_empty()) {
-        // The loop-carried accumulator is conditionally reset to zero by an
-        // if/select, and its final value is used after the loop.
-        zeroInitOp = std::nullopt;
-      }
 
       if (!zeroInitOp && !loopArgIsZero) {
         continue;

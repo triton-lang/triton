@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 
 def TritonNvidiaGPUMembar : Pass<"triton-nvidia-gpu-membar", "mlir::ModuleOp"> {
-    let summary = "Insert NVIDIA shared-memory synchronization before lowering";
+    let summary = "Place shared-memory barriers and tensor-memory waits before lowering";
 
     let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                              "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];

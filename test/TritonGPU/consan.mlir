@@ -625,12 +625,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #proxy_cp_blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #proxy_cp_mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK: tt.func private @__triton_consan_fence_proxy_accesses_nw4
+  // CHECK: %[[WRITE_BIT:.*]] = arith.shrui {{.*}} : tensor<1x1x1xi32,
+  // CHECK-NEXT: {{.*}} = arith.trunci %[[WRITE_BIT]]
+  // CHECK: %[[ELIGIBLE:.*]] = arith.select
+  // CHECK-NEXT: {{.*}} = arith.andi {{.*}}, %[[ELIGIBLE]]
   // CHECK-LABEL: @proxy_fence_tracks_cp_async_and_wgmma
   tt.func public @proxy_fence_tracks_cp_async_and_wgmma(%ptr: tensor<128x128x!tt.ptr<f16>, #proxy_cp_blocked>, %acc: tensor<128x128xf16, #proxy_cp_mma>) {
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable>
     // CHECK: tt.call @__triton_consan_set_proxy_access
+    // CHECK: %[[UNOBSERVED:.*]] = arith.constant 0 : i64
+    // CHECK-NEXT: tt.call @__triton_consan_publish_write_visibility{{.*}}({{[^,]+}}, {{[^,]+}}, %[[UNOBSERVED]],
     ttg.async_copy_global_to_local %ptr, %buf : tensor<128x128x!tt.ptr<f16>, #proxy_cp_blocked> -> <128x128xf16, #proxy_cp_shared, #proxy_cp_smem, mutable>
     ttg.async_commit_group
+    ttng.fence_async_shared {bCluster = false}
     ttg.async_wait {num = 0 : i32}
     // CHECK: tt.call @__triton_consan_verify_proxy_access
     // CHECK: tt.call @__triton_consan_verify_proxy_access
@@ -2292,7 +2300,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: partition0
       // CHECK: tti.experimental_lock_acquire {{.*}} {ctaLocal}
       // CHECK: tt.call @__triton_consan_set_waiting
-      // CHECK: tt.call @__triton_consan_check_all_active_waiting
+      // CHECK-NEXT: ttg.barrier global_write
+      // CHECK-NEXT: tt.call @__triton_consan_check_all_active_waiting
       // CHECK: tti.experimental_lock_release {{.*}} {ctaLocal}
       %c0_i32 = arith.constant 0 : i32
       %true = arith.constant true

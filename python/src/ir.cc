@@ -12,11 +12,15 @@
 #include <nanobind/stl/vector.h>
 #include <optional>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -2005,6 +2009,10 @@ void init_triton_ir(py::module_ &m) {
       .def("create_fpsan_barrier",
            [](TritonOpBuilder &self, Value &input) -> Value {
              return self.create<FpSanBarrierOp>(input.getType(), input);
+           })
+      .def("create_fpsan_compact_exp2",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return self.create<FpSanCompactExp2Op>(input.getType(), input);
            })
       .def("create_fpsan_homomorphic_cast",
            [](TritonOpBuilder &self, Value &input, Type &dstType) -> Value {

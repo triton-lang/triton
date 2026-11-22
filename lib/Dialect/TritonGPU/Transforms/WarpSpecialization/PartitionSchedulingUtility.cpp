@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/PartitionSchedulingUtility.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Tools/Sys/GetEnv.h"
 

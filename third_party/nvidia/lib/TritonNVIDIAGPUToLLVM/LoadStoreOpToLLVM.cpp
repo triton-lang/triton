@@ -1,6 +1,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
@@ -1257,6 +1258,44 @@ FailureOr<Value> createTMACachePolicy(Operation *op, Attribute attr,
                            computeCapability, op);
 }
 
+struct PrefetchBulkOpConversion
+    : public ConvertOpToLLVMPattern<ttng::PrefetchBulkOp> {
+  const NVIDIA::TargetInfo &targetInfo;
+
+  PrefetchBulkOpConversion(LLVMTypeConverter &converter,
+                           const NVIDIA::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::PrefetchBulkOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (targetInfo.getComputeCapability() < 90)
+      return op.emitError(
+          "bulk prefetch requires compute capability 9.0 or newer");
+    if (targetInfo.getPtxVersion() < 80)
+      return op.emitError("bulk prefetch requires PTX 8.0 or newer");
+
+    auto loc = op.getLoc();
+    auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto sizes =
+        unpackUniqueTensorElements(loc, adaptor.getNumBytes(), rewriter);
+    auto preds = unpackUniqueTensorElements(loc, adaptor.getPred(), rewriter);
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value issuer =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
+    for (auto [ptr, size, pred] : llvm::zip_equal(ptrs, sizes, preds)) {
+      PTXBuilder ptx;
+      auto &prefetch = *ptx.create("cp.async.bulk.prefetch.L2.global");
+      prefetch(ptx.newAddrOperand(ptr, "l"), ptx.newOperand(size, "r"))
+          .predicate(ttg::maybeAnd(rewriter, loc, issuer, pred));
+      ptx.launch(rewriter, loc, void_ty(op.getContext()));
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncBulkCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<ttng::AsyncBulkCopyGlobalToLocalOp> {
   const NVIDIA::TargetInfo &targetInfo;
@@ -1429,8 +1468,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    uint64_t affineBlockMask =
-        LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(dstTy).second;
+    uint64_t affineBlockMask = ttng::getTMASubviewCTAMask(dstTy);
 
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
@@ -1780,8 +1818,7 @@ static void iterateGatherScatterIndices(
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
-  bool crossCTA =
-      LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(smemType).second;
+  bool crossCTA = ttng::getTMASubviewCTAMask(smemType);
 
   Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
@@ -1879,9 +1916,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     barrierPtr =
         LLVM::NVIDIA::getLeaderAddress(loc, rewriter, barrierPtr, barrierTy);
   }
-  bool crossCTA = LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
-                      op.getResult().getType())
-                      .second;
+  bool crossCTA = ttng::getTMASubviewCTAMask(op.getResult().getType());
 
   std::string ctaGroup;
   if (getModuleTwoCTAs(op)) {
@@ -2108,7 +2143,7 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
                AtomicRMWOpConversion>(typeConverter, targetInfo,
                                       axisInfoAnalysis, benefit);
-  patterns.add<AsyncBulkCopyGlobalToLocalOpConversion,
+  patterns.add<PrefetchBulkOpConversion, AsyncBulkCopyGlobalToLocalOpConversion,
                AsyncBulkCopyLocalToGlobalOpConversion>(typeConverter,
                                                        targetInfo, benefit);
   patterns.add<LoadOpConversion, StoreOpConversion>(

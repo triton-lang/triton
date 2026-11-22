@@ -640,6 +640,20 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
 
 def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
     if helper_args.amd_codegen_path is not None:
+        # Copy the user-provided codegen library into the wheel packaging
+        # directory so it is included in the built wheel.  The path may be
+        # a directory containing the library or a full path to the .so
+        # (the Makefile passes a filename).
+        library = amd_codegen_library_name()
+        source_path = helper_args.amd_codegen_path
+        if os.path.isdir(source_path):
+            source_path = os.path.join(source_path, library)
+        if os.path.isfile(source_path):
+            destination_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "lib", library)
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+            if os.path.realpath(source_path) != os.path.realpath(destination_path):
+                print(f"copy {source_path} to {destination_path} ...")
+                shutil.copy2(source_path, destination_path)
         return
 
     library = amd_codegen_library_name()

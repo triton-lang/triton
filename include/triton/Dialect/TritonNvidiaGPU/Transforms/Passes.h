@@ -27,19 +27,10 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-class ModuleOp;
-
 namespace triton {
-class BufferRegionAnalysis;
-
 namespace nvidia_gpu {
 
 void registerConSanNVIDIAHooks();
-
-// Mark provisional per-warp arrivals; finalize their counts after
-// synchronization.
-void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
-                             int computeCapability);
 
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"

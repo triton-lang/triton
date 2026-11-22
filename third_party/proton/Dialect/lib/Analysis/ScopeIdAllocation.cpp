@@ -1,5 +1,6 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/IR/Dominance.h"
 
 #include <deque>
 
