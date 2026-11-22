@@ -3,7 +3,9 @@ import importlib.util
 import torch
 import triton
 import triton.language as tl
+import triton.experimental.gluon as gluon
 import pytest
+from triton.backends.compiler import GPUTarget
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -97,13 +99,21 @@ def matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.c
     impl_matmul_tile_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M, BLOCK_N, BLOCK_K)
 
 
-def test_triton_to_gluon_dot_sm80_helper(tmp_path):
-    # The translator rewrites tl.dot -> helpers.tl_dot for every target.  SM80
-    # selects nvidia_helpers.py, which used to define only tl_dot_mma_sync, so
-    # translating a dot kernel for Ampere produced source that failed to compile
-    # with AttributeError.  This test needs no GPU: it only checks that the
-    # generated module can resolve the helper it references.
-    converted = convert_triton_to_gluon([matmul_tile_kernel], target=TranslatorTarget("sm80"))
+@triton.jit
+def dot_no_acc_kernel(a_ptr, b_ptr, out_ptr):
+    offs = tl.arange(0, 32)
+    a = tl.load(a_ptr + offs[:, None] * 32 + offs[None, :])
+    b = tl.load(b_ptr + offs[:, None] * 32 + offs[None, :])
+    c = tl.dot(a, b)
+    tl.store(out_ptr + offs[:, None] * 32 + offs[None, :], c)
+
+
+def test_triton_to_gluon_dot_sm80(tmp_path):
+    # Offline-compile a translated 2D tl.dot (no accumulator) for SM80.  This
+    # covers two gaps in nvidia_helpers.py: the missing tl_dot entry point, and
+    # the 3D-only zero-accumulator shape in tl_dot_mma_sync (b.shape[2]).  The
+    # existing dot tests use the CI GPU's arch, so they never exercise SM80.
+    converted = convert_triton_to_gluon([dot_no_acc_kernel], target=TranslatorTarget("sm80"))
     assert "helpers.tl_dot(" in converted
 
     mod_path = tmp_path / "converted_sm80.py"
@@ -114,7 +124,13 @@ def test_triton_to_gluon_dot_sm80_helper(tmp_path):
     assert spec.loader is not None
     spec.loader.exec_module(module)
 
-    assert callable(module.helpers.tl_dot)
+    source = gluon.GluonASTSource(
+        module.dot_no_acc_kernel,
+        {"a_ptr": "*fp16", "b_ptr": "*fp16", "out_ptr": "*fp32"},
+        {},
+    )
+    compiled = triton.compile(source, target=GPUTarget("cuda", 80, 32))
+    assert compiled.asm["ptx"]
 
 
 def test_triton_to_gluon_dot_minimal(tmp_path):

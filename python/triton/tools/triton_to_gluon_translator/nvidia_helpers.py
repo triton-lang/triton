@@ -40,10 +40,11 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.fl
     b_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=mma_layout, operand_index=1, k_width=k_width)
     a = ttgl.convert_layout(a, a_layout)
     b = ttgl.convert_layout(b, b_layout)
+    c_shape: ttgl.constexpr = a.shape[:-1] + [b.shape[-1]]
     if acc_init is not None:
         acc = ttgl.convert_layout(acc_init, mma_layout)
     else:
-        acc = ttgl.full([a.shape[0], a.shape[1], b.shape[2]], 0.0, out_dtype, layout=mma_layout)
+        acc = ttgl.full(c_shape, 0.0, out_dtype, layout=mma_layout)
     result = mma_v2(a, b, acc, input_precision)
     if acc_init is not None:
         layout: ttgl.constexpr = acc_init.type.layout
