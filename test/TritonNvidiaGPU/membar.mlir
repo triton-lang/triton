@@ -1095,7 +1095,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
+!barrier = !ttg.memdesc<1xi64, #shared, #smem, mutable>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // These slots are disjoint for the current index. Publishing the wait
+  // still requires each warp to rendezvous before its leader arrives.
+  // FOLD-LABEL: @wait_before_disjoint_slot_arrival
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  tt.func @wait_before_disjoint_slot_arrival(%i: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %next = arith.addi %i, %c1 : i32
+    %a = arith.andi %i, %c1 : i32
+    %b = arith.andi %next, %c1 : i32
+    %bars = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    %first = ttg.memdesc_index %bars[%a] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !barrier
+    %second = ttg.memdesc_index %bars[%b] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !barrier
+    ttng.init_barrier %first, 1 : !barrier
+    ttng.init_barrier %second, 1 : !barrier
+    ttng.arrive_barrier %first, 1 : !barrier
+    ttng.wait_barrier %first, %c0 : !barrier
+    ttng.arrive_barrier %second, 1 : !barrier
+    ttng.wait_barrier %second, %c0 : !barrier
+    tt.return
+  }
+
   // The same progress guarantee holds for a distributed expectation.
   // FOLD-LABEL: @wait_before_distributed_expectation
   // FOLD: ttng.wait_barrier

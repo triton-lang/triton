@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -12,7 +13,7 @@ namespace {
 //    same buffer (RAW).
 // 2) both are AsyncLoad
 bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
-                                       Allocation *allocation) {
+                                       Allocation &allocation) {
   auto isAsyncLoad = [](Operation *op) {
     return op->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
   };
@@ -57,7 +58,7 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
   auto collectBufferIds = [&](ArrayRef<Value> memdescs) {
     Allocation::BufferIdSetT bufferIds;
     for (Value memdesc : memdescs) {
-      auto ids = allocation->getAllBufferIdsWithAliases(memdesc);
+      auto ids = allocation.getAllBufferIdsWithAliases(memdesc);
       bufferIds.insert(ids.begin(), ids.end());
     }
     return bufferIds;
@@ -96,10 +97,9 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 }
 } // namespace
 
-bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
-                  bool /*op2IsRead*/, Allocation *allocation,
-                  const AllocationSlice &, const AllocationSlice &) {
-  return (filterAsyncLocalLoadsDependencies(op1, op2, allocation) ||
-          filterLDSMemoryBarriersDependencies(op1, op2));
+bool membarFilter(const membar::SMemAccess &before,
+                  const membar::SMemAccess &after, Allocation &allocation) {
+  return filterAsyncLocalLoadsDependencies(before.op, after.op, allocation) ||
+         filterLDSMemoryBarriersDependencies(before.op, after.op);
 }
 } // namespace mlir::triton::AMD

@@ -80,11 +80,11 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
 
 } // namespace
 
-bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
-                            bool /*beforeIsRead*/, bool /*afterIsRead*/,
-                            Allocation *allocation,
-                            const AllocationSlice &beforeSlice,
-                            const AllocationSlice &afterSlice) {
+bool NVIDIA::canSkipBarSync(const membar::SMemAccess &source,
+                            const membar::SMemAccess &sink,
+                            Allocation &allocation) {
+  Operation *before = source.op;
+  Operation *after = sink.op;
   // Init and inval execute synchronously on the same lane within a region.
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(before) &&
       isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after))
@@ -96,14 +96,11 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
   };
   // Accessing these live destinations requires completion, which makes their
   // writes visible to the generic proxy.
-  if (completesTransactions(before) &&
-      beforeSlice.sharedKind != gpu::SharedKind::Barrier &&
-      hasOnlySourceAliases(beforeSlice, afterSlice, *allocation))
+  if (completesTransactions(before) && !source.isBarrier &&
+      hasOnlySourceAliases(source.slice, sink.slice, allocation))
     return true;
 
-  // If before and after are mbarriers
-  if (beforeSlice.sharedKind == gpu::SharedKind::Barrier &&
-      afterSlice.sharedKind == gpu::SharedKind::Barrier) {
+  if (source.isBarrier && sink.isBarrier) {
     auto signalsCompletion = [&](Operation *op) {
       if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
         return arrive.getNoIncrement();

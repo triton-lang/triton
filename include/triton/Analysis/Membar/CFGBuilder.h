@@ -47,7 +47,7 @@ enum class Boundary {
   None,
   WaitAll,      // Complete issued TMEM accesses.
   Publication,  // Order peer-visible TMEM effects.
-  KernelReturn, // Complete issued TMEM accesses and order CompletionSync::All.
+  KernelReturn, // Complete issued TMEM accesses at kernel exit.
 };
 
 enum class ArrivalMode { Scalar, PerWarp, Either };
@@ -55,7 +55,7 @@ enum class ArrivalMode { Scalar, PerWarp, Either };
 // Observe the input before the operation and start new producers at its output.
 // A scratch rendezvous lies between those two sets of effects.
 struct OpModel {
-  BlockInfo sharedIn, sharedOut;
+  SMemData shared;
   SmallVector<TMemAccess, 1> tmemAccesses;
   // Native transfers need a completion wait; descriptor asm needs region order.
   std::optional<SyncKind> tmemProducerNeed;

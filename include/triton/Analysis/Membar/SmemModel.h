@@ -4,278 +4,137 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
-#include <set>
-#include <tuple>
-#include <utility>
 
 namespace mlir {
 
-struct AllocationSlice;
+namespace triton::membar {
+struct SMemAccess;
+}
 
-/// Callback to allow backend to provide more information on whether a barrier
-/// is needed between two operations. Even though two operations access the same
-/// shared memory they may not require a barrier in between them.
-using MembarFilterFn = std::function<bool(
-    Operation *, Operation *, bool /*lhsIsRead*/, bool /*rhsIsRead*/,
-    Allocation *, const AllocationSlice &, const AllocationSlice &)>;
+/// Exempt a pair the backend orders or allows to commute, even across
+/// iterations. Relative address proofs belong to AllocationSlice.
+using MembarFilterFn =
+    std::function<bool(const triton::membar::SMemAccess &,
+                       const triton::membar::SMemAccess &, Allocation &)>;
 
-// Represents the access to a slice of an allocation
-// It contains information both on physical memory (the interval) and a
-// logical view on it (layout, subslice offsets and shape for the access)
+/// Physical storage and the relative coordinates valid in one SSA binding.
 struct AllocationSlice {
-public:
-  // Create allocation slice from a value, collecting subslice offsets.
-  // Dynamic buffer-index information is attached by BufferIndexAnalysis; use
-  // BufferIndexAnalysis::makeSlice when constructing slices for membar.
-  AllocationSlice(Value value, Interval<size_t> allocationInterval,
+  // Use BufferIndexAnalysis::makeSlice to attach a relative slot expression.
+  AllocationSlice(Value value, Interval<size_t> interval,
                   Allocation::BufferId bufferId);
+  explicit AllocationSlice(Interval<size_t> interval)
+      : allocationInterval(interval) {}
 
-  // Builder for accesses that represent accesses to the whole
-  // allocation (scratch buffers, ArriveBarrierOp, ..)
-  AllocationSlice(Interval<size_t> interval)
-      : allocationInterval(interval), accessTy(nullptr),
-        bufferId(Allocation::InvalidBufferId) {}
+  bool operator<(const AllocationSlice &other) const;
+  bool operator==(const AllocationSlice &) const = default;
 
-  bool operator<(const AllocationSlice &other) const {
-    return asTuple() < other.asTuple();
-  }
-
-  bool operator==(const AllocationSlice &other) const {
-    return asTuple() == other.asTuple();
-  }
-
-  // Check if a AllocationSlice intersects with another other.
-  // This happens if their subslice regions intersect in all dimensions.
-  // Returns true if it can't prove the AllocationSlices are disjoint.
-  bool intersects(const AllocationSlice &other) const;
+  bool mayOverlapPhysically(const AllocationSlice &other) const;
+  bool disjointWithinBinding(const AllocationSlice &other) const;
 
   Allocation::BufferId getBufferId() const { return bufferId; }
+  bool hasIterationInfo() const { return bufferIndexExpr || subslice; }
+  void invalidateIterationInfo() {
+    bufferIndexExpr = nullptr;
+    subslice = nullptr;
+  }
 
-  /// Translate shared-memory geometry and discard callee-local index facts.
-  /// TODO: Retire this method with the AMD forward-flow summaries.
+  /// AMD function summaries use caller-relative storage at each call site.
   AllocationSlice
   translateToCallsite(CallOpInterface call, FunctionOpInterface callee,
                       triton::BufferRegionAnalysis &regions) const;
 
-  void print(raw_ostream &os) const;
-
-  void invalidateIterationInfo() {
-    bufferIndexExpr = nullptr;
-    subsliceSource = {};
-  }
-
-  // Immutable MAY-addresses covering every dynamic instance of this access.
-  // They remain valid across backedges, unlike the epoch-relative facts above.
-  // The owning BufferRegionAnalysis outlives every slice using this pointer.
+  // All possible physical origins, including allocation padding and CTA IDs.
+  // Owned by BufferRegionAnalysis. A null footprint gives no restriction.
   const triton::BufferRegionFootprint *physicalFootprint = nullptr;
-
-  // Effect classification is preserved when geometry is widened or translated.
-  // Unknown for implicit scratch and non-shared accesses.
-  std::optional<triton::gpu::SharedKind> sharedKind;
-
-  // Buffer-index expression attached by BufferIndexAnalysis. It participates
-  // in ordering/equality so accesses to different slots remain separate.
-  // Must not be mutated after the slice is inserted into a sorted container
-  // (e.g. BlockInfo::SliceMapT); rebuild the container instead, as
-  // BlockInfo::invalidateIterationInfo does.
+  // Relative slot of an indexed descriptor, owned by BufferIndexAnalysis.
   const BufferIndexExpr *bufferIndexExpr = nullptr;
 
 private:
-  std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int32_t>, const BufferIndexExpr *, const void *,
-             const void *, std::optional<triton::gpu::SharedKind>>
-  asTuple() const {
-    return {allocationInterval,
-            bufferId,
-            accessTy.getAsOpaquePointer(),
-            subsliceOffsets,
-            bufferIndexExpr,
-            subsliceSource.getAsOpaquePointer(),
-            physicalFootprint,
-            sharedKind};
-  }
-  // Offsets from subslice, borrowed from its immutable context-owned attribute.
-  // Empty when offsets are unknown.
-  llvm::ArrayRef<int32_t> subsliceOffsets;
-  // The source descriptor supplying the coordinates for subslice offsets.
-  Value subsliceSource;
-  // The allocated interval for this buffer
+  // Bounds for this allocator buffer, also available for implicit scratch.
   Interval<size_t> allocationInterval;
-  // Type of the memory descriptor for this access
-  triton::gpu::MemDescType accessTy;
-  // Buffer id for partial sync on wait_barrier deps.
-  Allocation::BufferId bufferId;
-};
-
-// Empty summaries contain no operations. Nonempty summaries preserve an issuer
-// only when every operation has the same known kind.
-enum class ThreadIssuer : uint8_t {
-  // No contributing operations.
-  None,
-  // The issuer is unknown or differs across operations.
-  Unknown,
-  // Thread zero of the current execution partition.
-  Thread0,
-  // Lane zero of each warp in the partition.
-  WarpLeaders,
-  // A fixed leader of partition-relative warp zero.
-  // The leader's lane may be nonzero.
-  Warp0Leader
-};
-
-enum class CompletionSync : uint8_t {
-  None,
-  // Independent global reads may proceed before the rendezvous.
-  Shared,
-  All,
-};
-
-/// Completion scope, refined by a backend before joining pending state.
-using CompletionScopeFn = CompletionSync (*)(Operation *, CompletionSync);
-
-enum class ThreadDemandKind : uint8_t {
-  None,
-  GlobalReadsOnly,
-  // Base membar demands not proven to have only global-read effects.
-  General
-};
-
-struct BlockInfo {
-  using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
-
-  SliceMapT syncReadSlices;
-  SliceMapT syncWriteSlices;
-
-  // Thread ordering is independent of which physical addresses are accessed.
-  struct ThreadSyncState {
-    ThreadIssuer effectIssuer = ThreadIssuer::None;
-    CompletionSync completion = CompletionSync::None;
-    bool peerWaitNeedsSync = false;
-
-    bool operator==(const ThreadSyncState &) const = default;
-  } threadSync;
-  struct ThreadDemandState {
-    ThreadDemandKind kind = ThreadDemandKind::None;
-    // Only publication demands contribute to this issuer summary.
-    ThreadIssuer publicationIssuer = ThreadIssuer::None;
-    bool mayNotifyPeer = false;
-
-    bool operator==(const ThreadDemandState &) const = default;
-  } threadDemands;
-
-  BlockInfo() = default;
-
-  /// Unions two BlockInfo objects.
-  BlockInfo &join(const BlockInfo &other) {
-    for (auto &slice : other.syncReadSlices)
-      syncReadSlices[slice.first].insert(slice.second.begin(),
-                                         slice.second.end());
-
-    for (auto &slice : other.syncWriteSlices)
-      syncWriteSlices[slice.first].insert(slice.second.begin(),
-                                          slice.second.end());
-    joinThreadState(other);
-    return *this;
-  }
-
-  template <typename Transform> void transformSlices(Transform transform) {
-    for (auto *slices : {&syncReadSlices, &syncWriteSlices}) {
-      SliceMapT transformed;
-      for (const auto &[slice, ops] : *slices)
-        transformed[transform(slice)].insert(ops.begin(), ops.end());
-      *slices = std::move(transformed);
-    }
-  }
-
-  /// Clears the buffer index and access origin of every slice, rebuilding both
-  /// maps. Used at loop backedges where the same SSA value can denote a value
-  /// from a different dynamic iteration, and before storing function summaries
-  /// where per-function SSA identity is no longer meaningful.
-  void invalidateIterationInfo();
-
-  void dump() {
-    auto &err = llvm::errs();
-    err << "Block Interval:\n";
-    err << "  Read Intervals:\n";
-    for (auto &[slice, ops] : syncReadSlices) {
-      err << "    ";
-      slice.print(err);
-      err << " ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
-      err << "\n";
-    }
-    err << "  Write Intervals:\n";
-    for (auto &[slice, ops] : syncWriteSlices) {
-      err << "    ";
-      slice.print(err);
-      err << " ";
-      for (auto &op : ops)
-        err << op->getName() << " ";
-      err << "\n";
-    }
-  }
-
-  /// Returns true if Slices in two BlockInfo objects are intersected.
-  bool isIntersected(const BlockInfo &other, const MembarFilterFn &filter,
-                     Allocation *allocation) const {
-    return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
-                                 /*lhsIsRead=*/false, /*rhsIsRead=*/true,
-                                 filter, allocation) ||
-           /*WAR*/
-           isIntersected(syncReadSlices, other.syncWriteSlices,
-                         /*lhsIsRead=*/true, /*rhsIsRead=*/false, filter,
-                         allocation) ||
-           /*WAW*/
-           isIntersected(syncWriteSlices, other.syncWriteSlices,
-                         /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
-                         allocation);
-  }
-
-  /// Whether pending thread effects must rendezvous before upcoming demands.
-  static bool requiresThreadSync(const BlockInfo &pending,
-                                 const BlockInfo &effects);
-
-  /// Clears the effects because a barrier is inserted.
-  void sync() {
-    syncReadSlices.clear();
-    syncWriteSlices.clear();
-    threadSync = {};
-    threadDemands = {};
-  }
-
-  bool operator==(const BlockInfo &) const = default;
-
-  /// Checks one pair of access maps with the operation filter.
-  static bool isIntersected(const SliceMapT &lhsSlices,
-                            const SliceMapT &rhsSlices, bool lhsIsRead,
-                            bool rhsIsRead, const MembarFilterFn &filter,
-                            Allocation *allocation) {
-    for (auto &lhs : lhsSlices)
-      for (auto &rhs : rhsSlices)
-        if (lhs.first.intersects(rhs.first))
-          for (auto lhsOp : lhs.second)
-            for (auto rhsOp : rhs.second)
-              if (!filter || !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead,
-                                     allocation, lhs.first, rhs.first))
-                return true;
-    return false;
-  }
-
-private:
-  void joinThreadState(const BlockInfo &other);
+  // Identifies a local buffer for slot comparisons and backend alias checks.
+  Allocation::BufferId bufferId = Allocation::InvalidBufferId;
+  // A direct subslice gives its source, offsets and shape for relative proofs.
+  Operation *subslice = nullptr;
 };
 
 namespace triton::membar {
 
+// A source can require a rendezvous independently of storage overlap.
+// Summaries union the effects on each side of an operation.
+struct ThreadEffects {
+  enum : uint8_t {
+    // A release with a known issuer observes that issuer in program order.
+    Thread0 = 1 << 0,
+    WarpLeaders = 1 << 1, // Lane zero of every warp.
+    Warp0Leader = 1 << 2, // Elected lane of the first warp.
+    AnyIssuer = Thread0 | WarpLeaders | Warp0Leader,
+    SharedCompletion = 1 << 3, // May overlap independent global reads.
+    FullCompletion = 1 << 4,   // Must also finish before reads and kernel exit.
+    Completions = SharedCompletion | FullCompletion,
+    PeerWait = 1 << 5, // A peer notification can advance the counter phase.
+  };
+
+  // Effects left pending when the operation exits.
+  uint8_t pending = 0;
+  // Pending effects that require a rendezvous before this operation.
+  uint8_t joins = 0;
+
+  void merge(ThreadEffects other, bool usesShared);
+  bool operator==(const ThreadEffects &) const = default;
+};
+
+} // namespace triton::membar
+
+// A wait leaves these completion effects pending in its issuing threads.
+enum class CompletionSync : uint8_t {
+  None = 0,
+  Shared = triton::membar::ThreadEffects::SharedCompletion,
+  All = triton::membar::ThreadEffects::Completions,
+};
+
+/// The backend can refine the completion scope of an individual wait.
+using CompletionScopeFn = CompletionSync (*)(Operation *, CompletionSync);
+
+namespace triton::membar {
+
 struct FixedSync;
-struct OpModel;
+
+enum class Conflict { None, AfterRebind, Always };
+
+struct SMemAccess {
+  // A write subsumes a read of the same bytes for hazard detection.
+  enum Kind : uint8_t { None, Read, Write };
+  // A guarded block or function summary can represent several issuing ops.
+  Operation *op;
+  AllocationSlice slice;
+  // Exposed to predecessors and successors respectively. An internal
+  // rendezvous separates the first scratch write from the final read.
+  Kind entry, exit;
+  // A single operation can signal a counter and also access its payload.
+  bool isBarrier = false;
+
+  Conflict conflict(const SMemAccess &sink, const MembarFilterFn &filter,
+                    Allocation &allocation) const;
+  bool operator==(const SMemAccess &) const = default;
+};
+
+struct SMemData {
+  // Shared bytes the operation reads or writes.
+  SmallVector<SMemAccess, 0> accesses;
+  // What the issuing threads leave pending and what earlier work they need
+  // to observe.
+  ThreadEffects threads;
+
+  void merge(const SMemData &other);
+  Conflict conflict(const SMemData &sink, const MembarFilterFn &filter,
+                    Allocation &allocation) const;
+  bool operator==(const SMemData &) const = default;
+};
 
 struct SharedAccess {
   const BufferRegionFootprint *footprint;
@@ -321,22 +180,19 @@ public:
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
-  /// SynchronizationOnly records fixed barriers, including scratch rendezvous,
-  /// and the mode of existing per-warp notifications.
-  void describe(Operation *op, OpModel &model, FixedSync &fixed,
-                ArrayRef<MemoryAccess> accesses);
+  /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
+  SMemData describe(Operation *op, FixedSync &fixed,
+                    ArrayRef<MemoryAccess> accesses);
   const BufferIndexAnalysis &getBufferIndexAnalysis() const {
     return bufferIndexAnalysis;
   }
 
 private:
-  SmallVector<AllocationSlice>
-  getAllocationSlices(Value value, std::optional<gpu::SharedKind> sharedKind);
+  SmallVector<AllocationSlice> getAllocationSlices(Value value);
   bool isRegionLocal(Value value);
   bool mayNotifyPeer(Operation *op, ArrayRef<MemoryAccess> accesses);
-  BlockInfo getThreadEffects(Operation *op);
-  void addThreadDemand(BlockInfo &effects, Operation *op,
-                       ArrayRef<MemoryAccess> accesses);
+  ThreadEffects getThreadEffects(Operation *op, bool hasScratch,
+                                 ArrayRef<MemoryAccess> accesses);
 
   Allocation &allocation;
   BufferRegionAnalysis &regions;

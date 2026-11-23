@@ -24,30 +24,6 @@ void addDemand(MembarDemands &demands, ArrivalMode mode, Demand demand) {
   demands.required.push_back(demand);
 }
 
-std::optional<Path> sharedNeed(const BlockInfo &out, const OpModel &in,
-                               bool threadSync, bool carried,
-                               std::optional<BlockInfo> &carriedOut,
-                               Allocation &allocation,
-                               const MembarFilterFn &filter) {
-  // A kernel return has no subsequent CTA-local consumer.
-  if (in.boundary == Boundary::KernelReturn)
-    return out.threadSync.completion == CompletionSync::All
-               ? std::optional(Path::Any)
-               : std::nullopt;
-  if ((threadSync && in.arrivalMode == ArrivalMode::Scalar) ||
-      out.isIntersected(in.sharedIn, filter, &allocation))
-    return Path::Any;
-  if (!carried)
-    return std::nullopt;
-  if (!carriedOut) {
-    carriedOut.emplace(out);
-    carriedOut->invalidateIterationInfo();
-  }
-  if (carriedOut->isIntersected(in.sharedIn, filter, &allocation))
-    return Path::LoopCarried;
-  return std::nullopt;
-}
-
 bool tmemConflicts(ArrayRef<TMemAccess> before, ArrayRef<TMemAccess> after) {
   for (const TMemAccess &a : before)
     for (const TMemAccess &b : after)
@@ -81,45 +57,51 @@ MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
                               Allocation &allocation,
                               const MembarFilterFn &sharedFilter,
                               TMemModel *tmem) {
-  bool ordersThreadEffects = llvm::any_of(cfg.nodes, [](const auto &node) {
-    return node.effects.sharedIn.threadDemands.publicationIssuer !=
-           ThreadIssuer::None;
-  });
+  // Skip thread-only producers when no operation can observe them.
+  unsigned allJoins = 0;
+  for (const auto &node : cfg.nodes)
+    allJoins |= node.effects.shared.threads.joins;
   MembarDemands demands;
   for (unsigned source = 0; source < cfg.nodes.size(); ++source) {
     const auto &producer = cfg.nodes[source];
     const OpModel &out = producer.effects;
-    const BlockInfo &shared = out.sharedOut;
-    const auto &sync = shared.threadSync;
-    bool hasSlices =
-        !shared.syncReadSlices.empty() || !shared.syncWriteSlices.empty();
-    if (hasSlices || sync.completion != CompletionSync::None ||
-        (ordersThreadEffects && sync.effectIssuer != ThreadIssuer::None)) {
-      constexpr unsigned fresh = 1, carried = 2;
-      std::optional<BlockInfo> carriedOut;
+    const SMemData &shared = out.shared;
+    if (!shared.accesses.empty() || (shared.threads.pending & allJoins)) {
+      // Only the source's relative coordinates depend on the path.
+      enum { Bound = 1, Rebound };
+      bool relative = llvm::any_of(shared.accesses, [](const SMemAccess &a) {
+        return a.exit && a.slice.hasIterationInfo();
+      });
       walkEdges(
-          cfg, producer, fresh,
+          cfg, producer, Bound,
           [&](unsigned sink, unsigned state, bool) -> std::optional<unsigned> {
             const auto &in = cfg.nodes[sink].effects;
-            bool threadSync =
-                BlockInfo::requiresThreadSync(shared, in.sharedIn);
-            if (auto path = sharedNeed(shared, in, threadSync, state == carried,
-                                       carriedOut, allocation, sharedFilter)) {
+            bool join = shared.threads.pending & in.shared.threads.joins;
+            auto conflict =
+                join && in.arrivalMode == ArrivalMode::Scalar
+                    ? Conflict::Always
+                    : shared.conflict(in.shared, sharedFilter, allocation);
+            if (conflict == Conflict::Always) {
               demands.required.push_back(
-                  {source, sink, SyncKind::RegionBarrier, *path});
+                  {source, sink, SyncKind::RegionBarrier});
               return std::nullopt;
             }
-            // A pending effect reaches consecutive direct notifications until a
-            // CTA rendezvous. Lane zero in each warp can issue both in order.
-            if (threadSync)
+            if (state == Rebound && conflict == Conflict::AfterRebind) {
+              demands.required.push_back(
+                  {source, sink, SyncKind::RegionBarrier, Path::LoopCarried});
+              return std::nullopt;
+            }
+            // A per-warp publication leaves the producer live for other warps.
+            if (join)
               addDemand(demands, in.arrivalMode,
                         {source, sink, SyncKind::RegionBarrier});
             return state;
           },
           stopAt(SyncKind::RegionBarrier),
-          [&](Edge edge, unsigned state) {
-            return hasSlices && cfg.invalidatesIteration(edge, source) ? carried
-                                                                       : state;
+          [&](Edge edge, unsigned state) -> unsigned {
+            if (relative && cfg.invalidatesIteration(edge, source))
+              return Rebound;
+            return state;
           });
     }
 
