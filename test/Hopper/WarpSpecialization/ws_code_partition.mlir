@@ -305,3 +305,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Producer tt.load hoisted outside scf.for with consumer inside scf.for must
+// resolve the producer block from copyOpMap rather than the rewritten
+// local_load in the consumer block.
+// CHECK-LABEL: @hoisted_load_channel
+// CHECK: nvws.create_token {loadType = 1 : i32, numBuffers = 1 : i32}
+// CHECK: ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf8E4M3FN
+// CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232>
+// CHECK: default
+// CHECK: nvws.producer_acquire
+// CHECK: ttg.async_copy_global_to_local
+// CHECK: ttg.async_copy_global_to_local
+// CHECK: nvws.producer_commit
+// CHECK: partition0
+// CHECK: nvws.consumer_wait
+// CHECK: scf.for
+// CHECK: ttng.warp_group_dot
+// CHECK: nvws.consumer_release
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hoisted_load_channel(%arg0: !tt.ptr<f8E4M3FN>, %arg1: !tt.ptr<f8E4M3FN>, %arg2: !tt.ptr<f32>) {
+    %c0 = arith.constant {async_task_id = array<i32: 1>} 0 : i32
+    %c1 = arith.constant {async_task_id = array<i32: 1>} 1 : i32
+    %c3 = arith.constant {async_task_id = array<i32: 1>} 3 : i32
+    %cst = arith.constant {async_task_id = array<i32: 1>} dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %pa = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f8E4M3FN> -> tensor<64x64x!tt.ptr<f8E4M3FN>, #blocked>
+    %pb = tt.splat %arg1 {async_task_id = array<i32: 0>} : !tt.ptr<f8E4M3FN> -> tensor<64x64x!tt.ptr<f8E4M3FN>, #blocked>
+    %a = tt.load %pa {async_task_id = array<i32: 0>} : tensor<64x64x!tt.ptr<f8E4M3FN>, #blocked>
+    %b = tt.load %pb {async_task_id = array<i32: 0>} : tensor<64x64x!tt.ptr<f8E4M3FN>, #blocked>
+    %res = scf.for %iv = %c0 to %c3 step %c1 iter_args(%acc = %cst) -> (tensor<64x64xf32, #mma>) : i32 {
+      %la = ttg.local_alloc %a {async_task_id = array<i32: 1>} : (tensor<64x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>
+      %lb = ttg.local_alloc %b {async_task_id = array<i32: 1>} : (tensor<64x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<64x64xf8E4M3FN, #shared1, #smem>
+      %dot = ttng.warp_group_dot %la, %lb, %acc {async_task_id = array<i32: 1>, inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem> * !ttg.memdesc<64x64xf8E4M3FN, #shared1, #smem> -> tensor<64x64xf32, #mma>
+      scf.yield {async_task_id = array<i32: 1>} %dot : tensor<64x64xf32, #mma>
+    } {async_task_id = array<i32: 1>}
+    %out = ttg.convert_layout %res {async_task_id = array<i32: 1>} : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
+    %po = tt.splat %arg2 {async_task_id = array<i32: 1>} : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked>
+    tt.store %po, %out {async_task_id = array<i32: 1>} : tensor<64x64x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

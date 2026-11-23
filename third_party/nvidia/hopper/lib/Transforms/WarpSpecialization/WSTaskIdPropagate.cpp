@@ -58,8 +58,9 @@ int doTaskIdPropagate(triton::FuncOp &funcOp) {
     if (!taskIds.isUninitialized() &&
         (isa<arith::ConstantOp>(op) || !op->hasAttr("async_task_id"))) {
       op->setAttr("async_task_id", taskIds.getTaskIds());
-      labelParentOps(op);
     }
+    if (op->hasAttr("async_task_id"))
+      labelParentOps(op);
   });
   return 0;
 }

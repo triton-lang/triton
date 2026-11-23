@@ -53,3 +53,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Pre-annotated anchor ops inside a loop must still label their enclosing loop
+// even when no unannotated producer ops exist inside the loop body.
+// CHECK-LABEL: @anchor_op_labels_parent_loop
+// CHECK: scf.for
+// CHECK:   tt.descriptor_load {{.*}} {async_task_id = array<i32: 0>}
+// CHECK:   ttng.warp_group_dot {{.*}} {async_task_id = array<i32: 1>
+// CHECK: } {async_task_id = array<i32: 0, 1>}
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @anchor_op_labels_parent_loop(%arg0: !tt.tensordesc<64x64xf8E4M3FN, #shared>, %arg1: !tt.tensordesc<64x64xf8E4M3FN, #shared>, %arg2: !tt.tensordesc<64x64xf32, #shared>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c3 = arith.constant 3 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %res = scf.for %iv = %c0 to %c3 step %c1 iter_args(%acc = %cst) -> (tensor<64x64xf32, #mma>) : i32 {
+      %a = tt.descriptor_load %arg0[%c0, %iv] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xf8E4M3FN, #shared> -> tensor<64x64xf8E4M3FN, #blocked>
+      %b = tt.descriptor_load %arg1[%iv, %c0] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xf8E4M3FN, #shared> -> tensor<64x64xf8E4M3FN, #blocked>
+      %la = ttg.local_alloc %a : (tensor<64x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>
+      %lb0 = ttg.local_alloc %b : (tensor<64x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>
+      %lb = ttg.memdesc_trans %lb0 {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem> -> !ttg.memdesc<64x64xf8E4M3FN, #shared1, #smem>
+      %dot = ttng.warp_group_dot %la, %lb, %acc {async_task_id = array<i32: 1>, inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem> * !ttg.memdesc<64x64xf8E4M3FN, #shared1, #smem> -> tensor<64x64xf32, #mma>
+      scf.yield %dot : tensor<64x64xf32, #mma>
+    }
+    %out = ttg.convert_layout %res : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
+    tt.descriptor_store %arg2[%c0, %c0], %out {async_task_id = array<i32: 1>} : !tt.tensordesc<64x64xf32, #shared>, tensor<64x64xf32, #blocked>
+    tt.return
+  }
+}

@@ -57,6 +57,12 @@ public:
 
     OpBuilder builder(funcOp);
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();
+    bool hasUserTaskIds = !getNestedAsyncTaskIds(funcOp).empty();
+    auto clearAsyncTaskIds = [&]() {
+      if (!hasUserTaskIds) {
+        funcOp->walk([](Operation *op) { removeAsyncTaskIds(op); });
+      }
+    };
     unsigned numWarpGroups = 3;
     // FIXME: skip data partitioning with on-host TMA.
     bool success = false;
@@ -68,10 +74,27 @@ public:
             << "// -----// WarpSpec internal IR Dump After: doTaskPartition\n"
             << moduleOp << "\n\n\n";
       }
+      // Bail out if task partitioning produced no async tasks or assigned a
+      // non-TMA LoadOp as a single-task producer, since Hopper token lowering
+      // only supports TMA producer commits.
+      bool hasNonTMAProducer = false;
+      funcOp->walk([&](triton::LoadOp loadOp) {
+        auto taskIds = getAsyncTaskIds(loadOp);
+        if (taskIds.size() == 1 && taskIds[0] == 0)
+          hasNonTMAProducer = true;
+      });
+      if (getNestedAsyncTaskIds(funcOp).empty() || hasNonTMAProducer) {
+        clearAsyncTaskIds();
+        return;
+      }
       // Propagate taskId.
       int retCode = doTaskIdPropagate(funcOp);
-      if (retCode == -1)
+      if (retCode == -1) {
+        clearAsyncTaskIds();
+        if (hasUserTaskIds)
+          break;
         continue;
+      }
       if (dumpIntermediateSteps) {
         ::mlir::triton::tools::mlirDumpsOrDbgs()
             << "// -----// WarpSpec internal IR Dump After: doTaskIdPropagate\n"
@@ -89,6 +112,9 @@ public:
         break;
       }
       // Clear async_task.
+      clearAsyncTaskIds();
+      if (hasUserTaskIds)
+        break;
     }
     if (!success) {
       mlir::emitError(

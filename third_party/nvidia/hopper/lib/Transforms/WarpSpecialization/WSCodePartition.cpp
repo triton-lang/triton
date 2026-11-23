@@ -650,7 +650,12 @@ void createToken(
           llvm_unreachable("Unexpected load type");
         }
         Value v;
-        if (it->second.front()->getSrcOp()->getParentOfType<scf::ForOp>())
+        auto copyIt = copyOpMap.find(it->second.front());
+        Operation *tokenSrcOp =
+            (copyIt != copyOpMap.end() && copyIt->second.first)
+                ? copyIt->second.first
+                : it->second.front()->getSrcOp();
+        if (tokenSrcOp->getParentOfType<scf::ForOp>())
           v = ttnvws::CreateTokenOp::create(builder, funcOp.getLoc(),
                                             channel->numBuffers, tokenLoadType);
         else
@@ -1014,8 +1019,14 @@ void insertAsyncComm(
       consumerOps.insert(getUniqueActualConsumer(c->getDstOp()));
     }
 
-    // Find head producer
-    auto producerBlock = kv.second.front()->getSrcOp()->getBlock();
+    // Find head producer. Use the producer op recorded in copyOpMap because
+    // insertAsyncCopy replaces the consumer operand with a local_load in the
+    // consumer block.
+    auto copyIt = copyOpMap.find(kv.second.front());
+    Operation *producerOp = (copyIt != copyOpMap.end() && copyIt->second.first)
+                                ? copyIt->second.first
+                                : kv.second.front()->getSrcOp();
+    auto producerBlock = producerOp->getBlock();
     Operation *headProducer = nullptr;
     for (auto &op : producerBlock->getOperations()) {
       if (producerOps.contains(&op)) {
