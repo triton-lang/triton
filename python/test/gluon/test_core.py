@@ -8135,6 +8135,60 @@ def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block
     assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
 
 
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
+@pytest.mark.parametrize("fmt, vec_size", [("nvfp4", 16), ("mxfp4", 32)])
+@pytest.mark.parametrize("block_k,block_n", [(128, 128), (256, 128), (256, 256), (512, 128)])
+def test_tcgen05_mma_scaled_single_cta_k96(fmt, vec_size, block_k, block_n):
+    torch.manual_seed(0)
+    a, a_scale, a_ref = random_quantized_tensor(256, 1024, fmt)
+    b, b_scale, b_ref = random_quantized_tensor(256, 1024, fmt)
+    a_scale = swizzle_scales_packed_block(a_scale, vec_size)
+    b_scale = swizzle_scales_packed_block(b_scale, vec_size)
+    actual, compiled = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 128, block_n, block_k, (1, 1), False,
+                                               out_dtype=torch.float32, return_kernel=True)
+    torch.testing.assert_close(actual, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
+    use_k96 = is_blackwell_ultra() and block_k >= 256
+    expected_mmas = triton.cdiv(block_k, 96) if use_k96 else block_k // 64
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
+    if use_k96:
+        paired = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 256, block_n, block_k, (2, 1), False,
+                                         out_dtype=torch.float32)
+        torch.testing.assert_close(actual, paired, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell() or is_rubin(), reason="Requires Blackwell K64 or K96 MMA")
+@pytest.mark.parametrize("scale_rows", [64, 128])
+def test_tcgen05_mma_scaled_single_cta_k96_rhs_stride(scale_rows):
+
+    @gluon.jit
+    def kernel(out, SCALE_ROWS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8)
+        regs: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        a = ttgl.allocate_shared_memory(ttgl.uint8, [128, 128], layout, ttgl.full([128, 128], 0x22, ttgl.uint8, regs))
+        b = a.slice(0, 64).permute((1, 0))
+        sa = allocate_tensor_memory(ttgl.uint8, [128, 8], TensorMemoryScalesLayout())
+        sb = allocate_tensor_memory(ttgl.uint8, [SCALE_ROWS, 8], TensorMemoryScalesLayout())
+        sa.store(ttgl.full([128, 8], 127, ttgl.uint8, sa.get_reg_layout()))
+        k = ttgl.arange(0, 8, layout=ttgl.SliceLayout(0, sb.get_reg_layout()))
+        sb.store(ttgl.full([SCALE_ROWS, 8], 127, ttgl.uint8, sb.get_reg_layout()) + k[None, :].to(ttgl.uint8))
+        acc = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared()
+        tcgen05_mma_scaled(a, b, acc, sa, sb, "e2m1", "e2m1", use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[a])
+        mbarrier.invalidate(bar)
+        offsets = ttgl.arange(0, 128)[:, None] * 64 + ttgl.arange(0, 64)[None, :]
+        ttgl.store(out + offsets, acc.load())
+
+    out = torch.empty((128, 64), device="cuda")
+    compiled = kernel[(1, )](out, scale_rows)
+    # Each K block contributes 32 ones scaled by 2**k.
+    torch.testing.assert_close(out, torch.full_like(out, 32 * 255), rtol=0, atol=0)
+    expected_mmas = 3 if scale_rows == 128 and is_blackwell_ultra() else 4
+    assert compiled.asm["ptx"].count("tcgen05.mma.cta_group::1.") == expected_mmas
+
+
 @gluon.jit
 def tmem288k_simple_kernel(in_ptr, out_ptr, M: ttgl.constexpr, Ncol1: ttgl.constexpr, Ncol2: ttgl.constexpr,
                            num_warps: ttgl.constexpr):

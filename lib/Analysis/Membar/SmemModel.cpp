@@ -375,6 +375,9 @@ bool triton::membar::hasRegionLocalUses(Value root, bool followCalls) {
 namespace {
 
 bool hasOnlyGlobalReads(Operation *op) {
+  // Bulk prefetch has opaque effects but only reads global memory.
+  if (isa<ttng::PrefetchBulkOp>(op))
+    return true;
   auto effects = getEffectsRecursively(op);
   return effects && !effects->empty() &&
          llvm::all_of(*effects, [](const auto &effect) {

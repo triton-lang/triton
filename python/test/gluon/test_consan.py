@@ -918,6 +918,38 @@ def test_remote_shared_load_reader_visibility(PUBLISHED, FAILURE, device, run_wr
     kernel[(1, )](out, PUBLISHED=PUBLISHED, FAILURE=FAILURE, num_warps=4, num_ctas=2)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize("OP", ["release", "acquire", "reduce"])
+def test_shared_reuse_after_implicit_cluster_barrier(OP, device):
+    knobs.compilation.instrumentation_mode = "consan"
+
+    @gluon.jit(noinline=True)
+    def increment(ptr, order: ttgl.constexpr):
+        ttgl.atomic_add(ptr, 1, sem=order)
+
+    @gluon.jit
+    def kernel(out, aux, OP: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=[[1]])
+        offsets = ttgl.arange(0, 256, layout)
+        old = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, offsets)
+        ttgl.barrier(cluster=True)
+        peer_values = old.gather(offsets ^ 128, axis=0)
+        if OP == "reduce":
+            ttgl.store(aux, ttgl.sum(peer_values, 0))
+        else:
+            increment(aux, OP)
+        # Keep scratch disjoint from old so only the operation's implicit barrier orders reuse.
+        old._keep_alive()
+        new = ttgl.allocate_shared_memory(ttgl.int32, [256], shared, peer_values)
+        ttgl.store(out + offsets, new.load(layout))
+
+    out = torch.empty(256, device=device, dtype=torch.int32)
+    aux = torch.zeros(1, device=device, dtype=torch.int32)
+    kernel[(1, )](out, aux, OP, num_ctas=2)
+    torch.testing.assert_close(out, torch.arange(256, device=device, dtype=torch.int32) ^ 128)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FINISHED", [True, False])
 def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, run_wrapper, monkeypatch):

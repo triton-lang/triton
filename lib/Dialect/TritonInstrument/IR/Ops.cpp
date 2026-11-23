@@ -16,6 +16,13 @@ namespace instrument {
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
+LogicalResult ExperimentalFPSanProbabilityCastOp::verify() {
+  if (getSrc().getType().getElementType().isF32() ==
+      getType().getElementType().isF32())
+    return emitOpError("expected conversion between FP32 and FP8");
+  return success();
+}
+
 LogicalResult DotI8Op::verify() {
   auto aEnc =
       dyn_cast<ttg::DotOperandEncodingAttr>(getA().getType().getEncoding());

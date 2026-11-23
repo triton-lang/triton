@@ -1407,7 +1407,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Do not multi buffer tmem as uses are scheduled before defs
     // CHECK: ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
     // CHECK: ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32
-    // CHECK: scf.for
+    // CHECK: scf.for %[[IV:[^ ]+]] =
+    // CHECK: arith.remui %[[IV]], %c4_i32 {{.*}}loop.stage = 0
+    // CHECK: arith.remui %[[IV]], %c4_i32 {{.*}}loop.stage = 2
     // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 4 : i32, loop.stage = 2 : i32}
     // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 2 : i32, loop.stage = 3 : i32}
     // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 3 : i32, loop.stage = 3 : i32}
