@@ -67,6 +67,13 @@ warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
 
 @gluon.jit
+def offs_2d(rows: gl.constexpr, cols: gl.constexpr, stride, layout: gl.constexpr):
+    r = gl.arange(0, rows, gl.SliceLayout(1, layout))
+    c = gl.arange(0, cols, gl.SliceLayout(0, layout))
+    return r[:, None] * stride + c[None, :]
+
+
+@gluon.jit
 def mfma_kernel(a_ptr, b_ptr, c_ptr,  #
                 M: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
                 INSTR_SHAPE: gl.constexpr, WARPS_PER_CTA: gl.constexpr):
@@ -75,19 +82,13 @@ def mfma_kernel(a_ptr, b_ptr, c_ptr,  #
     a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
     b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
 
-    am = gl.arange(0, M, gl.SliceLayout(1, a_layout))
-    ak = gl.arange(0, K, gl.SliceLayout(0, a_layout))
-    a = gl.load(a_ptr + am[:, None] * K + ak[None, :])
-    bk = gl.arange(0, K, gl.SliceLayout(1, b_layout))
-    bn = gl.arange(0, N, gl.SliceLayout(0, b_layout))
-    b = gl.load(b_ptr + bk[:, None] * N + bn[None, :])
+    a = gl.load(a_ptr + offs_2d(M, K, K, a_layout))
+    b = gl.load(b_ptr + offs_2d(K, N, N, b_layout))
 
     acc = gl.zeros([M, N], gl.float32, mfma_layout)
     acc = cdna4.mfma(a, b, acc)
 
-    cm = gl.arange(0, M, gl.SliceLayout(1, mfma_layout))
-    cn = gl.arange(0, N, gl.SliceLayout(0, mfma_layout))
-    gl.store(c_ptr + cm[:, None] * N + cn[None, :], acc)
+    gl.store(c_ptr + offs_2d(M, N, N, mfma_layout), acc)
 
 
 def mfma(A, B, instr_shape, warps_per_cta):
@@ -202,13 +203,6 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 #
 # Let's put this in practice with 2 chained MFMA operations.
-
-
-@gluon.jit
-def offs_2d(rows: gl.constexpr, cols: gl.constexpr, stride, layout: gl.constexpr):
-    r = gl.arange(0, rows, gl.SliceLayout(1, layout))
-    c = gl.arange(0, cols, gl.SliceLayout(0, layout))
-    return r[:, None] * stride + c[None, :]
 
 
 @gluon.jit
@@ -695,15 +689,16 @@ def test_matmul_cdna4(M, N, K):
 
 
 # %%
-# MFMAs can only start after their operands are read from LDS. This means the
-# MFMAs have to wait until all LDS reads finish, which wastes time. One
-# technique we can use in Gluon is subtiling. We split the K dimension of a tile
-# into sub-tiles, so that the LDS reads of one sub-tile overlap with the MFMAs
-# of another.
+# MFMAs can only start after their operands are read from LDS. When a group of
+# LDS is issued, there is no need to wait for all of it to complete. One
+# technique we can use in Gluon is subtiling, which we split these LDS into
+# smaller groups and start MFMAs earlier. There are many ways to split the LDS
+# reads along M/N/K dimension. Here we will demonstrate how to split it along
+# K dimension.
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start: gl.constexpr, k_size: gl.constexpr):
+def matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start, k_size):
     a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
@@ -719,7 +714,6 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                        NUM_BUFFERS=NUM_BUFFERS)
     layouts = get_mfma_layouts()
 
-    SUB_K: gl.constexpr = cfg.BLOCK_K // 2
     pid = gl.program_id(0)
     num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
     off_m = pid // num_pid_n * cfg.BLOCK_M
@@ -741,16 +735,16 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     for k in range(num_k - (cfg.NUM_BUFFERS - 1)):
         matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, cfg.BLOCK_K // 2)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, cfg.BLOCK_K // 2, cfg.BLOCK_K // 2)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
     for i in gl.static_range(cfg.NUM_BUFFERS - 1):
         k = num_k - (cfg.NUM_BUFFERS - 1) + i
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, cfg.BLOCK_K // 2)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, cfg.BLOCK_K // 2, cfg.BLOCK_K // 2)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
@@ -794,21 +788,16 @@ if __name__ == "__main__" and is_cdna4():
 # CDNA5 WMMA
 # ----------
 #
-# CDNA5 replaces MFMA with WMMA, the wave matrix multiply-accumulate
-# instructions. The idea stays the same, but the instructions and their layouts
-# change slightly, given CDNA5 has a warp size of 32. WMMA is exposed in Gluon
-# as `wmma(a, b, acc)`. Same as `mfma`, the accumulator and the operands need
-# specific layouts, here based on `AMDWMMALayout` instead of `AMDMFMALayout`.
+# CDNA5 replaces MFMA with WMMA. Most of concepts and optimizations we
+# introduced above apply to WMMA, but with slight differences, especially given
+# CDNA5 is using warp size 32.
 #
-# `AMDWMMALayout` describes the placement of the warps in a different way.
-# Instead of `warps_per_cta`, it uses bases in the style of a linear layout,
-# for both the warps and the registers. Each basis is an offset in units of
-# instruction tiles. `warp_bases` gives the offset of each bit of the warp ID,
-# and `reg_bases` gives the offset of each bit of the index of the instruction
-# tiles that one warp repeats in its registers. With
-# `warp_bases=[[0, 1], [1, 0]]`, warp 1 takes the next tile along N and warp 2
-# the next tile along M, which is the same 2x2 warp grid as
-# `warps_per_cta=[2, 2]`.
+# Similarly WMMA is exposed in Gluon as `wmma(a, b, acc)`. The accumulator and
+# the operands need specific layouts based on `AMDWMMALayout`. `AMDWMMALayout`
+# describes the placement of the warps in a different way - instead of
+# `warps_per_cta`, it uses linear layout's style bases, `warp_bases`. For
+# example `warp_bases=[[0, 1], [1, 0]]` is equivalent to `warps_per_cta=[2, 2]`
+# in `AMDWMMALayout`
 
 if __name__ == "__main__" and is_cdna5():
     wmma_layout = gl.amd.AMDWMMALayout(  #
@@ -826,18 +815,27 @@ if __name__ == "__main__" and is_cdna5():
 # [  T79:0, ..., T79:7,  T95:0, ...,  T95:7, T111:0, ..., T127:0, ..., T127:7]]
 # ```
 #
-# Each warp has 32 lanes and owns one 16x16 tile of the 32x32 block. Warp 0
-# (lanes T0-T31) has the top left tile, warp 1 (T32-T63) the top right tile, and
-# so on.
+# We can see here each warp has 32 lanes and owns one 16x16 tile of the 32x32
+# block. Warp 0 (lanes T0-T31) has the top left tile, warp 1 (T32-T63) the top
+# right tile, and so on.
 
 
 @gluon.jit
-def wmma_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: gl.constexpr, WARP_BASES: gl.constexpr):
+def wmma_kernel(a_ptr, b_ptr, c_ptr,  #
+                M: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
+                WARP_BASES: gl.constexpr):
+    # CDNA5's BF16 WMMA only has shape 16x16x32
     wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(  #
         version=3, instr_shape=[16, 16, 32], transposed=True, warp_bases=WARP_BASES, reg_bases=[])
-    a = gl.load(a_ptr + offs_2d(M, K, K, gl.DotOperandLayout(0, wmma_layout, 8)))
-    b = gl.load(b_ptr + offs_2d(K, N, N, gl.DotOperandLayout(1, wmma_layout, 8)))
-    acc = cdna5.wmma(a, b, gl.zeros([M, N], gl.float32, wmma_layout))
+    a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=wmma_layout, k_width=8)
+    b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=wmma_layout, k_width=8)
+
+    a = gl.load(a_ptr + offs_2d(M, K, K, a_layout))
+    b = gl.load(b_ptr + offs_2d(K, N, N, b_layout))
+
+    acc = gl.zeros([M, N], gl.float32, wmma_layout)
+    acc = cdna5.wmma(a, b, acc)
+
     gl.store(c_ptr + offs_2d(M, N, N, wmma_layout), acc)
 
 
@@ -860,20 +858,18 @@ def test_wmma(M, N, K, warp_bases):
 
 
 # %%
-# The LDS also changes from CDNA4 to CDNA5. On CDNA5, a CTA runs on a workgroup
+# Another big change on CDNA5 is LDS. On CDNA5, a CTA runs on a workgroup
 # processor (WGP), which takes the place of the compute unit (CU) of CDNA4. A
 # WGP has 320 KB of LDS, twice the 160 KB of a CDNA4 CU, so a kernel can keep
 # more and larger tiles in flight. CDNA5 still uses 64 banks of 4 bytes. With 32
-# lanes per warp, `ds_load_b128` can be served in 2 groups of lanes instead of
-# 4.
+# lanes per warp, `ds_load_b128` can be served in 2 groups instead of 4 now.
 #
-# Another big change, as mentioned in `02-async-copy.py`, is async copies. On
-# CDNA4, an async copy writes the data of each lane to consecutive LDS
-# addresses. On CDNA5, an async copy takes a shared memory address for each
-# lane, so it no longer has this requirement, and the padded layouts work
-# without any trick. Moreover, CDNA5 also adds TDM, as shown in `03-tdm.py`. TDM
-# makes copies a lot easier, without much consideration of the layout details,
-# so TDM is what we prefer to use.
+# Moreover, as mentioned before, async copies also changed on CDNA5. On CDNA4,
+# an async copy can only writes to consecutive LDS addresses for lanes in a
+# warp. On CDNA5, an async copy takes a shared memory address for each
+# lane, so it no longer has this requirement. This makes it easier to use the
+# padded layouts. Moreover, CDNA5 also adds TDM, makes copies a lot easier.
+# There is no need to consider the layout details for global memory any more.
 
 
 @gluon.jit
@@ -881,6 +877,7 @@ def wmma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: g
                      B_K_CONTIGUOUS: gl.constexpr, smem_layout: gl.constexpr):
     wmma_layout: gl.constexpr = gl.amd.AMDWMMALayout(  #
         version=3, instr_shape=[16, 16, 32], transposed=True, warp_bases=[[0, 1], [1, 0]], reg_bases=[])
+
     a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [M, K], [K, 1], [M, K], smem_layout)
     a_smem = gl.allocate_shared_memory(gl.bfloat16, [M, K], smem_layout)
     cdna5.tdm.async_load(a_desc, dest=a_smem)
@@ -930,13 +927,10 @@ if __name__ == "__main__" and is_cdna5():
 # %%
 # When using TDM, we still need to consider bank conflicts. TDM only supports
 # padding but not swizzling on CDNA5, and it adds the padding on the fly while
-# it writes the tile. Without padding, the read has 8-way conflicts. We can use
-# the similar heuristics as on CDNA4 to decide the padded layout. The interval
-# stays one row of 64 values, so that each row can start at different banks.
-# For the amount, we again count the different columns that a group reads. On
-# CDNA5, a group has 16 consecutive lanes, and lanes 0-15 all read columns 0-7,
-# each from a different row. This is only 8 columns, so the interval-padding
-# pair becomes [64, 8].
+# it writes the tile. We can use the similar heuristics as on CDNA4 to decide
+# the padded layout. The interval stays one row of 64 values. For the amount, we
+# can count the different columns that a group reads as well. On CDNA5, a group
+# has 16 consecutive lanes, all read columns 0-7, so the amount can be set to 8.
 
 if __name__ == "__main__" and is_cdna5():
     padded_layout = gl.PaddedSharedLayout.with_identity_for(  #
@@ -946,30 +940,55 @@ if __name__ == "__main__" and is_cdna5():
     bank_conflicts_kernel[(1, )](a_layout, padded_layout, 0)
 
 # %%
-# Only considering bank conflicts on CDNA5 is not enough. Reads of different
-# warps can still slow each other down, which we call a partition conflict. A
-# WGP has 4 SIMDs, which are the units that run the warps. Warp `i` runs on SIMD
-# `i % 4`, and the 4 SIMDs work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3.
-# Each pair has its own port into the LDS. Behind the ports, the 320 KB of LDS
-# consists of 5 physical partitions of 64 KB. Both pairs can read in the same
-# cycle only if they access different partitions. Otherwise their reads take
-# turns, and each pair gets half the bandwidth.
+# Only considering bank conflicts on CDNA5 is not enough. Another new aspect of
+# conflicts on LDS is "partition conflict". On CDNA5, a WGP has 4 SIMDs, which
+# are the units that run the warps. Warp `i` runs on SIMD `i % 4`, and the 4
+# SIMDs work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3. Each pair has its
+# own port into the LDS.
 #
-# The simple `warp_bases=[[0, 1], [1, 0]]` runs into it. Warps 0 and 1 sit on
-# different SIMD pairs but compute tiles in the same rows, so both read the
-# same rows of A, which live in the same partition.
+# Behind the ports, the 320 KB of LDS consists of 5 physical partitions of
+# 64 KB. Both pairs can read in the same cycle only if they access different
+# partitions. Otherwise their reads are serialized, and each pair gets half of
+# the LDS bandwidth.
+#
+# The simple `warp_bases=[[0, 1], [1, 0]]` layout runs into this problem, where
+# warp 0 and 1 sit on different SIMD pairs but load tiles of the same row,
+# which live in the same partition. Let's say we split A by rows A0 and A1. So
+# we can see here W0 and W1 both access the same A0 from 2 SIMD pairs. Same
+# issue happens for B as well.
+#
+# ```
+#     B0  B1
+# A0  W0  W1
+# A1  W2  W3
+# ```
 #
 # To avoid it, the two SIMD pairs must read different rows of A and B, and these
-# rows must sit in different partitions. Gluon describes this placement with
-# another shared memory layout, `PartitionedSharedLayout`. It cuts a buffer
-# into pieces along `partition_dim`, places the pieces in `num_partitions`
-# different partitions, and lays out each piece with `partition_layout`, here
-# the padded layout from above.
+# rows must also sit in different partitions. We can further split A0 rows into
+# 2 halves, A00 and A01, as well as A1. Here we have 4 splits of A, and we can
+# arrange them shown below, where each step, W0 and W1 access different halves
+# of A. Apart from this splitting, A0 and A1 will still needs to be placed in
+# partitioned, which is handled by the compiler's shared memory allocator.
 #
-# To help generate such a layout, we can use `make_partitioned_dot_layouts`. It
-# takes the padded layouts of A and B, and returns a `PartitionedSharedLayout`
-# for each of them, together with a WMMA layout that places the warps of each
-# SIMD pair on their own pieces.
+# ```
+#      step 1    step 2
+#      ------    ------
+#      B0  B1    B0  B1
+# A00  W0  .     .   W1
+# A01  W2  .     .   W3
+# A10  .   W1    W0  .
+# A11  .   W3    W2  .
+# ```
+#
+# Gluon describes this optimization with another shared memory layout,
+# `PartitionedSharedLayout`. It cuts a shared memory buffer into pieces along
+# `partition_dim`, places the pieces in different partitions, and lays out each
+# piece with `partition_layout`, here the padded layout from above.
+#
+# To help generate such a layout for WMMA, we can use
+# `make_partitioned_dot_layouts`. It takes the padded layouts of A and B, and
+# returns a `PartitionedSharedLayout` for each of them, together with a WMMA
+# layout that places the warps of each SIMD pair on their own pieces.
 
 if __name__ == "__main__" and is_cdna5():
     a_smem_layout, b_smem_layout, wmma_layout = cdna5.make_partitioned_dot_layouts(  #
@@ -986,28 +1005,6 @@ if __name__ == "__main__" and is_cdna5():
 #     partition_layout=PaddedSharedLayout(
 #         interval_padding_pairs=[[64, 8]], ...))
 # ```
-#
-# The bases are in units of 16x16 instruction tiles. Warp 1 starts 8 tiles
-# (128 values) down and 8 tiles right of warp 0, and the last register basis
-# moves each warp 8 tiles down. The 256x256 output tile is split among the warps
-# like this, where "1st" and "2nd" mark which half of its rows a warp reads
-# first:
-#
-# ```
-#              N 0-127       N 128-255
-# M   0-63     warp 0, 1st   warp 1, 2nd
-# M  64-127    warp 2, 1st   warp 3, 2nd
-# M 128-191    warp 0, 2nd   warp 1, 1st
-# M 192-255    warp 2, 2nd   warp 3, 1st
-# ```
-#
-# Warps 0 and 2 form one SIMD pair, and warps 1 and 3 the other. For B, the
-# first pair reads rows 0-127, and the second pair reads rows 128-255. For A,
-# the first pair reads rows 0-127 while the second pair reads rows 128-255, and
-# then they swap. The shared layout cuts A and B into these two halves along
-# dimension 0 and stores them in different partitions, so the two pairs always
-# read from different partitions. TDM follows the cut, so each warp copies into
-# one half.
 
 # %%
 # Now let's combine these CDNA5 features together to write a matmul kernel. TDM
@@ -1054,7 +1051,7 @@ def get_wmma_layouts(partitioned):
 
 
 @gluon.jit
-def matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start: gl.constexpr, k_size: gl.constexpr):
+def matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start, k_size):
     a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
@@ -1080,7 +1077,6 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
                        NUM_BUFFERS=NUM_BUFFERS)
     layouts = get_wmma_layouts(PARTITIONED)
 
-    SUB_K: gl.constexpr = cfg.BLOCK_K // 2
     pid = gl.program_id(0)
     num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
     off_m = pid // num_pid_n * cfg.BLOCK_M
@@ -1102,8 +1098,8 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         next_k = k + cfg.NUM_BUFFERS - 1
         matmul_cdna5_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_n, a_desc, b_desc, a_smem, b_smem)
         cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 2)
-        a0, b0 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
-        a1, b1 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, cfg.BLOCK_K // 2)
+        a1, b1 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, cfg.BLOCK_K // 2, cfg.BLOCK_K // 2)
         acc = cdna5.wmma(a0, b0, acc)
         acc = cdna5.wmma(a1, b1, acc)
 

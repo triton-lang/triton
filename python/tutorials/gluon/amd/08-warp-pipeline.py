@@ -346,7 +346,7 @@ def matmul_ld_gmem(cfg, k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, 
 
 
 @gluon.jit
-def matmul_ld_smem(cfg, layouts: gl.constexpr, k, a_smem, w_smem, ws_smem, half: gl.constexpr):
+def matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem, half):
     slot = k % cfg.NUM_BUFFERS
     HALF_K: gl.constexpr = cfg.BLOCK_K // 2
     ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [cfg.BLOCK_N, HALF_K // 32])

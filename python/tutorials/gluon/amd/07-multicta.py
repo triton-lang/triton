@@ -343,7 +343,7 @@ def matmul_ld_gmem(cfg, k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, 
 
 
 @gluon.jit
-def matmul_ld_smem(cfg, layouts: gl.constexpr, k, a_smem, w_smem, ws_smem):
+def matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem):
     a = a_smem.index(k % cfg.NUM_BUFFERS).load(layouts.a_reg_layout)
     w = w_smem.index(k % cfg.NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
     w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(k % cfg.NUM_BUFFERS)).load(layouts.ws_reg_layout)
