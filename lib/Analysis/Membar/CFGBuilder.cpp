@@ -4,6 +4,7 @@
 #include "triton/Analysis/Membar/TmemModel.h"
 
 #include "mlir/Analysis/CFGLoopInfo.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
@@ -106,6 +107,43 @@ static Block *getGuardArm(Operation *op) {
   if (split && split.getCondition().getDefiningOp<ttg::ThreadPredicateOp>())
     return split.getTrueDest();
   return nullptr;
+}
+
+// Compare the entry guard with the loop test on its initial operands.
+static bool firstLoopTestIsTrue(cf::BranchOp enter, cf::CondBranchOp header) {
+  Block *preheader = enter->getBlock();
+  auto *pred = preheader->getSinglePredecessor();
+  if (!pred)
+    return false;
+  auto guard = dyn_cast<cf::CondBranchOp>(pred->getTerminator());
+  if (!guard)
+    return false;
+  auto known = guard.getCondition().getDefiningOp<arith::CmpIOp>();
+  auto test = header.getCondition().getDefiningOp<arith::CmpIOp>();
+  if (!known || !test)
+    return false;
+  auto condition = known.getPredicate();
+  if (guard.getFalseDest() == preheader)
+    condition = arith::invertPredicate(condition);
+  if (test.getPredicate() != condition)
+    return false;
+  auto initial = [&](Value v) -> Value {
+    if (auto arg = dyn_cast<BlockArgument>(v);
+        arg && arg.getOwner() == enter.getDest())
+      return enter.getDestOperands()[arg.getArgNumber()];
+    return v;
+  };
+  Value lhs = initial(test.getLhs()), rhs = initial(test.getRhs());
+  // A loop can widen both bounds while preserving their ordering.
+  if (lhs.getType() != known.getLhs().getType()) {
+    auto a = lhs.getDefiningOp<arith::ExtSIOp>();
+    auto b = rhs.getDefiningOp<arith::ExtSIOp>();
+    if (!a || !b)
+      return false;
+    lhs = a.getIn();
+    rhs = b.getIn();
+  }
+  return lhs == known.getLhs() && rhs == known.getRhs();
 }
 
 const BufferIndexAnalysis &
@@ -215,6 +253,31 @@ void MembarCFGBuilder<Model>::addRegion(MembarCFG<Facts> &cfg, Region &region) {
     for (Block *succ : term->getSuccessors())
       cfg.nodes[id].next.push_back(
           {entries.at(succ), indices.isBackedgeSuccessor(term, succ)});
+
+  // Split a branch-only header on entry when the first test must pass.
+  // Both copies share the same insertion gap. Backedges keep both outcomes.
+  const auto *loops = indices.getLoopInfo(&region);
+  if (!loops)
+    return;
+  for (auto [id, term] : exits) {
+    auto enter = dyn_cast<cf::BranchOp>(term);
+    if (!enter || cfg.nodes[id].op != term)
+      continue;
+    Block *dest = enter.getDest();
+    auto *loop = loops->getLoopFor(dest);
+    if (!loop || loop->getHeader() != dest ||
+        loop->getLoopPredecessor() != enter->getBlock())
+      continue;
+    const auto &first = cfg.nodes[entries.at(dest)];
+    auto header = dyn_cast<cf::CondBranchOp>(first.op);
+    if (!header || first.next.size() != 2 ||
+        !firstLoopTestIsTrue(enter, header))
+      continue;
+    auto entry = first;
+    entry.next.resize(1);
+    cfg.nodes[id].next.front().to = cfg.nodes.size();
+    cfg.nodes.push_back(std::move(entry));
+  }
 }
 
 template <typename Model>

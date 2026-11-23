@@ -2294,6 +2294,58 @@ tt.func @loop_with_optional_reader(%length: i32, %value: !loop_input, %first: !l
   tt.return
 }
 
+// The early return guarantees the loop executes its barrier before the load.
+// CHECK-LABEL: @guarded_loop_nonempty
+// CHECK: ttg.local_store
+// CHECK-NOT: ttg.barrier local
+// CHECK: ttg.barrier all
+// CHECK-NOT: ttg.barrier local
+// CHECK: ttg.local_load
+tt.func @guarded_loop_nonempty(%start: i32, %end: i32, %v: !loop_input, %out: !loop_dst) {
+  %skip = arith.cmpi sge, %start, %end : i32
+  cf.cond_br %skip, ^return, ^preheader
+^return:
+  tt.return
+^preheader:
+  %buf = ttg.local_alloc : () -> !loop_tile
+  ttg.local_store %v, %buf : !loop_input -> !loop_tile
+  %lower = arith.extsi %start : i32 to i64
+  %upper = arith.extsi %end : i32 to i64
+  %one = arith.constant 1 : i64
+  scf.for %iv = %lower to %upper step %one : i64 {
+    ttg.barrier all
+  }
+  %r = ttg.local_load %buf : !loop_tile -> !loop_result
+  tt.store %out, %r : !loop_dst
+  tt.return
+}
+
+// Equal bounds reach the load without executing the loop barrier.
+// CHECK-LABEL: @guarded_loop_may_be_empty
+// CHECK: ttg.local_store
+// CHECK-NOT: ttg.barrier local
+// CHECK: ttg.barrier all
+// CHECK: ttg.barrier local
+// CHECK-NEXT: {{.*}} = ttg.local_load
+tt.func @guarded_loop_may_be_empty(%start: i32, %end: i32, %v: !loop_input, %out: !loop_dst) {
+  %skip = arith.cmpi sgt, %start, %end : i32
+  cf.cond_br %skip, ^return, ^preheader
+^return:
+  tt.return
+^preheader:
+  %buf = ttg.local_alloc : () -> !loop_tile
+  ttg.local_store %v, %buf : !loop_input -> !loop_tile
+  %lower = arith.extsi %start : i32 to i64
+  %upper = arith.extsi %end : i32 to i64
+  %one = arith.constant 1 : i64
+  scf.for %iv = %lower to %upper step %one : i64 {
+    ttg.barrier all
+  }
+  %r = ttg.local_load %buf : !loop_tile -> !loop_result
+  tt.store %out, %r : !loop_dst
+  tt.return
+}
+
 // range(program_id(0), 64, 64) runs at most once. Membar still follows the
 // backedge, so it orders the store against prior reads and the exit read.
 // CHECK-LABEL: @single_visit_keeps_exit
