@@ -434,9 +434,19 @@ struct ArriveBarrierOpConversion
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
     Value pred;
-    // Warp-aligned partition offsets preserve the lane ID.
-    Value id =
-        op.getPerWarp() ? getLaneId(rewriter, loc) : getThreadId(rewriter, loc);
+    // Read the lane ID at the arrival to avoid spilling the issuer
+    // predicate across a register-heavy loop. Partitions are warp-aligned.
+    Value id;
+    if (op.getPerWarp() && !op.getFromCTA() &&
+        op->hasAttr(nvidia_gpu::AttrRematerializeLaneIdName)) {
+      PTXBuilder lane;
+      auto mov = *lane.create("mov.u32 $0, %laneid;");
+      mov({lane.newOperand("=r")}, /*onlyAttachMLIRArgs=*/true);
+      id = lane.launch(rewriter, loc, rewriter.getI32Type());
+    } else {
+      id = op.getPerWarp() ? getLaneId(rewriter, loc)
+                           : getThreadId(rewriter, loc);
+    }
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       // Routing may use several lane IDs to address peer CTAs.
       FromCTALowering lowering =

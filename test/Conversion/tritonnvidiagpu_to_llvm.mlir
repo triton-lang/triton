@@ -120,6 +120,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @per_warp_worker_arrival
+  tt.func @per_warp_worker_arrival(%bar: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %p: i1) {
+    ttg.warp_specialize(%bar, %p)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%addr: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %enabled: i1) num_warps(4) {
+      // CHECK: %[[LANE:.*]] = llvm.inline_asm has_side_effects {{.*}}"mov.u32 $0, %laneid;"
+      // CHECK: %[[LEADER:.*]] = llvm.icmp "eq" %[[LANE]],
+      // CHECK: %[[ISSUE:.*]] = llvm.and %[[LEADER]],
+      // CHECK: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1];", "b,r" %[[ISSUE]],
+      ttng.arrive_barrier %addr, 4, %enabled {per_warp, ttng.rematerialize_lane_id} : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<1xi64, #shared0, #smem, mutable>, i1) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {

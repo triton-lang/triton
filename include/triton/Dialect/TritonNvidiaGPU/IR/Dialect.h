@@ -86,6 +86,8 @@ PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
 unsigned getPackedArithFp4Axis(PackedArithOp op);
 
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
+constexpr static char AttrRematerializeLaneIdName[] =
+    "ttng.rematerialize_lane_id";
 
 inline bool getModuleTwoCTAs(ModuleOp mod) {
   auto attr = mod->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
