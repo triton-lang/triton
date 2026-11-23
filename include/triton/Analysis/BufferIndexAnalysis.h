@@ -6,13 +6,14 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include <memory>
 #include <vector>
 
 namespace mlir {
 
 class Block;
+class CFGLoopInfo;
 class Operation;
 struct AllocationSlice;
 struct BufferIndexExpr;
@@ -22,8 +23,10 @@ struct BufferIndexExpr;
 ///
 /// The analysis is intentionally narrow. It decomposes the dynamic slot index
 /// into `base + constantOffset`, optionally under a positive constant modulus,
-/// and proves two accesses disjoint only when the expressions have the same
-/// base and different offsets modulo the same modulus.
+/// and proves two accesses disjoint when the expressions have the same base
+/// and different offsets modulo the same modulus. Cursors of the same block
+/// also stay disjoint if their slots start at distinct residues and advance
+/// by the same constant step on every backedge.
 /// Scalar indices follow Triton's block-programming semantics. Comparisons
 /// also require the same indexed source in the same dynamic iteration:
 /// a source change can change both the origin and the byte stride of a slot.
@@ -31,12 +34,12 @@ struct BufferIndexExpr;
 /// Recognized index shapes:
 ///   1. integer constants,
 ///   2. `arith.addi` with one constant operand, only if it cannot overflow:
-///      the op is `nsw`, or the other operand's range proves it (constants,
-///      `remsi` by N, the wrap below, and loop arguments bounded by those).
-///      Under `remsi` by a power of two any such addition is accepted: a
-///      wrap changes the sum by a multiple of 2^width, which leaves its
-///      residue modulo the power of two unchanged,
-///   3. `arith.remsi` with a positive constant modulus,
+///      the op is `nsw`, or the other operand's range or a dominating branch
+///      guard proves it. Under a power-of-two modulus any such addition is
+///      accepted: a wrap changes the sum by a multiple of 2^width, which
+///      leaves its residue modulo the power of two unchanged,
+///   3. `arith.remsi` with a positive constant modulus, or `arith.remui`
+///      with a power-of-two modulus,
 ///   4. the pipeliner's select/cmpi one-step wrap:
 ///        select(cmpi sge(base + 1, N), 0, base + 1)
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
@@ -58,8 +61,8 @@ struct BufferIndexExpr;
 /// Buffer-index reasoning is disabled for functions with irreducible control
 /// flow because not every cyclic edge is a dominance backedge in such CFGs.
 ///
-/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
-/// SSA bases, and slices carried across cf-form backedges all fail the
+/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli,
+/// unrelated bases, and slices carried across cf-form backedges all fail the
 /// disjointness proof and fall back to normal membar aliasing.
 ///
 /// The class owns and interns the analyzed expressions attached to
@@ -87,12 +90,16 @@ public:
   /// dominance region. Restricted to the analyzed function-level CFG.
   bool entersLoop(Operation *terminator) const;
 
+  /// Natural loops in a multi-block region. Single-block regions have no
+  /// dominance tree.
+  const CFGLoopInfo *getLoopInfo(Region *region) const;
+
 private:
   void attachBufferIndex(AllocationSlice &slice, Value value);
   const BufferIndexExpr *intern(BufferIndexExpr expr);
 
   DominanceInfo dominanceInfo;
-  llvm::SmallPtrSet<Block *, 4> loopHeaders;
+  mutable DenseMap<Region *, std::unique_ptr<CFGLoopInfo>> loops;
   bool hasReducibleCFG;
   std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
 };

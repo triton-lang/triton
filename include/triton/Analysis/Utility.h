@@ -4,36 +4,19 @@
 #include <array>
 
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
 
+namespace triton::gpu {
+class ConvertLayoutOp;
+} // namespace triton::gpu
+
 // Match zero-filled storage: negative floating-point zero must be preserved.
-inline bool isZeroFillConst(Value v) {
-  if (auto splat = v.getDefiningOp<triton::SplatOp>())
-    return isZeroFillConst(splat.getSrc());
-  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
-    return isZeroFillConst(bitcast.getSrc());
-  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp)
-    return false;
-  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
-    return attr.getValue().isZero();
-  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
-    return attr.getValue().bitcastToAPInt().isZero();
-  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() &&
-           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
-  if (auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
-  return false;
-}
+bool isZeroFillConst(Value v);
 
 // Callback to allow backends to specify a target-specific getter for scratch
 // elements.
@@ -70,9 +53,7 @@ public:
     MaxUI,
   };
 
-  explicit ReduceOpHelper(triton::ReduceOp op)
-      : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
-        srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
+  explicit ReduceOpHelper(triton::ReduceOp op);
 
   RankedTensorType getSrcTy() { return srcTy; }
 
@@ -413,6 +394,9 @@ bool atomicResultHasCTABroadcast(Operation *op);
 } // namespace triton
 
 namespace triton::nvidia_gpu {
+
+/// Full cluster rendezvous emitted by the operation's lowering.
+BarrierStages getClusterBarrierStages(Operation *op);
 
 bool needsClusterBarrier(Operation *op);
 

@@ -427,14 +427,15 @@ def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
 
 
 @builtin
-def store_wait(pendings, read_only=True, _semantic=None):
+def store_wait(pendings, read_only=True, deps=(), _semantic=None):
     """
-    Wait for pending TMA stores.
+    Wait for pending bulk and TMA stores in their shared completion queue.
 
     Args:
-        pendings (int | ttgl.constexpr): Maximum number of TMA stores allowed to remain pending.
+        pendings (int | ttgl.constexpr): Maximum number of committed store groups allowed to remain pending.
         read_only (bool | ttgl.constexpr): If true, wait only until the pending stores have finished reading
             their shared-memory sources, but writes may not be visible in HBM. Defaults to true.
+        deps (Sequence[shared_memory_descriptor]): Shared-memory sources to keep live through this wait.
 
     Notes:
         By default, ``tma.store_wait`` only waits for the TMA store to finish reading from the shared memory,
@@ -444,7 +445,7 @@ def store_wait(pendings, read_only=True, _semantic=None):
     """
     pendings = _unwrap_if_constexpr(pendings)
     read_only = _unwrap_if_constexpr(read_only)
-    _semantic.builder.create_async_tma_store_wait(pendings, read_only)
+    _semantic.builder.create_async_tma_store_wait(pendings, read_only, [src.handle for src in deps])
 
 
 @builtin

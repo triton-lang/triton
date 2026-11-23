@@ -3,8 +3,10 @@
 #include "TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -367,8 +369,15 @@ struct FpToFpOpConversion
       // NVPTX can select a direct f16 <-> bf16 conversion when supported.
       if (srcWidth == dstWidth)
         value = LLVM::FPExtOp::create(rewriter, loc, f32_ty, value);
-      return {convertFpTrunc(loc, rewriter, elemTy, value,
-                             roundingMode.value_or(RoundingMode::RTNE))};
+      RoundingMode rounding = roundingMode.value_or(RoundingMode::RTNE);
+      // PTX has no f64 -> bf16 conversion before SM90. Truncating toward zero
+      // through f32 gives the same result because every bf16 value is exact
+      // in f32. Rounding to nearest through f32 would round twice; NVPTX
+      // already expands that mode without double rounding.
+      if (computeCapability < 90 && srcElementType.isF64() &&
+          dstElementType.isBF16() && rounding == RoundingMode::RTZ)
+        value = convertFpTrunc(loc, rewriter, f32_ty, value, rounding);
+      return {convertFpTrunc(loc, rewriter, elemTy, value, rounding)};
     }
 
     bool useSoftwareFp8 = computeCapability < 89 &&

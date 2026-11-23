@@ -24,8 +24,6 @@
 #ifndef TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -59,6 +57,15 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+// Physical ranges of a linear bulk copy, derived from the canonical layout.
+// Source ranges are packed by increasing CTA id, omitting broadcast bits.
+struct BulkCopyLayout {
+  unsigned bytesPerCTA;
+  unsigned splitMask;
+  unsigned broadcastMask;
+};
+BulkCopyLayout getBulkCopyLayout(gpu::MemDescType type);
+
 struct PackedArithTypeInfo {
   llvm::StringLiteral suffix;
   unsigned lanes, registerBits;
@@ -88,6 +95,10 @@ inline bool getModuleTwoCTAs(ModuleOp mod) {
 inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
+
+// Whether an async-proxy shared payload can access another CTA's memory.
+// Completion mbarriers have their own routing.
+bool hasCrossCTAAsyncSharedAccess(Operation *op);
 
 // Return the declared MMA N, restricted to a true N subview.
 unsigned getMMAv5InstructionN(gpu::MemDescType type);

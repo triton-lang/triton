@@ -8,6 +8,56 @@ import triton.language as tl
 from triton.runtime import interpreter
 
 
+@pytest.mark.parametrize("value, expected_fp32", [
+    (1.0, 1.0),
+    (1.00000001, 1.0),
+    (1.0000001, 1.0000001192092896),
+    (0.99999999, 1.0),
+    (2.0, 2.0),
+])
+def test_implicit_cvt_float_rounds_to_fp32(value, expected_fp32):
+    result = interpreter._implicit_cvt(value)
+    assert isinstance(result, tl.tensor)
+    assert result.dtype == tl.float32
+    assert result.handle.data.dtype == np.float32
+    np.testing.assert_equal(result.handle.data[0], np.float32(expected_fp32))
+
+
+@pytest.mark.parametrize("annotation, dtype", [
+    ("fp16", tl.float16),
+    ("bf16", tl.bfloat16),
+    ("fp32", tl.float32),
+    ("fp64", tl.float64),
+])
+def test_implicit_cvt_float_follows_annotation(annotation, dtype):
+    result = interpreter._implicit_cvt(1.00000001, annotation)
+    assert result.dtype == dtype
+    assert result.handle.data.dtype == interpreter._get_np_dtype(dtype)
+
+
+def test_implicit_cvt_bf16_truncates_like_launcher():
+    # fp32 bits 0x3F80C000: keeping the upper half gives 0x3F80 (1.0); rounding would give 0x3F81.
+    result = interpreter._implicit_cvt(1.005859375, "bf16")
+    assert result.dtype == tl.bfloat16
+    assert result.handle.data[0] == np.uint16(0x3F80)
+
+
+def test_float_arg_precision_follows_annotation():
+    import torch
+
+    def default_fp32(out, x):
+        tl.store(out, x > 1.0)
+
+    def annotated_fp64(out, x: tl.float64):
+        tl.store(out, x > 1.0)
+
+    out = torch.zeros(2, dtype=torch.int32)
+    interpreter.InterpretedFunction(default_fp32)[(1, )](out, 1.00000001)
+    interpreter.InterpretedFunction(annotated_fp64)[(1, )](out[1:], 1.00000001)
+    # 1.00000001 rounds to 1.0 in fp32 but stays above 1.0 in fp64, as in compiled kernels.
+    assert out.tolist() == [0, 1]
+
+
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
     base = np.uint64(array.ctypes.data)
     offsets = np.arange(array.size, dtype=np.uint64) * np.uint64(array.itemsize)
@@ -57,6 +107,17 @@ def test_bf16_to_fp16_rounding_and_overflow():
     with np.errstate(over="ignore"):
         result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.float16, ir.ROUNDING_MODE.RTNE)
     np.testing.assert_array_equal(result.data.view(np.uint16), expected)
+
+
+@pytest.mark.parametrize("method, value, expected", [
+    # Just above a tie between two 16-bit values: rounding to fp32 first drops
+    # the 2**-30 that breaks the tie, and the tie rounds down.
+    ("get_fp16", 1 + 2**-11 + 2**-30, 0x3C01),
+    ("get_bf16", 1 + 2**-8 + 2**-30, 0x3F81),
+])
+def test_16bit_float_constant_rounded_once(method, value, expected):
+    result = getattr(interpreter.InterpreterBuilder(), method)(value)
+    assert result.data.view(np.uint16)[0] == expected
 
 
 def test_fp16_to_bf16_exact_values():
@@ -206,6 +267,25 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+@pytest.mark.parametrize("shape", [(), (4, )])
+def test_fpsan_namespace_normal_execution(shape):
+
+    def kernel(shape: tl.constexpr):
+        x = tl.full(shape, 1.0001, tl.float32)
+        return tl.fpsan.barrier(x), tl.fpsan.homomorphic_cast(x, tl.float16)
+
+    barrier = tl.fpsan.barrier
+    cast = tl.fpsan.homomorphic_cast
+    unchanged, narrowed = interpreter.InterpretedFunction(kernel)(shape)
+    expected = np.full(shape, 1.0001, dtype=np.float32)
+    np.testing.assert_array_equal(unchanged.handle.data, expected)
+    np.testing.assert_array_equal(narrowed.handle.data, expected.astype(np.float16))
+    assert unchanged.dtype == tl.float32
+    assert narrowed.dtype == tl.float16
+    assert tl.fpsan.barrier is barrier
+    assert tl.fpsan.homomorphic_cast is cast
 
 
 @pytest.mark.parametrize("fail", [False, True])

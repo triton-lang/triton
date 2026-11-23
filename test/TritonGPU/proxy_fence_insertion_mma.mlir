@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-fence-insertion | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-proxy-fence-insertion | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -81,9 +81,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
     %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared1, #smem>
     // CHECK: ttng.fence_async_shared
-    // CHECK: scf.for
+    // CHECK-NEXT: cf.br
     // CHECK-NOT: ttng.fence_async_shared
-    // CHECK:   ttng.warp_group_dot
+    // CHECK: ttng.warp_group_dot
     scf.for %iv0 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
       scf.for %iv1 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
         %2 = ttng.warp_group_dot %0, %1, %cst : !ttg.memdesc<128x128xf16, #shared, #smem> * !ttg.memdesc<128x64xf16, #shared1, #smem> -> tensor<128x64xf32, #mma>
@@ -111,9 +111,9 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %0 = ttg.local_alloc %arg0 : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %1 = ttg.local_alloc %arg1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared1, #smem>
     // CHECK-NOT: ttng.fence_async_shared
-    // CHECK: scf.for
-    // CHECK: ttng.fence_async_shared
-    // CHECK: ttng.warp_group_dot
+    // CHECK: ttg.local_store
+    // CHECK-NEXT: ttng.fence_async_shared
+    // CHECK-NEXT: ttng.warp_group_dot
     scf.for %iv0 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
       scf.for %iv1 = %c0_i32 to %c64_i32 step %c32_i32 : i32 {
         ttg.local_store %arg0, %0 : tensor<128x128xf16, #blocked> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -170,9 +170,10 @@ tt.func @mma_inside_warp_specialize(%src: tensor<64x64xf16, #blocked>) {
     %c1_i32 = arith.constant 1 : i32
     %c32_i32 = arith.constant 32 : i32
     // CHECK: ttng.fence_async_shared
-    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: cf.br
     scf.for %i = %c0_i32 to %c32_i32 step %c1_i32 : i32 {
-      // CHECK-NEXT: ttng.tc_gen5_mma
+      // CHECK-NOT: ttng.fence_async_shared
+      // CHECK: ttng.tc_gen5_mma
       ttng.tc_gen5_mma %lhs, %rhs, %acc, %true, %true : !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
       // CHECK-NEXT: ttng.tc_gen5_mma
       ttng.tc_gen5_mma %lhs, %rhs, %acc, %true, %true : !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>

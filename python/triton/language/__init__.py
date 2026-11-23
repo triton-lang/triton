@@ -3,6 +3,7 @@
 
 from . import math
 from . import extra
+from . import fpsan
 from .standard import (
     all,
     any,
@@ -130,8 +131,8 @@ from .core import (
     void,
     where,
 )
-from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
-                   ceil)
+from .math import (clmul, umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf,
+                   floor, ceil)
 from .random import (
     pair_uniform_to_normal,
     philox,
@@ -183,6 +184,7 @@ __all__ = [
     "cdiv",
     "ceil",
     "clamp",
+    "clmul",
     "condition",
     "const",
     "constexpr",
@@ -214,6 +216,7 @@ __all__ = [
     "float8e4b8",
     "float8e5",
     "float8e5b16",
+    "fpsan",
     "floor",
     "fma",
     "full",

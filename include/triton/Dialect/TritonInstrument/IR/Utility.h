@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
@@ -170,6 +171,7 @@ struct AuxDataMap {
     int numBaseThreadSlots = 1;
     int tmaThreadOffset = -1;
     int tcThreadOffset = -1;
+    int tcAReadThreadOffset = -1;
     int clcThreadOffset = -1;
     int asyncCopyMbarrierArriveThreadOffset = -1;
     int totalNumThreads = 1;
@@ -177,6 +179,7 @@ struct AuxDataMap {
 
     bool hasTMAThreads() const { return tmaThreadOffset >= 0; }
     bool hasTCThreads() const { return tcThreadOffset >= 0; }
+    bool hasTCAReadThreads() const { return tcAReadThreadOffset >= 0; }
     bool hasCLCThreads() const { return clcThreadOffset >= 0; }
     bool hasAsyncCopyMbarrierArriveThreads() const {
       return asyncCopyMbarrierArriveThreadOffset >= 0;
@@ -292,11 +295,12 @@ struct AuxDataMap {
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
+  // The initial release stores zero before any warp group can acquire the lock.
+  Operation *lockInitialization = nullptr;
 
-  // Cluster barriers that ConSan inserts for its own checks during
-  // instrumentation. They do not synchronize the program, so do not instrument
-  // them.
-  SmallVector<Operation *> internalClusterBarriers;
+  // Snapshot the original operations before instrumentation splits blocks
+  // for cluster rendezvous and introduces sanitizer-internal barriers.
+  SmallVector<std::pair<Operation *, BarrierStages>> operations;
 
   // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
   // barriers outside warp specialization share the entry-region slot; each

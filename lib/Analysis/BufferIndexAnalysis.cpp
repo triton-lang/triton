@@ -1,13 +1,15 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+#include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/MathExtras.h"
 #include <optional>
@@ -20,64 +22,32 @@ static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
 
 /// A buffer index decomposed as `baseValue + constantOffset`, optionally
 /// under a known modulus (recorded when the index is wrapped by remsi or
-/// the pipeliner's select/cmpi idiom). Two expressions rooted at the
-/// same base value with different offsets (modulo the same recorded modulus,
-/// when both carry one) provably target different slots.
+/// the pipeliner's select/cmpi idiom).
 struct BufferIndexExpr {
   Value baseValue;
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
   Value indexedSource;
+  // In the block owning baseValue, the slot is congruent to
+  // loopPhase + iteration * loopStep modulo N when loopPhase is known.
+  std::optional<int64_t> loopPhase;
+  int64_t loopStep = 0;
 
-  bool operator==(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           constantOffset == other.constantOffset && modulus == other.modulus &&
-           indexedSource == other.indexedSource;
-  }
+  bool operator==(const BufferIndexExpr &) const = default;
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    return baseValue == other.baseValue &&
-           indexedSource == other.indexedSource && modulus == other.modulus &&
-           constantOffset != other.constantOffset;
+    if (indexedSource != other.indexedSource || modulus != other.modulus)
+      return false;
+    if (baseValue == other.baseValue)
+      return constantOffset != other.constantOffset;
+    return loopPhase && other.loopPhase && loopPhase != other.loopPhase &&
+           loopStep == other.loopStep &&
+           cast<BlockArgument>(baseValue).getOwner() ==
+               cast<BlockArgument>(other.baseValue).getOwner();
   }
 };
 
 namespace {
-
-enum class DFSState { Visiting, Visited };
-
-/// A CFG is reducible iff every retreating edge in a depth-first traversal is
-/// a backedge, i.e. its target dominates its source. Only blocks reachable
-/// from the function entry matter to membar's forward dataflow analysis.
-bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
-                    DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  states[block] = DFSState::Visiting;
-
-  for (Block *successor : block->getTerminator()->getSuccessors()) {
-    auto it = states.find(successor);
-    if (it == states.end()) {
-      if (!isReducibleCFG(successor, states, dominanceInfo, loopHeaders))
-        return false;
-      continue;
-    }
-    if (it->second == DFSState::Visiting) {
-      if (!dominanceInfo.dominates(successor, block))
-        return false;
-      loopHeaders.insert(successor);
-    }
-  }
-
-  states[block] = DFSState::Visited;
-  return true;
-}
-
-bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo,
-                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
-  DenseMap<Block *, DFSState> states;
-  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo,
-                        loopHeaders);
-}
 
 std::optional<int64_t> getConstantIntValue(Value v) {
   APInt val;
@@ -86,8 +56,61 @@ std::optional<int64_t> getConstantIntValue(Value v) {
   return std::nullopt;
 }
 
+bool allIncomingValues(BlockArgument blockArg,
+                       llvm::function_ref<bool(Block *, Value)> check) {
+  Block *header = blockArg.getOwner();
+  unsigned argIdx = blockArg.getArgNumber();
+  if (header->pred_begin() == header->pred_end())
+    return false;
+
+  for (auto predIt = header->pred_begin(), e = header->pred_end(); predIt != e;
+       ++predIt) {
+    Block *pred = *predIt;
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      return false;
+
+    auto operands = branch.getSuccessorOperands(predIt.getSuccessorIndex());
+    Value incoming = operands[argIdx];
+    if (!incoming || !check(pred, incoming))
+      return false;
+  }
+
+  return true;
+}
+
+/// Verify that `base` is provably bounded by -1 <= base < N so that
+///   select(cmpi sge/slt (addi(base, 1), N), ...)
+/// truly equals (base + 1) % N. The select form returns 0 on the wrap arm
+/// rather than (base + 1) - N; outside that range the two expressions
+/// diverge and the match would be unsound.
+///
+/// Constants are checked directly. For cf-form loop-carried counters we prove
+/// the bound inductively: incoming values to the loop-header block argument
+/// must each be either an in-range constant or the matched select itself.
+/// Given -1 <= base < N we have 0 <= base + 1 <= N, and the select maps N to 0
+/// and otherwise returns base + 1, so the next value satisfies 0 <= next < N.
+bool isBaseProvablyBounded(Value base, int64_t modulus,
+                           arith::SelectOp selectOp) {
+  assert(modulus > 0);
+
+  if (auto c = getConstantIntValue(base))
+    return *c >= -1 && *c < modulus;
+
+  auto blockArg = dyn_cast<BlockArgument>(base);
+  if (!blockArg)
+    return false;
+
+  return allIncomingValues(blockArg, [&](Block *, Value incoming) {
+    if (incoming == selectOp.getResult())
+      return true;
+    auto c = getConstantIntValue(incoming);
+    return c && *c >= -1 && *c < modulus;
+  });
+}
+
 BufferIndexExpr analyzeBufferIndex(Value indexValue,
-                                   bool underPow2Modulus = false);
+                                   bool wrapIsHarmless = false);
 std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp);
 
 using SignedRange = std::pair<int64_t, int64_t>;
@@ -278,63 +301,6 @@ bool isAddWithoutSignedOverflow(arith::AddIOp addOp, Value x, int64_t c) {
   return lo && hi && *lo >= typeMin && *hi <= typeMax;
 }
 
-bool isCFBlockArgProvablyBounded(BlockArgument blockArg, int64_t modulus,
-                                 arith::SelectOp selectOp) {
-  // For cf-form loops, the loop-carried value is a block argument. Each
-  // incoming value must be either an in-range initial value or the matched
-  // select that advances the counter.
-  Block *header = blockArg.getOwner();
-  unsigned argIdx = blockArg.getArgNumber();
-  // Entry block arguments have no incoming operands to prove the bound.
-  if (header->pred_begin() == header->pred_end())
-    return false;
-
-  for (auto predIt = header->pred_begin(), e = header->pred_end(); predIt != e;
-       ++predIt) {
-    Block *pred = *predIt;
-    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
-    if (!branch)
-      return false;
-
-    auto operands = branch.getSuccessorOperands(predIt.getSuccessorIndex());
-    Value incoming = operands[argIdx];
-
-    if (incoming == selectOp.getResult())
-      continue;
-
-    auto c = getConstantIntValue(incoming);
-    if (!c || *c < -1 || *c >= modulus)
-      return false;
-  }
-
-  return true;
-}
-
-/// Verify that `base` is provably bounded by -1 <= base < N so that
-///   select(cmpi sge/slt (addi(base, 1), N), ...)
-/// truly equals (base + 1) % N. The select form returns 0 on the wrap arm
-/// rather than (base + 1) - N; outside that range the two expressions
-/// diverge and the match would be unsound.
-///
-/// Constants are checked directly. For cf-form loop-carried counters we prove
-/// the bound inductively: incoming values to the loop-header block argument
-/// must each be either an in-range constant or the matched select itself.
-/// Given -1 <= base < N we have 0 <= base + 1 <= N, and the select maps N to 0
-/// and otherwise returns base + 1, so the next value satisfies 0 <= next < N.
-bool isBaseProvablyBounded(Value base, int64_t modulus,
-                           arith::SelectOp selectOp) {
-  assert(modulus > 0);
-
-  if (auto c = getConstantIntValue(base))
-    return *c >= -1 && *c < modulus;
-
-  auto blockArg = dyn_cast<BlockArgument>(base);
-  if (!blockArg)
-    return false;
-
-  return isCFBlockArgProvablyBounded(blockArg, modulus, selectOp);
-}
-
 /// Match the one-step modular wrap the pipeliner emits on its iter_arg:
 ///   select(cmpi sge (addi(base, 1), N), zero, addi(base, 1))
 ///   select(cmpi slt (addi(base, 1), N), addi(base, 1), zero)
@@ -385,36 +351,32 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   if (!isBaseProvablyBounded(base, *mod, selectOp))
     return std::nullopt;
 
-  auto baseExpr = analyzeBufferIndex(base);
-  // Nested moduli ((x mod M) + 1) mod N don't reduce to (x + 1) mod N in
-  // general; keep the full select as the expression root.
-  auto offset = llvm::checkedAdd(baseExpr.constantOffset, *c);
-  if (baseExpr.modulus || !offset)
-    return std::nullopt;
-  BufferIndexExpr result{baseExpr.baseValue, *offset};
-  result.modulus = *mod;
-  return result;
+  if (auto seed = getConstantIntValue(base))
+    return BufferIndexExpr{nullptr, *seed + 1, *mod};
+  return BufferIndexExpr{base, 1, *mod};
 }
 
-// An addi is split into base + constant only when it cannot overflow (nsw, or
-// a range proof); a wrapped sum is not base + constant modulo N. Anything else
-// stays an opaque base, which only ever compares equal to itself.
+// An addi is split into base + constant only when it cannot overflow (nsw, a
+// range proof, or a dominating branch guard); a wrapped sum is not base +
+// constant modulo N. Anything else stays an opaque base, which only ever
+// compares equal to itself.
 //
-// `underPow2Modulus` is set when the caller reduces the result by remsi with a
-// power-of-two modulus. A wrap changes the sum by a multiple of 2^width, which
-// that modulus divides, so the residue of base + constant survives any wrap and
-// the addi can be split without an overflow proof.
-BufferIndexExpr analyzeBufferIndex(Value indexValue, bool underPow2Modulus) {
+// `wrapIsHarmless` skips that proof. It is set when the caller reduces the
+// result by a power-of-two modulus: a wrap changes the sum by a multiple of
+// 2^width, which that modulus divides, so the residue of base + constant
+// survives any wrap. analyzeLoopPhase also sets it, keeping the cursor proof's
+// assumption that cursor updates fit in range.
+BufferIndexExpr analyzeBufferIndex(Value indexValue, bool wrapIsHarmless) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
 
   if (auto addOp = indexValue.getDefiningOp<arith::AddIOp>()) {
     auto composeWithConstant = [&](Value nonConst,
                                    int64_t constant) -> BufferIndexExpr {
-      if (!underPow2Modulus &&
+      if (!wrapIsHarmless &&
           !isAddWithoutSignedOverflow(addOp, nonConst, constant))
         return BufferIndexExpr{indexValue, 0};
-      auto baseExpr = analyzeBufferIndex(nonConst, underPow2Modulus);
+      auto baseExpr = analyzeBufferIndex(nonConst, wrapIsHarmless);
       // (x mod N) + C is not represented as (base, offset, mod); keep the
       // full addi as the expression root.
       auto offset = llvm::checkedAdd(baseExpr.constantOffset, constant);
@@ -426,20 +388,21 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue, bool underPow2Modulus) {
       return composeWithConstant(addOp.getLhs(), *offset);
     if (auto offset = getConstantIntValue(addOp.getLhs()))
       return composeWithConstant(addOp.getRhs(), *offset);
-    return BufferIndexExpr{indexValue, 0};
   }
 
   if (auto selectOp = indexValue.getDefiningOp<arith::SelectOp>())
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
-  // arith.remsi(x, N): strip the remainder and record N as the modulus.
-  // N must be a positive compile-time constant.
-  if (auto remOp = indexValue.getDefiningOp<arith::RemSIOp>()) {
-    if (auto mod = getConstantIntValue(remOp.getRhs()); mod && *mod > 0) {
-      auto result = analyzeBufferIndex(remOp.getLhs(),
-                                       llvm::isPowerOf2_64(uint64_t(*mod)));
-      // Nested modulus: keep the full remsi as the expression root.
+  // For power-of-two N the low bits give the residue for either signedness.
+  Operation *rem = indexValue.getDefiningOp();
+  if (isa_and_nonnull<arith::RemSIOp, arith::RemUIOp>(rem)) {
+    if (auto mod = getConstantIntValue(rem->getOperand(1));
+        mod && *mod > 0 &&
+        (isa<arith::RemSIOp>(rem) || llvm::isPowerOf2_64(*mod))) {
+      auto result = analyzeBufferIndex(
+          rem->getOperand(0), wrapIsHarmless || llvm::isPowerOf2_64(*mod));
+      // Nested modulus: keep the full remainder as the expression root.
       if (result.modulus)
         return BufferIndexExpr{indexValue, 0};
       result.modulus = *mod;
@@ -450,13 +413,40 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue, bool underPow2Modulus) {
   return BufferIndexExpr{indexValue, 0};
 }
 
+// Each entry must establish the same seed and each backedge add the same step.
+void analyzeLoopPhase(BufferIndexExpr &expr, DominanceInfo &dominance) {
+  auto arg = dyn_cast_or_null<BlockArgument>(expr.baseValue);
+  if (!arg || !expr.modulus)
+    return;
+  std::optional<int64_t> seed, step;
+  auto check = [&](Block *pred, Value incoming) {
+    // As upstream: assume cursor updates fit in range.
+    auto input = analyzeBufferIndex(incoming, /*wrapIsHarmless=*/true);
+    bool backedge = dominance.dominates(arg.getOwner(), pred);
+    if (input.baseValue != (backedge ? expr.baseValue : Value{}) ||
+        (input.modulus && input.modulus != expr.modulus))
+      return false;
+    int64_t residue =
+        normalizeModuloOffset(input.constantOffset, *expr.modulus);
+    auto &expected = backedge ? step : seed;
+    if (expected && *expected != residue)
+      return false;
+    expected = residue;
+    return true;
+  };
+  if (allIncomingValues(arg, check) && seed) {
+    expr.loopPhase =
+        normalizeModuloOffset(*seed + expr.constantOffset, *expr.modulus);
+    expr.loopStep = step.value_or(0);
+  }
+}
+
 // Bounds the walk through chains of loop-carried slot views (one link per
 // pipeline stage) and stops it on cycles such as a view carried unchanged.
 constexpr unsigned kMaxCarriedViewDepth = 8;
 
 std::optional<BufferIndexExpr>
-analyzeSlot(Value value, DominanceInfo &dominanceInfo,
-            const llvm::SmallPtrSetImpl<Block *> &loopHeaders, unsigned depth);
+analyzeSlot(Value value, DominanceInfo &dominanceInfo, unsigned depth);
 
 /// Derive the slot of a memdesc carried around a cf-form loop as a header
 /// block argument, as the pipeliner does when it rotates the slot views of
@@ -473,11 +463,11 @@ analyzeSlot(Value value, DominanceInfo &dominanceInfo,
 /// counter's (constant) entry value; otherwise the proof fails.
 std::optional<BufferIndexExpr>
 analyzeLoopCarriedSlot(BlockArgument arg, DominanceInfo &dominanceInfo,
-                       const llvm::SmallPtrSetImpl<Block *> &loopHeaders,
                        unsigned depth) {
+  // In a reducible CFG, a block with both an entry edge and a backedge (an
+  // edge from a block it dominates) is a loop header; anything else fails
+  // below.
   Block *header = arg.getOwner();
-  if (!loopHeaders.contains(header))
-    return std::nullopt;
 
   struct Incoming {
     Value view;
@@ -501,7 +491,7 @@ analyzeLoopCarriedSlot(BlockArgument arg, DominanceInfo &dominanceInfo,
     }
 
     // Backedge: the view handed to the next iteration.
-    auto next = analyzeSlot(view, dominanceInfo, loopHeaders, depth);
+    auto next = analyzeSlot(view, dominanceInfo, depth);
     if (!next || !next->modulus)
       return std::nullopt;
     auto counter = dyn_cast_or_null<BlockArgument>(next->baseValue);
@@ -533,7 +523,7 @@ analyzeLoopCarriedSlot(BlockArgument arg, DominanceInfo &dominanceInfo,
   int64_t modulus = *carried->modulus;
   auto counter = cast<BlockArgument>(carried->baseValue);
   for (const Incoming &entry : entries) {
-    auto initial = analyzeSlot(entry.view, dominanceInfo, loopHeaders, depth);
+    auto initial = analyzeSlot(entry.view, dominanceInfo, depth);
     if (!initial || initial->baseValue || initial->modulus ||
         initial->indexedSource != carried->indexedSource ||
         initial->constantOffset < 0 || initial->constantOffset >= modulus)
@@ -552,8 +542,7 @@ analyzeLoopCarriedSlot(BlockArgument arg, DominanceInfo &dominanceInfo,
 /// Returns the slot expression of a shared-memory view, if it selects one
 /// slot of a multi-buffered allocation.
 std::optional<BufferIndexExpr>
-analyzeSlot(Value value, DominanceInfo &dominanceInfo,
-            const llvm::SmallPtrSetImpl<Block *> &loopHeaders, unsigned depth) {
+analyzeSlot(Value value, DominanceInfo &dominanceInfo, unsigned depth) {
   // MemDescIndexOp selects a whole slot of a multi-buffered allocation; its
   // index operand identifies the slot. MemDescViewTrait producers (trans,
   // reshape, reinterpret, subslice) are slot-preserving, so we can walk
@@ -572,16 +561,34 @@ analyzeSlot(Value value, DominanceInfo &dominanceInfo,
   auto arg = dyn_cast<BlockArgument>(v);
   if (!arg || depth == 0)
     return std::nullopt;
-  return analyzeLoopCarriedSlot(arg, dominanceInfo, loopHeaders, depth - 1);
+  return analyzeLoopCarriedSlot(arg, dominanceInfo, depth - 1);
 }
 
 } // namespace
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
-    : dominanceInfo(funcOp),
-      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo, loopHeaders)) {}
+    : dominanceInfo(funcOp), hasReducibleCFG(true) {
+  Region &body = funcOp.getFunctionBody();
+  if (const auto *info = getLoopInfo(&body)) {
+    // A CFG is reducible iff every retreating edge in a depth-first traversal
+    // is a backedge, i.e. its target dominates its source. Only blocks
+    // reachable from the function entry matter to membar's forward dataflow
+    // analysis.
+    llvm::ReversePostOrderTraversal<Block *> blocks(&body.front());
+    hasReducibleCFG = !llvm::containsIrreducibleCFG<Block *>(blocks, *info);
+  }
+}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
+
+const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
+  if (region->hasOneBlock())
+    return nullptr;
+  auto &info = loops[region];
+  if (!info)
+    info = std::make_unique<CFGLoopInfo>(dominanceInfo.getDomTree(region));
+  return info.get();
+}
 
 bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
                                        const AllocationSlice &b) {
@@ -624,10 +631,10 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
   if (!hasReducibleCFG)
     return;
 
-  auto expr =
-      analyzeSlot(value, dominanceInfo, loopHeaders, kMaxCarriedViewDepth);
+  auto expr = analyzeSlot(value, dominanceInfo, kMaxCarriedViewDepth);
   if (!expr)
     return;
+  analyzeLoopPhase(*expr, dominanceInfo);
   slice.bufferIndexExpr = intern(std::move(*expr));
 }
 
@@ -645,12 +652,15 @@ bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
 }
 
 bool BufferIndexAnalysis::entersLoop(Operation *terminator) const {
-  if (!isa<BranchOpInterface>(terminator))
+  if (!isa<BranchOpInterface>(terminator) ||
+      !isa<FunctionOpInterface>(terminator->getParentOp()))
     return false;
-  return llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
-    return loopHeaders.contains(successor) &&
-           !isBackedgeSuccessor(terminator, successor);
-  });
+  const auto *info = getLoopInfo(terminator->getParentRegion());
+  return info &&
+         llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
+           return info->isLoopHeader(successor) &&
+                  !isBackedgeSuccessor(terminator, successor);
+         });
 }
 
 } // namespace mlir

@@ -97,6 +97,10 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
 }
 
 bool isFuncArgWith32bitPtrRange(mlir::Value value) {
+  // Hints on a function argument (e.g. tl.multiple_of) are carried by a
+  // tt.annotate of the argument.
+  while (auto annotateOp = value.getDefiningOp<tt::AnnotateOp>())
+    value = annotateOp.getSrc();
   if (value.getDefiningOp())
     return false;
 

@@ -10,6 +10,7 @@ import shutil
 import pathlib
 import subprocess
 import sys
+import threading
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -23,6 +24,91 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_concurrent_file_cache_miss(fresh_triton_cache, monkeypatch, fail_first):
+
+    @triton.jit
+    def kernel(x):
+        tl.store(x, 1)
+
+    src = triton.compiler.ASTSource(kernel, {"x": "*i32"})
+    target = triton.runtime.driver.active.get_current_target()
+    get_group = FileCacheManager.get_group
+    make_ir = triton.compiler.ASTSource.make_ir
+    reads = itertools.count()
+    first_misses = threading.Barrier(2, timeout=30)
+    builds = []
+
+    def simultaneous_miss(manager, filename):
+        group = get_group(manager, filename)
+        if not group and filename == f"{src.name[:150]}.json" and next(reads) < 2:
+            first_misses.wait()
+        return group
+
+    def build(source, *args, **kwargs):
+        builds.append(source)
+        if fail_first and len(builds) == 1:
+            raise RuntimeError("test compile failed")
+        return make_ir(source, *args, **kwargs)
+
+    monkeypatch.setattr(FileCacheManager, "get_group", simultaneous_miss)
+    monkeypatch.setattr(triton.compiler.ASTSource, "make_ir", build)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(triton.compile, src, target=target) for _ in range(2)]
+        errors = [f.exception(timeout=60) for f in futures]
+    assert [str(error) for error in errors if error] == (["test compile failed"] if fail_first else [])
+    assert len(builds) == 1 + int(fail_first)
+    cached = triton.compile(src, target=target)
+    assert all(f.result().hash == cached.hash for f in futures if not f.exception())
+    assert len(builds) == 1 + int(fail_first)
+
+
+def test_independent_file_cache_compiles(fresh_triton_cache, monkeypatch):
+
+    @triton.jit
+    def kernel(x):
+        tl.store(x, 1)
+
+    src = triton.compiler.ASTSource(kernel, {"x": "*i32"})
+    target = triton.runtime.driver.active.get_current_target()
+    make_ir = triton.compiler.ASTSource.make_ir
+    builds = threading.Barrier(2, timeout=30)
+
+    def parallel_build(*args, **kwargs):
+        builds.wait()
+        return make_ir(*args, **kwargs)
+
+    monkeypatch.setattr(triton.compiler.ASTSource, "make_ir", parallel_build)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(triton.compile, src, target=target, options={"num_warps": w}) for w in (4, 8)]
+        assert len({f.result(timeout=60).hash for f in futures}) == 2
+
+
+def test_file_cache_nested_build_does_not_wait_for_another_builder(fresh_triton_cache):
+    manager = FileCacheManager("nested")
+    held = threading.Event()
+    release = threading.Event()
+
+    def other_builder():
+        with manager._lock_compile("other.json"):
+            held.set()
+            release.wait(timeout=10)
+
+    thread = threading.Thread(target=other_builder)
+    thread.start()
+    assert held.wait(timeout=10)
+    timer = threading.Timer(5, release.set)
+    timer.start()
+    try:
+        with manager._lock_compile("outer.json"):
+            with manager._lock_compile("other.json"):
+                assert not release.is_set(), "nested compilation waited for another builder"
+    finally:
+        release.set()
+        timer.cancel()
+        thread.join(timeout=10)
 
 
 @pytest.mark.parametrize("backend, options_type, arch", [

@@ -132,6 +132,14 @@ def _validate_np_data_size(np_array, tl_dtype):
     return True
 
 
+def _int_constant(value, np_dtype):
+    # The compiled builder takes the value as an int64 (signed types) or a
+    # uint64 (unsigned types) and arith.constant keeps its low bits, so e.g.
+    # tl.full(shape, 0xFFFFFFFF, tl.int32) is -1.
+    wide_dtype = np.int64 if np.issubdtype(np_dtype, np.signedinteger) else np.uint64
+    return np.array([value], dtype=wide_dtype).astype(np_dtype)
+
+
 def _get_signed_np_dtype(dtype):
     if dtype == np.uint8:
         return np.int8
@@ -502,34 +510,34 @@ class InterpreterBuilder:
         return TensorHandle(np.array([value], dtype=np.bool_), tl.int1)
 
     def get_uint8(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint8), tl.uint8)
+        return TensorHandle(_int_constant(value, np.uint8), tl.uint8)
 
     def get_int8(self, value):
-        return TensorHandle(np.array([value], dtype=np.int8), tl.int8)
+        return TensorHandle(_int_constant(value, np.int8), tl.int8)
 
     def get_uint16(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint16), tl.uint16)
+        return TensorHandle(_int_constant(value, np.uint16), tl.uint16)
 
     def get_int16(self, value):
-        return TensorHandle(np.array([value], dtype=np.int16), tl.int16)
+        return TensorHandle(_int_constant(value, np.int16), tl.int16)
 
     def get_uint32(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint32), tl.uint32)
+        return TensorHandle(_int_constant(value, np.uint32), tl.uint32)
 
     def get_int32(self, value):
-        return TensorHandle(np.array([value], dtype=np.int32), tl.int32)
+        return TensorHandle(_int_constant(value, np.int32), tl.int32)
 
     def get_uint64(self, value):
-        return TensorHandle(np.array([value], dtype=np.uint64), tl.uint64)
+        return TensorHandle(_int_constant(value, np.uint64), tl.uint64)
 
     def get_int64(self, value):
-        return TensorHandle(np.array([value], dtype=np.int64), tl.int64)
+        return TensorHandle(_int_constant(value, np.int64), tl.int64)
 
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
 
     def get_bf16(self, value):
-        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
+        return self.create_fp_trunc(self.get_fp64(value), tl.bfloat16)
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
@@ -705,6 +713,19 @@ class InterpreterBuilder:
         lhs = TensorHandle(lhs_data, lhs.dtype)
         rhs = TensorHandle(rhs_data, rhs.dtype)
         return self.binary_op(lhs, rhs, np.right_shift)
+
+    def create_clmul(self, lhs, rhs):
+        if lhs.dtype.scalar.is_int1():
+            return self.binary_op(lhs, rhs, np.bitwise_and)
+        dtype = lhs.data.dtype
+        bits = dtype.itemsize * 8
+        unsigned_dtype = getattr(np, f"uint{bits}")
+        x = lhs.data.view(unsigned_dtype)
+        y = rhs.data.view(unsigned_dtype)
+        result = np.zeros_like(x)
+        for bit in range(bits):
+            result ^= np.where((y >> bit) & 1, x << bit, 0)
+        return TensorHandle(result.view(dtype), lhs.dtype.scalar)
 
     def create_umulhi(self, lhs, rhs):
         # umulhi multiplies the operands as unsigned integers, so signed inputs
@@ -1369,6 +1390,7 @@ def _patch_lang(fn):
         _patch_builtin(lang.tensor, interpreter_builder, scope)
         if lang == tl:
             _patch_builtin(lang.math, interpreter_builder, scope)
+            _patch_builtin(lang.fpsan, interpreter_builder, scope)
         _patch_lang_tensor(lang.tensor, scope)
         _patch_lang_core(lang, scope)
     _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder, scope)
@@ -1376,7 +1398,7 @@ def _patch_lang(fn):
 
 
 # TODO: wrap everything in triton tensors
-def _implicit_cvt(arg):
+def _implicit_cvt(arg, annotation=None):
     if isinstance(arg, bool):
         handle = TensorHandle(np.array([arg], dtype=np.bool_), tl.int1)
         return tl.tensor(handle, tl.int1)
@@ -1395,6 +1417,15 @@ def _implicit_cvt(arg):
             raise ValueError(f"Unsupported integer value {arg}")
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
+    if isinstance(arg, float):
+        ty_name = annotation if annotation in ("fp16", "bf16", "fp32", "fp64") else "fp32"
+        if ty_name == "bf16":
+            # As the launchers' extractBF16 does: round to fp32, then keep its upper 16 bits.
+            bits = np.array([arg], dtype=np.float32).view(np.uint32) >> 16
+            handle = TensorHandle(bits.astype(np.uint16), tl.bfloat16)
+        else:
+            handle = getattr(interpreter_builder, f"get_{ty_name}")(arg)
+        return tl.tensor(handle, tl.str_to_ty(ty_name, None))
     if hasattr(arg, "data_ptr"):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
@@ -1435,8 +1466,8 @@ class GridExecutor:
         self.arg_names = arg_names
         self.grid = grid
         self.pre_run_hooks = pre_run_hooks
-        __annotations__ = {name: _normalize_ty(ty) for name, ty in inspect.get_annotations(fn).items()}
-        self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
+        self.annotations = {name: _normalize_ty(ty) for name, ty in inspect.get_annotations(fn).items()}
+        self.constexprs = [name for name in arg_names if self.annotations.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
         storages = {}
@@ -1523,7 +1554,10 @@ class GridExecutor:
             # we need to copy arguments to the host for the interpreter
             # implicitly convert tensor arguments to their base pointers
             args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
-            args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
+            args = {
+                name: arg if name in self.constexprs else _implicit_cvt(arg, self.annotations.get(name))
+                for name, arg in args.items()
+            }
             # iterate through grid
             assert len(grid) <= 3, "grid must have at most 3 dimensions"
             grid = grid + (1, ) * (3 - len(grid))

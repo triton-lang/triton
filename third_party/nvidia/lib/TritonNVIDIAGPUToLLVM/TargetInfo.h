@@ -4,9 +4,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
+namespace mlir {
+class DialectRegistry;
+} // namespace mlir
+
 namespace mlir::triton::NVIDIA {
 
 void registerTargetInfo();
+void registerNVVMDialect(DialectRegistry &registry);
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
@@ -73,6 +78,8 @@ public:
                    int i) const override;
   std::pair<Value, Value> shuffleUp(RewriterBase &rewriter, Location loc,
                                     Value val, int delta) const override;
+  std::pair<Value, Value> shuffleDown(RewriterBase &rewriter, Location loc,
+                                      Value val, int delta) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,

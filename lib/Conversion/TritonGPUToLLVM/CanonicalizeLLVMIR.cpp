@@ -82,18 +82,24 @@ struct CanonicalizeLLVMIR
           CanonicalizeLLVMIR> {
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
-    RewritePatternSet patterns(&getContext());
+    MLIRContext *context = func.getContext();
+    RewritePatternSet patterns(context);
     patterns.add<SelectConstantConditionPattern,
                  ElideFullClusterRankMaskPattern, FoldAbsIntoReduxPattern>(
-        &getContext());
+        context);
 
-    getContext()
-        .getLoadedDialect<LLVM::LLVMDialect>()
-        ->getCanonicalizationPatterns(patterns);
-    for (mlir::RegisteredOperationName op :
-         getContext().getRegisteredOperationsByDialect(
-             LLVM::LLVMDialect::getDialectNamespace()))
-      op.getCanonicalizationPatterns(patterns, &getContext());
+    for (StringRef name :
+         {LLVM::LLVMDialect::getDialectNamespace(),
+          triton::nvgpu::NVGPUDialect::getDialectNamespace()}) {
+      Dialect *dialect = context->getLoadedDialect(name);
+      if (!dialect)
+        continue;
+      dialect->getCanonicalizationPatterns(patterns);
+      for (RegisteredOperationName op :
+           context->getRegisteredOperationsByDialect(name))
+        op.getCanonicalizationPatterns(patterns, context);
+    }
+    triton::gpu::WarpIdOp::getCanonicalizationPatterns(patterns, context);
 
     (void)applyPatternsGreedily(func, std::move(patterns));
   }

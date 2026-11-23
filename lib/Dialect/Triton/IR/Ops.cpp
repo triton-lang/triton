@@ -1,6 +1,7 @@
 #include <array>
 #include <sstream>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -691,6 +692,10 @@ LogicalResult verifyCallbackBody(Operation *owner, Region &body,
   if (!visited.insert(&body).second)
     return success();
   WalkResult result = body.walk([&](Operation *op) -> WalkResult {
+    // Shared-memory allocation also records scratch used by callees on tt.call.
+    if (op->hasAttr("allocation.size"))
+      return op->emitOpError("requires shared memory scratch in a ")
+             << owner->getName().getStringRef() << " callback";
     if (auto call = dyn_cast<CallOp>(op)) {
       // A threaded function pass can be rewriting the callee concurrently.
       if (op->getContext()->isMultithreadingEnabled())
@@ -1244,6 +1249,15 @@ LogicalResult FpToFpOp::verify() {
       (!getRounding().has_value())) {
     return emitError("Rounding mode is required for FP downcast");
   }
+  return success();
+}
+
+LogicalResult FpSanHomomorphicCastOp::verify() {
+  unsigned srcWidth =
+      getElementTypeOrSelf(getInput().getType()).getIntOrFloatBitWidth();
+  unsigned dstWidth = getElementTypeOrSelf(getType()).getIntOrFloatBitWidth();
+  if (dstWidth > srcWidth)
+    return emitOpError("destination must not be wider than input");
   return success();
 }
 

@@ -1,8 +1,7 @@
 #ifndef TRITON_CONVERSION_MLIR_TYPES_H
 #define TRITON_CONVERSION_MLIR_TYPES_H
 
-#include "mlir/Transforms/DialectConversion.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 
 // This file redefines some common MLIR types for easy usage.
 namespace mlir {

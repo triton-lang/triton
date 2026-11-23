@@ -1,6 +1,7 @@
 #ifndef TRITON_TRITONGPU_TRANSFORMS_MMAV5PIPELINEUTILITY_H_
 #define TRITON_TRITONGPU_TRANSFORMS_MMAV5PIPELINEUTILITY_H_
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 namespace mlir {
@@ -8,9 +9,6 @@ namespace mlir {
 class OpBuilder;
 class DominanceInfo;
 
-namespace scf {
-class ForOp;
-} // namespace scf
 namespace triton::nvidia_gpu {
 
 //===----------------------------------------------------------------------===//

@@ -414,14 +414,14 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
-                     Value barrier, Value pred, bool twoCTAs,
-                     ValueRange descs) {
+                     Value barrier, Value pred, bool twoCTAs, ValueRange descs,
+                     bool earlyARelease = false) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
   for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
     Value descMask =
-        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        LLVM::NVIDIA::createMulticastMask(loc, rewriter, broadcastBits);
     mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
@@ -433,7 +433,10 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   ptxOperands.push_back(barrierOperand);
   std::string opcode =
       "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".mbarrier::arrive::one.shared::cluster";
+      ".mbarrier::arrive::one";
+  if (earlyARelease)
+    opcode += ".sync_restrict::shared::read::mma::a";
+  opcode += ".shared::cluster";
   if (mask)
     opcode += ".multicast::cluster";
   opcode += ".b64 [$1]";
@@ -503,13 +506,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  Value warpId = triton::gpu::WarpIdOp::create(rewriter, loc);
+  pred = tb.and_(pred, tb.icmp_eq(warpId, tb.i32_val(0)));
   if (twoCTAs) {
     Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
     pred = tb.and_(pred, cluster0);
   }
-  pred = tb.and_(pred, isWarp0);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
@@ -856,7 +858,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   SmallVector<Value> commitDescs = op.getCompletionDescs();
   bool useK96 =
-      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && opKindIsMXFP4 &&
+      targetFeatures.supportsK96Tcgen05MMA() && opKindIsMXFP4 &&
       !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
       ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
@@ -865,7 +867,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       // Repeated MN tiles or subviews must not interleave unrelated words.
       ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
       ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
-          std::max(2u, mmaSizeN / 32);
+          std::max(twoCTAs ? 2u : 4u, mmaSizeN / 32);
   if (useK96) {
     // K96 tiles must come in pairs to leave a K64-aligned remainder.
     int numK96 = 2 * (blockK / 192);
@@ -995,11 +997,16 @@ private:
 
 struct TCGen5CommitOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  TCGen5CommitOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit,
+                           const ttng::TargetFeatures &targetFeatures)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        targetFeatures(targetFeatures) {}
 
   LogicalResult
   matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getEarlyARelease() && !targetFeatures.supportsEarlyARelease())
+      return op.emitOpError("Early A release requires Rubin");
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -1017,10 +1024,13 @@ struct TCGen5CommitOpConversion
     }
 
     createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred, twoCTAs,
-                    op.getDescs());
+                    op.getDescs(), op.getEarlyARelease());
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  ttng::TargetFeatures targetFeatures;
 };
 
 } // namespace
@@ -1035,7 +1045,8 @@ void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       const TargetInfo &targetInfo) {
   patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
       typeConverter, benefit, targetInfo.getTargetFeatures());
-  patterns.add<TCGen5CommitOpConversion>(typeConverter, benefit);
+  patterns.add<TCGen5CommitOpConversion>(typeConverter, benefit,
+                                         targetInfo.getTargetFeatures());
 }
 
 } // namespace NVIDIA

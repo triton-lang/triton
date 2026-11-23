@@ -111,6 +111,7 @@ from ._layouts import (
     CoalescedLayout,
 )
 from ._math import (
+    clmul,
     umulhi,
     exp,
     exp2,
