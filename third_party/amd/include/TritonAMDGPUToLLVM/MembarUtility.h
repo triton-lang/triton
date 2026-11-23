@@ -1,44 +1,34 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 
-#include "mlir/IR/Operation.h"
-#include "triton/Analysis/Allocation.h"
-
 namespace mlir {
-struct AllocationSlice;
+class Allocation;
+namespace triton::membar {
+struct SMemAccess;
 }
+} // namespace mlir
 
 namespace mlir::triton::AMD {
 
-// Filter function used in the AMDGPU backend to filter unnecessary barriers
-// during Membar Analysis. Membar calls the filter with the pending (earlier)
-// access as op1 and the current access as op2; the filters below rely on that
-// ordering to tell RAW from WAR. Filters applied by this function:
-// 1) Do not create a barrier between an AsyncCopyGlobalToLocal and a LocalLoad
-// that follows it into the same buffer, if the LocalLoad is synced by
-// AsyncWait. Such a LocalLoad is ordered after the AsyncLoads its token waits
-// for, so the barrier membar would add is redundant: membar cannot see that
-// subviews from the same shared allocation do not alias when pipelining loads.
-// See amdgpu_membar.mlir for examples.
-// This filter is direction-aware and applies to the RAW direction only. The
-// wait says nothing about what follows the read, so an AsyncCopyGlobalToLocal
-// that refills the same buffer after a synced LocalLoad must still wait for
-// every thread to finish reading it (WAR), and only a barrier orders that.
-// Example membar input IR, where both barriers below are required and emitted:
-//   %tile_a = ttg.memdesc_index
-//   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
-//   scf.for
-//     %2 = AsyncWait %1
-//      # Membar will add a required ttg.barrier here
-//     %3 = LocalLoad %tile_a
-//      # WAR: membar will add the required ttg.barrier here
-//     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
-//     scf.yield
-// 2) Do not create barriers between two async loads. The synchronization
-// between them do not make sense.
-bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
-                  bool op2IsRead, Allocation *allocation,
-                  const AllocationSlice &, const AllocationSlice &);
+/// Exempt accesses ordered by AMD async-copy and LDS barrier protocols.
+/// Membar passes the earlier access first. The token orders a LocalLoad
+/// after the copies it waits for even when the subviews used for pipelining
+/// may alias. A loop that refills the tile still needs both barriers below.
+///
+///     %copy = AsyncCopyGlobalToLocal %ptr, %tile
+///     scf.for ... iter_args(%pending = %copy) {
+///       %wait = AsyncWait %pending
+///       ttg.barrier local
+///       %value = LocalLoad %tile token %wait
+///       ttg.barrier local
+///       %next = AsyncCopyGlobalToLocal %next_ptr, %tile
+///       scf.yield %next
+///     }
+///
+/// The first joins the per-wave waits (RAW). The second waits for every
+/// thread to finish reading the tile (WAR). See amdgpu_membar.mlir.
+bool membarFilter(const membar::SMemAccess &source,
+                  const membar::SMemAccess &sink, Allocation &allocation);
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_

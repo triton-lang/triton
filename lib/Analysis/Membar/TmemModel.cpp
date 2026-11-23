@@ -242,7 +242,7 @@ void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
         access.isWrite ? SyncKind::WaitStore : SyncKind::WaitLoad;
     model.privateTMem = isPrivate(access.footprint);
     // TMEM demands already order native transfers before publication.
-    model.sharedOut.threadSync.effectIssuer = ThreadIssuer::None;
+    model.shared.threads.pending = 0;
   } else {
     model.tmemProducerNeed = SyncKind::RegionBarrier;
   }

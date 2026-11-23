@@ -124,8 +124,7 @@ std::optional<OpModel> MembarModel::describe(Operation *op, FixedSync &fixed,
         return;
       FixedSync armFixed;
       if (auto arm = describe(inner, armFixed)) {
-        effects.sharedIn.join(arm->sharedIn);
-        effects.sharedOut.join(arm->sharedOut);
+        effects.shared.merge(arm->shared);
         if (arm->boundary == Boundary::Publication)
           effects.boundary = Boundary::Publication;
       }
@@ -134,13 +133,21 @@ std::optional<OpModel> MembarModel::describe(Operation *op, FixedSync &fixed,
   }
   auto function = op->getParentOfType<FunctionOpInterface>();
   if (isa<triton::ReturnOp>(op)) {
-    if (isKernel(function))
+    if (isKernel(function)) {
       effects.boundary = Boundary::KernelReturn;
+      // A kernel return has no subsequent CTA-local consumer. Only full
+      // completions need a SHMEM rendezvous at exit.
+      effects.shared.threads.joins = ThreadEffects::FullCompletion;
+    }
     return effects;
   }
 
   auto accesses = getMemoryAccesses(op);
-  models.at(function).describe(op, effects, fixed, accesses);
+  effects.shared = models.at(function).describe(op, fixed, accesses);
+  // Retain the notification mode even in synchronization-only placement.
+  if (auto barrier = dyn_cast<ttg::MBarrierOpInterface>(op);
+      barrier && barrier.isPerWarp())
+    effects.arrivalMode = ArrivalMode::PerWarp;
   if (tmem)
     tmem->describe(op, effects, fixed, accesses);
   if (effects == OpModel{})

@@ -1,105 +1,43 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::AMD {
-namespace {
-// Returns true if
-// 1) op2 is a LocalLoad synced via AsyncWait and op1 is an AsyncLoad into the
-//    same buffer (RAW).
-// 2) both are AsyncLoad
-bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
-                                       Allocation *allocation) {
-  auto isAsyncLoad = [](Operation *op) {
-    return op->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
-  };
-  auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
-    auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
-    return localLoad && isSyncedViaAsyncWait(localLoad);
-  };
-  // Returns the local memory operands an op reads from or writes to. Fused TDM
-  // copies write to several destinations, hence the vector.
-  auto getMemdescValues = [](Operation *op) -> SmallVector<Value> {
-    return llvm::TypeSwitch<Operation *, SmallVector<Value>>(op)
-        .Case<triton::amdgpu::BufferLoadToLocalOp>(
-            [](auto op) -> SmallVector<Value> { return {op.getDest()}; })
-        .Case<triton::gpu::AsyncCopyGlobalToLocalOp,
-              triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(
-            [](auto op) -> SmallVector<Value> { return {op.getResult()}; })
-        .Case<triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp>(
-            [](auto op) -> SmallVector<Value> {
-              return llvm::to_vector(op.getDests());
-            })
-        .Case<triton::amdgpu::AsyncTDMGatherOp>(
-            [](auto op) -> SmallVector<Value> { return {op.getDst()}; })
-        .Case<triton::gpu::LocalLoadOp>(
-            [](auto op) -> SmallVector<Value> { return {op.getSrc()}; })
-        .Default([](Operation *) { return SmallVector<Value>{}; });
-  };
 
-  // Early return if neither operands are an AsyncLoad
-  if (!isAsyncLoad(op1) && !isAsyncLoad(op2)) {
-    return false;
-  }
-  // Filter if both operands are an AsyncLoad
-  if (isAsyncLoad(op1) && isAsyncLoad(op2)) {
+bool membarFilter(const membar::SMemAccess &source,
+                  const membar::SMemAccess &sink, Allocation &allocation) {
+  // A workgroup barrier between async copies cannot order their completion.
+  bool copy = source.issuer->hasTrait<OpTrait::GlobalToLocalCopyTrait>();
+  if (copy && sink.issuer->hasTrait<OpTrait::GlobalToLocalCopyTrait>())
     return true;
-  }
 
-  SmallVector<Value> op1Memdescs = getMemdescValues(op1);
-  SmallVector<Value> op2Memdescs = getMemdescValues(op2);
-  if (op1Memdescs.empty() || op2Memdescs.empty())
-    return false;
-
-  auto collectBufferIds = [&](ArrayRef<Value> memdescs) {
-    Allocation::BufferIdSetT bufferIds;
-    for (Value memdesc : memdescs) {
-      auto ids = allocation->getAllBufferIdsWithAliases(memdesc);
-      bufferIds.insert(ids.begin(), ids.end());
-    }
-    return bufferIds;
+  // A copy carrying an mbarrier arrives on it once complete, so the mbarrier
+  // already orders it workgroup-wide. Copies without one are ordered by an
+  // async wait, whose counter is per wave.
+  auto usesCounter = [](Operation *op) {
+    auto counter = dyn_cast<gpu::MBarrierOpInterface>(op);
+    return counter && counter.getBarrier();
   };
-  auto op1BufferIds = collectBufferIds(op1Memdescs);
-  auto op2BufferIds = collectBufferIds(op2Memdescs);
+  if (usesCounter(source.issuer) && usesCounter(sink.issuer))
+    return true;
 
-  // Check if operations access the same buffer
-  bool sameBuffer = llvm::any_of(
-      op1BufferIds, [&](auto id) { return op2BufferIds.contains(id); });
-
-  if (!sameBuffer)
+  // Filter only the RAW direction. A later refill of the same buffer
+  // must still wait for the load to finish (WAR).
+  auto load = dyn_cast<gpu::LocalLoadOp>(sink.issuer);
+  if (!copy || !load)
     return false;
 
-  // Filter only the RAW direction: the AsyncWait orders the synced LocalLoad
-  // after the AsyncLoad, but not a later refill of the same buffer (WAR).
-  return isLocalLoadWithAsyncWaitToken(op2);
+  // A fused copy's token covers every destination. Look up both sets of
+  // aliases in the same allocation frame, including for call summaries.
+  auto sources = allocation.getAllBufferIdsWithAliases(load.getSrc());
+  for (const auto &payload :
+       getMemoryAccesses(source.issuer, gpu::SharedKind::Generic))
+    for (auto id : allocation.getAllBufferIdsWithAliases(payload.value))
+      if (sources.contains(id))
+        return isSyncedViaAsyncWait(load);
+  return false;
 }
 
-bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
-  auto isLDSMemoryBarrierOp = [](Operation *op) {
-    if (llvm::isa<triton::amdgpu::InitBarrierOp,
-                  triton::amdgpu::ArriveBarrierOp,
-                  triton::amdgpu::AsyncCopyMbarrierArriveOp,
-                  triton::amdgpu::WaitBarrierOp>(op))
-      return true;
-    // A copy carrying an mbarrier arrives on it once complete, so the mbarrier
-    // already orders it workgroup-wide. Copies without one are ordered by an
-    // async wait, whose counter is per wave, so they are not covered here.
-    if (auto mbarrierOp = llvm::dyn_cast<triton::gpu::MBarrierOpInterface>(op))
-      return mbarrierOp.getBarrier() != nullptr;
-    return false;
-  };
-
-  return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
-}
-} // namespace
-
-bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
-                  bool /*op2IsRead*/, Allocation *allocation,
-                  const AllocationSlice &, const AllocationSlice &) {
-  return (filterAsyncLocalLoadsDependencies(op1, op2, allocation) ||
-          filterLDSMemoryBarriersDependencies(op1, op2));
-}
 } // namespace mlir::triton::AMD

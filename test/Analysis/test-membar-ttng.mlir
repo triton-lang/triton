@@ -740,6 +740,32 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
+  // A summary containing a general effect already includes global-read events.
+  // Both waits share one rendezvous before the load.
+  // FLOW-LABEL: @full_and_readonly_completions_in_loop
+  // FLOW: ttg.barrier local
+  // FLOW-NEXT: {{.*}} = tt.load
+  // FLOW-NEXT: tt.store
+  tt.func @full_and_readonly_completions_in_loop(%n: i32, %m: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %wait_reads: i1) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    tt.store %dst, %zero : !tt.ptr<i32>
+    scf.for %i = %zero to %n step %one : i32 {
+      %wait = arith.cmpi slt, %i, %m : i32
+      scf.if %wait {
+        scf.for %j = %zero to %i step %one : i32 {
+          ttng.async_tma_store_wait {pendings = 0 : i32}
+        }
+        scf.if %wait_reads {
+          ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+        }
+      }
+      %v = tt.load %src : !tt.ptr<i32>
+      tt.store %dst, %v : !tt.ptr<i32>
+    }
+    tt.return
+  }
+
   // Every thread must finish the wait before the guard's single lane signals.
   // CHECK-LABEL: @wait_before_guarded_notification
   // FLOW-LABEL: @wait_before_guarded_notification

@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "Analysis/AMDGPUAllocation.h"
+#include "Analysis/Membar.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -38,7 +39,6 @@
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -47,6 +47,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
+using mlir::triton::AMD::BlockInfo;
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTWARPPIPELINE
@@ -98,8 +99,12 @@ buildBlockInfoFromBlock(Block *block, Allocation *allocation,
     mei.getEffects(effs);
     for (auto &eff : effs) {
       Value v = eff.getValue();
-      if (!v)
+      if (!v ||
+          !isa<MemoryEffects::Read, MemoryEffects::Write>(eff.getEffect()))
         continue;
+      using triton::membar::SMemAccess;
+      auto kind = isa<MemoryEffects::Write>(eff.getEffect()) ? SMemAccess::Write
+                                                             : SMemAccess::Read;
       for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
         if (bufId == Allocation::InvalidBufferId)
           continue;
@@ -113,10 +118,7 @@ buildBlockInfoFromBlock(Block *block, Allocation *allocation,
                 bufferIndex->makeSlice(indexed.getResult(), interval, bufId)
                     .bufferIndexExpr;
         }
-        if (isa<MemoryEffects::Write>(eff.getEffect()))
-          info.syncWriteSlices[slice].insert(op);
-        else if (isa<MemoryEffects::Read>(eff.getEffect()))
-          info.syncReadSlices[slice].insert(op);
+        info.accesses.insert({op, slice, kind, kind});
       }
     }
   });
@@ -289,7 +291,7 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
       const BlockInfo &sourceInfo =
           src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
       if (!sourceInfo.isIntersected(
-              clusterInfo[dst], mlir::triton::AMD::membarFilter, allocation))
+              clusterInfo[dst], mlir::triton::AMD::membarFilter, *allocation))
         continue;
       bars[barrierLoc] = true;
       LDBG("cluster " << src << " need fence to " << dst
@@ -933,7 +935,7 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
       if (isCovered(src, barrierLoc))
         continue;
       if (!mergedInfo[src].isIntersected(
-              mergedInfo[dst], mlir::triton::AMD::membarFilter, allocation))
+              mergedInfo[dst], mlir::triton::AMD::membarFilter, *allocation))
         continue;
       LDBG("cross-pipeline LDS dep (a_"
            << i << ", b_" << j << ") uncovered at slot " << barrierLoc);

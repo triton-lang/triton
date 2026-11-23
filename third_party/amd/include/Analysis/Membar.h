@@ -3,9 +3,52 @@
 
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/Membar/SmemModel.h"
+#include <set>
+#include <tuple>
 #include <utility>
 
 namespace mlir::triton::AMD {
+
+/// Effects accumulated across CFG paths or a warp-pipeline stage.
+struct BlockInfo {
+  struct AccessLess {
+    bool operator()(const membar::SMemAccess &a,
+                    const membar::SMemAccess &b) const {
+      return std::tie(a.slice, a.issuer, a.entry, a.exit, a.isMBarrier) <
+             std::tie(b.slice, b.issuer, b.entry, b.exit, b.isMBarrier);
+    }
+  };
+  // A set makes joins idempotent across backedges and repeated calls.
+  std::set<membar::SMemAccess, AccessLess> accesses;
+  membar::ThreadEffects threads;
+
+  void join(const BlockInfo &other) {
+    accesses.insert(other.accesses.begin(), other.accesses.end());
+    threads.merge(other.threads, !accesses.empty());
+  }
+
+  template <typename Transform> void transformSlices(Transform transform) {
+    decltype(accesses) transformed;
+    for (auto access : accesses) {
+      access.slice = transform(access.slice);
+      transformed.insert(std::move(access));
+    }
+    accesses = std::move(transformed);
+  }
+
+  void invalidateIterationInfo();
+  template <typename Effects>
+  bool isIntersected(const Effects &other, const MembarFilterFn &filter,
+                     Allocation &allocation) const {
+    // Both AMD clients invalidate iteration facts on backedges.
+    for (const auto &a : accesses)
+      for (const auto &b : other.accesses)
+        if (a.conflict(b, filter, allocation) == membar::Conflict::Always)
+          return true;
+    return false;
+  }
+  bool operator==(const BlockInfo &) const = default;
+};
 
 /// Legacy forward-flow state at the current program point and at function
 /// boundaries.
@@ -30,14 +73,8 @@ struct MembarInfo {
     return *this;
   }
 
-  void addBlockInfo(const BlockInfo &blockInfo) {
-    if (!allPathsFromEntrySynced)
-      entryBlockInfo.join(blockInfo);
-    pending.join(blockInfo);
-  }
-
   void sync() {
-    pending.sync();
+    pending = {};
     allPathsFromEntrySynced = true;
   }
 
@@ -91,9 +128,6 @@ private:
 
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
-
-  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                    MembarInfo *membarInfo, OpBuilder *builder);
 
   Allocation &allocation;
   BufferRegionAnalysis &regions;
