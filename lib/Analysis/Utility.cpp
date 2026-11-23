@@ -348,7 +348,7 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
   // A contiguous warp-local segment ends at the first bit owned by
-  // another warp or CTA. Either owner can occur first in a linear layout.
+  // another warp or CTA.
   auto kBlock = StringAttr::get(ctx, "block");
   unsigned warpMask =
       getOutputBasisMask(originalLayout, {kWarp, kBlock}, axisDim);
