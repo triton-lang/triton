@@ -800,13 +800,34 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(kernel_fn)
 
+        # Builtin device libraries are compiled for a generic target, so give
+        # them the kernel's final target settings. User-provided attributes are
+        # applied to the kernel after linking, so honor their override here.
+        target_cpu = kernel_fn.get_fn_attr('target-cpu') or ''
+        target_features = kernel_fn.get_fn_attr('target-features') or ''
+        for name, value in options.llvm_fn_attrs:
+            if name == 'target-cpu':
+                target_cpu = value
+            elif name == 'target-features':
+                target_features = value
+        # An absent or empty per-function CPU uses the target-machine default.
+        target_cpu = target_cpu or options.arch
+
         if knobs.compilation.enable_asan:
-            paths = [get_amd_bitcode_path(name) for name in ("asanrtl", "ocml", "ockl")]
-            llvm.link_extern_libs(llvm_mod, paths)
-        elif options.extern_libs:
-            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
-            if len(paths) > 0:
-                llvm.link_extern_libs(llvm_mod, paths)
+            llvm.link_extern_libs(llvm_mod, [get_amd_bitcode_path("asanrtl")])
+            libraries = [(name, get_amd_bitcode_path(name)) for name in ("ocml", "ockl")]
+        else:
+            libraries = [(name, path) for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
+        bundled_libdir = Path(__file__).parent / 'lib'
+        for name, path in libraries:
+            # Only retarget the ocml/ockl bitcode that ships with Triton as it
+            # is built for a generic target, so it is safe to stamp the kernel's
+            # target-cpu/target-features onto it. Libraries from anywhere else
+            # are linked as-is, keeping their own target attributes.
+            if name in ('ocml', 'ockl') and Path(path).resolve() == (bundled_libdir / f'{name}.bc').resolve():
+                llvm.link_extern_libs(llvm_mod, [path], target_cpu=target_cpu, target_features=target_features)
+            else:
+                llvm.link_extern_libs(llvm_mod, [path])
 
         if is_expert_scheduling_enabled(options.base_arch):
             # LLVM reads this attribute per function. Apply it after linking so
