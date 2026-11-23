@@ -80,8 +80,10 @@ def test_inline_asm_shared_amd_compilation(elementwise):
     compiled = triton.compile(source, target=GPUTarget("hip", "gfx942", 64))
     assert "ds_read_b32" in compiled.asm["amdgcn"]
 
+
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
+
 
 @pytest.mark.parametrize("target,mode", [(HOPPER_TARGET, "scalar"), (HOPPER_TARGET, "broadcast"),
                                          (BLACKWELL_TARGET, "per_range")])
@@ -106,6 +108,7 @@ def test_bulk_prefetch_codegen(target, mode):
         assert ptx.index("cp.async.wait_group") < ptx.index("cp.async.bulk.prefetch.L2.global")
         assert not re.search(r"\bbar(?:rier)?\.sync\b", ptx)
 
+
 def test_bulk_prefetch_noinline_consan():
 
     @gluon.jit(noinline=True)
@@ -120,6 +123,7 @@ def test_bulk_prefetch_noinline_consan():
     compiled = triton.compile(source, target=HOPPER_TARGET, options={"instrumentation_mode": "consan"})
     assert "cp.async.bulk.prefetch.L2.global" in compiled.asm["ptx"]
 
+
 @pytest.mark.parametrize("num_bytes", [-16, 15, 1 << 32])
 def test_bulk_prefetch_invalid_byte_count(num_bytes):
 
@@ -130,6 +134,7 @@ def test_bulk_prefetch_invalid_byte_count(num_bytes):
     source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {"NUM_BYTES": num_bytes})
     with pytest.raises(CompilationError, match="multiple of 16"):
         triton.compile(source, target=HOPPER_TARGET)
+
 
 @gluon.jit
 def _bulk_codegen_kernel(src, out, pred):

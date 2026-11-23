@@ -2,7 +2,6 @@ import expecttest
 import math
 import pytest
 import re
-import triton
 from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
