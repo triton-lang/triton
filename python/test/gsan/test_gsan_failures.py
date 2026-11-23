@@ -1202,12 +1202,12 @@ def _bulk_load(src, out):
 def _bulk_raw_kernel(src, out, ready, ACQUIRE: gl.constexpr):
     if gl.program_id(0) == 0:
         gl.store(src + 11, 123)
-        gl.inline_asm("fence.proxy.async.global;")
+        hopper.fence_async_global()
         gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
     else:
         while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed", scope="gpu") == 0:
             pass
-        gl.inline_asm("fence.proxy.async.global;")
+        hopper.fence_async_global()
         _bulk_load(src, out)
 
 
@@ -1263,6 +1263,7 @@ def _bulk_store_after_read(payload, scratch, ready, ACQUIRE: gl.constexpr):
     else:
         while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed") == 0:
             pass
+        hopper.fence_async_global()
         layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
         smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]),
                                          gl.full((16, ), 17, gl.int32, layout))
