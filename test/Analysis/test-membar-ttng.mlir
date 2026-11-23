@@ -644,10 +644,36 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
 !ptrs = tensor<128x!tt.ptr<i32>, #blocked>
 !values = tensor<128xi32, #blocked>
+!slot = !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>
 !row_tile = tensor<16x16xf32, #rows>
 !col_tile = tensor<16x16xf32, #cols>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func private @write_slot(%slot: !slot, %input: !values) attributes {noinline = true} {
+    ttg.local_store %input, %slot : !values -> !slot
+    tt.return
+  }
+
+  // The callee writes only the second slot in the caller's frame.
+  // Its entry is disjoint from the first store. Its exit conflicts with the gather.
+  // FLOW-LABEL: @caller_owned_slots
+  // FLOW: ttg.local_store
+  // FLOW-NEXT: tt.call @write_slot
+  // FLOW-NEXT: ttg.barrier local
+  // FLOW-NEXT: {{.*}} = ttg.local_gather
+  tt.func @caller_owned_slots(%input: !values, %indices: !values) -> (!values, !values) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %slots = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable>
+    %first = ttg.memdesc_index %slots[%c0] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    %second = ttg.memdesc_index %slots[%c1] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    ttg.local_store %input, %first : !values -> !slot
+    tt.call @write_slot(%second, %input) : (!slot, !values) -> ()
+    %gather = ttg.local_gather %second[%indices] {axis = 0 : i32} : !slot, !values -> !values
+    %load = ttg.local_load %first : !slot -> !values
+    tt.return %gather, %load : !values, !values
+  }
+
   // Counter waits do not require known allocation origins.
   // CHECK-LABEL: @consecutive_waits_argument
   // CHECK: ttng.wait_barrier
@@ -673,6 +699,51 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     %twice = arith.addi %value, %value : i32
     ttng.barrier_expect %second, 0, %pred : !barrier
     tt.return %twice : i32
+  }
+
+  // The guard's canonical thread can publish its load and store directly.
+  // CHECK-LABEL: @guarded_scalar_publication
+  // CHECK: ttg.thread_scope
+  // CHECK: tt.load
+  // CHECK-NEXT: tt.store
+  // CHECK-NOT: ttg.barrier
+  // CHECK: ttng.arrive_barrier
+  tt.func private @guarded_scalar_publication(%src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %done: !barrier) {
+    %owner = ttg.thread_predicate <31, 3>
+    scf.if %owner {
+      ttg.thread_scope {
+        %v = tt.load %src : !tt.ptr<i32>
+        tt.store %dst, %v : !tt.ptr<i32>
+        ttg.thread_yield
+      }
+    }
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
+  // Thread zero contributes to a distributed arrival. A later scalar
+  // publication must also observe the leaders of the other three warps.
+  // CHECK-LABEL: @scalar_and_distributed_publications
+  // CHECK: tt.store
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func private @scalar_and_distributed_publications(%out: !tt.ptr<i32>, %v: i32, %ready: !barrier, %done: !barrier) {
+    tt.store %out, %v : !tt.ptr<i32>
+    ttng.arrive_barrier %ready, 4 {per_warp} : !barrier
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
+  // The lane elected for a commit can differ from lane zero of warp zero.
+  // CHECK-LABEL: @elected_then_distributed_publication
+  // CHECK: ttng.tc_gen5_commit
+  // CHECK-NEXT: ttg.barrier warp local
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  tt.func private @elected_then_distributed_publication(%ready: !barrier, %done: !barrier) {
+    ttng.tc_gen5_commit %ready : !barrier
+    ttng.arrive_barrier %done, 4 {per_warp} : !barrier
+    tt.return
   }
 
   // An ordinary call keeps the same lane issuing all three arrivals.

@@ -45,7 +45,7 @@ void SMemOrdering::classify(membar::SMemAccess &access, Operation *op,
 
 bool SMemOrdering::canSkip(const membar::SMemAccess &source,
                            const membar::SMemAccess &sink,
-                           Allocation &allocation) const {
+                           Allocation &allocation, bool) const {
   auto isCopy = [](OrderingRule rule) {
     return rule == OrderingRule::AsyncCopy || rule == OrderingRule::OrderedCopy;
   };

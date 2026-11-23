@@ -13,7 +13,7 @@ public:
                 const MemoryAccess &effect, membar::ThreadEffects threads,
                 Allocation &allocation) override;
   bool canSkip(const membar::SMemAccess &source, const membar::SMemAccess &sink,
-               Allocation &allocation) const override;
+               Allocation &allocation, bool inKernel) const override;
 
 private:
   // Token ordering requires a common payload buffer in the analyzed frame.

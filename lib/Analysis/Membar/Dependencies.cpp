@@ -67,25 +67,24 @@ MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
     const SMemData &shared = out.shared;
     if (!shared.accesses.empty() || (shared.threads.pending & allJoins)) {
       // Only the source's relative coordinates depend on the path.
-      enum { Bound = 1, Rebound };
-      bool relative = llvm::any_of(shared.accesses, [](const SMemAccess &a) {
-        return a.exit && a.slice.hasIterationInfo();
-      });
+      constexpr unsigned bound = 1, rebound = 2;
       walkEdges(
-          cfg, producer, Bound,
+          cfg, producer, bound,
           [&](unsigned sink, unsigned state, bool) -> std::optional<unsigned> {
             const auto &in = cfg.nodes[sink].effects;
             bool join = shared.threads.pending & in.shared.threads.joins;
             auto conflict =
                 join && in.arrivalMode == ArrivalMode::Scalar
                     ? Conflict::Always
-                    : shared.conflict(in.shared, ordering, allocation);
+                    : shared.conflict(in.shared, ordering, allocation,
+                                      producer.body == 0 &&
+                                          cfg.nodes[sink].body == 0);
             if (conflict == Conflict::Always) {
               demands.required.push_back(
                   {source, sink, SyncKind::RegionBarrier});
               return std::nullopt;
             }
-            if (state == Rebound && conflict == Conflict::AfterRebind) {
+            if (state == rebound && conflict == Conflict::AfterRebind) {
               demands.required.push_back(
                   {source, sink, SyncKind::RegionBarrier, Path::LoopCarried});
               return std::nullopt;
@@ -97,10 +96,8 @@ MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
             return state;
           },
           stopAt(SyncKind::RegionBarrier),
-          [&](Edge edge, unsigned state) -> unsigned {
-            if (relative && cfg.invalidatesIteration(edge, source))
-              return Rebound;
-            return state;
+          [&](Edge edge, unsigned state) {
+            return cfg.invalidatesIteration(edge, source) ? rebound : state;
           });
     }
 

@@ -346,11 +346,10 @@ public:
     return getLatticeElement(value)->getValue();
   }
 
-  /// Return an immutable footprint covering every possible view, owned by this
-  /// analysis. Call after solver convergence. Return null for unknown geometry
-  /// or views outside allocationFrame, when set.
-  const BufferRegionFootprint *
-  getFootprint(Value value, FunctionOpInterface allocationFrame = {});
+  /// All possible views in their original allocation frames, or null for
+  /// unknown geometry. The analysis owns the footprint. Query after
+  /// convergence.
+  const BufferRegionFootprint *getFootprint(Value value);
 
   /// Describe an operation's allocated shared scratch, including cross-CTA
   /// accesses.

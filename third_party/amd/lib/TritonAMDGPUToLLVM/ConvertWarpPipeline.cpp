@@ -21,7 +21,6 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "Analysis/AMDGPUAllocation.h"
-#include "Analysis/Membar.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -35,10 +34,10 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -47,7 +46,6 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
-using mlir::triton::AMD::BlockInfo;
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTWARPPIPELINE
@@ -56,33 +54,12 @@ namespace mlir::triton {
 
 namespace {
 
-// Find the slot selection through descriptor views and single-block stage
-// yields. Unsupported producers, including loop-carried values, stay unknown.
-static triton::gpu::MemDescIndexOp resolveMemDescIndex(Value value) {
-  llvm::SmallPtrSet<Value, 8> seen;
-  while (value && seen.insert(value).second) {
-    Operation *def = value.getDefiningOp();
-    if (!def)
-      return {};
-    if (auto index = dyn_cast<triton::gpu::MemDescIndexOp>(def))
-      return index;
-    if (auto exec = dyn_cast<scf::ExecuteRegionOp>(def)) {
-      if (!llvm::hasSingleElement(exec.getRegion()))
-        return {};
-      auto yield =
-          dyn_cast<scf::YieldOp>(exec.getRegion().front().getTerminator());
-      unsigned resultNumber = cast<OpResult>(value).getResultNumber();
-      if (!yield || resultNumber >= yield.getNumOperands())
-        return {};
-      value = yield.getOperand(resultNumber);
-      continue;
-    }
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
-      return {};
-    value = def->getOperand(0);
-  }
-  return {};
-}
+// Warp pipelines use allocator intervals before buffer-region analysis.
+struct StageAccess {
+  triton::membar::SMemAccess access;
+  Interval<size_t> interval;
+};
+using StageAccesses = SmallVector<StageAccess, 0>;
 
 // Stages in one comparison share descriptor facts and async-copy keys.
 class PipelineAccesses {
@@ -91,10 +68,9 @@ public:
       : allocation(allocation),
         indices(cast<FunctionOpInterface>(allocation.getOperation())) {}
 
-  BlockInfo collect(Block *block, bool useIndex = true);
-  bool hasConflict(const BlockInfo &before, const BlockInfo &after) const {
-    return before.isIntersected(after, &ordering, allocation);
-  }
+  StageAccesses collect(Block *block, bool useIndex = true);
+  bool hasConflict(ArrayRef<StageAccess> before, ArrayRef<StageAccess> after,
+                   bool crossesBackedge = false) const;
 
 private:
   Allocation &allocation;
@@ -102,33 +78,38 @@ private:
   triton::AMD::SMemOrdering ordering;
 };
 
-BlockInfo PipelineAccesses::collect(Block *block, bool useIndex) {
+StageAccesses PipelineAccesses::collect(Block *block, bool useIndex) {
   using triton::membar::SMemAccess;
-  BlockInfo stage;
+  StageAccesses accesses;
   // Include nested regions. Pipeline stages cannot contain loops.
   block->walk([&](Operation *op) {
     for (const auto &effect : triton::getMemoryAccesses(op)) {
       if (!effect.isShared())
         continue;
-      auto kind = effect.isWrite ? SMemAccess::Write : SMemAccess::Read;
-      for (auto id : allocation.getAllBufferIdsWithAliases(effect.value)) {
-        if (id == Allocation::InvalidBufferId)
-          continue;
-        auto interval = allocation.getAllocatedInterval(id);
-        AllocationSlice slice(interval, id, indices.getSubslice(effect.value));
-        // A stage yield can forward an indexed slot of the original view.
-        if (useIndex)
-          if (auto indexed = resolveMemDescIndex(effect.value))
-            slice.bufferIndexExpr =
-                indices.makeSlice(indexed.getResult(), interval, id)
-                    .bufferIndexExpr;
-        SMemAccess access{slice, kind, kind};
-        ordering.classify(access, op, effect, {}, allocation);
-        stage.accesses.insert(access);
-      }
+      auto access = SMemAccess::fromDescriptor(effect, indices, useIndex);
+      ordering.classify(access, op, effect, {}, allocation);
+      for (auto id : allocation.getAllBufferIdsWithAliases(effect.value))
+        if (id != Allocation::InvalidBufferId)
+          accesses.push_back({access, allocation.getAllocatedInterval(id)});
     }
   });
-  return stage;
+  return accesses;
+}
+
+bool PipelineAccesses::hasConflict(ArrayRef<StageAccess> before,
+                                   ArrayRef<StageAccess> after,
+                                   bool crossesBackedge) const {
+  using triton::membar::Conflict;
+  for (const auto &a : before)
+    for (const auto &b : after) {
+      if (!a.interval.intersects(b.interval))
+        continue;
+      auto conflict = a.access.conflict(b.access, &ordering, allocation);
+      if (conflict == Conflict::Always ||
+          (crossesBackedge && conflict == Conflict::AfterRebind))
+        return true;
+    }
+  return false;
 }
 
 // Pre-existing barrier/wait ops that may legally appear at cluster
@@ -253,21 +234,12 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
 //   Walking by increasing distance ensures the shorter-range LOCAL
 //   barriers we just placed are visible when checking longer-range pairs,
 //   skipping many redundant placements.
-static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
+static void analyzePipelineDependencies(ArrayRef<StageAccesses> clusterInfo,
                                         SmallVectorImpl<bool> &bars,
                                         const PipelineAccesses &pipeline,
                                         bool circular) {
   const int N = clusterInfo.size();
   const int maxDist = circular ? N : N - 1;
-
-  // A descriptor can change between iterations. Preserve same-iteration
-  // disjointness proofs only for pairs that do not wrap around the loop.
-  SmallVector<BlockInfo> previousIterationInfo;
-  if (circular) {
-    previousIterationInfo.assign(clusterInfo.begin(), clusterInfo.end());
-    for (BlockInfo &info : previousIterationInfo)
-      info.invalidateIterationInfo();
-  }
 
   // Modular wrap; a no-op in linear mode where indices stay in range.
   auto wrap = [&](int i) -> int { return circular ? (i % N + N) % N : i; };
@@ -295,9 +267,8 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
       const int barrierLoc = (dist == 1) ? dst : wrap(dst - 1);
       if (isCovered(src, barrierLoc))
         continue;
-      const BlockInfo &sourceInfo =
-          src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
-      if (!pipeline.hasConflict(sourceInfo, clusterInfo[dst]))
+      if (!pipeline.hasConflict(clusterInfo[src], clusterInfo[dst],
+                                /*crossesBackedge=*/src + dist >= N))
         continue;
       bars[barrierLoc] = true;
       LDBG("cluster " << src << " need fence to " << dst
@@ -477,7 +448,7 @@ private:
     }
 
     PipelineAccesses pipeline(*allocation);
-    SmallVector<BlockInfo> clusterInfo;
+    SmallVector<StageAccesses> clusterInfo;
     for (auto cb : clusterBlocks)
       clusterInfo.push_back(pipeline.collect(cb));
     int numClusters = clusterInfo.size();
@@ -658,7 +629,7 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
   }
 
   PipelineAccesses pipeline(*allocation);
-  SmallVector<BlockInfo> clusterInfo;
+  SmallVector<StageAccesses> clusterInfo;
   for (auto *cb : clusterBlocks)
     clusterInfo.push_back(pipeline.collect(cb));
 
@@ -906,8 +877,9 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
   assert(!loopBars.empty() &&
          "expected at least one cluster in the prior loop");
 
+  // Slot expressions are local to each pipeline. Retain direct subslices.
   PipelineAccesses pipeline(*allocation);
-  SmallVector<BlockInfo> mergedInfo;
+  SmallVector<StageAccesses> mergedInfo;
   for (auto *b : loopBlocks)
     mergedInfo.push_back(pipeline.collect(b, /*useIndex=*/false));
   for (auto *b : nextBlocks)

@@ -18,7 +18,7 @@ TMemModel::TMemModel(ModuleOp module, BufferRegionAnalysis &regions)
     Value root = alloc.getResult();
     // A noinline function can execute in more than one warp role.
     Region *owner = isKernel(alloc->getParentOfType<FunctionOpInterface>()) &&
-                            hasRegionLocalUses(root, /*followCalls=*/true)
+                            hasRegionLocalUses(root)
                         ? alloc->getParentRegion()
                         : nullptr;
     allocations.emplace_back(regions.getFootprint(root), owner);
@@ -241,8 +241,6 @@ void TMemModel::describe(Operation *op, OpModel &model, FixedSync &fixed,
     model.tmemProducerNeed =
         access.isWrite ? SyncKind::WaitStore : SyncKind::WaitLoad;
     model.privateTMem = isPrivate(access.footprint);
-    // TMEM demands already order native transfers before publication.
-    model.shared.threads.pending = 0;
   } else {
     model.tmemProducerNeed = SyncKind::RegionBarrier;
   }

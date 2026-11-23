@@ -132,15 +132,13 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   auto *tmemModel = tmem ? &*tmem : nullptr;
 
   auto sharedMode = mode == PlacementMode::TensorMemory
-                        ? SMemModel::AccessMode::SynchronizationOnly
-                        : SMemModel::AccessMode::AllSharedAccesses;
-  // Allocation slices borrow index expressions from the issuing function's
-  // model.
+                        ? SMemModel::Mode::SynchronizationOnly
+                        : SMemModel::Mode::Role;
+  // Graph accesses borrow index expressions from the issuing function.
   std::map<Operation *, SMemModel> models;
   for (auto function : module.getOps<FunctionOpInterface>())
     models.try_emplace(function, *moduleAllocation.getFuncData(function),
-                       regions, ordering, sharedMode, completionScope,
-                       /*followCalls=*/true);
+                       regions, ordering, sharedMode, completionScope);
 
   MembarModel model(models, tmemModel);
   MembarCFGBuilder builder(model, module);

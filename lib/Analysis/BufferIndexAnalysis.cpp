@@ -1,29 +1,29 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Support/MathExtras.h"
+#include <cstdint>
 #include <optional>
 
 namespace mlir {
 
-static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
-  return ((offset % modulus) + modulus) % modulus;
-}
-
-/// A buffer index decomposed as `baseValue + constantOffset`, optionally
-/// under a known modulus (recorded when the index is wrapped by remsi or
-/// the pipeliner's select/cmpi idiom).
+/// A slot index of the form `baseValue + constantOffset`, optionally reduced
+/// by a remainder, a low-bit mask or the pipeliner's one-step wrap.
 struct BufferIndexExpr {
+  // Shared SSA base of the index arithmetic. Null for a constant index.
   Value baseValue;
+  // Keep signed offsets until we know the modulus of the slot expression.
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
+  // The descriptor determines both the origin and the stride of each slot.
   Value indexedSource;
   // In the block owning baseValue, the slot is congruent to
   // loopPhase + iteration * loopStep modulo N when loopPhase is known.
@@ -31,17 +31,6 @@ struct BufferIndexExpr {
   int64_t loopStep = 0;
 
   bool operator==(const BufferIndexExpr &) const = default;
-
-  bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    if (indexedSource != other.indexedSource || modulus != other.modulus)
-      return false;
-    if (baseValue == other.baseValue)
-      return constantOffset != other.constantOffset;
-    return loopPhase && other.loopPhase && loopPhase != other.loopPhase &&
-           loopStep == other.loopStep &&
-           cast<BlockArgument>(baseValue).getOwner() ==
-               cast<BlockArgument>(other.baseValue).getOwner();
-  }
 };
 
 namespace {
@@ -161,8 +150,6 @@ std::optional<BufferIndexExpr> matchModuloPattern(arith::SelectOp selectOp) {
   return BufferIndexExpr{base, 1, *mod};
 }
 
-// Assume signed i32 additions in slot indices and cursor updates fit in range.
-// Overflow can change the residue modulo N when N doesn't divide 2^32.
 BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   if (auto c = getConstantIntValue(indexValue))
     return BufferIndexExpr{nullptr, *c};
@@ -173,9 +160,11 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
       auto baseExpr = analyzeBufferIndex(nonConst);
       // (x mod N) + C is not represented as (base, offset, mod); keep the
       // full addi as the expression root.
-      if (baseExpr.modulus)
+      int64_t offset;
+      if (baseExpr.modulus ||
+          llvm::AddOverflow(baseExpr.constantOffset, constant, offset))
         return BufferIndexExpr{indexValue, 0};
-      return {baseExpr.baseValue, baseExpr.constantOffset + constant};
+      return {baseExpr.baseValue, offset};
     };
     if (auto offset = getConstantIntValue(addOp.getRhs()))
       return composeWithConstant(addOp.getLhs(), *offset);
@@ -187,18 +176,27 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
     if (auto result = matchModuloPattern(selectOp))
       return *result;
 
+  auto wrap = [&](Value value, int64_t modulus) -> BufferIndexExpr {
+    auto result = analyzeBufferIndex(value);
+    // Nested moduli do not generally reduce to one modulus.
+    if (result.modulus)
+      return {indexValue, 0};
+    result.modulus = modulus;
+    return result;
+  };
   // For power-of-two N the low bits give the residue for either signedness.
   Operation *rem = indexValue.getDefiningOp();
   if (isa_and_nonnull<arith::RemSIOp, arith::RemUIOp>(rem)) {
     if (auto mod = getConstantIntValue(rem->getOperand(1));
         mod && *mod > 0 &&
-        (isa<arith::RemSIOp>(rem) || llvm::isPowerOf2_64(*mod))) {
-      auto result = analyzeBufferIndex(rem->getOperand(0));
-      // Nested modulus: keep the full remainder as the expression root.
-      if (result.modulus)
-        return BufferIndexExpr{indexValue, 0};
-      result.modulus = *mod;
-      return result;
+        (isa<arith::RemSIOp>(rem) || llvm::isPowerOf2_64(*mod)))
+      return wrap(rem->getOperand(0), *mod);
+  }
+  if (auto andOp = indexValue.getDefiningOp<arith::AndIOp>()) {
+    for (unsigned i : {0u, 1u}) {
+      auto mask = getConstantIntValue(andOp->getOperand(i));
+      if (mask && llvm::isPowerOf2_64(*mask + 1))
+        return wrap(andOp->getOperand(1 - i), *mask + 1);
     }
   }
 
@@ -217,8 +215,7 @@ void analyzeLoopPhase(BufferIndexExpr &expr, DominanceInfo &dominance) {
     if (input.baseValue != (backedge ? expr.baseValue : Value{}) ||
         (input.modulus && input.modulus != expr.modulus))
       return false;
-    int64_t residue =
-        normalizeModuloOffset(input.constantOffset, *expr.modulus);
+    int64_t residue = llvm::mod(input.constantOffset, *expr.modulus);
     auto &expected = backedge ? step : seed;
     if (expected && *expected != residue)
       return false;
@@ -226,24 +223,29 @@ void analyzeLoopPhase(BufferIndexExpr &expr, DominanceInfo &dominance) {
     return true;
   };
   if (allIncomingValues(arg, check) && seed) {
-    expr.loopPhase =
-        normalizeModuloOffset(*seed + expr.constantOffset, *expr.modulus);
+    expr.loopPhase = llvm::mod(*seed + expr.constantOffset, *expr.modulus);
     expr.loopStep = step.value_or(0);
   }
 }
 
 triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
-  // MemDescIndexOp selects a whole slot of a multi-buffered allocation; its
-  // index operand identifies the slot. MemDescViewTrait producers (trans,
-  // reshape, reinterpret, subslice) are slot-preserving, so we can walk
-  // through them to find the underlying MemDescIndexOp.
-  Value v = value;
-  while (auto *def = v.getDefiningOp()) {
-    if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def))
-      return indexOp;
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+  // Views and single-block pipeline stages preserve the selected slot.
+  // Stop at block arguments, which may carry a different slot on each edge.
+  while (auto *def = value.getDefiningOp()) {
+    if (auto index = dyn_cast<triton::gpu::MemDescIndexOp>(def))
+      return index;
+    if (def->hasTrait<OpTrait::MemDescViewTrait>()) {
+      value = def->getOperand(0);
+      continue;
+    }
+    auto stage = dyn_cast<scf::ExecuteRegionOp>(def);
+    if (!stage || !stage.getRegion().hasOneBlock())
       break;
-    v = def->getOperand(0);
+    auto yield =
+        dyn_cast<scf::YieldOp>(stage.getRegion().front().getTerminator());
+    if (!yield)
+      break;
+    value = yield.getOperand(cast<OpResult>(value).getResultNumber());
   }
   return {};
 }
@@ -297,54 +299,43 @@ const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
   return info.get();
 }
 
-bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
-                                       const AllocationSlice &b) {
-  auto *aExpr = a.bufferIndexExpr;
-  auto *bExpr = b.bufferIndexExpr;
-  if (!aExpr || !bExpr)
+bool areBufferIndicesProvablyDifferent(const BufferIndexExpr *a,
+                                       const BufferIndexExpr *b) {
+  // For shared slots (p + offset) % N with positive non-power-of-two N,
+  // signed i32 overflow in the additions is undefined. We deliberately omit
+  // the wraparound case so Membar can prove small dynamic indices disjoint
+  // even when their bounds are unknown.
+  if (!a || !b || a->indexedSource != b->indexedSource ||
+      a->modulus != b->modulus)
     return false;
-  return aExpr->isProvablyDifferentFrom(*bExpr);
+  if (a->baseValue == b->baseValue)
+    return a->constantOffset != b->constantOffset;
+  return a->loopPhase && b->loopPhase && a->loopPhase != b->loopPhase &&
+         a->loopStep == b->loopStep &&
+         cast<BlockArgument>(a->baseValue).getOwner() ==
+             cast<BlockArgument>(b->baseValue).getOwner();
 }
 
-const BufferIndexExpr *BufferIndexAnalysis::intern(BufferIndexExpr expr) {
-  // Euclidean normalization: make 0 <= constantOffset < m so negative constants
-  // compare correctly against positive ones. Equivalent expressions (e.g.
-  // offset 0 and offset m) share a single interned entry.
-  if (expr.modulus) {
-    int64_t m = *expr.modulus;
-    expr.constantOffset = normalizeModuloOffset(expr.constantOffset, m);
-  }
-
+const BufferIndexExpr *BufferIndexAnalysis::getIndexExpr(Value value) {
+  // In irreducible CFGs, a cycle can rebind an index without a dominance
+  // backedge that invalidates the proof.
+  if (!hasReducibleCFG)
+    return nullptr;
+  auto index = extractBufferIndex(value);
+  if (!index || !isa<triton::gpu::SharedMemorySpaceAttr>(
+                    index.getSrc().getType().getMemorySpace()))
+    return nullptr;
+  auto expr = analyzeBufferIndex(index.getIndex());
+  expr.indexedSource = index.getSrc();
+  // Plain i32 sums wrap modulo 2^32, which also preserves low-bit masks.
+  expr.constantOffset =
+      llvm::mod(expr.constantOffset, expr.modulus.value_or(int64_t{1} << 32));
+  analyzeLoopPhase(expr, dominanceInfo);
   for (const auto &existing : expressions)
     if (*existing == expr)
       return existing.get();
-
-  auto owned = std::make_unique<BufferIndexExpr>(expr);
-  const BufferIndexExpr *result = owned.get();
-  expressions.push_back(std::move(owned));
-  return result;
-}
-
-AllocationSlice
-BufferIndexAnalysis::makeSlice(Value value, Interval<size_t> allocationInterval,
-                               Allocation::BufferId bufferId) {
-  AllocationSlice slice(allocationInterval, bufferId, getSubslice(value));
-  attachBufferIndex(slice, value);
-  return slice;
-}
-
-void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
-                                            Value value) {
-  if (!hasReducibleCFG)
-    return;
-
-  auto index = extractBufferIndex(value);
-  if (!index)
-    return;
-  auto expr = analyzeBufferIndex(index.getIndex());
-  analyzeLoopPhase(expr, dominanceInfo);
-  expr.indexedSource = index.getSrc();
-  slice.bufferIndexExpr = intern(std::move(expr));
+  expressions.push_back(std::make_unique<BufferIndexExpr>(expr));
+  return expressions.back().get();
 }
 
 bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,

@@ -326,6 +326,12 @@ void AddressSet::subtract(const AddressSet &other) {
 }
 
 bool AddressSet::intersects(const AddressSet &other) const {
+  // SparseBitVector scans from the first block. Reject disjoint ranges
+  // using its two endpoints before walking a potentially large tile.
+  if (uint32_t(addresses.find_last()) <
+          uint32_t(other.addresses.find_first()) ||
+      uint32_t(other.addresses.find_last()) < uint32_t(addresses.find_first()))
+    return false;
   return addresses.intersects(other.addresses);
 }
 
@@ -584,9 +590,7 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
   });
 }
 
-const BufferRegionFootprint *
-BufferRegionAnalysis::getFootprint(Value value,
-                                   FunctionOpInterface allocationFrame) {
+const BufferRegionFootprint *BufferRegionAnalysis::getFootprint(Value value) {
   auto memory = dyn_cast<ttg::MemDescType>(value.getType());
   if (!memory)
     return nullptr;
@@ -597,13 +601,7 @@ BufferRegionAnalysis::getFootprint(Value value,
       it->second = std::make_unique<BufferRegionFootprint>(
           BufferRegionFootprint{memory.getMemorySpace(), info});
   }
-  const auto *footprint = it->second.get();
-  if (footprint && allocationFrame &&
-      llvm::any_of(footprint->regionInfo.views, [&](const auto &view) {
-        return view.allocationFrame != getOperationId(allocationFrame);
-      }))
-    return nullptr;
-  return footprint;
+  return it->second.get();
 }
 
 const BufferRegionFootprint *
@@ -680,8 +678,14 @@ Allocation *BufferRegionAnalysis::getAllocation(Operation *op) const {
 
 const BufferRegionFootprint *BufferRegionAnalysis::getKernelFootprint(
     const BufferRegionFootprint *footprint) {
-  if (!footprint)
-    return nullptr;
+  // Most accesses already use kernel coordinates. Reuse their sparse
+  // address sets instead of copying them into the translation cache.
+  if (!footprint ||
+      llvm::all_of(footprint->regionInfo.views, [&](const auto &view) {
+        return isKernel(
+            cast<FunctionOpInterface>(operationInterner[view.allocationFrame]));
+      }))
+    return footprint;
   auto [it, inserted] = kernelFootprints.try_emplace(footprint);
   if (inserted) {
     RegionInfo::ViewList views;

@@ -309,6 +309,12 @@ def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
     This operation returns a new descriptor pointing to the `i`-th element of the
     input descriptor along the 0-th dimension.
 
+    For a shared-memory slot indexed by the signed remainder
+    `(p + offset) % N` with positive, non-power-of-two `N`, each addition
+    forming the dividend must fit in signed i32. Overflow is undefined
+    even if the resulting slot is in bounds. Power-of-two slot masks and
+    ordinary integer additions retain their wrapping semantics.
+
     It doesn't affect the underlying memory.
 
     For example, suppose that

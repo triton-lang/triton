@@ -17,18 +17,11 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
-
-#include <tuple>
+#include <optional>
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
-namespace mlir {
-
-using triton::membar::SMemData;
-using triton::membar::SMemModel;
-using triton::membar::ThreadEffects;
-
-namespace triton::membar {
+namespace mlir::triton::membar {
 
 static bool mayCrossCTA(Operation *op, const MemoryAccess &access) {
   using namespace nvidia_gpu;
@@ -67,59 +60,17 @@ SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
   return {getFootprint(access.value), access.isWrite, mayCrossCTA(op, access)};
 }
 
-} // namespace triton::membar
-
-bool AllocationSlice::operator<(const AllocationSlice &other) const {
-  auto key = [](const AllocationSlice &slice) {
-    return std::tie(slice.allocationInterval, slice.bufferId, slice.subslice,
-                    slice.bufferIndexExpr, slice.physicalFootprint);
-  };
-  return key(*this) < key(other);
-}
-
-bool AllocationSlice::mayOverlapPhysically(const AllocationSlice &other) const {
-  return allocationInterval.intersects(other.allocationInterval) &&
-         triton::mayOverlap(physicalFootprint, other.physicalFootprint);
-}
-
-bool AllocationSlice::disjointWithinBinding(
-    const AllocationSlice &other) const {
-  if (bufferId == other.bufferId &&
-      areBufferIndicesProvablyDifferent(*this, other))
-    return true;
-  return triton::membar::disjointSubslices(subslice, other.subslice);
-}
-
-AllocationSlice AllocationSlice::translateToCallsite(
-    CallOpInterface call, FunctionOpInterface callee,
-    triton::BufferRegionAnalysis &regions) const {
-  AllocationSlice shifted = *this;
-  // Unknown accesses span the whole frame; shifting their endpoint overflows.
-  if (allocationInterval != Interval<size_t>{}) {
-    size_t offset = regions.getCallOffset(call);
-    shifted.allocationInterval = Interval<size_t>(
-        allocationInterval.start() + offset, allocationInterval.end() + offset);
-  }
-  shifted.physicalFootprint =
-      regions.translateToCallsite(physicalFootprint, call, callee);
-  shifted.bufferId = Allocation::InvalidBufferId;
-  shifted.invalidateIterationInfo();
-  return shifted;
-}
-
-namespace triton::membar {
-
 void SMemData::merge(const SMemData &other) {
   llvm::append_range(accesses, other.accesses);
-  threads.merge(other.threads, !accesses.empty());
+  threads.merge(other.threads);
 }
 
 Conflict SMemData::conflict(const SMemData &sink, const SMemOrdering *ordering,
-                            Allocation &allocation) const {
+                            Allocation &allocation, bool inKernel) const {
   auto result = Conflict::None;
   for (const SMemAccess &before : accesses)
     for (const SMemAccess &after : sink.accesses) {
-      auto pair = before.conflict(after, ordering, allocation);
+      auto pair = before.conflict(after, ordering, allocation, inKernel);
       if (pair == Conflict::Always)
         return pair;
       if (pair == Conflict::AfterRebind)
@@ -128,38 +79,37 @@ Conflict SMemData::conflict(const SMemData &sink, const SMemOrdering *ordering,
   return result;
 }
 
-void ThreadEffects::merge(ThreadEffects other, bool usesShared) {
-  pending |= other.pending;
-  joins |= other.joins;
-  // In a guard or call summary, a global read combined with shared storage
-  // also consumes pending shared completions.
-  if (usesShared && (joins & FullCompletion))
-    joins |= SharedCompletion;
+SMemAccess SMemAccess::fromDescriptor(const MemoryAccess &effect,
+                                      BufferIndexAnalysis &indices,
+                                      bool useIndex) {
+  Kind kind = effect.isWrite ? Write : Read;
+  return {.entry = kind,
+          .exit = kind,
+          .index = useIndex ? indices.getIndexExpr(effect.value) : nullptr,
+          .subslice = indices.getSubslice(effect.value)};
 }
 
 Conflict SMemAccess::conflict(const SMemAccess &sink,
                               const SMemOrdering *ordering,
-                              Allocation &allocation) const {
+                              Allocation &allocation, bool inKernel) const {
   if (exit == None || sink.entry == None ||
       (exit == Read && sink.entry == Read))
     return Conflict::None;
-  if (!slice.mayOverlapPhysically(sink.slice) ||
-      (ordering && ordering->canSkip(*this, sink, allocation)))
+  if (!mayOverlap(footprint, sink.footprint) ||
+      (ordering && ordering->canSkip(*this, sink, allocation, inKernel)))
     return Conflict::None;
   // Only relative disjointness can expire on a backedge or call entry.
-  return slice.disjointWithinBinding(sink.slice) ? Conflict::AfterRebind
-                                                 : Conflict::Always;
+  if (areBufferIndicesProvablyDifferent(index, sink.index) ||
+      disjointSubslices(subslice, sink.subslice))
+    return Conflict::AfterRebind;
+  return Conflict::Always;
 }
-
-} // namespace triton::membar
 
 // Follow views and selects within this region. For calls, record which results
 // carry each descriptor argument back to the caller.
-// Only the legacy flow passes a null cache.
-// TODO: Make it a reference when followCalls is removed.
 static bool
 usesStayLocal(Value root,
-              DenseMap<Value, SmallVector<unsigned>> *calleeReturns) {
+              DenseMap<Value, SmallVector<unsigned>> &calleeReturns) {
   SmallVector<Value> worklist{root};
   llvm::SmallPtrSet<Value, 8> seen;
   while (!worklist.empty()) {
@@ -175,19 +125,18 @@ usesStayLocal(Value root,
       }
       if (user->getParentRegion() != root.getParentRegion())
         return false;
-      if (auto call = dyn_cast<triton::CallOp>(user); calleeReturns && call) {
+      if (auto call = dyn_cast<triton::CallOp>(user)) {
         auto callee = cast<triton::FuncOp>(call.resolveCallable());
         BlockArgument arg = callee.getArgument(use.getOperandNumber());
-        if (calleeReturns->try_emplace(arg).second &&
+        if (calleeReturns.try_emplace(arg).second &&
             !usesStayLocal(arg, calleeReturns))
           return false;
-        for (unsigned index : calleeReturns->at(arg))
+        for (unsigned index : calleeReturns.at(arg))
           worklist.push_back(call.getResult(index));
         continue;
       }
-      if (calleeReturns && isa<BlockArgument>(root) &&
-          isa<triton::ReturnOp>(user)) {
-        calleeReturns->at(root).push_back(use.getOperandNumber());
+      if (isa<BlockArgument>(root) && isa<triton::ReturnOp>(user)) {
+        calleeReturns.at(root).push_back(use.getOperandNumber());
         continue;
       }
       // TMEM loads and stores only access the issuing CTA's tensor memory.
@@ -220,11 +169,11 @@ usesStayLocal(Value root,
   return true;
 }
 
-bool triton::membar::hasRegionLocalUses(Value root, bool followCalls) {
+bool hasRegionLocalUses(Value root) {
   if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
     return false;
   DenseMap<Value, SmallVector<unsigned>> calleeReturns;
-  return usesStayLocal(root, followCalls ? &calleeReturns : nullptr);
+  return usesStayLocal(root, calleeReturns);
 }
 
 bool SMemModel::isRegionLocal(Value value) {
@@ -235,7 +184,7 @@ bool SMemModel::isRegionLocal(Value value) {
            auto [it, inserted] =
                regionLocalAllocations.try_emplace(root, false);
            if (inserted)
-             it->second = triton::membar::hasRegionLocalUses(root, followCalls);
+             it->second = hasRegionLocalUses(root);
            return it->second;
          });
 }
@@ -362,7 +311,7 @@ std::optional<CompletionSync> getCompletion(Operation *op) {
   return std::nullopt;
 }
 
-// A publication orders earlier effects of its own known issuer.
+// A direct notification orders the work of every contributing thread.
 uint8_t publicationIssuer(Operation *op) {
   if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
     return getNotificationIssuer(arrive);
@@ -373,6 +322,22 @@ uint8_t publicationIssuer(Operation *op) {
   if (isa<ttng::TCGen5CommitOp>(op))
     return ThreadEffects::Warp0Leader;
   return 0;
+}
+
+uint8_t payloadIssuer(Operation *op, SMemModel::Mode mode) {
+  // In one role, scalar stores and thread scopes select the same thread
+  // zero across calls. A function summary can be reused by several roles.
+  if (mode == SMemModel::Mode::Role) {
+    auto store = dyn_cast<StoreOp>(op);
+    if ((store && isa<PointerType>(store.getPtr().getType())) ||
+        op->getParentOfType<gpu::ThreadScopeOp>())
+      return ThreadEffects::Thread0;
+  }
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
+          ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp,
+          ttng::MMAv5OpInterface>(op))
+    return ThreadEffects::Warp0Leader;
+  return ThreadEffects::AnyIssuer;
 }
 
 // Classify the operation's own payload. A full completion must precede
@@ -389,19 +354,21 @@ uint8_t joinedCompletions(Operation *op) {
   auto effects = getEffectsRecursively(op);
   if (!effects)
     return ThreadEffects::Completions;
-  if (llvm::all_of(*effects, [](const auto &effect) {
-        return isa<triton::gpu::SharedMemory, ttng::TensorMemory>(
-                   effect.getResource()) &&
-               isa<MemoryEffects::Allocate, MemoryEffects::Free>(
-                   effect.getEffect());
-      }))
-    return 0;
-  if (llvm::all_of(*effects, [](const auto &effect) {
-        return isa<MemoryEffects::Read>(effect.getEffect()) &&
-               isa<triton::GlobalMemory>(effect.getResource());
-      }))
-    return ThreadEffects::FullCompletion;
-  return ThreadEffects::Completions;
+  uint8_t joins = 0;
+  for (const auto &effect : *effects) {
+    auto *resource = effect.getResource();
+    // TMEM transfers have their own completion and publication protocol.
+    if (isa<ttng::TensorMemory>(resource) ||
+        (isa<triton::gpu::SharedMemory>(resource) &&
+         isa<MemoryEffects::Allocate, MemoryEffects::Free>(effect.getEffect())))
+      continue;
+    // A global write can overwrite the source of an asynchronous copy.
+    if (!isa<triton::GlobalMemory>(resource) ||
+        !isa<MemoryEffects::Read>(effect.getEffect()))
+      return ThreadEffects::Completions;
+    joins = ThreadEffects::FullCompletion;
+  }
+  return joins;
 }
 
 } // namespace
@@ -423,58 +390,22 @@ ThreadEffects SMemModel::getThreadEffects(Operation *op, bool hasScratch,
 
   if (auto issuer = publicationIssuer(op)) {
     threads.pending = issuer;
-    unsigned ordered = issuer == ThreadEffects::AnyIssuer ? 0 : issuer;
-    threads.joins =
-        ThreadEffects::Completions | (ThreadEffects::AnyIssuer & ~ordered);
-  } else {
-    threads.joins =
-        hasScratch ? ThreadEffects::Completions : joinedCompletions(op);
-    if (!threads.joins)
-      return {};
-    // Diagnostics consume completions without leaving payload to publish.
-    if (isa<triton::PrintOp, triton::AssertOp>(op))
-      return threads;
-    // Each issuing CTA uses a fixed lane of the partition's first warp.
-    threads.pending =
-        isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
-            ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp,
-            ttng::MMAv5OpInterface>(op)
-            ? ThreadEffects::Warp0Leader
-            : ThreadEffects::AnyIssuer;
+    // Routed signals have no guaranteed participant. Direct signals join
+    // only work that may have been issued outside their participating lanes.
+    unsigned participants = issuer == ThreadEffects::AnyIssuer ? 0 : issuer;
+    threads.joins = ThreadEffects::AnyIssuer & ~participants;
+    return threads;
   }
+
+  threads.joins =
+      hasScratch ? ThreadEffects::Completions : joinedCompletions(op);
+  // Diagnostics consume completions without leaving payload to publish.
+  if (!threads.joins || isa<triton::PrintOp, triton::AssertOp>(op))
+    return threads;
+  threads.pending = payloadIssuer(op, mode);
   if (mayNotifyPeer(op, accesses))
     threads.joins |= ThreadEffects::PeerWait;
   return threads;
-}
-
-SmallVector<AllocationSlice> SMemModel::getAllocationSlices(Value value) {
-  auto function = cast<FunctionOpInterface>(allocation.getOperation());
-  // Only views in the current frame have local allocator IDs.
-  auto *footprint = regions.getFootprint(value, function);
-  SmallVector<AllocationSlice> slices;
-  auto addSlice = [&](Interval<size_t> interval,
-                      Allocation::BufferId bufferId) {
-    auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
-    slice.physicalFootprint = footprint;
-    slices.push_back(std::move(slice));
-  };
-  Allocation::BufferIdSetT bufferIds;
-  if (footprint && (!followCalls || isKernel(function))) {
-    // Use every lattice origin: function-local alias analysis can miss roots
-    // returned through calls or joined with descriptor arguments.
-    for (const auto &view : footprint->regionInfo.views)
-      for (auto id : allocation.getBufferIds(view.allocation->getResult(0)))
-        bufferIds.insert(id);
-  } else if (followCalls) {
-    footprint = regions.getKernelFootprint(regions.getFootprint(value));
-  }
-  // Unknown allocations use an unbounded interval. View disjointness and
-  // RAW/WAR/WAW checks still determine whether a barrier is needed.
-  if (bufferIds.empty())
-    addSlice(Interval<size_t>{}, Allocation::InvalidBufferId);
-  for (auto bufferId : bufferIds)
-    addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
-  return slices;
 }
 
 SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
@@ -490,47 +421,38 @@ SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
     return {};
   }
 
-  auto scratchId = allocation.getBufferId(op);
-  bool hasScratch = scratchId != Allocation::InvalidBufferId;
+  bool hasScratch = allocation.getBufferId(op) != Allocation::InvalidBufferId;
   fixed =
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
-  if (accessMode == AccessMode::SynchronizationOnly)
+  if (mode == Mode::SynchronizationOnly)
     return {};
 
   SMemData data;
   data.threads = getThreadEffects(op, hasScratch, accesses);
-  for (const auto &access : accesses) {
-    if (!access.isShared())
+  for (const auto &effect : accesses) {
+    if (!effect.isShared())
       continue;
-    auto kind = access.isWrite ? SMemAccess::Write : SMemAccess::Read;
+    auto access = SMemAccess::fromDescriptor(effect, bufferIndexAnalysis);
+    access.footprint = regions.getFootprint(effect.value);
     // An internal rendezvous completes explicit accesses before exit.
-    for (const auto &slice : getAllocationSlices(access.value)) {
-      data.accesses.push_back(
-          {slice, kind, fixed.inside ? SMemAccess::None : kind});
-      if (ordering)
-        ordering->classify(data.accesses.back(), op, access, data.threads,
-                           allocation);
-    }
+    if (fixed.inside)
+      access.exit = SMemAccess::None;
+    if (ordering)
+      ordering->classify(access, op, effect, data.threads, allocation);
+    data.accesses.push_back(access);
   }
 
-  if (!hasScratch)
-    return data;
-
-  auto interval = allocation.getAllocatedInterval(scratchId);
-  auto *footprint = regions.getScratchFootprint(op);
-  if (followCalls &&
-      !isKernel(cast<FunctionOpInterface>(allocation.getOperation()))) {
-    interval = {};
-    footprint = regions.getKernelFootprint(footprint);
-  }
-  AllocationSlice scratch(interval);
-  scratch.physicalFootprint = footprint;
-  // Scratch starts with a write and ends with a read. An internal
-  // rendezvous leaves only the final read exposed to subsequent operations.
-  data.accesses.push_back(
-      {scratch, SMemAccess::Write,
-       fixed.inside ? SMemAccess::Read : SMemAccess::Write});
+  // A scratch rendezvous leaves only its last read exposed. Otherwise
+  // the initial write can still conflict with a subsequent reader.
+  if (hasScratch)
+    data.accesses.push_back(
+        {.entry = SMemAccess::Write,
+         .exit = fixed.inside ? SMemAccess::Read : SMemAccess::Write,
+         .footprint = regions.getScratchFootprint(op)});
+  if (mode == Mode::Role)
+    for (auto &access : data.accesses)
+      access.footprint = regions.getKernelFootprint(access.footprint);
   return data;
 }
 
-} // namespace mlir
+} // namespace mlir::triton::membar

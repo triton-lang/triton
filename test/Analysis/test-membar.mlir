@@ -1839,6 +1839,55 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   tt.return
 }
 
+// The offset 4 reduces to 1 modulo 3 even with no known bounds on phase.
+// CHECK-LABEL: @disjoint_remsi_normalized_offset
+// CHECK: ttg.local_store
+// CHECK-NEXT: {{.*}} = ttg.local_load
+tt.func @disjoint_remsi_normalized_offset(%values: tensor<128x128xf16>, %phase: i32) -> tensor<128x128xf16> {
+  %c3 = arith.constant 3 : i32
+  %c4 = arith.constant 4 : i32
+  %next = arith.addi %phase, %c4 : i32
+  %i = arith.remsi %phase, %c3 : i32
+  %j = arith.remsi %next, %c3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
+  %a = ttg.memdesc_index %ring[%i] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %b = ttg.memdesc_index %ring[%j] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  ttg.local_store %values, %a : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %result = ttg.local_load %b : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return %result : tensor<128x128xf16>
+}
+
+// CHECK-LABEL: masked_buffer_indices
+tt.func @masked_buffer_indices(%value: tensor<128x128xf16>, %cursor: i32) {
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %ring = ttg.local_alloc : () -> !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable>
+  %next = arith.addi %cursor, %c1 : i32
+
+  %a = arith.andi %cursor, %c3 : i32
+  %b = arith.andi %c3, %next : i32
+  %dst = ttg.memdesc_index %ring[%a] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src = ttg.memdesc_index %ring[%b] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %value, %dst : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  %read = ttg.local_load %src : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+
+  // Masking out bit zero lets cursor 0 and its successor both select slot 0.
+  %c = arith.andi %cursor, %c2 : i32
+  %d = arith.andi %next, %c2 : i32
+  %dst2 = ttg.memdesc_index %ring[%c] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  %src2 = ttg.memdesc_index %ring[%d] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  ttg.local_store %read, %dst2 : tensor<128x128xf16> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %read2 = ttg.local_load %src2 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16>
+  tt.return
+}
+
 // CHECK-LABEL: must_barrier_irreducible_cfg
 // The first cycle is a natural loop: natural_header dominates natural_latch,
 // so its retreating edge is accepted. The later cycle bb1 -> bb2 -> bb1 has two

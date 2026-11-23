@@ -547,6 +547,11 @@ class shared_memory_descriptor(base_value):
         """
         Create a subview of shared memory by indexing along the first dimension.
 
+        For a signed slot index ``(p + offset) % N`` with positive,
+        non-power-of-two ``N``, each addition forming the dividend must fit
+        in signed int32. Overflow is undefined even if the slot is in bounds.
+        Power-of-two slot masks preserve wrapping arithmetic.
+
         Args:
             index (int): The index at which to take the subview.
 

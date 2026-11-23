@@ -63,8 +63,9 @@ SMemOrdering::SMemOrdering(ModuleAllocation &module) {
     if (kernel.isExternal())
       continue;
     Block &entry = kernel.getFunctionBody().front();
-    for (auto alloc : entry.getOps<gpu::LocalAllocOp>())
-      entryKernels[alloc] = kernel;
+    kernel.walk([&](gpu::LocalAllocOp alloc) {
+      origins[alloc] = {kernel, alloc->getBlock() == &entry};
+    });
   }
 }
 
@@ -92,10 +93,9 @@ void SMemOrdering::classify(SMemAccess &access, Operation *op,
     else
       access.rule = OrderingRule::Counter;
 
-    // A direct arrival or expectation includes a local contribution.
-    // Routed issuers and broadcast waits can omit participating CTAs.
-    bool direct = release && (threads.pending == ThreadEffects::Thread0 ||
-                              threads.pending == ThreadEffects::WarpLeaders);
+    // Only direct arrivals and expectations guarantee that thread zero
+    // contributes locally, so they can publish its work without a join.
+    bool direct = release && !(threads.joins & ThreadEffects::Thread0);
     if ((wait || direct) &&
         !ttng::hasCGABroadcast(cast<gpu::MemDescType>(effect.value.getType())))
       access.key = counterKeys.try_emplace(effect.value, counterKeys.size() + 1)
@@ -118,13 +118,12 @@ void SMemOrdering::classify(SMemAccess &access, Operation *op,
 // Allocator reuse can give unrelated allocations the same physical address.
 bool SMemOrdering::hasOnlySourceAliases(const SMemAccess &source,
                                         const SMemAccess &sink,
-                                        Allocation &allocation) const {
-  auto *before = source.slice.physicalFootprint;
-  auto *after = sink.slice.physicalFootprint;
+                                        Allocation &allocation,
+                                        bool inKernel) const {
+  auto *before = source.footprint;
+  auto *after = sink.footprint;
   if (!before || !after)
     return false;
-  bool local = source.slice.getBufferId() != Allocation::InvalidBufferId &&
-               sink.slice.getBufferId() != Allocation::InvalidBufferId;
   bool overlaps = false;
   for (const auto &a : before->regionInfo.views) {
     for (const auto &b : after->regionInfo.views) {
@@ -134,8 +133,15 @@ bool SMemOrdering::hasOnlySourceAliases(const SMemAccess &source,
         continue;
       if (!a.allocation || a.allocation != b.allocation)
         return false;
-      if (!local &&
-          entryKernels.lookup(a.allocation) != allocation.getOperation())
+      auto origin = origins.lookup(a.allocation);
+      if (origin.kernel != allocation.getOperation() ||
+          (!inKernel && !origin.inEntry))
+        return false;
+      // Verified non-broadcast mbarriers have one i64 per CTA. Overlap
+      // must select the same whole counter in every possible binding.
+      if (source.rule == OrderingRule::CounterWait &&
+          (a.region.baseOffset % 8 || a.region.length != 8 ||
+           a.region != b.region))
         return false;
       overlaps = true;
     }
@@ -144,11 +150,11 @@ bool SMemOrdering::hasOnlySourceAliases(const SMemAccess &source,
 }
 
 bool SMemOrdering::canSkip(const SMemAccess &source, const SMemAccess &sink,
-                           Allocation &allocation) const {
+                           Allocation &allocation, bool inKernel) const {
   switch (source.rule) {
   case OrderingRule::AsyncPayload:
     // Consumers of live destinations must await transaction completion.
-    return hasOnlySourceAliases(source, sink, allocation);
+    return hasOnlySourceAliases(source, sink, allocation, inKernel);
   case OrderingRule::CommutativeAtomic:
     return sink.rule == source.rule && sink.key == source.key;
   case OrderingRule::CounterInit:
@@ -163,8 +169,9 @@ bool SMemOrdering::canSkip(const SMemAccess &source, const SMemAccess &sink,
       return true;
     // Publication orders the wait before each issuer's contribution.
     // With one issuer per warp, the phase needs every warp to arrive.
-    return source.key && sink.rule == OrderingRule::CounterSignal &&
-           source.key == sink.key;
+    return source.key && sink.rule == OrderingRule::CounterSignal && sink.key &&
+           (source.key == sink.key ||
+            hasOnlySourceAliases(source, sink, allocation, inKernel));
   default:
     return false;
   }

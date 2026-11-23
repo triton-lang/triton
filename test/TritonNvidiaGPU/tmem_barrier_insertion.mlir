@@ -94,6 +94,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // One rendezvous before the MMA covers the shared copy and the TMEM store.
+  // CHECK-LABEL: @shared_copy_and_accumulator_before_mma
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttng.fence_async_shared
+  // CHECK-NEXT: {{.*}} = ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma
+  tt.func @shared_copy_and_accumulator_before_mma(%src: tensor<128x128x!tt.ptr<f16>, #blocked>,
+                                                 %b: !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+                                                 %init: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %a = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory, mutable>
+    ttg.async_copy_global_to_local %src, %a {contiguity = 8 : i32} : tensor<128x128x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory, mutable>
+    ttg.async_commit_group
+    ttg.async_wait {num = 0 : i32}
+    ttng.fence_async_shared {bCluster = false}
+    %acc = ttng.tmem_alloc %init {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true :
+      !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory, mutable>,
+      !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
   // Keep the assumption before the rendezvous required by the MMA.
   // CHECK-LABEL: @alloc_assume_then_mma
   // CHECK: ttng.tmem_alloc
@@ -1040,17 +1065,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // The descriptor acquire and the TMEM store each have a synchronization
-  // requirement before the same-warp load.
+  // The load waits for the TMEM store. The descriptor acquire can defer
+  // its rendezvous to the first shared-memory access.
   // WAIT-LABEL: @wait_tensormap_acquire_barrier
   // WAIT: ttng.tmem_store
   // WAIT-NEXT: %{{.*}} = ttg.global_scratch_alloc
   // WAIT-NEXT: ttng.tensormap_create
   // WAIT-NEXT: ttng.tensormap_fenceproxy_acquire
   // WAIT-NEXT: %{{.*}} = ttng.reinterpret_tensor_descriptor
-  // CHECK-DAG: ttg.barrier local
-  // WAIT-DAG: ttng.tmem_wait store
-  // WAIT: %{{.*}} = ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: %{{.*}} = ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
   // WAIT-NEXT: %{{.*}} = ttg.local_alloc
   // WAIT-NEXT: ttng.fence_async_shared
   // CHECK-NEXT: ttg.barrier local
@@ -1088,9 +1113,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-NEXT: ttg.async_commit_group
   // WAIT-NEXT: ttg.async_wait
   // WAIT-NEXT: ttng.async_tma_store_wait
-  // CHECK-DAG: ttg.barrier local
-  // WAIT-DAG: ttng.tmem_wait store
-  // WAIT: %{{.*}} = ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: %{{.*}} = ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
   tt.func @tmem_wait_after_shared_synchronization(%data: tensor<128x128xf32, #blocked>) {
     %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     ttng.fence_async_shared {bCluster = false}

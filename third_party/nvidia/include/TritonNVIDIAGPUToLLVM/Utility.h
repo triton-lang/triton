@@ -13,15 +13,19 @@ public:
                 const MemoryAccess &effect, membar::ThreadEffects threads,
                 Allocation &allocation) override;
   bool canSkip(const membar::SMemAccess &source, const membar::SMemAccess &sink,
-               Allocation &allocation) const override;
+               Allocation &allocation, bool inKernel) const override;
 
 private:
   bool hasOnlySourceAliases(const membar::SMemAccess &source,
                             const membar::SMemAccess &sink,
-                            Allocation &allocation) const;
+                            Allocation &allocation, bool inKernel) const;
 
   // Only entry allocations have one lifetime across different calls.
-  DenseMap<Operation *, Operation *> entryKernels;
+  struct Origin {
+    Operation *kernel;
+    bool inEntry;
+  };
+  DenseMap<Operation *, Origin> origins;
   // Zero excludes counters that lack a participating issuer in each CTA.
   DenseMap<Value, uint32_t> counterKeys;
   // Commutativity requires both the same operation and the same element type.

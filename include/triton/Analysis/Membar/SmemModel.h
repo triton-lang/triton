@@ -4,52 +4,11 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
+#include <compare>
 #include <cstdint>
 #include <map>
-#include <optional>
 
 namespace mlir {
-
-/// Physical storage and the relative coordinates valid in one SSA binding.
-struct AllocationSlice {
-  explicit AllocationSlice(
-      Interval<size_t> interval,
-      Allocation::BufferId id = Allocation::InvalidBufferId,
-      const triton::membar::Subslice *view = nullptr)
-      : allocationInterval(interval), bufferId(id), subslice(view) {}
-
-  bool operator<(const AllocationSlice &other) const;
-  bool operator==(const AllocationSlice &) const = default;
-
-  bool mayOverlapPhysically(const AllocationSlice &other) const;
-  bool disjointWithinBinding(const AllocationSlice &other) const;
-
-  Allocation::BufferId getBufferId() const { return bufferId; }
-  bool hasIterationInfo() const { return bufferIndexExpr || subslice; }
-  void invalidateIterationInfo() {
-    bufferIndexExpr = nullptr;
-    subslice = nullptr;
-  }
-
-  /// AMD function summaries use caller-relative storage at each call site.
-  AllocationSlice
-  translateToCallsite(CallOpInterface call, FunctionOpInterface callee,
-                      triton::BufferRegionAnalysis &regions) const;
-
-  // All possible physical origins, including allocation padding and CTA IDs.
-  // Owned by BufferRegionAnalysis. A null footprint gives no restriction.
-  const triton::BufferRegionFootprint *physicalFootprint = nullptr;
-  // Relative slot of an indexed descriptor, owned by BufferIndexAnalysis.
-  const BufferIndexExpr *bufferIndexExpr = nullptr;
-
-private:
-  // Bounds for this allocator buffer, also available for implicit scratch.
-  Interval<size_t> allocationInterval;
-  // Identifies a local buffer for slot comparisons and backend alias checks.
-  Allocation::BufferId bufferId = Allocation::InvalidBufferId;
-  // A direct subslice gives its source, offsets and shape for relative proofs.
-  const triton::membar::Subslice *subslice;
-};
 
 namespace triton::membar {
 
@@ -57,11 +16,11 @@ namespace triton::membar {
 // Summaries union the effects on each side of an operation.
 struct ThreadEffects {
   enum : uint8_t {
-    // A release with a known issuer observes that issuer in program order.
+    // Each participant in a release publishes its own earlier work.
     Thread0 = 1 << 0,
-    WarpLeaders = 1 << 1, // Lane zero of every warp.
-    Warp0Leader = 1 << 2, // Elected lane of the first warp.
-    AnyIssuer = Thread0 | WarpLeaders | Warp0Leader,
+    WarpLeaders = Thread0 | (1 << 1), // Lane zero of every warp.
+    Warp0Leader = 1 << 2,             // Elected lane of the first warp.
+    AnyIssuer = WarpLeaders | Warp0Leader,
     SharedCompletion = 1 << 3, // May overlap independent global reads.
     FullCompletion = 1 << 4,   // Must also finish before reads and kernel exit.
     Completions = SharedCompletion | FullCompletion,
@@ -73,7 +32,10 @@ struct ThreadEffects {
   // Pending effects that require a rendezvous before this operation.
   uint8_t joins = 0;
 
-  void merge(ThreadEffects other, bool usesShared);
+  void merge(ThreadEffects other) {
+    pending |= other.pending;
+    joins |= other.joins;
+  }
   bool operator==(const ThreadEffects &) const = default;
 };
 
@@ -126,13 +88,12 @@ public:
                         Allocation &allocation) = 0;
   // Exempt overlapping accesses only if the ordering survives rebinding.
   virtual bool canSkip(const SMemAccess &source, const SMemAccess &sink,
-                       Allocation &allocation) const = 0;
+                       Allocation &allocation, bool inKernel) const = 0;
 };
 
 struct SMemAccess {
   // A write subsumes a read of the same bytes for hazard detection.
   enum Kind : uint8_t { None, Read, Write };
-  AllocationSlice slice;
   // Exposed to predecessors and successors respectively. An internal
   // rendezvous separates the first scratch write from the final read.
   Kind entry, exit;
@@ -140,10 +101,20 @@ struct SMemAccess {
   // and counter. The key identifies extra comparison facts, or zero if unused.
   OrderingRule rule = OrderingRule::Ordinary;
   uint32_t key = 0;
+  // All possible physical origins, including allocation padding and CTA IDs.
+  // A null footprint imposes no restriction on overlap.
+  const BufferRegionFootprint *footprint = nullptr;
+  // Relative slot and subslice coordinates are valid in one SSA binding.
+  const BufferIndexExpr *index = nullptr;
+  const Subslice *subslice = nullptr;
 
+  // The caller supplies physical storage in its own coordinate system.
+  static SMemAccess fromDescriptor(const MemoryAccess &effect,
+                                   BufferIndexAnalysis &indices,
+                                   bool useIndex = true);
   Conflict conflict(const SMemAccess &sink, const SMemOrdering *ordering,
-                    Allocation &allocation) const;
-  bool operator==(const SMemAccess &) const = default;
+                    Allocation &allocation, bool inKernel = false) const;
+  auto operator<=>(const SMemAccess &) const = default;
 };
 
 struct SMemData {
@@ -155,10 +126,11 @@ struct SMemData {
 
   void merge(const SMemData &other);
   Conflict conflict(const SMemData &sink, const SMemOrdering *ordering,
-                    Allocation &allocation) const;
+                    Allocation &allocation, bool inKernel = false) const;
   bool operator==(const SMemData &) const = default;
 };
 
+// Proxy and cluster placement need the physical footprint and CTA routing.
 struct SharedAccess {
   const BufferRegionFootprint *footprint;
   bool isWrite;
@@ -184,27 +156,22 @@ private:
   std::map<Operation *, BufferIndexAnalysis> indices;
 };
 
-bool hasRegionLocalUses(Value root, bool followCalls);
+bool hasRegionLocalUses(Value root);
 
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {
 public:
-  enum class AccessMode { AllSharedAccesses, SynchronizationOnly };
+  enum class Mode { Role, FunctionSummary, SynchronizationOnly };
 
-  /// Only AMD::MembarAnalysis uses followCalls=false.
-  /// TODO: When it retires, remove the flag, follow descriptor uses through
-  /// calls unconditionally, and keep callee footprints in kernel coordinates.
   SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
-            SMemOrdering *ordering,
-            AccessMode accessMode = AccessMode::AllSharedAccesses,
-            CompletionScopeFn completionScope = nullptr,
-            bool followCalls = false)
+            SMemOrdering *ordering, Mode mode,
+            CompletionScopeFn completionScope = nullptr)
       : allocation(allocation), regions(regions), ordering(ordering),
-        accessMode(accessMode), completionScope(completionScope),
-        followCalls(followCalls), bufferIndexAnalysis(cast<FunctionOpInterface>(
-                                      allocation.getOperation())) {}
+        mode(mode), completionScope(completionScope),
+        bufferIndexAnalysis(
+            cast<FunctionOpInterface>(allocation.getOperation())) {}
 
-  /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
+  /// Describe the ordering requirements and fixed barriers of one operation.
   SMemData describe(Operation *op, FixedSync &fixed,
                     ArrayRef<MemoryAccess> accesses);
   const BufferIndexAnalysis &getBufferIndexAnalysis() const {
@@ -212,20 +179,25 @@ public:
   }
 
 private:
-  SmallVector<AllocationSlice> getAllocationSlices(Value value);
   bool isRegionLocal(Value value);
   bool mayNotifyPeer(Operation *op, ArrayRef<MemoryAccess> accesses);
   ThreadEffects getThreadEffects(Operation *op, bool hasScratch,
                                  ArrayRef<MemoryAccess> accesses);
 
+  // Scratch belongs to the function. Descriptor footprints are module-wide.
   Allocation &allocation;
   BufferRegionAnalysis &regions;
   // Backend classification and key tables shared across this module's calls.
   SMemOrdering *ordering;
-  AccessMode accessMode;
+  // A role shares thread identities and kernel coordinates across calls.
+  // Function summaries translate per call. TMEM-only placement needs fixed
+  // sync.
+  Mode mode;
+  // AMD refines the completion scope after assigning wait counts.
   CompletionScopeFn completionScope;
-  bool followCalls;
+  // Owns the slot expressions borrowed by the nodes of this function.
   BufferIndexAnalysis bufferIndexAnalysis;
+  // A counter confined to this region cannot advance a peer's phase.
   DenseMap<Value, bool> regionLocalAllocations;
 };
 

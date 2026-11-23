@@ -4,43 +4,25 @@
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/Membar/SmemModel.h"
 #include <set>
-#include <tuple>
 #include <utility>
 
 namespace mlir::triton::AMD {
 
-/// Effects accumulated across CFG paths or a warp-pipeline stage.
+/// Effects accumulated across CFG paths.
 struct BlockInfo {
-  struct AccessLess {
-    bool operator()(const membar::SMemAccess &a,
-                    const membar::SMemAccess &b) const {
-      return std::tie(a.slice, a.entry, a.exit, a.rule, a.key) <
-             std::tie(b.slice, b.entry, b.exit, b.rule, b.key);
-    }
-  };
   // A set makes joins idempotent across backedges and repeated calls.
-  std::set<membar::SMemAccess, AccessLess> accesses;
+  std::set<membar::SMemAccess> accesses;
   membar::ThreadEffects threads;
 
   void join(const BlockInfo &other) {
     accesses.insert(other.accesses.begin(), other.accesses.end());
-    threads.merge(other.threads, !accesses.empty());
+    threads.merge(other.threads);
   }
 
-  template <typename Transform> void transformSlices(Transform transform) {
-    decltype(accesses) transformed;
-    for (auto access : accesses) {
-      access.slice = transform(access.slice);
-      transformed.insert(std::move(access));
-    }
-    accesses = std::move(transformed);
-  }
-
-  void invalidateIterationInfo();
   template <typename Effects>
   bool isIntersected(const Effects &other, const membar::SMemOrdering *ordering,
                      Allocation &allocation) const {
-    // Both AMD clients invalidate iteration facts on backedges.
+    // The forward walk invalidates relative addresses on backedges.
     for (const auto &a : accesses)
       for (const auto &b : other.accesses)
         if (a.conflict(b, ordering, allocation) == membar::Conflict::Always)
@@ -86,11 +68,6 @@ struct MembarInfo {
     pending.join(callee.pending);
   }
 
-  template <typename Transform> void transformSlices(Transform transform) {
-    pending.transformSlices(transform);
-    entryBlockInfo.transformSlices(transform);
-  }
-
   bool operator==(const MembarInfo &) const = default;
 };
 
@@ -117,7 +94,7 @@ public:
                  CompletionScopeFn completionScope = nullptr)
       : allocation(allocation), regions(regions), ordering(ordering),
         shared(allocation, regions, ordering,
-               triton::membar::SMemModel::AccessMode::AllSharedAccesses,
+               triton::membar::SMemModel::Mode::FunctionSummary,
                completionScope) {}
 
 private:
@@ -146,8 +123,7 @@ public:
       : moduleAllocation(moduleAllocation), ordering(ordering) {}
 
   void run() {
-    // Geometry and interval slices use the same completed allocation, including
-    // backend scratch sizes and shared-memory partition offsets.
+    // Include backend scratch sizes and shared-memory partition offsets.
     auto solver = createDataFlowSolver();
     auto *regions = solver->load<triton::BufferRegionAnalysis>(
         triton::BufferRegionAnalysis::Mode::AllMemory, &moduleAllocation);
