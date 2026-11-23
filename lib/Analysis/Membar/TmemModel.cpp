@@ -178,8 +178,8 @@ static Boundary getTMemBoundary(Operation *op) {
     return barrier.getBarriers().empty() ? Boundary::None
                                          : Boundary::Publication;
   }
-  // Volatile loads still access only global memory.
-  if (isa<triton::LoadOp>(op))
+  // Global loads and prefetches do not publish earlier TMEM accesses.
+  if (isa<triton::LoadOp, PrefetchBulkOp>(op))
     return Boundary::None;
   // Shared-memory fences and copy-group waits do not publish TMEM accesses.
   if (isa<FenceAsyncSharedOp, FenceMBarrierInitReleaseClusterOp,

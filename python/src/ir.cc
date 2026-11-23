@@ -2010,6 +2010,10 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &input) -> Value {
              return self.create<FpSanBarrierOp>(input.getType(), input);
            })
+      .def("create_fpsan_compact_exp2",
+           [](TritonOpBuilder &self, Value &input) -> Value {
+             return self.create<FpSanCompactExp2Op>(input.getType(), input);
+           })
       .def("create_fpsan_homomorphic_cast",
            [](TritonOpBuilder &self, Value &input, Type &dstType) -> Value {
              return self.create<FpSanHomomorphicCastOp>(dstType, input);

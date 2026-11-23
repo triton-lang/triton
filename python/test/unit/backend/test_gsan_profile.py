@@ -1532,7 +1532,7 @@ def test_gsan_profile_bulk_store_observes_whole_range(words, take_copy, fresh_kn
         smem = gl.allocate_shared_memory(gl.int32, [256], gl.SwizzledSharedLayout(1, 1, 1, [0]),
                                          gl.full((256, ), 17, gl.int32, layout))
         hopper.bulk.async_store(out + 4, smem, WORDS, pred=pred)
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
     with AllocationProfile() as profile:
         out = torch.empty(264, dtype=torch.int32, device="cuda")

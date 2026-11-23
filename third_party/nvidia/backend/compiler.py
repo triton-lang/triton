@@ -436,9 +436,9 @@ class CUDABackend(BaseBackend):
         if not any(is_enabled(options, mode) for mode in ("gsan", "consan")):
             passes.ttgpuir.add_optimize_thread_regions(pm)
         passes.convert.add_scf_to_cf(pm)
-        passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
+        passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
