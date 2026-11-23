@@ -69,15 +69,11 @@ SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
 
 } // namespace triton::membar
 
-AllocationSlice::AllocationSlice(Value value, Interval<size_t> interval,
-                                 Allocation::BufferId bufferId)
-    : allocationInterval(interval), bufferId(bufferId),
-      subslice(value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {}
-
 bool AllocationSlice::operator<(const AllocationSlice &other) const {
   auto key = [](const AllocationSlice &slice) {
-    return std::tie(slice.allocationInterval, slice.bufferId, slice.subslice,
-                    slice.bufferIndexExpr, slice.physicalFootprint);
+    return std::tie(slice.allocationInterval, slice.bufferId,
+                    slice.relative.subslice, slice.relative.index,
+                    slice.physicalFootprint);
   };
   return key(*this) < key(other);
 }
@@ -89,27 +85,7 @@ bool AllocationSlice::mayOverlapPhysically(const AllocationSlice &other) const {
 
 bool AllocationSlice::disjointWithinBinding(
     const AllocationSlice &other) const {
-  // Indices of the same descriptor can prove slots disjoint even for
-  // arguments without a local allocator ID.
-  if (bufferId == other.bufferId &&
-      areBufferIndicesProvablyDifferent(*this, other))
-    return true;
-  if (!subslice || !other.subslice)
-    return false;
-  auto a = cast<triton::gpu::MemDescSubsliceOp>(subslice);
-  auto b = cast<triton::gpu::MemDescSubsliceOp>(other.subslice);
-  // Only a common source supplies comparable coordinates, even if it
-  // is itself a subslice or is carried through control flow or a loop.
-  if (a.getSrc() != b.getSrc())
-    return false;
-  // Disjoint half-open [offset, offset + size) intervals in any one
-  // dimension prove that the subslices cannot intersect.
-  for (auto [startA, sizeA, startB, sizeB] :
-       llvm::zip_equal(a.getOffsets(), a.getType().getShape(), b.getOffsets(),
-                       b.getType().getShape()))
-    if (startA + sizeA <= startB || startB + sizeB <= startA)
-      return true;
-  return false;
+  return relative.disjoint(other.relative, bufferId == other.bufferId);
 }
 
 AllocationSlice AllocationSlice::translateToCallsite(
@@ -486,9 +462,10 @@ SmallVector<AllocationSlice> SMemModel::getAllocationSlices(Value value) {
   // Only views in the current frame have local allocator IDs.
   auto *footprint = regions.getFootprint(value, function);
   SmallVector<AllocationSlice> slices;
+  auto relative = bufferIndexAnalysis.getRelativeAddress(value);
   auto addSlice = [&](Interval<size_t> interval,
                       Allocation::BufferId bufferId) {
-    auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
+    AllocationSlice slice(interval, bufferId, relative);
     slice.physicalFootprint = footprint;
     slices.push_back(std::move(slice));
   };

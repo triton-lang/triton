@@ -84,45 +84,39 @@ static triton::gpu::MemDescIndexOp resolveMemDescIndex(Value value) {
   return {};
 }
 
-// Construct a virtual block describing a pipeline cluster's buffer R/W set.
-// Walks recursively so that LDS effects inside nested non-loop regions
-// (scf.if / tt.reduce / tt.scan / etc.) are accounted for.  Loops (scf.for /
-// scf.while) cannot legally appear inside a cluster, so this walk never has
-// to reason about iteration-multiplied effects.
-static BlockInfo
-buildBlockInfoFromBlock(Block *block, Allocation *allocation,
-                        BufferIndexAnalysis *bufferIndex = nullptr) {
-  BlockInfo info;
-  block->walk([&](MemoryEffectOpInterface mei) {
-    Operation *op = mei.getOperation();
-    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
-    mei.getEffects(effs);
-    for (auto &eff : effs) {
-      Value v = eff.getValue();
-      if (!v ||
-          !isa<MemoryEffects::Read, MemoryEffects::Write>(eff.getEffect()))
+static BlockInfo getStageAccesses(Block *block, Allocation &allocation,
+                                  BufferIndexAnalysis &indices,
+                                  bool useIndex = true) {
+  using triton::membar::SMemAccess;
+  BlockInfo stage;
+  // Walk recursively to include LDS effects inside nested regions.
+  // Pipeline stages cannot contain loops, so each access belongs to the
+  // same dynamic iteration.
+  block->walk([&](Operation *op) {
+    for (const auto &effect : triton::getMemoryAccesses(op)) {
+      if (!effect.isShared())
         continue;
-      using triton::membar::SMemAccess;
-      auto kind = isa<MemoryEffects::Write>(eff.getEffect()) ? SMemAccess::Write
-                                                             : SMemAccess::Read;
-      for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
-        if (bufId == Allocation::InvalidBufferId)
+      auto kind = effect.isWrite ? SMemAccess::Write : SMemAccess::Read;
+      // A stage yield can forward the slot. Subslice coordinates still
+      // describe the original view.
+      auto relative =
+          indices.getRelativeAddress(effect.value, /*useIndex=*/false);
+      if (useIndex)
+        if (auto indexed = resolveMemDescIndex(effect.value))
+          relative.index =
+              indices.getRelativeAddress(indexed.getResult()).index;
+      for (auto id : allocation.getAllBufferIdsWithAliases(effect.value)) {
+        if (id == Allocation::InvalidBufferId)
           continue;
-        auto interval = allocation->getAllocatedInterval(bufId);
-        auto slice = AllocationSlice(v, interval, bufId);
-        // Retain the access's physical footprint and subview restrictions;
-        // recover only its slot expression through descriptor and stage views.
-        if (bufferIndex) {
-          if (auto indexed = resolveMemDescIndex(v))
-            slice.bufferIndexExpr =
-                bufferIndex->makeSlice(indexed.getResult(), interval, bufId)
-                    .bufferIndexExpr;
-        }
-        info.accesses.insert({op, slice, kind, kind});
+        auto interval = allocation.getAllocatedInterval(id);
+        AllocationSlice slice(interval, id, relative);
+        stage.accesses.insert(
+            {op, slice, kind, kind,
+             effect.isShared(triton::gpu::SharedKind::Barrier)});
       }
     }
   });
-  return info;
+  return stage;
 }
 
 // Pre-existing barrier/wait ops that may legally appear at cluster
@@ -473,8 +467,7 @@ private:
     BufferIndexAnalysis bufferIndex(forOp->getParentOfType<triton::FuncOp>());
     SmallVector<BlockInfo> clusterInfo;
     for (auto cb : clusterBlocks)
-      clusterInfo.push_back(
-          buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+      clusterInfo.push_back(getStageAccesses(cb, *allocation, bufferIndex));
     int numClusters = clusterInfo.size();
 
     // Check if any cluster has explicit priority.
@@ -656,8 +649,7 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
       clusterOps.front()->getParentOfType<triton::FuncOp>());
   SmallVector<BlockInfo> clusterInfo;
   for (auto *cb : clusterBlocks)
-    clusterInfo.push_back(
-        buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+    clusterInfo.push_back(getStageAccesses(cb, *allocation, bufferIndex));
 
   bool anyHasPriority = llvm::any_of(clusterOps, [](scf::ExecuteRegionOp op) {
     return op->hasAttr("triton.warp_pipeline.priority");
@@ -903,11 +895,16 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
   assert(!loopBars.empty() &&
          "expected at least one cluster in the prior loop");
 
+  // Slot expressions are local to each pipeline. Retain direct subslices.
+  BufferIndexAnalysis bufferIndex(
+      cast<FunctionOpInterface>(allocation->getOperation()));
   SmallVector<BlockInfo> mergedInfo;
   for (auto *b : loopBlocks)
-    mergedInfo.push_back(buildBlockInfoFromBlock(b, allocation));
+    mergedInfo.push_back(
+        getStageAccesses(b, *allocation, bufferIndex, /*useIndex=*/false));
   for (auto *b : nextBlocks)
-    mergedInfo.push_back(buildBlockInfoFromBlock(b, allocation));
+    mergedInfo.push_back(
+        getStageAccesses(b, *allocation, bufferIndex, /*useIndex=*/false));
 
   SmallVector<bool> mergedBars;
   mergedBars.reserve(K + M);

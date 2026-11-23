@@ -1,12 +1,11 @@
 #ifndef TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
 #define TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
 
-#include "triton/Analysis/Allocation.h"
-
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
+#include <compare>
 #include <memory>
 #include <vector>
 
@@ -15,8 +14,26 @@ namespace mlir {
 class Block;
 class CFGLoopInfo;
 class Operation;
-struct AllocationSlice;
 struct BufferIndexExpr;
+
+namespace triton::membar {
+
+struct Subslice;
+
+/// Relative coordinates of a descriptor. Two views can be disjoint even
+/// when their sets of possible physical addresses overlap.
+struct RelativeAddress {
+  const BufferIndexExpr *index = nullptr;
+  const Subslice *subslice = nullptr;
+
+  /// Compare the recorded coordinates within a single SSA binding.
+  /// Subslice bounds are relative to their common source descriptor.
+  /// Slot comparisons also require the same allocator buffer.
+  bool disjoint(RelativeAddress other, bool sameBuffer) const;
+  auto operator<=>(const RelativeAddress &) const = default;
+};
+
+} // namespace triton::membar
 
 /// Extends membar's slice disjointness check for multi-buffered shared-memory
 /// allocations selected by `ttg.memdesc_index`.
@@ -28,8 +45,8 @@ struct BufferIndexExpr;
 /// also stay disjoint if their slots start at distinct residues and advance
 /// by the same constant step on every backedge.
 /// Scalar indices follow Triton's block-programming semantics. Comparisons
-/// also require the same indexed source in the same dynamic iteration:
-/// a source change can change both the origin and the byte stride of a slot.
+/// require the same binding of the indexed source and the index base. A
+/// source change can change both the origin and the byte stride of a slot.
 ///
 /// Recognized index shapes:
 ///   1. integer constants,
@@ -43,31 +60,27 @@ struct BufferIndexExpr;
 ///
 /// This is a per-function analysis. It owns dominance information used to
 /// detect cf-form loop backedges and interns the analyzed expressions whose
-/// pointers are stored on `AllocationSlice`. The select/cmpi recurrence base
+/// pointers are stored in `RelativeAddress`. The select/cmpi recurrence base
 /// must be provably in `[-1, N)`, which is checked from the loop-header block
 /// argument's incoming operands.
 ///
 /// Buffer-index reasoning is disabled for functions with irreducible control
 /// flow because not every cyclic edge is a dominance backedge in such CFGs.
 ///
-/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli,
-/// unrelated bases, and slices carried across cf-form backedges all fail the
-/// disjointness proof and fall back to normal membar aliasing.
+/// Unknown arithmetic and dynamic, non-positive or nested moduli become
+/// opaque SSA bases. Unrelated bases or a change of binding leave Membar
+/// to check physical overlap.
 ///
-/// The class owns and interns the analyzed expressions attached to
-/// `AllocationSlice`; callers must not keep those payloads beyond the lifetime
-/// of this analysis.
+/// `RelativeAddress` borrows slot expressions and subslice coordinates.
+/// Both are valid for the lifetime of this analysis.
 class BufferIndexAnalysis {
 public:
   explicit BufferIndexAnalysis(FunctionOpInterface funcOp);
   ~BufferIndexAnalysis();
 
-  /// Builds an `AllocationSlice` for `value` and attaches a buffer-index
-  /// expression to it. Callers in membar should use this rather than the raw
-  /// `AllocationSlice` constructor so index expressions are attached
-  /// consistently.
-  AllocationSlice makeSlice(Value value, Interval<size_t> allocationInterval,
-                            Allocation::BufferId bufferId);
+  /// Obtain direct subslice coordinates and the slot selected through views.
+  triton::membar::RelativeAddress getRelativeAddress(Value value,
+                                                     bool useIndex = true);
 
   /// Returns true if `successor` may revisit definitions from `terminator`'s
   /// dynamic iteration. Uses dominance for reducible cf-form loops and
@@ -84,20 +97,14 @@ public:
   const CFGLoopInfo *getLoopInfo(Region *region) const;
 
 private:
-  void attachBufferIndex(AllocationSlice &slice, Value value);
-  const BufferIndexExpr *intern(BufferIndexExpr expr);
+  const BufferIndexExpr *getIndexExpr(Value value);
 
   DominanceInfo dominanceInfo;
   mutable DenseMap<Region *, std::unique_ptr<CFGLoopInfo>> loops;
   bool hasReducibleCFG;
   std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
+  DenseMap<Value, std::unique_ptr<triton::membar::Subslice>> subslices;
 };
-
-/// Returns true only if the buffer-index expressions attached to `a` and `b`
-/// provably denote different buffer slots in the same dynamic iteration.
-/// Stateless; accesses only the payload pointers.
-bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
-                                       const AllocationSlice &b);
 
 } // namespace mlir
 

@@ -1,5 +1,4 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
-#include "triton/Analysis/Membar/SmemModel.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/Analysis/CFGLoopInfo.h"
@@ -7,10 +6,20 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Support/MathExtras.h"
+#include <cstdint>
 #include <optional>
 
 namespace mlir {
+
+struct triton::membar::Subslice {
+  Value source;
+  // Bounds borrowed from the immutable offset attribute and result type.
+  ArrayRef<int32_t> offsets;
+  ArrayRef<int64_t> shape;
+};
 
 static int64_t normalizeModuloOffset(int64_t offset, int64_t modulus) {
   return ((offset % modulus) + modulus) % modulus;
@@ -31,6 +40,8 @@ struct BufferIndexExpr {
 
   bool operator==(const BufferIndexExpr &) const = default;
 
+  // Compare indices into the same descriptor, including arguments
+  // without allocator IDs.
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
     if (indexedSource != other.indexedSource || modulus != other.modulus)
       return false;
@@ -264,6 +275,42 @@ BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
 
+triton::membar::RelativeAddress
+BufferIndexAnalysis::getRelativeAddress(Value value, bool useIndex) {
+  using triton::membar::Subslice;
+  // Disabling slot analysis still preserves the direct subslice coordinates.
+  auto *index = useIndex ? getIndexExpr(value) : nullptr;
+  auto view = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>();
+  if (!view)
+    return {index};
+  auto &coords = subslices[value];
+  if (!coords)
+    coords = std::make_unique<Subslice>(
+        Subslice{view.getSrc(), view.getOffsets(), view.getType().getShape()});
+  return {index, coords.get()};
+}
+
+bool triton::membar::RelativeAddress::disjoint(RelativeAddress other,
+                                               bool sameBuffer) const {
+  if (sameBuffer && index && other.index &&
+      index->isProvablyDifferentFrom(*other.index))
+    return true;
+
+  auto *a = subslice;
+  auto *b = other.subslice;
+  // The common source supplies coordinates even if a preceding subslice
+  // has not folded or the descriptor is carried through a branch or loop.
+  if (!a || !b || a->source != b->source)
+    return false;
+  // Disjoint half-open [offset, offset + size) intervals in any one
+  // dimension prove that the subslices cannot intersect.
+  for (auto [startA, sizeA, startB, sizeB] :
+       llvm::zip_equal(a->offsets, a->shape, b->offsets, b->shape))
+    if (startA + sizeA <= startB || startB + sizeB <= startA)
+      return true;
+  return false;
+}
+
 const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
   if (region->hasOneBlock())
     return nullptr;
@@ -273,54 +320,28 @@ const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
   return info.get();
 }
 
-bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
-                                       const AllocationSlice &b) {
-  auto *aExpr = a.bufferIndexExpr;
-  auto *bExpr = b.bufferIndexExpr;
-  if (!aExpr || !bExpr)
-    return false;
-  return aExpr->isProvablyDifferentFrom(*bExpr);
-}
-
-const BufferIndexExpr *BufferIndexAnalysis::intern(BufferIndexExpr expr) {
-  // Euclidean normalization: make 0 <= constantOffset < m so negative constants
-  // compare correctly against positive ones. Equivalent expressions (e.g.
-  // offset 0 and offset m) share a single interned entry.
-  if (expr.modulus) {
-    int64_t m = *expr.modulus;
-    expr.constantOffset = normalizeModuloOffset(expr.constantOffset, m);
-  }
-
-  for (const auto &existing : expressions)
-    if (*existing == expr)
-      return existing.get();
-
-  auto owned = std::make_unique<BufferIndexExpr>(expr);
-  const BufferIndexExpr *result = owned.get();
-  expressions.push_back(std::move(owned));
-  return result;
-}
-
-AllocationSlice
-BufferIndexAnalysis::makeSlice(Value value, Interval<size_t> allocationInterval,
-                               Allocation::BufferId bufferId) {
-  AllocationSlice slice(value, allocationInterval, bufferId);
-  attachBufferIndex(slice, value);
-  return slice;
-}
-
-void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
-                                            Value value) {
+const BufferIndexExpr *BufferIndexAnalysis::getIndexExpr(Value value) {
+  // In irreducible CFGs, a cycle can rebind an index without a dominance
+  // backedge that invalidates the proof.
   if (!hasReducibleCFG)
-    return;
-
+    return nullptr;
   auto index = extractBufferIndex(value);
   if (!index)
-    return;
+    return nullptr;
   auto expr = analyzeBufferIndex(index.getIndex());
   analyzeLoopPhase(expr, dominanceInfo);
   expr.indexedSource = index.getSrc();
-  slice.bufferIndexExpr = intern(std::move(expr));
+  // Euclidean normalization: make 0 <= constantOffset < m so negative constants
+  // compare correctly against positive ones. Equivalent expressions (e.g.
+  // offset 0 and offset m) share a single interned entry.
+  if (expr.modulus)
+    expr.constantOffset =
+        normalizeModuloOffset(expr.constantOffset, *expr.modulus);
+  for (const auto &existing : expressions)
+    if (*existing == expr)
+      return existing.get();
+  expressions.push_back(std::make_unique<BufferIndexExpr>(expr));
+  return expressions.back().get();
 }
 
 bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,

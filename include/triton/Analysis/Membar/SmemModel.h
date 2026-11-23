@@ -23,13 +23,13 @@ using MembarFilterFn =
 
 /// Physical storage and the relative coordinates valid in one SSA binding.
 struct AllocationSlice {
-  // The value supplies the subslice coordinates. Use
-  // BufferIndexAnalysis::makeSlice to attach the dynamic slot as well.
-  AllocationSlice(Value value, Interval<size_t> interval,
-                  Allocation::BufferId bufferId);
-  // Implicit scratch has no descriptor. Use the whole allocation interval.
-  explicit AllocationSlice(Interval<size_t> interval)
-      : allocationInterval(interval) {}
+  // Descriptor accesses borrow relative coordinates from BufferIndexAnalysis.
+  // Implicit scratch uses the whole interval without relative coordinates.
+  explicit AllocationSlice(
+      Interval<size_t> interval,
+      Allocation::BufferId id = Allocation::InvalidBufferId,
+      triton::membar::RelativeAddress relative = {})
+      : allocationInterval(interval), bufferId(id), relative(relative) {}
 
   bool operator<(const AllocationSlice &other) const;
   bool operator==(const AllocationSlice &) const = default;
@@ -38,13 +38,10 @@ struct AllocationSlice {
   bool disjointWithinBinding(const AllocationSlice &other) const;
 
   Allocation::BufferId getBufferId() const { return bufferId; }
-  bool hasIterationInfo() const { return bufferIndexExpr || subslice; }
+  bool hasIterationInfo() const { return relative.index || relative.subslice; }
   // Relative coordinates are part of the sort key. Rebuild any ordered
   // container when clearing them across a backedge or a call boundary.
-  void invalidateIterationInfo() {
-    bufferIndexExpr = nullptr;
-    subslice = nullptr;
-  }
+  void invalidateIterationInfo() { relative = {}; }
 
   /// Translate shared-memory geometry to the caller's frame and discard
   /// callee-local index and subslice facts.
@@ -58,17 +55,15 @@ struct AllocationSlice {
   // BufferRegionAnalysis outlives the slices that borrow it. A null
   // footprint leaves only the allocator interval for physical overlap.
   const triton::BufferRegionFootprint *physicalFootprint = nullptr;
-  // BufferIndexAnalysis owns the expression. Include it in slice ordering
-  // and equality to keep accesses to different slots separate.
-  const BufferIndexExpr *bufferIndexExpr = nullptr;
 
 private:
   // Bounds for this allocator buffer, also available for implicit scratch.
   Interval<size_t> allocationInterval;
   // Identifies a local buffer for slot comparisons and backend alias checks.
-  Allocation::BufferId bufferId = Allocation::InvalidBufferId;
-  // A direct subslice gives its source, offsets and shape for relative proofs.
-  Operation *subslice = nullptr;
+  Allocation::BufferId bufferId;
+  // Relative slot and subslice coordinates, valid in one SSA binding.
+  // Both participate in slice ordering and equality to keep views separate.
+  triton::membar::RelativeAddress relative;
 };
 
 namespace triton::membar {
