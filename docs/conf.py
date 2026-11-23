@@ -64,7 +64,6 @@ These tutorials can be found in ``python/tutorials/gluon``.
         "title": "Gluon AMD Tutorials",
         "header_ref": "example_gluon_amd_tutorials_header",
         "description": """\
-These tutorials cover AMD CDNA4 (MI350 series) and CDNA5 (MI450 series) GPUs.
 They can be found in ``python/tutorials/gluon/amd``.
 """,
         "ignore": {"__init__.py", "conftest.py"},
