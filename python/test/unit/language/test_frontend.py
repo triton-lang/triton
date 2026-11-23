@@ -932,6 +932,23 @@ def test_starred_varargs():
     consume_varargs(*dims)
 
 
+@filecheck_test
+@triton.jit
+def test_static_range_for_else():
+    # The else clause of a static_range loop runs once, after the loop.
+    # CHECK-LABEL: test_static_range_for_else
+    # CHECK-COUNT-3: call @{{.*}}anchor{{.*}}(tensor<4xi32>) -> ()
+    # CHECK-NOT: call
+    # CHECK: call @{{.*}}anchor{{.*}}(tensor<8xi32>) -> ()
+    # CHECK-NOT: call
+    # CHECK: tt.return
+    for i in tl.static_range(3):
+        anchor(tl.arange(0, 4))
+    else:
+        x = tl.arange(0, 8)
+        anchor(x)
+
+
 @triton.jit
 def accumulate(a, b):
     return a + b
