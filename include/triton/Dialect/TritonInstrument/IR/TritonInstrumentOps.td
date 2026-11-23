@@ -524,6 +524,16 @@ def TTI_DotI8Op : TTI_Op<"dot_i8", [
   let hasVerifier = 1;
 }
 
+def TTI_ExperimentalFPSanProbabilityCastOp : TTI_Op<"experimental_fpsan_probability_cast", [
+  Pure, Elementwise, SameOperandsAndResultShape, SameOperandsAndResultEncoding
+]> {
+  let summary = "Pack or expand compact FPSan probability payloads";
+  let arguments = (ins RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$src);
+  let results = (outs RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$result);
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
 def TTI_ExperimentalFPSanEmbedOp : TTI_Op<"experimental_fpsan_embed", [
   Pure,
   Elementwise,
