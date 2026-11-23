@@ -21,12 +21,15 @@ copies, so the warp can overlap the memory access with other operations.
 
 import importlib
 import pytest
+import sys
 import torch
 import triton
+from pathlib import Path
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 t1 = importlib.import_module("amd.01-buffer-ops")
 
 

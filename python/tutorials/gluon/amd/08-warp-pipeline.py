@@ -29,12 +29,15 @@ previous chapters.
 import importlib
 import re
 import pytest
+import sys
 import torch
 import triton
+from pathlib import Path
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
 t7 = importlib.import_module("amd.07-multicta")
 

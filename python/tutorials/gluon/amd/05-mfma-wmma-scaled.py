@@ -13,13 +13,16 @@ where we multiply fp8 activations by mxfp4 weights, as an example.
 
 import importlib
 import pytest
+import sys
 import torch
 import triton
+from pathlib import Path
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna4, cdna5
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 t1 = importlib.import_module("amd.01-buffer-ops")
 t4 = importlib.import_module("amd.04-mfma-wmma")
 

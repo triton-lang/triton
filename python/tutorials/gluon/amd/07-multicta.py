@@ -16,13 +16,16 @@ layout to describe how the workload is assigned to multiple CTAs.
 import importlib
 import math
 import pytest
+import sys
 import torch
 import triton
+from pathlib import Path
 from triton._C.libtriton import ir, gluon_ir
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.language.amd import cdna5
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 t5 = importlib.import_module("amd.05-mfma-wmma-scaled")
 
 
