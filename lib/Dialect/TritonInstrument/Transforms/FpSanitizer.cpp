@@ -188,6 +188,7 @@ struct MmaOperandSource {
   RankedTensorType tileType;
   int64_t rowStride;
   int64_t stride;
+  Type probabilityFormat{};
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -1165,6 +1166,90 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
   return ttg::AsyncCommitGroupOp::create(rewriter, loc, deps).getResult();
 }
 
+struct CompactExp2Pattern : OpRewritePattern<tt::FpSanCompactExp2Op> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(tt::FpSanCompactExp2Op op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value x = embedToInt(rw, loc, op.getInput());
+    // (1 + 2^25)^x = 1 + (x << 25) modulo 2^32.
+    Value high = arith::ShLIOp::create(
+        rw, loc, x, getIntConstantLike(rw, loc, x.getType(), 25));
+    Value power = arith::AddIOp::create(
+        rw, loc, high, getIntConstantLike(rw, loc, x.getType(), 1));
+    rw.replaceOp(op, unembedToFloat(rw, loc, power, op.getType()));
+    return success();
+  }
+};
+
+// 0 encodes a masked weight. 128..255 encode the 128 compact powers.
+// Keep other inputs in a disjoint range so a perturbation that leaves the
+// family is observable even when it preserves the top seven bits.
+Value packProbability(PatternRewriter &rw, Location loc, Value payload) {
+  auto ty = cast<RankedTensorType>(payload.getType());
+  auto constant = [&](uint32_t n) {
+    return getUIntConstantLike(rw, loc, ty, n);
+  };
+  Value low = arith::AndIOp::create(rw, loc, payload, constant((1u << 25) - 1));
+  Value compact = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, low,
+                                        constant(1));
+  Value power = arith::ShRUIOp::create(rw, loc, payload, constant(25));
+  Value encoded = arith::OrIOp::create(rw, loc, power, constant(128));
+  Value hash = arith::RemUIOp::create(rw, loc, payload, constant(127));
+  Value other = arith::AddIOp::create(rw, loc, hash, constant(1));
+  Value zero = arith::CmpIOp::create(rw, loc, arith::CmpIPredicate::eq, payload,
+                                     constant(0));
+  other = arith::SelectOp::create(rw, loc, zero, constant(0), other);
+  Value code = arith::SelectOp::create(rw, loc, compact, encoded, other);
+  return arith::TruncIOp::create(rw, loc, ty.clone(rw.getI8Type()), code);
+}
+
+Value expandProbability(PatternRewriter &rw, Location loc, Value byte,
+                        Type format) {
+  auto ty = cast<RankedTensorType>(byte.getType()).clone(rw.getI32Type());
+  Value code = arith::ExtUIOp::create(rw, loc, ty, byte);
+  Value live =
+      arith::ShRUIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 7));
+  Value exponent =
+      arith::ShLIOp::create(rw, loc, code, getIntConstantLike(rw, loc, ty, 25));
+  Value payload = arith::OrIOp::create(rw, loc, exponent, live);
+  // An odd format marker commutes with rescaling and preserves all 128
+  // powers of the compact exponential.
+  int tag = isa<Float8E5M2Type>(format) ? 0x71b39a53 : 0x5b7a9d23;
+  return arith::MulIOp::create(rw, loc, payload,
+                               getIntConstantLike(rw, loc, ty, tag));
+}
+
+struct ProbabilityCastPattern
+    : OpRewritePattern<ExperimentalFPSanProbabilityCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ExperimentalFPSanProbabilityCastOp op,
+                                PatternRewriter &rw) const override {
+    auto loc = op.getLoc();
+    Value payload = embedToInt(rw, loc, op.getSrc());
+    Type format = op.getSrc().getType().getElementType();
+    payload = format.isF32() ? packProbability(rw, loc, payload)
+                             : expandProbability(rw, loc, payload, format);
+    rw.replaceOp(op, unembedToFloat(rw, loc, payload, op.getType()));
+    return success();
+  }
+};
+
+LogicalResult setProbabilityFormats(Operation *op, Type a, Type b, Type d,
+                                    MmaOperandSource &lhs,
+                                    MmaOperandSource &rhs) {
+  if (op->hasAttr("tti.fpsan_probability_a"))
+    lhs.probabilityFormat = a;
+  if (op->hasAttr("tti.fpsan_probability_b"))
+    rhs.probabilityFormat = b;
+  for (Type format : {lhs.probabilityFormat, rhs.probabilityFormat})
+    if (format &&
+        (!isa<Float8E4M3FNType, Float8E5M2Type>(format) || !d.isF32()))
+      return op->emitOpError(
+          "expected FP8 probability operand and FP32 accumulator");
+  return success();
+}
+
 Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                      const MmaOperandSource &source, RankedTensorType resultTy,
                      bool isLhs, Value tileOffset, Value kOffset) {
@@ -1371,34 +1456,44 @@ Value loadScaleSlice(PatternRewriter &rewriter, Location loc, bool isLhs,
   return loadScratchStrided2D(rewriter, loc, slicePtr, tileTy, loadStride);
 }
 
-Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
-                     Value bSlice, Value aScaleSlice, Value bScaleSlice,
-                     int64_t m, int64_t n,
-                     ttg::DistributedEncodingTrait accLayout,
-                     IntegerType accElem, const DotScaleConfig &scale = {}) {
+Value getMmaOperandPayload(PatternRewriter &rw, Location loc, Value raw,
+                           const MmaOperandSource &source, bool isLhs,
+                           const DotScaleConfig &scale) {
+  if (source.probabilityFormat)
+    return expandProbability(rw, loc, embedToInt(rw, loc, raw),
+                             source.probabilityFormat);
+  if (scale.computeElem)
+    return castDotScaledOperandToComputePayload(
+        rw, loc, raw, isLhs ? scale.aElemType : scale.bElemType,
+        scale.computeElem);
+  return embedToInt(rw, loc, raw);
+}
+
+// Keep the usual interpretation of the block scale. Multiply a tagged
+// weight in its expanded ring so the scale preserves its exponent bits.
+Value getMmaScalePayload(PatternRewriter &rw, Location loc, Value raw,
+                         const DotScaleConfig &scale, Type elem) {
+  Value payload =
+      castDotScaledScaleToComputePayload(rw, loc, raw, scale.computeElem);
+  return castFloatPayloadToType(rw, loc, payload,
+                                getTypeWithElement(payload.getType(), elem));
+}
+
+Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aI,
+                     Value bI, Value aScaleSlice, Value bScaleSlice, int64_t m,
+                     int64_t n, ttg::DistributedEncodingTrait accLayout,
+                     IntegerType accElem, const DotScaleConfig &scale) {
   OpBuilder::InsertionGuard guard(rewriter);
   auto fullTy = RankedTensorType::get({m, n}, accElem, accLayout);
-
-  Value aI;
-  Value bI;
-  if (scale.computeElem) {
-    aI = castDotScaledOperandToComputePayload(
-        rewriter, loc, aSlice, scale.aElemType, scale.computeElem);
-    bI = castDotScaledOperandToComputePayload(
-        rewriter, loc, bSlice, scale.bElemType, scale.computeElem);
-    if (aScaleSlice) {
-      auto aScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, aScaleSlice, scale.computeElem);
-      aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
-    }
-    if (bScaleSlice) {
-      auto bScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, bScaleSlice, scale.computeElem);
-      bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
-    }
-  } else {
-    aI = embedToInt(rewriter, loc, aSlice);
-    bI = embedToInt(rewriter, loc, bSlice);
+  if (aScaleSlice) {
+    Value factor = getMmaScalePayload(rewriter, loc, aScaleSlice, scale,
+                                      getElementTypeOrSelf(aI));
+    aI = arith::MulIOp::create(rewriter, loc, aI, factor);
+  }
+  if (bScaleSlice) {
+    Value factor = getMmaScalePayload(rewriter, loc, bScaleSlice, scale,
+                                      getElementTypeOrSelf(bI));
+    bI = arith::MulIOp::create(rewriter, loc, bI, factor);
   }
   aI = castFloatPayloadToType(rewriter, loc, aI,
                               getTypeWithElement(aI.getType(), accElem));
@@ -1510,8 +1605,8 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
   Value compact = loadScratchStrided2D(rewriter, loc, groupPtr, compactLoadTy,
                                        /*stride0=*/isLhs ? 1 : scaleStride,
                                        /*stride1=*/isLhs ? scaleStride : 1);
-  compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
-                                               scale.computeElem);
+  compact = getMmaScalePayload(rewriter, loc, compact, scale,
+                               targetTy.getElementType());
 
   auto expandedShape = compactShape;
   expandedShape.insert(expandedShape.begin() + expandAxis, 1);
@@ -1527,17 +1622,16 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
   return reshaped;
 }
 
-Value loadScaledOperandK32(PatternRewriter &rewriter, Location loc, bool isLhs,
-                           const MmaOperandSource &source,
-                           const DotScaleConfig &scale, Value tileIdx,
-                           Value kI32, ttg::NvidiaMmaEncodingAttr mmaLayout) {
+Value loadOperandPayloadK32(PatternRewriter &rewriter, Location loc, bool isLhs,
+                            const MmaOperandSource &source,
+                            const DotScaleConfig &scale, Value tileIdx,
+                            Value kI32, ttg::NvidiaMmaEncodingAttr mmaLayout) {
   int64_t packFactor = isLhs ? scale.aKPackFactor : scale.bKPackFactor;
-  tt::ScaleDotElemType elemType = isLhs ? scale.aElemType : scale.bElemType;
   Value chunk = loadOperandK32(rewriter, loc, isLhs, source, tileIdx, kI32,
                                mmaLayout, packFactor);
 
-  Value payload = castDotScaledOperandToComputePayload(
-      rewriter, loc, chunk, elemType, scale.computeElem);
+  Value payload =
+      getMmaOperandPayload(rewriter, loc, chunk, source, isLhs, scale);
   auto payloadTy = cast<RankedTensorType>(payload.getType());
   Value scalePayload =
       loadScaledScaleK32(rewriter, loc, isLhs, scale, tileIdx, kI32, payloadTy);
@@ -1800,23 +1894,13 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
     rewriter.setInsertionPointToStart(kLoop.getBody());
     Value kIdx = kLoop.getInductionVar();
     Value kI32 = arith::IndexCastOp::create(rewriter, loc, i32Ty, kIdx);
-    Value aChunk;
-    Value bChunk;
-    if (scale.computeElem) {
-      aChunk = loadScaledOperandK32(rewriter, loc, /*isLhs=*/true, aSource,
-                                    scale, mIdxI32, kI32, mmaLayout);
-      bChunk = loadScaledOperandK32(rewriter, loc, /*isLhs=*/false, bSource,
-                                    scale, nIdxI32, kI32, mmaLayout);
-    } else {
-      aChunk = loadOperandK32(rewriter, loc, /*isLhs=*/true, aSource, mIdxI32,
-                              kI32, mmaLayout);
-      bChunk = loadOperandK32(rewriter, loc, /*isLhs=*/false, bSource, nIdxI32,
-                              kI32, mmaLayout);
-    }
-    Value next =
-        emitI8DotDecomposition(rewriter, loc, embedToInt(rewriter, loc, aChunk),
-                               embedToInt(rewriter, loc, bChunk), accElem,
-                               kLoop.getRegionIterArgs()[0]);
+    Value aChunk = loadOperandPayloadK32(rewriter, loc, /*isLhs=*/true, aSource,
+                                         scale, mIdxI32, kI32, mmaLayout);
+    Value bChunk =
+        loadOperandPayloadK32(rewriter, loc, /*isLhs=*/false, bSource, scale,
+                              nIdxI32, kI32, mmaLayout);
+    Value next = emitI8DotDecomposition(rewriter, loc, aChunk, bChunk, accElem,
+                                        kLoop.getRegionIterArgs()[0]);
     scf::YieldOp::create(rewriter, loc, next);
     rewriter.setInsertionPointAfter(kLoop);
     sum = kLoop.getResult(0);
@@ -1865,9 +1949,13 @@ std::optional<scf::ForOp> emitMmaEmulationLoops(
       bScaleSlice =
           loadScaleSlice(rewriter, loc, /*isLhs=*/false, scale, nIdxI32, kI32);
     }
+    Value aPayload =
+        getMmaOperandPayload(rewriter, loc, aSlice, aSource, true, scale);
+    Value bPayload =
+        getMmaOperandPayload(rewriter, loc, bSlice, bSource, false, scale);
     Value partial =
-        emulateDotStep(rewriter, loc, aSlice, bSlice, aScaleSlice, bScaleSlice,
-                       tileM, tileN, accLayout, accElem, scale);
+        emulateDotStep(rewriter, loc, aPayload, bPayload, aScaleSlice,
+                       bScaleSlice, tileM, tileN, accLayout, accElem, scale);
     Value acc = kLoop.getRegionIterArgs()[0];
     Value next = arith::AddIOp::create(rewriter, loc, acc, partial);
     scf::YieldOp::create(rewriter, loc, next);
@@ -2955,6 +3043,10 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
                                           /*rowStride=*/1, /*stride=*/k);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
+    if (failed(setProbabilityFormats(
+            op, aMemTy.getElementType(), bMemTy.getElementType(),
+            dMemTy.getElementType(), *aSource, *bSource)))
+      return failure();
 
     // TMEM and D scratch are written cooperatively. In two-CTA mode, the
     // cluster barrier also makes both CTAs' shared operands visible before the
@@ -3117,6 +3209,10 @@ struct TCGen5MMAScaledPattern
                                           /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
+    if (failed(setProbabilityFormats(
+            op, aMemTy.getElementType(), bMemTy.getElementType(),
+            dMemTy.getElementType(), *aSource, *bSource)))
+      return failure();
 
     DotScaleConfig scale;
     scale.aElemType = op.getAType();
@@ -3473,7 +3569,8 @@ public:
                                                   UnaryOpId::PreciseSqrt);
     patterns.add<UnaryPattern<tt::FpSanBarrierOp>>(&getContext(),
                                                    UnaryOpId::Barrier);
-    patterns.add<FpSanHomomorphicCastPattern>(&getContext());
+    patterns.add<FpSanHomomorphicCastPattern, CompactExp2Pattern,
+                 ProbabilityCastPattern>(&getContext());
     patterns.add<ExternElementwisePattern, ElementwiseInlineAsmPattern>(
         &getContext());
     patterns.add<TMEMLoadPattern, TMEMStorePattern, TMEMCopyPattern,

@@ -1,4 +1,5 @@
 // RUN: split-file %s %t
+// RUN: triton-opt %t/mma-partition.mlir --tritongpu-allocate-warp-groups --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --canonicalize-llvm-ir --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -passes=instcombine -S | FileCheck %s --check-prefix=MMA-PARTITION
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefixes CHECK,SM90 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefixes CHECK,SM80 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefixes CHECK,SM100 --dump-input-context=20 %s
@@ -10,6 +11,30 @@
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefix=F64BF16 --dump-input-context=20 %s
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16-SM80 --dump-input-context=20 %s
 // RUN: triton-opt %t/clmul.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=93' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx93 | FileCheck %s --check-prefix=CLMUL
+
+//--- mma-partition.mlir
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!operand = !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+!acc = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // MMA-PARTITION-LABEL: @single_warp_mma(
+  // MMA-PARTITION-SAME: i1 [[PRED:%[0-9]+]]
+  // MMA-PARTITION: br i1 [[PRED]],
+  // MMA-PARTITION: tcgen05.mma.
+  tt.func public @single_warp_mma(%a: !operand, %b: !operand, %acc: !acc, %pred: i1) {
+    ttg.warp_specialize(%a, %b, %acc, %pred)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%lhs: !operand, %rhs: !operand, %dst: !acc, %issue: i1) num_warps(1) {
+      %false = arith.constant false
+      ttng.tc_gen5_mma %lhs, %rhs, %dst, %false, %issue {is_async} : !operand, !operand, !acc
+      ttg.warp_return
+    } : (!operand, !operand, !acc, i1) -> ()
+    tt.return
+  }
+}
 
 //--- common.mlir
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>

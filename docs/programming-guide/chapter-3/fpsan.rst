@@ -379,6 +379,48 @@ Exact preserved properties:
 - ``exp2(0) = 1``
 - ``exp2(-x) = 1.0 / exp2(x)``
 
+Compact exponentials for FP8 probabilities
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Online softmax centers scores around a running maximum. Changing the shard
+count changes that maximum. A later multiplication by
+``alpha = exp2(old_max - new_max)`` compensates for the change, provided the
+weights survive the intervening FP8 store and load.
+
+Use ``gl.fpsan.compact_exp2`` for the FP32 probabilities and each correction
+factor. For a separate merge kernel written in Triton, use
+``tl.fpsan.compact_exp2(local_max - global_max)`` for the merge weights.
+Each explicit call uses base ``1 + 2**25`` under FPSan. Its powers have the form
+``1 + ((u % 128) << 25)`` modulo ``2**32``. Gluon can encode every such
+payload and masked zero in one FP8 element.
+
+.. code-block:: python
+
+   alpha = gl.fpsan.compact_exp2(old_max - maximum)
+   weights = gl.fpsan.compact_exp2(scores - maximum[:, None])
+   p = gl.fpsan.probability_cast(weights, gl.float8e4nv, expect_zero=mask)
+   p_tile.store(p)
+   tcgen05_mma(p_tile, v_tile, acc, a_type="fpsan_probability", mbarriers=[done])
+
+Use ``b_type="fpsan_probability"`` when P is the right operand. For a
+register tensor use ``gl.fpsan.probability_cast(p, gl.float32)`` to expand
+it. Each consumer decodes the byte it reads. Copies preserve the code.
+The decoder multiplies the recovered payload by an odd, format-specific
+constant, making the FP8 conversion observable while commuting with alpha.
+Packing other nonzero inputs yields a disjoint set of lossy codes.
+The same operand tags work on ``tcgen05_mma_scaled``. FPSan expands the
+probability before multiplying it by the block scale in the FP32 payload
+ring. The shard identity assumes each token retains the same scale and
+that the value at the cast is a compact power or zero. Computing a scale
+from shard-dependent probabilities can change the quantization itself.
+Keep arithmetic on the expanded values. Native execution uses the ordinary
+exponential, cast and MMA.
+
+The compact exponential has period 128. For an exponent difference divisible
+by 128, alpha equals one. For a difference divisible by 64, alpha equals
+its inverse. Accumulation can further cancel differences. Exercise multiple
+maximum differences when checking rescaling.
+
 ``exp``
 =======
 
