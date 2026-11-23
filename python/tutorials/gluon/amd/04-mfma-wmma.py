@@ -791,14 +791,6 @@ if __name__ == "__main__" and is_cdna4():
 # ```
 
 # %%
-# This tutorial shows how important layouts are in Gluon for AMD GPUs. Many
-# optimizations come from choosing the right layout and letting the compiler
-# generate the expected instructions. Layouts control how data flows from global
-# memory to shared memory, from shared memory to registers, and between
-# registers. The data path must be managed carefully to keep the compute unit
-# busy.
-
-# %%
 # CDNA5 WMMA
 # ----------
 #
@@ -1159,3 +1151,11 @@ if __name__ == "__main__" and is_cdna5():
 # padded: 2247 TFLOPS
 # partitioned: 2300 TFLOPS
 # ```
+
+# %%
+# This tutorial shows how important layouts are in Gluon for AMD GPUs. Many
+# optimizations come from choosing the right layout and letting the compiler
+# generate the expected instructions. Layouts control how data flows from global
+# memory to shared memory, from shared memory to registers, and between
+# registers. The data path must be managed carefully to keep the compute unit
+# busy.
