@@ -23,6 +23,57 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZETHREADLOCALITY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+// Choose a CGA layout that keeps the gather axis within a single CTA so the
+// resulting gather layout is warp-local even when num_ctas > 1.
+static CGAEncodingAttr getGatherCGALayout(RankedTensorType srcType,
+                                          RankedTensorType idxType,
+                                          unsigned axis) {
+  MLIRContext *ctx = srcType.getContext();
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  StringAttr kGatherDim = StringAttr::get(ctx, "dim" + Twine(axis));
+
+  auto isGatherDimCTALocal = [&](CGAEncodingAttr cga) {
+    return cga.getLinearLayout().sublayoutIsZero(kBlock, kGatherDim);
+  };
+
+  auto srcCGA = getCGALayout(cast<LayoutEncodingTrait>(srcType.getEncoding()));
+  if (isGatherDimCTALocal(srcCGA))
+    return srcCGA;
+
+  auto idxCGA = getCGALayout(cast<LayoutEncodingTrait>(idxType.getEncoding()));
+  if (isGatherDimCTALocal(idxCGA))
+    return idxCGA;
+
+  unsigned rank = srcType.getRank();
+  unsigned remainingCTAs = srcCGA.getLinearLayout().getTotalInDimSize();
+  SmallVector<unsigned> ctasPerCGA(rank, 1);
+  SmallVector<unsigned> ctaSplitNum(rank, 1);
+  auto ctaOrder = srcCGA.getCTAOrder();
+
+  // Distribute CTAs across the non-gather dimensions first.
+  for (int i = rank - 1; i >= 0; --i) {
+    unsigned dim = ctaOrder[i];
+    if (dim == axis)
+      continue;
+    unsigned split = std::min<unsigned>(srcType.getDimSize(dim), remainingCTAs);
+    ctaSplitNum[dim] = split;
+    ctasPerCGA[dim] = split;
+    remainingCTAs /= split;
+  }
+
+  // Broadcast any remaining CTAs along a non-gather dimension.
+  for (int i = rank - 1; i >= 0; --i) {
+    unsigned dim = ctaOrder[i];
+    if (dim == axis)
+      continue;
+    ctasPerCGA[dim] *= remainingCTAs;
+    break;
+  }
+
+  return CGAEncodingAttr::fromSplitParams(ctx, ctasPerCGA, ctaSplitNum,
+                                          ctaOrder);
+}
+
 // This function considers a gather op in isolation and attempts to determine
 // whether an optimized layout can be applied to the source and index tensors.
 static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
@@ -65,15 +116,20 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   unsigned rank = srcType.getRank();
   if (rank == 1)
     return failure();
+
+  CGAEncodingAttr cgaLayout = getGatherCGALayout(srcType, idxType, axis);
+  SmallVector<int64_t> srcShapePerCTA =
+      getShapePerCTA(cgaLayout.getCTASplitNum(), srcType.getShape());
+
   SmallVector<unsigned> threadsPerWarp(rank);
   SmallVector<unsigned> warpsPerCTA(rank);
   SmallVector<unsigned> order;
   order.push_back(axis);
 
-  // Minimize `sizePerThread[axis]` by putting as many theads along the axis as
+  // Minimize `sizePerThread[axis]` by putting as many threads along the axis as
   // possible, limited to the actual size of the dimension.
   unsigned maxThreadsInAxis =
-      std::min<unsigned>(srcType.getDimSize(axis), numThreadsPerWarp);
+      std::min<unsigned>(srcShapePerCTA[axis], numThreadsPerWarp);
   threadsPerWarp[axis] = maxThreadsInAxis;
 
   // Now spread them along the other dimensions. Do this according to order
@@ -85,7 +141,7 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
     // The gather axis is now the fastest-changing dimension.
     order.push_back(dim);
     unsigned nextThreadAlloc =
-        std::min<unsigned>(srcType.getDimSize(dim), threadsToAlloc);
+        std::min<unsigned>(srcShapePerCTA[dim], threadsToAlloc);
     threadsPerWarp[dim] = nextThreadAlloc;
     threadsToAlloc /= nextThreadAlloc;
   }
@@ -98,7 +154,7 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   for (unsigned dim : getWarpOrder(srcType)) {
     if (dim == axis)
       continue;
-    unsigned warpsCanFit = srcType.getDimSize(dim) / threadsPerWarp[dim];
+    unsigned warpsCanFit = srcShapePerCTA[dim] / threadsPerWarp[dim];
     assert(warpsCanFit != 0);
     unsigned nextWarpAlloc = std::min<unsigned>(warpsCanFit, warpsToAlloc);
     warpsPerCTA[dim] = nextWarpAlloc;
@@ -125,8 +181,6 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
 
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
-  auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
-  auto cgaLayout = getCGALayout(baseLayout);
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, cgaLayout);
 

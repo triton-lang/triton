@@ -957,3 +957,84 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return
   }
 }
+
+// -----
+
+// Source is split along the gather axis across CTAs while indices are CTA-local
+// along the gather axis; reuse the index CGA layout so the gather is warp-local.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[1, 0]]}>
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @set_warp_shuffle_layout_num_ctas_reuse_idx_cga
+tt.func @set_warp_shuffle_layout_num_ctas_reuse_idx_cga(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<64x64xi32, #blocked1>) -> tensor<64x64xf32, #blocked1> {
+  // CHECK-NEXT: %[[SRC:.*]] = ttg.convert_layout %arg0
+  // CHECK-NEXT: %[[IDX:.*]] = ttg.convert_layout %arg1
+  // CHECK-NEXT: %[[OUT:.*]] = tt.gather %[[SRC]][%[[IDX]]] {axis = 1 : i32, efficient_layout} : (tensor<64x64xf32, #[[$LAYOUT]]>, tensor<64x64xi32, #[[$LAYOUT]]>) -> tensor<64x64xf32, #[[$LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 1 : i32} : (tensor<64x64xf32, #blocked>, tensor<64x64xi32, #blocked1>) -> tensor<64x64xf32, #blocked1>
+  // CHECK-NEXT: %[[RES:.*]] = ttg.convert_layout %[[OUT]]
+  // CHECK-NEXT: tt.return %[[RES]]
+  tt.return %0 : tensor<64x64xf32, #blocked1>
+}
+
+}
+
+// -----
+
+// Both source and indices split the gather axis across CTAs; synthesize a
+// CGA layout that splits the non-gather dimension instead.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @set_warp_shuffle_layout_num_ctas_both_axis_split
+tt.func @set_warp_shuffle_layout_num_ctas_both_axis_split(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<64x64xi32, #blocked>) -> tensor<64x64xf32, #blocked> {
+  // CHECK: tt.gather {{.*}} {axis = 1 : i32, efficient_layout} : (tensor<64x64xf32, #[[$LAYOUT]]>, tensor<64x64xi32, #[[$LAYOUT]]>) -> tensor<64x64xf32, #[[$LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 1 : i32} : (tensor<64x64xf32, #blocked>, tensor<64x64xi32, #blocked>) -> tensor<64x64xf32, #blocked>
+  tt.return %0 : tensor<64x64xf32, #blocked>
+}
+
+}
+
+// -----
+
+// When num_ctas exceeds the non-gather dimension size, broadcast the remaining
+// CTAs on the non-gather dimension and size warpsPerCTA to shapePerCTA.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[1, 0\], \[0, 0\]\]}}}>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @set_warp_shuffle_layout_num_ctas_broadcast_overflow
+tt.func @set_warp_shuffle_layout_num_ctas_broadcast_overflow(%arg0: tensor<2x64xf32, #blocked>, %arg1: tensor<2x1xi32, #blocked>) -> tensor<2x1xf32, #blocked> {
+  // CHECK: tt.gather {{.*}} {axis = 1 : i32, efficient_layout} : (tensor<2x64xf32, #[[$LAYOUT]]>, tensor<2x1xi32, #[[$LAYOUT]]>) -> tensor<2x1xf32, #[[$LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 1 : i32} : (tensor<2x64xf32, #blocked>, tensor<2x1xi32, #blocked>) -> tensor<2x1xf32, #blocked>
+  tt.return %0 : tensor<2x1xf32, #blocked>
+}
+
+}
+
+// -----
+
+// 3D gather with 4 CTAs split along the gather axis redistributes CTAs across
+// non-gather dimensions.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 2, 16], warpsPerCTA = [4, 1, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
+
+// CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [4, 1, 1], order = [2, 1, 0], CGALayout = {{\[\[0, 1, 0\], \[0, 2, 0\]\]}}}>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @set_warp_shuffle_layout_num_ctas_3d
+tt.func @set_warp_shuffle_layout_num_ctas_3d(%arg0: tensor<4x4x64xf32, #blocked>, %arg1: tensor<4x4x4xi32, #blocked>) -> tensor<4x4x4xf32, #blocked> {
+  // CHECK: tt.gather {{.*}} {axis = 2 : i32, efficient_layout} : (tensor<4x4x64xf32, #[[$LAYOUT]]>, tensor<4x4x4xi32, #[[$LAYOUT]]>) -> tensor<4x4x4xf32, #[[$LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 2 : i32} : (tensor<4x4x64xf32, #blocked>, tensor<4x4x4xi32, #blocked>) -> tensor<4x4x4xf32, #blocked>
+  tt.return %0 : tensor<4x4x4xf32, #blocked>
+}
+
+}
