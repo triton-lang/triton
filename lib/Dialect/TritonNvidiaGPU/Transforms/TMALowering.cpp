@@ -117,7 +117,8 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Value alloc = gpu::LocalAllocOp::create(rewriter, loc, memDescType, src);
   createStore(desc, alloc);
   triton::nvidia_gpu::TMAStoreWaitOp::create(rewriter, loc, 0,
-                                             /*read_only=*/false);
+                                             /*read_only=*/false,
+                                             ValueRange{alloc});
   rewriter.eraseOp(op);
 }
 

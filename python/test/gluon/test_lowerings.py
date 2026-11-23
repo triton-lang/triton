@@ -1935,12 +1935,11 @@ _ld_st_shared_layouts = _filter_layouts([
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_local_load_transposed_nvmma_zero_swizzle(device):
-    rows = 128
-    cols = 16
+@pytest.mark.parametrize("rows, cols, swizzle", [(128, 16, 0), (512, 64, 32)])
+def test_local_load_transposed_nvmma(rows, cols, swizzle, device):
     src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
     dst_layout = ttgl.BlockedLayout([1, 16], [1, 32], [1, 4], [1, 0])
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, transposed=False, element_bitwidth=8, rank=2)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, transposed=False, element_bitwidth=8, rank=2)
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr, src_layout: ttgl.constexpr,
