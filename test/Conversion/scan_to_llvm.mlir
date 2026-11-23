@@ -3,7 +3,8 @@
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
-// RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: triton-opt %t/cross-cta.mlir --allocate-shared-memory --triton-nvidia-gpu-membar=compute-capability=90 | FileCheck %s --check-prefix=SCRATCH-REUSE
+// RUN: triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm=compute-capability=90 --canonicalize | FileCheck %s --check-prefix=CROSS-CTA
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
@@ -18,16 +19,30 @@
 // RUN: triton-opt %t/lane-local-carries.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=LOCAL
 
 //--- cross-cta.mlir
-// ERROR: scan axis distributed across CTAs is not supported
+// SCRATCH-REUSE-LABEL: @cross_cta
+// SCRATCH-REUSE: "tt.scan"
+// SCRATCH-REUSE: ttng.cluster_barrier
+// SCRATCH-REUSE-NEXT: {{.*}}"tt.scan"
+// CROSS-CTA-LABEL: llvm.func {{.*}}@cross_cta
+// CROSS-CTA: nvvm.cluster.arrive
+// CROSS-CTA: nvvm.cluster.wait
+// CROSS-CTA: nvvm.mapa
+// CROSS-CTA: llvm.load {{.*}}!llvm.ptr<7>
+// CROSS-CTA: llvm.return
 #layout = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[32], [64]], block = [[128]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
-  tt.func @cross_cta(%x: tensor<256xi32, #layout>) -> tensor<256xi32, #layout> {
+  tt.func private @cross_cta(%x: tensor<256xi32, #layout>) -> tensor<256xi32, #layout> {
     %0 = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}> ({
     ^bb0(%a: i32, %b: i32):
       %sum = arith.addi %a, %b : i32
       tt.scan.return %sum : i32
     }) : (tensor<256xi32, #layout>) -> tensor<256xi32, #layout>
-    tt.return %0 : tensor<256xi32, #layout>
+    %1 = "tt.scan"(%0) <{axis = 0 : i32, reverse = true}> ({
+    ^bb0(%a: i32, %b: i32):
+      %sum = arith.addi %a, %b : i32
+      tt.scan.return %sum : i32
+    }) : (tensor<256xi32, #layout>) -> tensor<256xi32, #layout>
+    tt.return %1 : tensor<256xi32, #layout>
   }
 }
 

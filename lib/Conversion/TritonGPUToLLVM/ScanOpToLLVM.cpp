@@ -28,8 +28,6 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ScanLoweringHelper helper(op);
-    if (!helper.isSupported())
-      return op.emitError("scan axis distributed across CTAs is not supported");
 
     auto loc = op.getLoc();
     ScanValues values;
@@ -47,7 +45,7 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
     Value laneId = b.urem(threadId, b.i32_val(warpSize));
     Value warpId = b.udiv(threadId, b.i32_val(warpSize));
 
-    scanWithinCTA(op, helper, values, laneId, warpId, rewriter);
+    emitScan(op, helper, values, laneId, warpId, rewriter);
 
     SmallVector<Value> results;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -63,9 +61,9 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   }
 
 private:
-  void scanWithinCTA(triton::ScanOp op, const ScanLoweringHelper &helper,
-                     ScanValues &values, Value laneId, Value warpId,
-                     ConversionPatternRewriter &rewriter) const {
+  void emitScan(triton::ScanOp op, const ScanLoweringHelper &helper,
+                ScanValues &values, Value laneId, Value warpId,
+                ConversionPatternRewriter &rewriter) const {
     permuteRegisters(values, helper.getRegisterOrder());
     scanWithinThreads(op, values, helper.getThreadSegmentSize(), rewriter);
     ScanValues intraWarpTotals;
@@ -311,7 +309,7 @@ private:
                       /*forceWarpShuffle=*/false, storePred);
 
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
-    scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
+    emitScan(op, totalsHelper, totals, laneId, warpId, rewriter);
     return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
                              interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
@@ -566,13 +564,14 @@ private:
       if (!(s & regBits))
         offsets.push_back(s);
 
+    Value blockId = targetInfo.getClusterCTAId(rewriter, loc);
     SmallVector<ScanCarry> carries;
     for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, segmentLayout,
                                       {{kReg, b.i32_val(r)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)}});
+                                       {kBlock, blockId}});
       Value segment = coords[op.getAxis()].second;
       Value segmentInScan = segment;
       if (segmentsPerScan != numSegments)

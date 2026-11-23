@@ -103,12 +103,12 @@ private:
 // warp-local totals.
 //
 // Segment: a contiguous range along the scan axis owned by one thread or warp.
-// Total layout: maps registers, lanes, and warps to segment indices along the
-// scan axis, preserving coordinates for independent scans.
+// Total layout: maps registers, lanes, warps, and CTAs to segment indices
+// along the scan axis, preserving coordinates for independent scans.
 // Scan layout: ownership used to accumulate totals within a warp. The
 // intra-warp scan layout places low axis bits in registers before lanes. The
 // inter-warp scan layout replicates each full totals sequence across its
-// participating warps.
+// participating warps and CTAs.
 //
 // Example: forward sum of x0..x31 with two warps and two distinct lane owners
 // per warp. R, L, W list scan-axis register, lane, and warp bases. Zero
@@ -189,7 +189,6 @@ public:
 
   explicit ScanLoweringHelper(triton::ScanOp op);
   ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
-  bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
   }
