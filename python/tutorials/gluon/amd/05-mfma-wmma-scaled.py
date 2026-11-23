@@ -412,7 +412,7 @@ def matmul_cdna4_ld_gmem(cfg, k, a_desc, w_desc, ws_desc, a_offs, w_offs, ws_off
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts):
+def matmul_cdna4_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem):
     a = a_smem.index(k % cfg.NUM_BUFFERS).load(layouts.a_reg_layout)
     w = w_smem.index(k % cfg.NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
     ws_buf = ws_smem.index(k % cfg.NUM_BUFFERS)
@@ -462,12 +462,12 @@ def matmul_cdna4_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K: gl.constexpr,
         matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, w_desc, ws_desc, a_offs, w_offs, ws_offs, a_smem,
                              w_smem, ws_smem)
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
-        a, w, w_scale = matmul_cdna4_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts)
+        a, w, w_scale = matmul_cdna4_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna4.mfma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
     for i in gl.static_range(cfg.NUM_BUFFERS - 1):
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
-        a, w, w_scale = matmul_cdna4_ld_smem(cfg, num_k - (cfg.NUM_BUFFERS - 1) + i, a_smem, w_smem, ws_smem, layouts)
+        a, w, w_scale = matmul_cdna4_ld_smem(cfg, layouts, num_k - (cfg.NUM_BUFFERS - 1) + i, a_smem, w_smem, ws_smem)
         acc = cdna4.mfma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
     y_desc = t1.make_buffer_descriptor(y_ptr + off_n, off_m, cfg.M, cfg.N, cfg.BLOCK_M)
@@ -750,7 +750,7 @@ def matmul_cdna5_ld_gmem(cfg, k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_
 
 
 @gluon.jit
-def matmul_cdna5_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts):
+def matmul_cdna5_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem):
     a = a_smem.index(k % cfg.NUM_BUFFERS).load(layouts.a_reg_layout)
     w = w_smem.index(k % cfg.NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
     ws_buf = ws_smem.index(k % cfg.NUM_BUFFERS)
@@ -799,7 +799,7 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K: gl.constexpr,
         matmul_cdna5_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem,
                              ws_smem)
         cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 3)
-        a, w, w_scale = matmul_cdna5_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts)
+        a, w, w_scale = matmul_cdna5_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
     y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],

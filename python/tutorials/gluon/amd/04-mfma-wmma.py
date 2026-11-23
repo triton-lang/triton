@@ -625,7 +625,7 @@ def matmul_cdna4_ld_gmem(cfg, k, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem(cfg, k, a_smem, b_smem, layouts):
+def matmul_cdna4_ld_smem(cfg, layouts, k, a_smem, b_smem):
     a_buf = a_smem.index(k % cfg.NUM_BUFFERS)
     b_buf = b_smem.index(k % cfg.NUM_BUFFERS)
     a = a_buf.load(layouts.a_reg_layout)
@@ -661,12 +661,12 @@ def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K, NUM_BUFFERS: gl.constexpr 
     for k in range(num_k - (cfg.NUM_BUFFERS - 1)):
         matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
-        a, b = matmul_cdna4_ld_smem(cfg, k, a_smem, b_smem, layouts)
+        a, b = matmul_cdna4_ld_smem(cfg, layouts, k, a_smem, b_smem)
         acc = cdna4.mfma(a, b, acc)
 
     for i in gl.static_range(cfg.NUM_BUFFERS - 1):
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
-        a, b = matmul_cdna4_ld_smem(cfg, num_k - (cfg.NUM_BUFFERS - 1) + i, a_smem, b_smem, layouts)
+        a, b = matmul_cdna4_ld_smem(cfg, layouts, num_k - (cfg.NUM_BUFFERS - 1) + i, a_smem, b_smem)
         acc = cdna4.mfma(a, b, acc)
 
     c_desc = t1.make_buffer_descriptor(c_ptr + off_n, off_m, cfg.M, cfg.N, cfg.BLOCK_M)
@@ -703,7 +703,7 @@ def test_matmul_cdna4(M, N, K):
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, k_start: gl.constexpr, k_size: gl.constexpr):
+def matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start: gl.constexpr, k_size: gl.constexpr):
     a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
@@ -741,16 +741,16 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     for k in range(num_k - (cfg.NUM_BUFFERS - 1)):
         matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
     for i in gl.static_range(cfg.NUM_BUFFERS - 1):
         k = num_k - (cfg.NUM_BUFFERS - 1) + i
         cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
@@ -1054,7 +1054,7 @@ def get_wmma_layouts(partitioned):
 
 
 @gluon.jit
-def matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, k_start: gl.constexpr, k_size: gl.constexpr):
+def matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, k_start: gl.constexpr, k_size: gl.constexpr):
     a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
@@ -1102,8 +1102,8 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         next_k = k + cfg.NUM_BUFFERS - 1
         matmul_cdna5_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_n, a_desc, b_desc, a_smem, b_smem)
         cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 2)
-        a0, b0 = matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
-        a1, b1 = matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
+        a0, b0 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, 0, SUB_K)
+        a1, b1 = matmul_cdna5_ld_smem_subtiled(cfg, layouts, k, a_smem, b_smem, SUB_K, SUB_K)
         acc = cdna5.wmma(a0, b0, acc)
         acc = cdna5.wmma(a1, b1, acc)
 

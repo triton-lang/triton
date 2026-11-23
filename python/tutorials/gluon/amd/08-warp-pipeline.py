@@ -346,7 +346,7 @@ def matmul_ld_gmem(cfg, k, pred, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, 
 
 
 @gluon.jit
-def matmul_ld_smem(cfg, k, half: gl.constexpr, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
+def matmul_ld_smem(cfg, layouts: gl.constexpr, k, a_smem, w_smem, ws_smem, half: gl.constexpr):
     slot = k % cfg.NUM_BUFFERS
     HALF_K: gl.constexpr = cfg.BLOCK_K // 2
     ws_layout: gl.constexpr = cdna5.get_wmma_scale_layout(layouts.w_reg_layout, [cfg.BLOCK_N, HALF_K // 32])
@@ -397,18 +397,18 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
         matmul_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_n, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem)
         if WARP_PIPELINE:
             with gl.amd.warp_pipeline_stage("memory0", priority=1):
-                a, w, w_scale = matmul_ld_smem(cfg, k, 0, a_smem, w_smem, ws_smem, layouts)
+                a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem, 0)
             with gl.amd.warp_pipeline_stage("compute0", priority=0):
                 acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
             with gl.amd.warp_pipeline_stage("memory1", priority=1):
-                a, w, w_scale = matmul_ld_smem(cfg, k, 1, a_smem, w_smem, ws_smem, layouts)
+                a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem, 1)
             with gl.amd.warp_pipeline_stage("compute1", priority=0):
                 acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
         else:
             # The same loop without stages.
-            a, w, w_scale = matmul_ld_smem(cfg, k, 0, a_smem, w_smem, ws_smem, layouts)
+            a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem, 0)
             acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
-            a, w, w_scale = matmul_ld_smem(cfg, k, 1, a_smem, w_smem, ws_smem, layouts)
+            a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem, 1)
             acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], layouts.y_smem_layout)

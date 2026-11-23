@@ -367,7 +367,7 @@ def matmul_ld_gmem(cfg, k, pred, off_m, off_n, gather_idx, a_desc, w_desc, ws_de
 
 
 @gluon.jit
-def matmul_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
+def matmul_ld_smem(cfg, layouts: gl.constexpr, k, a_smem, w_smem, ws_smem):
     a = a_smem.index(k % cfg.NUM_BUFFERS).load(layouts.a_reg_layout)
     w = w_smem.index(k % cfg.NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
     w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(k % cfg.NUM_BUFFERS)).load(layouts.ws_reg_layout)
@@ -424,7 +424,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
         matmul_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem,
                        ws_smem)
         cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 3)
-        a, w, w_scale = matmul_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts)
+        a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
     y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
