@@ -258,7 +258,7 @@ def test_copy(x_cga_layout, use_tdm):
 
 
 @gluon.aggregate
-class ClusterLayouts:
+class WmmaLayouts:
     # Operand A's shared memory and register layouts
     a_smem_layout: gl.constexpr
     a_reg_layout: gl.constexpr
@@ -303,7 +303,7 @@ def get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     ws_reg_layout = cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
     y_smem_layout = gl.PaddedSharedLayout.with_identity_for([[CTA_N, 8]], [BLOCK_M, BLOCK_N], [1, 0], cga_y)
 
-    return ClusterLayouts(a_smem_layout, a_reg_layout,  #
+    return WmmaLayouts(a_smem_layout, a_reg_layout,  #
                           w_smem_layout, w_reg_layout,  #
                           ws_smem_layout, ws_reg_layout,  #
                           acc_layout, y_smem_layout)

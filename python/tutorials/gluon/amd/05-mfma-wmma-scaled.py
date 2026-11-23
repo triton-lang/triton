@@ -345,7 +345,7 @@ if __name__ == "__main__" and is_cdna4():
 
 
 @gluon.aggregate
-class MXMfmaLayouts:
+class MfmaLayouts:
     # Operand A's global memory, shared memory, and register layouts
     a_gmem_layout: gl.constexpr
     a_smem_layout: gl.constexpr
@@ -383,7 +383,7 @@ def get_mx_mfma_layouts(preshuffle):
         ws_gmem_layout = gl.BlockedLayout([1, 4], [warp_size // 2, 2], [4, 1], [1, 0])
     ws_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     ws_reg_layout = cdna4.get_mfma_scale_layout(w_reg_layout, [256, 8])
-    return MXMfmaLayouts(a_gmem_layout, a_smem_layout, a_reg_layout,  #
+    return MfmaLayouts(a_gmem_layout, a_smem_layout, a_reg_layout,  #
                          w_gmem_layout, w_smem_layout, w_reg_layout,  #
                          ws_gmem_layout, ws_smem_layout, ws_reg_layout,  #
                          acc_layout)
@@ -684,7 +684,7 @@ def test_scaled_wmma_smem(M, N, K, a_kind, b_kind, preshuffle):
 
 
 @gluon.aggregate
-class MXWmmaLayouts:
+class WmmaLayouts:
     # Operand A's shared memory and register layouts
     a_smem_layout: gl.constexpr
     a_reg_layout: gl.constexpr
@@ -715,7 +715,7 @@ def get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
     ws_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
     ws_reg_layout = cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
-    return MXWmmaLayouts(a_smem_layout, a_reg_layout,  #
+    return WmmaLayouts(a_smem_layout, a_reg_layout,  #
                          w_smem_layout, w_reg_layout,  #
                          ws_smem_layout, ws_reg_layout,  #
                          acc_layout)
