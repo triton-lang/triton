@@ -56,8 +56,6 @@ def random_fp8(M, K):
 
 
 def random_mxfp4(N, K):
-    # The utilities in `triton.tools.mxfp` create random MX values and scales.
-    # The last value is the dequantized tensor, for the reference result.
     values = MXFP4Tensor(size=(N, K), device="cuda").random()
     scales = MXScaleTensor(size=(N, K // 32), device="cuda").random(low=1 / 128, high=2.0)
     ref = values.to(torch.float32) * scales.to(torch.float32).repeat_interleave(32, dim=1)
@@ -65,8 +63,6 @@ def random_mxfp4(N, K):
 
 
 def random_operand(rows, K, kind):
-    # Create an fp8, mxfp8, or mxfp4 operand of shape [rows, K]. Return the
-    # data, the scales or None, and the dequantized tensor for the reference.
     if kind == "mxfp4":
         values = MXFP4Tensor(size=(rows, K), device="cuda").random()
         data, ref = values.to_packed_tensor(dim=1), values.to(torch.float32)
@@ -86,10 +82,9 @@ def random_operand(rows, K, kind):
 # The scaled MFMA instruction we will use is
 # `v_mfma_scale_f32_16x16x128_f8f6f4`. It multiplies a 16x128 tile of A by a
 # 128x16 tile of B, applies the scales, and accumulates a 16x16 fp32 tile. Gluon
-# exposes it as `mfma_scaled`, which takes each operand with its scales. The
-# scaled MFMA takes fp8, fp6, and fp4 operands in any combination. An fp8
-# operand can come with or without scales, and we pass `None` for an operand
-# without scales.
+# exposes it as `mfma_scaled`, which takes each operand with its scales. The 2
+# operands can be fp8, fp6, or fp4 in any combination. We can also pass `None`
+# to use uniform scales (all ones).
 #
 # The accumulator uses `AMDMFMALayout` with `instr_shape=[16, 16, 128]`. Both
 # operands use `k_width=16`, so each lane holds 16 consecutive bytes along K. A
@@ -99,8 +94,7 @@ def random_operand(rows, K, kind):
 # for them, so the kernel uses the generic `DistributedLinearLayout` to describe
 # them. Writing them manually can be tedious, so we use `get_mfma_scale_layout`
 # to compute them from the operand layout.
-
-# %%
+#
 # Before diving into the MFMA, let's look at how fp4 operands are stored.
 # Memory is addressed in bytes, so we pack 2 fp4 values into one byte along K,
 # with the first value in the low 4 bits. An [N, K] fp4 tensor is stored as an
