@@ -80,6 +80,56 @@ def test_inline_asm_shared_amd_compilation(elementwise):
     compiled = triton.compile(source, target=GPUTarget("hip", "gfx942", 64))
     assert "ds_read_b32" in compiled.asm["amdgcn"]
 
+HOPPER_TARGET = GPUTarget("cuda", 90, 32)
+BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
+
+@pytest.mark.parametrize("target,mode", [(HOPPER_TARGET, "scalar"), (HOPPER_TARGET, "broadcast"),
+                                         (BLACKWELL_TARGET, "per_range")])
+def test_bulk_prefetch_codegen(target, mode):
+
+    @gluon.jit
+    def kernel(src, num_bytes, active, MODE: ttgl.constexpr):
+        if MODE == "scalar":
+            async_copy.wait_group(0)
+            hopper.bulk.prefetch(src, 16384)
+        else:
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+            idx = ttgl.arange(0, 256, layout=layout)
+            sizes = ttgl.where(idx + 1 == active, num_bytes, 16384) if MODE == "per_range" else num_bytes
+            hopper.bulk.prefetch(src + idx * 16384, sizes, pred=idx < active)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8", "num_bytes": "u32", "active": "i32"}, {"MODE": mode})
+    ptx = triton.compile(source, target=target).asm["ptx"]
+    # Two distinct ranges per thread in the vector case, one range per program in the scalar case.
+    assert len(re.findall(r"@%?\w+\s+cp\.async\.bulk\.prefetch\.L2\.global\s", ptx)) == (1 if mode == "scalar" else 2)
+    if mode == "scalar":
+        assert ptx.index("cp.async.wait_group") < ptx.index("cp.async.bulk.prefetch.L2.global")
+        assert not re.search(r"\bbar(?:rier)?\.sync\b", ptx)
+
+def test_bulk_prefetch_noinline_consan():
+
+    @gluon.jit(noinline=True)
+    def prefetch(src):
+        hopper.bulk.prefetch(src, 64)
+
+    @gluon.jit
+    def kernel(src):
+        prefetch(src)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {})
+    compiled = triton.compile(source, target=HOPPER_TARGET, options={"instrumentation_mode": "consan"})
+    assert "cp.async.bulk.prefetch.L2.global" in compiled.asm["ptx"]
+
+@pytest.mark.parametrize("num_bytes", [-16, 15, 1 << 32])
+def test_bulk_prefetch_invalid_byte_count(num_bytes):
+
+    @gluon.jit
+    def kernel(src, NUM_BYTES: ttgl.constexpr):
+        hopper.bulk.prefetch(src, NUM_BYTES)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {"NUM_BYTES": num_bytes})
+    with pytest.raises(CompilationError, match="multiple of 16"):
+        triton.compile(source, target=HOPPER_TARGET)
 
 @gluon.jit
 def _bulk_codegen_kernel(src, out, pred):
@@ -166,7 +216,7 @@ def _bulk_store_codegen_kernel(src, out, pred):
     values = ttgl.load(src + ttgl.arange(0, 4096, layout))
     smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
     hopper.bulk.async_store(out, smem, 2560, pred=pred)
-    hopper.bulk.store_wait(0, read_only=False)
+    hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
 
 @pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])
@@ -188,7 +238,7 @@ def test_bulk_async_store_invalid_count(num_elements):
     def kernel(out, count, COUNT: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
         hopper.bulk.async_store(out, smem, count if COUNT is None else COUNT)
-        hopper.bulk.store_wait(0)
+        hopper.bulk.store_wait(0, deps=[smem])
 
     source = gluon.GluonASTSource(kernel, {"out": "*i32", "count": "i32"}, {"COUNT": num_elements})
     with pytest.raises((CompilationError, RuntimeError)):
@@ -202,7 +252,7 @@ def test_bulk_async_store_partial_cluster_rejected(cga):
     def kernel(out, SHARED: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.int32, [256], SHARED)
         hopper.bulk.async_store(out, smem, 128)
-        hopper.bulk.store_wait(0)
+        hopper.bulk.store_wait(0, deps=[smem])
 
     source = gluon.GluonASTSource(kernel, {"out": "*i32"},
                                   {"SHARED": ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)})
