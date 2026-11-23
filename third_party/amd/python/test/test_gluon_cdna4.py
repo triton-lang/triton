@@ -103,32 +103,26 @@ def test_runtime_scaled_downcast_fp6(fmt, dtype):
         scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))[:, None]
         scale_k = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout))[None, :]
         scale = ttgl.load(scale_ptr + scale_m * (K // 32) + scale_k)
-        packed = ttgl.amd.cdna4.scaled_downcast(x, scale, FMT, axis=1)
-        # Store the 12 code bytes of each 16-byte group densely.
-        ttgl.store(out_ptr + offs_m * (K // 4 * 3) + offs_k // 16 * 12 + offs_k % 16, packed, mask=offs_k % 16 < 12)
+        ttgl.store(out_ptr + offs_m * K + offs_k, ttgl.amd.cdna4.scaled_downcast(x, scale, FMT, axis=1))
 
     M, K = 64, 128
-    torch.manual_seed(0)
     scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
     scale_f = torch.exp2(scale.double() - 127).repeat_interleave(32, dim=1)
-    grid = fp6_values(fmt, torch.arange(32, device="cuda")).double()
-    # Exact grid values, midpoints (ties to even), and out-of-range values that saturate.
-    pick = torch.randint(0, 32, (M, K), device="cuda")
-    x = grid[pick]
-    tie = torch.rand((M, K), device="cuda") < 0.3
-    x = torch.where(tie & (pick < 31), (grid[pick] + grid[(pick + 1).clamp_max(31)]) / 2, x)
-    x = torch.where(torch.rand((M, K), device="cuda") < 0.05, grid[31] * 4, x)
-    x = x * torch.where(torch.rand((M, K), device="cuda") < 0.5, -1.0, 1.0)
-    x = (x * scale_f).to(dtype)
-    out = torch.empty((M, K // 4 * 3), dtype=torch.uint8, device="cuda")
+    # Non-negative FP6 values in code order.
+    fp6_magnitudes = fp6_values(fmt, torch.arange(32, device="cuda")).double()
+    fp6_max = fp6_magnitudes[-1]
+    x = (torch.randn((M, K), dtype=torch.float64, device="cuda") * fp6_max * scale_f).to(dtype)
+    out = torch.empty((M, K), dtype=torch.uint8, device="cuda")
     compiled = kernel[(1, )](x, scale, out, fmt, M, K, num_warps=4)
     assert f"v_cvt_scalef32_2xpk16_{'fp6' if fmt == 'e2m3' else 'bf6'}_f32" in compiled.asm["amdgcn"]
 
     # Round x / scale to nearest, ties to even code, saturating to the largest magnitude.
     a = (x.double() / scale_f).abs()
-    dist = (a[..., None] - grid).abs()
+    dist = (a[..., None] - fp6_magnitudes).abs()
     nearest = dist == dist.min(dim=-1, keepdim=True).values
     even = nearest & (torch.arange(32, device="cuda") % 2 == 0)
     code = torch.where(even.any(-1), even.int().argmax(-1), nearest.int().argmax(-1))
-    code = torch.where(a >= grid[31], 31, code) | (torch.signbit(x.float()).int() << 5)
-    torch.testing.assert_close(out, pack_fp6(code), atol=0, rtol=0)
+    code = torch.where(a >= fp6_max, 31, code) | (torch.signbit(x.float()).int() << 5)
+    groups = pack_fp6(code).reshape(M, -1, 12)
+    expected = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(M, K)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)

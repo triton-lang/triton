@@ -4785,17 +4785,6 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
         assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
 
 
-@gluon.constexpr_function
-def _fp6_packed_copy_layout(shared, num_warps):
-    # Direct-to-LDS writes of a warp must be contiguous: lanes take the next 6 offset bits after the 16-byte group.
-    bases = shared.offset_bases
-    lanes = 6
-    warps = num_warps.bit_length() - 1
-    return ttgl.DistributedLinearLayout(reg_bases=bases[:4] + bases[4 + lanes + warps:], lane_bases=bases[4:4 + lanes],
-                                        warp_bases=bases[4 + lanes:4 + lanes + warps], block_bases=[],
-                                        shape=shared.shape)
-
-
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("a_type, b_type", [("e2m3", "e2m3"), ("e3m2", "e3m2"), ("e2m3", "e3m2")])
 @pytest.mark.parametrize("src, dest", [("buffer", "registers")] + [(src, dest)
@@ -4818,8 +4807,17 @@ def test_amd_mfma_scaled_fp6_packed_load(a_type, b_type, src, dest):
                 a_layout, [BLOCK_M, BLOCK_K], ttgl.uint8)
             b_shared: ttgl.constexpr = ttgl.amd.cdna4.compute_efficient_padded_shared_layout(
                 b_layout, [BLOCK_K, BLOCK_N], ttgl.uint8)
-            a_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(a_shared, ttgl.num_warps())
-            b_load_layout: ttgl.constexpr = _fp6_packed_copy_layout(b_shared, ttgl.num_warps())
+            # Each warp writes consecutive 16-byte slots of one 1 KiB padding interval.
+            a_load_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [8, 0]], lane_bases=[[0, 16], [0, 32], [0, 64], [1, 0],
+                                                                                [4, 0], [32, 0]], warp_bases=[[2, 0],
+                                                                                                              [16, 0]],
+                block_bases=[], shape=[BLOCK_M, BLOCK_K])
+            b_load_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+                reg_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 8]], lane_bases=[[16, 0], [32, 0], [64, 0], [0, 1],
+                                                                                [0, 4], [0, 32]], warp_bases=[[0, 2],
+                                                                                                              [0, 16]],
+                block_bases=[], shape=[BLOCK_K, BLOCK_N])
         else:
             a_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, 8, [1, 0])
             b_shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(16, 2, 8, [0, 1])

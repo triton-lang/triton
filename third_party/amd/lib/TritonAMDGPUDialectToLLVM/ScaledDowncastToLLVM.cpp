@@ -381,6 +381,9 @@ struct ScaledDowncastFp6OpPattern
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type v16f32 = vec_ty(f32_ty, 16);
     Type v6i32 = vec_ty(i32_ty, 6);
+    auto toF32 = [&](Value v) -> Value {
+      return isa<Float32Type>(v.getType()) ? v : b.fpext(f32_ty, v);
+    };
     SmallVector<Value> results;
     results.reserve(numValues);
     for (int64_t i = 0; i < numValues; i += 32) {
@@ -391,9 +394,6 @@ struct ScaledDowncastFp6OpPattern
       // The instruction places lo[j] in code slot 2j and hi[j] in slot 2j+1.
       Value lo = b.undef(v16f32), hi = b.undef(v16f32);
       for (int j = 0; j < 16; ++j) {
-        auto toF32 = [&](Value v) -> Value {
-          return isa<Float32Type>(v.getType()) ? v : b.fpext(f32_ty, v);
-        };
         lo = b.insert_element(lo, toF32(inputVals[i + 2 * j]), b.i32_val(j));
         hi =
             b.insert_element(hi, toF32(inputVals[i + 2 * j + 1]), b.i32_val(j));
