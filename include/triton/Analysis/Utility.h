@@ -177,9 +177,9 @@ private:
 //      r2                     | r1/lane 1 (Q11) | r2/lane 0 (Q12)
 //      r3                     | r2/lane 1 (Q13) | r3/lane 0 (Q14)
 //    Each total slot r supplies the carry for saved element registers 2r,2r+1.
-//    For each destination slot, enumerate candidate source registers across
-//    lanes. Shuffle each candidate from the computed source lane, then select
-//    the candidate matching the computed source register. For r1, the
+//    For each destination slot, find the registers holding the preceding
+//    prefixes. Shuffle each candidate from the computed source lane, then
+//    select the candidate matching the computed source register. For r1, the
 //    candidates are r0 and r1: lane 0 selects r0 from lane 1 (Q9), while lane 1
 //    selects r1 from lane 0 (Q10).
 //

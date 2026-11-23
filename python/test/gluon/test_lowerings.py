@@ -115,6 +115,9 @@ def _scan_layouts():
     # Exceed the totals budget while lanes select independent warp segments.
     grouped = linear([[4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 16]],
                      [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + lane_padding, [[1, 0], [0, 0]], [], [128, 32])
+    # Two values per segment require an exclusive carry. Warp bits interleave the segments.
+    grouped_carries = linear([[1, 0], [4, 0], [8, 0], [16, 0], [64, 0]], [[0, 1 << bit] for bit in range(lane_bits)],
+                             [[2, 0], [32, 0]], [], [128, THREADS_PER_WARP])
 
     sliced = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 2, 2], [4, 1, THREADS_PER_WARP // 4], [2, 1, 2], [2, 0, 1]))
     mma_v2 = ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8])
@@ -132,6 +135,7 @@ def _scan_layouts():
         "warp_transpose": transpose,
         "thread_only": thread_only,
         "grouped_totals": grouped,
+        "grouped_carries": grouped_carries,
         "slice": sliced,
         "mma_v2": mma_v2,
         "mma_v3": mma_v3,
