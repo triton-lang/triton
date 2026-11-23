@@ -7690,6 +7690,33 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
             assert not torch.isnan(C[0])
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", ['float16', 'float32', 'float64'])
+@pytest.mark.parametrize("func", ['minimum', 'maximum', 'min', 'max'])
+def test_propagate_nan_signed_zero(dtype, func, device):
+    # With propagate_nan=ALL, min/max follow IEEE 754-2019 minimum/maximum: -0.0 < +0.0, whatever the operand order.
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(A, B, C, func: tl.constexpr):
+        offs = tl.arange(0, 4)
+        a = tl.load(A + offs)
+        b = tl.load(B + offs)
+        if func == 'min' or func == 'max':
+            c = getattr(tl, func)(tl.join(a, b), axis=1, propagate_nan=tl.PropagateNan.ALL)
+        else:
+            c = getattr(tl, func)(a, b, propagate_nan=tl.PropagateNan.ALL)
+        tl.store(C + offs, c)
+
+    A = torch.tensor([0.0, -0.0, -0.0, 0.0], device=device, dtype=getattr(torch, dtype))
+    B = torch.tensor([-0.0, 0.0, -0.0, 0.0], device=device, dtype=getattr(torch, dtype))
+    C = torch.ones_like(A)
+    kernel[(1, )](A, B, C, func)
+    is_min = func in ('minimum', 'min')
+    assert torch.all(C == 0)
+    assert torch.signbit(C).tolist() == [is_min, is_min, True, False]
+
+
 # -----------------------
 # test clamp
 # -----------------------
