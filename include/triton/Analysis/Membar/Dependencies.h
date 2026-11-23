@@ -24,46 +24,50 @@ struct MembarDemands {
   SmallVector<Demand> optional;
 };
 
-using EdgeTransfer = llvm::function_ref<unsigned(Edge, unsigned)>;
-using SyncTransfer = llvm::function_ref<unsigned(unsigned, unsigned)>;
+// A model may leave its state unchanged at a fixed sync or on an edge.
+template <typename State> struct KeepState {
+  std::optional<State> operator()(State state, unsigned) const { return state; }
+  State operator()(Edge, State state) const { return state; }
+};
 
-// Start after the producer and visit each (point, state) once before internal
-// sync. The visitor returns the next state or std::nullopt to stop the path.
-// A sync transfer returns zero when it covers the producer. Completion walks
-// omit the transfer so zero can represent an uncommitted copy.
-template <typename Facts, typename Visit>
+// Start after the producer and visit each (point, worker context, state) once
+// before internal sync. The visitor and fixed sync transfer return std::nullopt
+// to retire the producer on this path. State must support DenseMapInfo.
+template <typename Facts, typename State, typename Visit,
+          typename Apply = KeepState<State>, typename OnEdge = KeepState<State>>
 void walkEdges(const MembarCFG<Facts> &cfg, const Node<Facts> &producer,
-               unsigned state, Visit visit, SyncTransfer apply = {},
-               EdgeTransfer onEdge = {}) {
-  llvm::SmallSetVector<std::pair<unsigned, unsigned>, 16> arrivals;
-  auto enqueue = [&](ArrayRef<Edge> edges, unsigned state, bool worker) {
-    for (Edge edge : edges) {
+               State initial, Visit visit, Apply apply = {},
+               OnEdge onEdge = {}) {
+  llvm::SmallSetVector<std::pair<unsigned, State>, 16> arrivals;
+  auto depart = [&](const Node<Facts> &node, State state, bool worker) {
+    auto live = apply(state, node.fixed.after);
+    if (!live)
+      return;
+    for (Edge edge : node.next) {
       bool nextWorker = worker;
       if (!edge.follow(nextWorker))
         continue;
-      unsigned live =
-          apply ? apply(state, cfg.nodes[edge.to].fixed.before) : state;
-      if (!apply || live)
-        arrivals.insert(
-            {2 * edge.to + nextWorker, onEdge ? onEdge(edge, live) : live});
+      if (auto next = apply(*live, cfg.nodes[edge.to].fixed.before))
+        arrivals.insert({2 * edge.to + nextWorker, onEdge(edge, *next)});
     }
   };
-  enqueue(producer.next, apply ? apply(state, producer.fixed.after) : state,
-          producer.inWorker);
+  depart(producer, initial, producer.inWorker);
   for (unsigned i = 0; i != arrivals.size(); ++i) {
     auto [arrival, incoming] = arrivals[i];
     unsigned point = arrival / 2;
     const auto &node = cfg.nodes[point];
     bool canExitWorker = arrival & 1;
     if (auto next = visit(point, incoming, canExitWorker))
-      enqueue(node.next,
-              apply ? apply(apply(*next, node.fixed.inside), node.fixed.after)
-                    : *next,
-              canExitWorker);
+      if (auto live = apply(*next, node.fixed.inside))
+        depart(node, *live, canExitWorker);
   }
 }
 
 void coalesceDemands(SmallVectorImpl<Demand> &demands);
+
+// Expose completed shared accesses at the waits that make them available.
+void recordSharedCompletions(MembarCFG<OpModel> &cfg,
+                             const SMemOrdering &ordering);
 
 MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
                               Allocation &allocation,

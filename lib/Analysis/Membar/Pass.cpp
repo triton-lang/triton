@@ -152,6 +152,9 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
     });
     for (Region *body : bodies) {
       auto cfg = builder.build(*body, /*expandWarpRoles=*/false);
+      // A specialized role may inherit transfers from outside its graph.
+      if (ordering && bodies.size() == 1 && mode != PlacementMode::TensorMemory)
+        recordSharedCompletions(cfg, *ordering);
       // A shared callee occurs once per role graph. The first role chooses
       // its notification modes. Later roles see the emitted modes as fixed.
       for (auto &node : cfg.nodes)

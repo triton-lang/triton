@@ -8,6 +8,31 @@ namespace mlir::triton::AMD {
 
 using membar::OrderingRule;
 
+membar::AsyncGroup SMemOrdering::getAsyncGroup(Operation *op) const {
+  using membar::AsyncGroup;
+  if (isa<amdgpu::BufferLoadToLocalOp, amdgpu::AsyncCopyLocalToGlobalOp>(op))
+    return {AsyncGroup::Issue, AsyncGroup::Copy};
+  // Keep the original deadline when a queue also signals an LDS counter.
+  if (isa<amdgpu::AsyncCopyMbarrierArriveOp>(op))
+    return {AsyncGroup::Opaque, AsyncGroup::Copy};
+  if (isa<amdgpu::TDMOpInterface, amdgpu::AsyncTDMFusedCopyGlobalToLocalOp>(
+          op)) {
+    if (auto counter = dyn_cast<gpu::MBarrierOpInterface>(op);
+        counter && counter.getBarrier())
+      return {AsyncGroup::Opaque, AsyncGroup::TDM};
+    return {AsyncGroup::Issue, AsyncGroup::TDM};
+  }
+  // A single transfer can lower to several instructions. Only a zero
+  // hardware count proves that every prior transfer on this queue completed.
+  if (auto wait = dyn_cast<amdgpu::AsyncWaitOp>(op);
+      wait && wait.getNumInst() == 0)
+    return {AsyncGroup::Drain, AsyncGroup::Copy};
+  if (auto wait = dyn_cast<amdgpu::AsyncTDMIntrinsicWait>(op);
+      wait && wait.getCount() == 0)
+    return {AsyncGroup::Drain, AsyncGroup::TDM};
+  return membar::SMemOrdering::getAsyncGroup(op);
+}
+
 void SMemOrdering::classify(membar::SMemAccess &access, Operation *op,
                             const MemoryAccess &, membar::ThreadEffects,
                             Allocation &allocation) {

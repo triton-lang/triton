@@ -22,14 +22,16 @@ bool mayObserveBarrier(const Node<AsyncFenceFacts> &node,
 
 // A cluster fence covers both windows. A CTA fence covers a peer generic
 // access once the owner has acquired it.
-unsigned applyFixed(unsigned state, unsigned sync) {
+std::optional<unsigned> applyFixed(unsigned state, unsigned sync) {
   if (sync & bit(SyncKind::ClusterProxyFence))
-    return 0;
+    return std::nullopt;
   if (!(state & bit(SyncKind::ClusterBarrier)))
     state &= ~(sync & bit(SyncKind::CTAProxyFence));
   if (sync & bit(SyncKind::ClusterBarrier))
     state &= ~bit(SyncKind::ClusterBarrier);
-  return state & proxyScopes ? state : 0;
+  if (!(state & proxyScopes))
+    return std::nullopt;
+  return state;
 }
 
 } // namespace
@@ -106,7 +108,7 @@ static void recordCompletedWrites(FenceCFG &cfg) {
                          : ArrayRef(producer.effects.completionBarrier);
     const SharedAccess &write = producer.effects.accesses.front();
     walkEdges(
-        cfg, producer, /*committed=*/false,
+        cfg, producer, /*committed=*/0u,
         [&](unsigned point, bool committed,
             bool canExitWorker) -> std::optional<unsigned> {
           auto &node = cfg.nodes[point];

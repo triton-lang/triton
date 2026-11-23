@@ -218,8 +218,10 @@ ClusterBarrierModel::discoverDemands(MembarCFG<Facts> &cfg) {
             }
             return state;
           },
-          [](unsigned state, unsigned fixed) {
-            return fixed & bit(SyncKind::ClusterBarrier) ? 0u : state;
+          [](unsigned state, unsigned fixed) -> std::optional<unsigned> {
+            if (fixed & bit(SyncKind::ClusterBarrier))
+              return std::nullopt;
+            return state;
           },
           [&](Edge edge, unsigned state) {
             if (cfg.invalidatesIteration(edge, source))

@@ -8,8 +8,11 @@ namespace {
 
 auto stopAt(SyncKind need) {
   // A TMEM wait can still need a later cross-warp rendezvous.
-  return [mask = bit(need) & fullBarrier](unsigned state, unsigned fixed) {
-    return fixed & mask ? 0u : state;
+  return [mask = bit(need) & fullBarrier](
+             unsigned state, unsigned fixed) -> std::optional<unsigned> {
+    if (fixed & mask)
+      return std::nullopt;
+    return state;
   };
 }
 
@@ -103,7 +106,7 @@ MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
 
     if (auto need = out.tmemProducerNeed)
       walkEdges(
-          cfg, producer, 1,
+          cfg, producer, 1u,
           [&](unsigned sink, unsigned state, bool) {
             const auto &consumer = cfg.nodes[sink];
             if (auto path = tmemNeed(producer, consumer, *tmem))

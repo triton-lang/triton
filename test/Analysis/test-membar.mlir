@@ -148,7 +148,8 @@ tt.func @async_wait_pure_op_between_waits(%arg: tensor<32x16xf16, #AL>) {
 }
 
 // The conditional global read does not consume the copy's shared writes.
-// Keep one rendezvous at the join, before the shared layout conversion.
+// The conversion uses disjoint scratch. Its internal rendezvous orders
+// the completed writes before the load.
 // CHECK-LABEL: async_wait_conditional_global_read
 tt.func @async_wait_conditional_global_read(%ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %bias_ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %condition: i1) -> tensor<32x16xf16, #BL> {
   %zero = arith.constant dense<0.0> : tensor<32x16xf16, #AL>
@@ -160,8 +161,8 @@ tt.func @async_wait_conditional_global_read(%ptrs: tensor<32x16x!tt.ptr<f16>, #A
   // CHECK-NOT: ttg.barrier
   // CHECK: tt.load
   // CHECK-NEXT: cf.br
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: {{.*}} = ttg.convert_layout
+  // CHECK-NOT: ttg.barrier
+  // CHECK: {{.*}} = ttg.convert_layout
   // CHECK-NEXT: {{.*}} = ttg.local_load
   ttg.async_wait %group {num = 0 : i32}
   %bias = scf.if %condition -> tensor<32x16xf16, #AL> {

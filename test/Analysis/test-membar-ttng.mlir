@@ -24,8 +24,37 @@ tt.func @async_store_wait(%arg: tensor<32x16xf16, #AL>) {
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
+#rows = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 16]}>
+#operand = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+!matrix = tensor<128x128xf16, #rows>
+!acc = tensor<128x128xf32, #mma>
+!tile = !ttg.memdesc<128x128xf16, #operand, #smem, mutable>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32} {
+// The first rendezvous orders issue. The local wait makes the registers ready.
+// Both warp groups must finish reading B before it is overwritten.
+// CHECK-LABEL: @warpgroup_wait_before_operand_reuse
+tt.func @warpgroup_wait_before_operand_reuse(%x: !matrix, %y: !matrix, %acc: !acc) -> !acc {
+  %a = ttg.local_alloc %x : (!matrix) -> !tile
+  %b = ttg.local_alloc %y : (!matrix) -> !tile
+  %dot = ttng.warp_group_dot %a, %b, %acc {isAsync = true} : !tile * !tile -> !acc
+  ttg.barrier local
+  // CHECK: ttng.warp_group_dot_wait {{.*}}warpGroupLocal
+  // CHECK-NEXT: {{.*}} = ttng.warp_group_dot_wait
+  // CHECK-NEXT: {{.*}} = ttg.local_alloc
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  %local = ttng.warp_group_dot_wait %dot {pendings = 0 : i32, warpGroupLocal} : !acc
+  %ready = ttng.warp_group_dot_wait %local {pendings = 1 : i32} : !acc
+  %c = ttg.local_alloc %y : (!matrix) -> !tile
+  %copy = ttg.local_load %a : !tile -> !matrix
+  ttg.local_store %copy, %b : !matrix -> !tile
+  %result = ttng.warp_group_dot %c, %b, %ready : !tile * !tile -> !acc
+  tt.return %result : !acc
+}
+
 // CHECK-LABEL: @warpgroup_wait_followed_by_cta_barrier
 tt.func @warpgroup_wait_followed_by_cta_barrier(%acc: tensor<256xf32, #blocked>, %value: i32) {
   %c1 = arith.constant 1 : i32
@@ -639,11 +668,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 // initialized by callers; waits may complete groups issued by those callers.
 #bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#reader = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #cols = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
 !barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
 !ptrs = tensor<128x!tt.ptr<i32>, #blocked>
 !values = tensor<128xi32, #blocked>
+!loaded = tensor<128xi32, #reader>
 !slot = !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>
 !row_tile = tensor<16x16xf32, #rows>
 !col_tile = tensor<16x16xf32, #cols>
@@ -931,6 +962,51 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
       scf.yield %next : i32
     }
     tt.return %sum : i32
+  }
+
+  // Each reader warp reads bytes copied by all four warps. The rendezvous
+  // for A also covers B in the same group. The drain completes only C.
+  // CHECK-LABEL: @copy_group_completion
+  tt.func @copy_group_completion(%src: !ptrs) -> (!loaded, !loaded, !loaded) {
+    %a = ttg.local_alloc : () -> !slot
+    %b = ttg.local_alloc : () -> !slot
+    %c = ttg.local_alloc : () -> !slot
+    %copy_a = ttg.async_copy_global_to_local %src, %a : !ptrs -> !slot
+    %copy_b = ttg.async_copy_global_to_local %src, %b : !ptrs -> !slot
+    %older = ttg.async_commit_group tokens %copy_a, %copy_b
+    %copy_c = ttg.async_copy_global_to_local %src, %c : !ptrs -> !slot
+    %newer = ttg.async_commit_group tokens %copy_c
+    // Synchronizing the issues still leaves the copies in flight.
+    ttg.barrier local
+    // CHECK: ttg.async_wait {{.*}}num = 1
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.async_wait {{.*}}num = 0
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    ttg.async_wait %older {num = 1 : i32}
+    %x = ttg.local_load %a : !slot -> !loaded
+    ttg.async_wait %newer {num = 0 : i32}
+    %y = ttg.local_load %b : !slot -> !loaded
+    %z = ttg.local_load %c : !slot -> !loaded
+    tt.return %x, %y, %z : !loaded, !loaded, !loaded
+  }
+
+  // Thread zero must wait for every lane to finish reading the global source.
+  // CHECK-LABEL: @copy_before_global_overwrite
+  tt.func @copy_before_global_overwrite(%src: !tt.ptr<i32>, %value: i32) -> !values {
+    %ptrs = tt.splat %src : !tt.ptr<i32> -> !ptrs
+    %tile = ttg.local_alloc : () -> !slot
+    %copy = ttg.async_copy_global_to_local %ptrs, %tile : !ptrs -> !slot
+    %group = ttg.async_commit_group tokens %copy
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.store
+    ttg.async_wait %group {num = 0 : i32}
+    tt.store %src, %value : !tt.ptr<i32>
+    %result = ttg.local_load %tile : !slot -> !values
+    tt.return %result : !values
   }
 
   // Shared-copy completion can overlap independent global reads in a loop.

@@ -1031,6 +1031,129 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
+  // Both stores read %tile. The second read wait must finish across
+  // warps before the refill, even with a rendezvous before the wait.
+  // PREP-LABEL: @tma_read_wait_before_refill
+  // PREP: ttng.async_tma_copy_local_to_global
+  // PREP-NEXT: ttng.async_tma_store_wait
+  // PREP-NEXT: ttng.async_tma_copy_local_to_global
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttng.async_tma_store_wait
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttg.local_store
+  tt.func @tma_read_wait_before_refill(%desc: !desc, %data: !values) {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %tile = ttg.local_alloc %data : (!values) -> !tile
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %tile : !desc, !tile
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_copy_local_to_global %desc[%c16, %c0] %tile : !desc, !tile
+    ttg.barrier local
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttg.local_store %data, %tile : !values -> !tile
+    tt.return
+  }
+
+  // The wait observes a read of %tile. Storage outside %tile can
+  // be overwritten while other warps are still waiting.
+  // PREP-LABEL: @tma_read_wait_disjoint_write
+  // PREP: ttng.async_tma_copy_local_to_global
+  // PREP-NEXT: ttng.async_tma_store_wait
+  // PREP-NEXT: ttg.local_store
+  tt.func @tma_read_wait_disjoint_write(%desc: !desc, %data: !values) {
+    %c0 = arith.constant 0 : i32
+    %tile = ttg.local_alloc %data : (!values) -> !tile
+    %other = ttg.local_alloc : () -> !tile
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %tile : !desc, !tile
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttg.local_store %data, %other : !values -> !tile
+    ttg.local_dealloc %tile : !tile
+    tt.return
+  }
+
+  // The partial wait releases %a. After the refill and rendezvous, draining
+  // %b must not introduce another read of %a.
+  // PREP-LABEL: @tma_partial_read_wait
+  // PREP: ttng.async_tma_store_wait {pendings = 1
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttg.local_store
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttng.async_tma_store_wait {pendings = 0
+  // PREP-NEXT: ttg.local_store
+  tt.func @tma_partial_read_wait(%desc: !desc, %data: !values) {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %a = ttg.local_alloc %data : (!values) -> !tile
+    %b = ttg.local_alloc %data : (!values) -> !tile
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %a : !desc, !tile
+    ttng.async_tma_copy_local_to_global %desc[%c16, %c0] %b : !desc, !tile
+    ttg.barrier local
+    ttng.async_tma_store_wait {pendings = 1 : i32, read_only}
+    ttg.local_store %data, %a : !values -> !tile
+    ttg.barrier local
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttg.local_store %data, %a : !values -> !tile
+    ttg.local_dealloc %b : !tile
+    tt.return
+  }
+
+  // The slots are disjoint within an iteration, but the pending TMA read
+  // came from the previous iteration and used the slot being refilled.
+  // PREP-LABEL: @tma_read_wait_across_backedge
+  // PREP: ttg.barrier local
+  // PREP-NEXT: ttng.async_tma_store_wait
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: ttg.local_store
+  tt.func @tma_read_wait_across_backedge(%desc: !desc, %data: !values, %n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    %zeros = arith.constant dense<0.0> : !values
+    %ring = ttg.local_alloc : () -> !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable>
+    %first = ttg.memdesc_index %ring[%c0] : !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable> -> !tile
+    ttg.local_store %zeros, %first : !values -> !tile
+    ttng.fence_async_shared {bCluster = false}
+    scf.for %i = %c0 to %n step %c1 : i32 {
+      %next = arith.addi %i, %c1 : i32
+      %a = arith.andi %i, %c1 : i32
+      %b = arith.andi %next, %c1 : i32
+      %row = arith.muli %i, %c16 : i32
+      %src = ttg.memdesc_index %ring[%a] : !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable> -> !tile
+      %dst = ttg.memdesc_index %ring[%b] : !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable> -> !tile
+      ttg.barrier local
+      ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+      ttg.local_store %data, %dst : !values -> !tile
+      ttng.fence_async_shared {bCluster = false}
+      ttng.async_tma_copy_local_to_global %desc[%row, %c0] %src : !desc, !tile
+    }
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttg.local_dealloc %ring : !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // A global write can reuse tensor-map storage read by the bulk transfer.
+  // The subsequent full wait still publishes the global result at exit.
+  // PREP-LABEL: @tma_read_wait_before_global_write
+  // PREP: ttng.async_tma_store_wait
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: tt.store
+  // PREP-NEXT: ttng.async_tma_store_wait
+  // PREP-NEXT: ttg.barrier local
+  // PREP-NEXT: tt.return
+  tt.func @tma_read_wait_before_global_write(%desc: !desc, %data: !values, %out: !tt.ptr<i32>) {
+    %c0 = arith.constant 0 : i32
+    %tile = ttg.local_alloc %data : (!values) -> !tile
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %tile : !desc, !tile
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    tt.store %out, %c0 : !tt.ptr<i32>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    tt.return
+  }
+
   // The caller refills the shared tile as soon as the outlined store returns.
   // PREP-LABEL: @tma_store_for_refill
   // PREP: ttng.async_tma_store_wait

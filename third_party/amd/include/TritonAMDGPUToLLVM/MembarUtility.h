@@ -9,6 +9,7 @@ namespace mlir::triton::AMD {
 
 class SMemOrdering final : public membar::SMemOrdering {
 public:
+  membar::AsyncGroup getAsyncGroup(Operation *op) const override;
   void classify(membar::SMemAccess &access, Operation *op,
                 const MemoryAccess &effect, membar::ThreadEffects threads,
                 Allocation &allocation) override;

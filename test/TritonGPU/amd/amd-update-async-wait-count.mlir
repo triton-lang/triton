@@ -1008,3 +1008,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+!tile = !ttg.memdesc<32x16xf32, #shared, #ttg.shared_memory, mutable>
+!values = tensor<32x16xf32, #blocked>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // A hardware drain completes its own queue. Both drains can share a
+  // rendezvous with the write to a third, independent tile.
+  // SCOPE-LABEL: @independent_copy_and_tdm_drains(
+  tt.func public @independent_copy_and_tdm_drains(%ptrs: tensor<32x16x!tt.ptr<f32>, #blocked>, %desc: !tt.tensordesc<32x16xf32>, %x: !values) -> !values {
+    %a = ttg.local_alloc : () -> !tile
+    %b = ttg.local_alloc : () -> !tile
+    %c = ttg.local_alloc : () -> !tile
+    %copy = ttg.async_copy_global_to_local %ptrs, %a : tensor<32x16x!tt.ptr<f32>, #blocked> -> !tile
+    %group = ttg.async_commit_group tokens %copy
+    %tdm = amdg.async_tdm_copy_global_to_local %desc into %b : !tt.tensordesc<32x16xf32> -> !tile
+    // SCOPE: amdg.async_wait {{.*}}num_inst = 0
+    // SCOPE-NEXT: {{.*}}amdg.async_tdm_intrinsic_wait {{.*}}count = 0
+    // SCOPE-NEXT: ttg.local_store
+    // SCOPE-NEXT: ttg.barrier local
+    // SCOPE-NOT: ttg.barrier local
+    // SCOPE: tt.return
+    %wa = ttg.async_wait %group {num = 0 : i32}
+    %wb = amdg.async_tdm_wait %tdm {num = 0 : i32}
+    ttg.local_store %x, %c : !values -> !tile
+    %va = ttg.local_load %a token %wa : !tile -> !values
+    %vb = ttg.local_load %b token %wb : !tile -> !values
+    %vc = ttg.local_load %c : !tile -> !values
+    %ab = arith.addf %va, %vb : !values
+    %result = arith.addf %ab, %vc : !values
+    tt.return %result : !values
+  }
+
+  // Both token waits specify num=0. The first lowers to a partial wait
+  // and the second tile still needs a rendezvous after the full drain.
+  // SCOPE-LABEL: @tdm_partial_then_drain(
+  tt.func public @tdm_partial_then_drain(%desc: !tt.tensordesc<32x16xf32>) -> !values {
+    %a = ttg.local_alloc : () -> !tile
+    %b = ttg.local_alloc : () -> !tile
+    %ca = amdg.async_tdm_copy_global_to_local %desc into %a : !tt.tensordesc<32x16xf32> -> !tile
+    %cb = amdg.async_tdm_copy_global_to_local %desc into %b : !tt.tensordesc<32x16xf32> -> !tile
+    // SCOPE: amdg.async_tdm_intrinsic_wait {{.*}}count = 1
+    // SCOPE-NEXT: ttg.barrier local
+    // SCOPE-NEXT: {{.*}}ttg.local_load
+    %wa = amdg.async_tdm_wait %ca {num = 0 : i32}
+    %va = ttg.local_load %a token %wa : !tile -> !values
+    // SCOPE: amdg.async_tdm_intrinsic_wait {{.*}}count = 0
+    // SCOPE-NEXT: ttg.barrier local
+    // SCOPE-NEXT: {{.*}}ttg.local_load
+    %wb = amdg.async_tdm_wait %cb {num = 0 : i32}
+    %vb = ttg.local_load %b token %wb : !tile -> !values
+    %result = arith.addf %va, %vb : !values
+    tt.return %result : !values
+  }
+}

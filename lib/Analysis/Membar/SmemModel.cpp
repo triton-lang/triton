@@ -1,5 +1,5 @@
 #include "triton/Analysis/Membar/SmemModel.h"
-#include "triton/Analysis/Membar/CFGBuilder.h"
+#include "triton/Analysis/Membar/Dependencies.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -12,6 +12,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -292,7 +293,8 @@ template <typename Op> uint8_t getNotificationIssuer(Op op) {
 std::optional<CompletionSync> getCompletion(Operation *op) {
   // Acquires and proxy fences do not consume payload. Wait deps only keep
   // allocations live; each thread fences its own completed accesses.
-  if (isa<ttng::WaitBarrierOp, ttng::FenceAsyncSharedOp>(op))
+  if (isa<ttng::WaitBarrierOp, ttng::FenceAsyncSharedOp,
+          gpu::AsyncCommitGroupOp>(op))
     return CompletionSync::None;
   if (isa<triton::gpu::AsyncWaitOp>(op))
     return CompletionSync::Shared;
@@ -352,8 +354,11 @@ uint8_t joinedCompletions(Operation *op) {
       op->hasTrait<OpTrait::ReturnLike>())
     return 0;
   auto effects = getEffectsRecursively(op);
+  constexpr uint8_t untracked = ThreadEffects::Completions |
+                                ThreadEffects::GlobalSourceRead |
+                                ThreadEffects::TensorMapRead;
   if (!effects)
-    return ThreadEffects::Completions;
+    return untracked;
   uint8_t joins = 0;
   for (const auto &effect : *effects) {
     auto *resource = effect.getResource();
@@ -362,11 +367,19 @@ uint8_t joinedCompletions(Operation *op) {
         (isa<triton::gpu::SharedMemory>(resource) &&
          isa<MemoryEffects::Allocate, MemoryEffects::Free>(effect.getEffect())))
       continue;
-    // A global write can overwrite the source of an asynchronous copy.
-    if (!isa<triton::GlobalMemory>(resource) ||
-        !isa<MemoryEffects::Read>(effect.getEffect()))
-      return ThreadEffects::Completions;
-    joins = ThreadEffects::FullCompletion;
+    if (isa<gpu::SharedMemoryEffect>(effect) && effect.getValue()) {
+      joins |= ThreadEffects::SharedCompletion;
+    } else if (isa<GlobalMemory>(resource) &&
+               isa<MemoryEffects::Read>(effect.getEffect())) {
+      joins |= ThreadEffects::FullCompletion;
+    } else if (isa<ttng::TMAStoreLikeOpInterface>(op)) {
+      // A TMA destination can alias a copy's global source. The transfer
+      // uses the tensor map without modifying it.
+      joins |= ThreadEffects::Completions | ThreadEffects::GlobalSourceRead;
+    } else {
+      // Includes tensor-map updates, ordinary global writes and opaque effects.
+      return untracked;
+    }
   }
   return joins;
 }
@@ -397,8 +410,9 @@ ThreadEffects SMemModel::getThreadEffects(Operation *op, bool hasScratch,
     return threads;
   }
 
-  threads.joins =
-      hasScratch ? ThreadEffects::Completions : joinedCompletions(op);
+  threads.joins = joinedCompletions(op);
+  if (hasScratch)
+    threads.joins |= ThreadEffects::SharedCompletion;
   // Diagnostics consume completions without leaving payload to publish.
   if (!threads.joins || isa<triton::PrintOp, triton::AssertOp>(op))
     return threads;
@@ -453,6 +467,140 @@ SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
     for (auto &access : data.accesses)
       access.footprint = regions.getKernelFootprint(access.footprint);
   return data;
+}
+
+AsyncGroup SMemOrdering::getAsyncGroup(Operation *op) const {
+  if (isa<gpu::AsyncCopyGlobalToLocalOp>(op))
+    return {AsyncGroup::Issue};
+  if (isa<gpu::AsyncCommitGroupOp>(op))
+    return {AsyncGroup::Commit};
+  if (auto wait = dyn_cast<gpu::AsyncWaitOp>(op))
+    return {AsyncGroup::Wait, AsyncGroup::Copy, wait.getNum()};
+  if (isa<ttng::AsyncCopyMbarrierArriveOp>(op))
+    return {AsyncGroup::Opaque, AsyncGroup::Copy};
+  // A predicated linear bulk store advances the TMA queue only when
+  // enabled. Keep the conservative deadline if its group count varies.
+  if (auto store = dyn_cast<ttng::AsyncBulkCopyLocalToGlobalOp>(op);
+      store && !matchPattern(store.getPred(), m_One()))
+    return {AsyncGroup::Opaque, AsyncGroup::TMAStore};
+  if (isa<ttng::AsyncStoreOpInterface>(op))
+    return {AsyncGroup::IssueAndCommit, AsyncGroup::TMAStore};
+  if (auto wait = dyn_cast<ttng::TMAStoreWaitOp>(op))
+    return {AsyncGroup::Wait, AsyncGroup::TMAStore, wait.getPendings()};
+  if (auto dot = dyn_cast<ttng::WarpGroupDotOp>(op);
+      dot && gpu::lookupNumWarps(op) > 4)
+    return {dot.getIsAsync() ? AsyncGroup::IssueAndCommit : AsyncGroup::Drain,
+            AsyncGroup::WarpGroup};
+  // Even a local wait completes reads in the issuing warp group. A later
+  // overwrite must account for the other warp groups finishing those reads.
+  if (auto wait = dyn_cast<ttng::WarpGroupDotWaitOp>(op);
+      wait && gpu::lookupNumWarps(op) > 4)
+    return {AsyncGroup::Wait, AsyncGroup::WarpGroup, wait.getPendings()};
+  return {};
+}
+
+static void completeAccesses(const SMemData &source, SMemData &wait,
+                             bool rebound) {
+  for (const SMemAccess &access : source.accesses) {
+    // Completion establishes a new ordering point after the wait. An
+    // exemption for the original issue cannot exempt this handoff.
+    SMemAccess completed{.entry = SMemAccess::None,
+                         .exit = access.entry,
+                         .footprint = access.footprint,
+                         .index = rebound ? nullptr : access.index,
+                         .subslice = rebound ? nullptr : access.subslice};
+    if (!llvm::is_contained(wait.accesses, completed))
+      wait.accesses.push_back(completed);
+  }
+}
+
+void recordSharedCompletions(MembarCFG<OpModel> &cfg,
+                             const SMemOrdering &ordering) {
+  struct QueueInfo {
+    bool hasIssue = false;
+    bool opaque = false;
+    unsigned limit = 0;
+  } queues[AsyncGroup::NumQueues];
+  SmallVector<AsyncGroup> events;
+  for (const auto &node : cfg.nodes) {
+    // Hidden transfers or commits make the group counts unreliable.
+    if (isa<gpu::WarpSpecializeOp>(node.op) ||
+        (isa<gpu::InlineAsmOp, ElementwiseInlineAsmOp, ExternElementwiseOp>(
+             node.op) &&
+         !isMemoryEffectFree(node.op)))
+      return;
+    auto event = ordering.getAsyncGroup(node.op);
+    events.push_back(event);
+    auto &queue = queues[event.queue];
+    queue.hasIssue |= event.issues();
+    queue.opaque |= event.kind == AsyncGroup::Opaque ||
+                    (event.issues() && node.effects.shared.accesses.empty());
+    if (event.waits())
+      queue.limit = std::max(queue.limit, event.pending + 1);
+  }
+
+  // A token can name a copy directly before AMD wait-count lowering.
+  // Keep the broad deadline if any path lacks an explicit commit.
+  DenseSet<unsigned> uncommitted;
+  for (auto [source, issue] : llvm::enumerate(events)) {
+    const auto &queue = queues[issue.queue];
+    if (!issue.issues() || queue.opaque || !queue.limit)
+      continue;
+    const auto &producer = cfg.nodes[source];
+    // Count commits including the producer's own. All counts above the
+    // largest wait retire at the same next wait. The second component
+    // records whether relative coordinates may have changed.
+    using State = std::pair<unsigned, unsigned>;
+    walkEdges(
+        cfg, producer, State{issue.commits(), false},
+        [&](unsigned point, State state, bool) -> std::optional<State> {
+          auto event = events[point];
+          if (event.queue != issue.queue)
+            return state;
+          auto &[commits, rebound] = state;
+          if (event.commits())
+            commits = std::min(commits + 1, queue.limit);
+          if (!event.waits())
+            return state;
+          if (event.kind == AsyncGroup::Wait && commits <= event.pending) {
+            if (!commits)
+              uncommitted.insert(point);
+            return state;
+          }
+          auto &wait = cfg.nodes[point];
+          completeAccesses(producer.effects.shared, wait.effects.shared,
+                           rebound || producer.body != wait.body);
+          return std::nullopt;
+        },
+        // A rendezvous before the wait cannot publish its completion.
+        {},
+        [&](Edge edge, State state) {
+          state.second |= cfg.invalidatesIteration(edge, source);
+          return state;
+        });
+  }
+
+  for (auto [point, event] : llvm::enumerate(events)) {
+    const auto &queue = queues[event.queue];
+    if (!event.waits() || !queue.hasIssue || queue.opaque ||
+        uncommitted.contains(point))
+      continue;
+    auto &wait = cfg.nodes[point].effects.shared;
+    auto &pending = wait.threads.pending;
+    if (!(pending & ThreadEffects::SharedCompletion))
+      continue;
+    // Storage conflicts cover shared payload. Full waits also publish global
+    // writes, even when an earlier read-only wait retired the shared reads.
+    pending &= ~ThreadEffects::SharedCompletion;
+    if (pending & ThreadEffects::FullCompletion) {
+      pending |= ThreadEffects::PeerWait;
+    } else if (!wait.accesses.empty()) {
+      pending |= ThreadEffects::PeerWait;
+      pending |= event.queue == AsyncGroup::TMAStore
+                     ? ThreadEffects::TensorMapRead
+                     : ThreadEffects::GlobalSourceRead;
+    }
+  }
 }
 
 } // namespace mlir::triton::membar

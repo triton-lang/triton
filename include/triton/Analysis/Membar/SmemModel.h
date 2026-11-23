@@ -24,7 +24,11 @@ struct ThreadEffects {
     SharedCompletion = 1 << 3, // May overlap independent global reads.
     FullCompletion = 1 << 4,   // Must also finish before reads and kernel exit.
     Completions = SharedCompletion | FullCompletion,
-    PeerWait = 1 << 5, // A peer notification can advance the counter phase.
+    PeerWait = 1 << 5, // A peer signal can release storage or advance a phase.
+    // A shared payload footprint excludes the copy source or the tensor map
+    // in global memory. Their reads must also finish before reuse.
+    GlobalSourceRead = 1 << 6,
+    TensorMapRead = 1 << 7,
   };
 
   // Effects left pending when the operation exits.
@@ -76,11 +80,35 @@ enum class OrderingRule : uint8_t {
 
 struct SMemAccess;
 
+// Group waits retire the oldest committed transfers in one issuer's queue.
+struct AsyncGroup {
+  enum Kind : uint8_t {
+    None,
+    Issue,
+    Commit,
+    IssueAndCommit,
+    Wait,
+    Drain,
+    Opaque
+  };
+  enum Queue : uint8_t { Copy, TMAStore, WarpGroup, TDM, NumQueues };
+  Kind kind = None;
+  Queue queue = Copy;
+  // A Wait leaves the newest groups pending. Drain also covers ungrouped
+  // transfers, as on targets that count instructions instead of groups.
+  unsigned pending = 0;
+
+  bool issues() const { return kind == Issue || kind == IssueAndCommit; }
+  bool commits() const { return kind == Commit || kind == IssueAndCommit; }
+  bool waits() const { return kind == Wait || kind == Drain; }
+};
+
 /// Classify effects before merging guarded operations or call summaries.
 /// Keys belong to this ordering instance and outlive all its access records.
 class SMemOrdering {
 public:
   virtual ~SMemOrdering() = default;
+  virtual AsyncGroup getAsyncGroup(Operation *op) const;
   // Only descriptor effects have backend-specific ordering. Scratch is
   // ordinary.
   virtual void classify(SMemAccess &access, Operation *op,
