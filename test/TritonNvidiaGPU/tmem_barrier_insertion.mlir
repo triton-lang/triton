@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' | FileCheck %s --check-prefixes=CHECK,WAIT,TMEM
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefix=TMEM
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefixes=TMEM,SCALAR
 // RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' | FileCheck %s --check-prefix=GUARD
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -1287,6 +1287,70 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     } : (!publish_tmem, !publish_bar, !publish_bar) -> ()
     %loaded = ttng.tmem_load %mem : !publish_tmem -> !publish_data
     tt.return %loaded : !publish_data
+  }
+
+  // Each worker needs a rendezvous to exchange shared data. Its warps can
+  // meet with TMEM reads outstanding if each waits before releasing the tile.
+  // CHECK-LABEL: @paired_tmem_releases
+  // CHECK: ttng.init_barrier {{.*}}, 8 :
+  // CHECK: partition0
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK: partition1
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // The TMEM-only pass keeps a single issuer. It must collect the other
+  // warps' completions before that thread releases the tile.
+  // SCALAR-LABEL: @paired_tmem_releases
+  // SCALAR: ttng.init_barrier {{.*}}, 2 :
+  // SCALAR: partition0
+  // SCALAR: ttng.tmem_wait load
+  // SCALAR-NEXT: ttg.barrier local
+  // SCALAR-NEXT: ttng.arrive_barrier {{.*}}, 1 :
+  // SCALAR: partition1
+  // SCALAR: ttng.tmem_wait load
+  // SCALAR-NEXT: ttg.barrier local
+  // SCALAR-NEXT: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @paired_tmem_releases(%initial: !publish_data) {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %mem = ttng.tmem_alloc %initial {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (!publish_data) -> !publish_tmem
+    %input = ttg.local_alloc %initial : (!publish_data) -> !publish_smem
+    %empty = ttg.local_alloc : () -> !publish_bar
+    ttng.init_barrier %empty, 2 : !publish_bar
+    ttg.warp_specialize(%mem, %empty, %input)
+    default {
+      ttng.wait_barrier %empty, %phase : !publish_bar
+      ttng.tmem_store %initial, %mem, %true : !publish_data -> !publish_tmem
+      ttg.warp_yield
+    }
+    partition0(%tile: !publish_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
+      %x = ttg.local_load %src : !publish_smem -> tensor<128x8xi32, #blocked_scales>
+      %buf = ttg.local_alloc %x : (tensor<128x8xi32, #blocked_scales>) -> !publish_smem
+      %v = ttng.tmem_load %tile : !publish_tmem -> !publish_data
+      ttng.arrive_barrier %done, 1 : !publish_bar
+      %y = ttg.local_load %buf : !publish_smem -> !publish_data
+      %sum = arith.addi %v, %y : !publish_data
+      tt.print "sum" {hex = false, isSigned = array<i32: 1>} : %sum : !publish_data
+      ttg.warp_return
+    }
+    partition1(%tile: !publish_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
+      %x = ttg.local_load %src : !publish_smem -> tensor<128x8xi32, #blocked_scales>
+      %buf = ttg.local_alloc %x : (tensor<128x8xi32, #blocked_scales>) -> !publish_smem
+      %v = ttng.tmem_load %tile : !publish_tmem -> !publish_data
+      ttng.arrive_barrier %done, 1 : !publish_bar
+      %y = ttg.local_load %buf : !publish_smem -> !publish_data
+      %diff = arith.subi %v, %y : !publish_data
+      tt.print "diff" {hex = false, isSigned = array<i32: 1>} : %diff : !publish_data
+      ttg.warp_return
+    } : (!publish_tmem, !publish_bar, !publish_smem) -> ()
+    tt.return
   }
 
   // A one-column shift changes the warp owning each overlapping word.
