@@ -623,10 +623,8 @@ private:
     auto shuffleDistance =
         getShuffleDistance(segmentLayout, inverse, op.getAxis(),
                            segmentsPerScan, reverse ? -1 : 1);
-    // Only the CTA bits inside this scan segment affect the carry. Higher
-    // bits identify independent segments in the same source layout.
-    bool crossCTA = getOutputBasisMask(segmentLayout, {kBlock}, axis) &
-                    (segmentsPerScan - 1);
+    auto withinScanLayout = segmentLayout.resizeOutDim(axis, segmentsPerScan);
+    bool crossCTA = !withinScanLayout.sublayoutIsZero({kBlock}, {axis});
     unsigned numCTAs = crossCTA ? segmentLayout.getInDimSize(kBlock) : 1;
     Value blockId =
         crossCTA ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
