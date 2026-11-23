@@ -1024,9 +1024,8 @@ class WmmaLayouts:
     # Operand B's shared memory and register layouts
     b_smem_layout: gl.constexpr
     b_reg_layout: gl.constexpr
-    # Accumulator's register layout and output's shared memory layout
+    # Accumulator's register layout
     acc_layout: gl.constexpr
-    c_smem_layout: gl.constexpr
 
 
 @gluon.constexpr_function
@@ -1044,10 +1043,9 @@ def get_wmma_layouts(partitioned):
             version=3, instr_shape=[16, 16, 32], transposed=True, warp_bases=[[0, 1], [1, 0]], reg_bases=[])
     a_reg_layout = gl.DotOperandLayout(0, acc_layout, 8)
     b_reg_layout = gl.DotOperandLayout(1, acc_layout, 8)
-    c_smem_layout = gl.PaddedSharedLayout.with_identity_for([[256, 8]], [256, 256], [1, 0])
     return WmmaLayouts(a_smem_layout, a_reg_layout,  #
                        b_smem_layout, b_reg_layout,  #
-                       acc_layout, c_smem_layout)
+                       acc_layout)
 
 
 @gluon.jit
@@ -1103,10 +1101,12 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         acc = cdna5.wmma(a0, b0, acc)
         acc = cdna5.wmma(a1, b1, acc)
 
-    c_smem = gl.allocate_shared_memory(c_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], layouts.c_smem_layout)
+    c_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
+                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
+    c_smem = gl.allocate_shared_memory(c_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], c_smem_layout)
     c_smem.store(acc.to(c_ptr.dtype.element_ty))
     c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],
-                                              layouts.c_smem_layout)
+                                              c_smem_layout)
     c_desc = cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
     cdna5.tdm.async_store(c_desc, src=c_smem)
     cdna5.tdm.async_wait(0)

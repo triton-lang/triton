@@ -287,9 +287,8 @@ class WmmaLayouts:
     # The scales' shared memory and register layouts
     ws_smem_layout: gl.constexpr
     ws_reg_layout: gl.constexpr
-    # Accumulator's register layout and output's shared memory layout
+    # Accumulator's register layout
     acc_layout: gl.constexpr
-    y_smem_layout: gl.constexpr
 
 
 @gluon.constexpr_function
@@ -320,12 +319,11 @@ def get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
 
     ws_smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0], cga_layout=cga_w)
     ws_reg_layout = cdna5.get_wmma_scale_layout(w_reg_layout, [BLOCK_N, BLOCK_K // 32])
-    y_smem_layout = gl.PaddedSharedLayout.with_identity_for([[CTA_N, 8]], [BLOCK_M, BLOCK_N], [1, 0], cga_y)
 
     return WmmaLayouts(a_smem_layout, a_reg_layout,  #
                        w_smem_layout, w_reg_layout,  #
                        ws_smem_layout, ws_reg_layout,  #
-                       acc_layout, y_smem_layout)
+                       acc_layout)
 
 
 @gluon.jit
@@ -391,10 +389,13 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
         a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
-    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], layouts.y_smem_layout)
+    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N // cfg.CTA_N, 8]],
+                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0],
+                                                                          layouts.acc_layout.cga_layout)
+    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
     y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],
-                                              layouts.y_smem_layout)
+                                              y_smem_layout)
     y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
     cdna5.tdm.async_store(y_desc, src=y_smem)
     cdna5.tdm.async_wait(0)
