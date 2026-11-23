@@ -116,6 +116,30 @@ tt.func @dist1_deps(%lb : index, %ub : index, %step : index,
   tt.return %loop#0 : tensor<128x32xf16, #A>
 }
 
+// The carried pointer is read by loads in stages 1 and 0. Its update goes one
+// stage after the earliest of them, the stage-0 load, even though the stage-1
+// load reads it first in program order.
+// CHECK-LABEL: @dist1_deps_two_stages
+tt.func @dist1_deps_two_stages(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>) {
+  %init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %a_off = arith.constant dense<4> : tensor<128x32xi32, #A>
+  %loop:3 = scf.for %iv = %lb to %ub step %step iter_args(%acc_a = %init, %acc_b = %init, %a_ptr = %a_ptr_init) -> (tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32x!tt.ptr<f16>, #A>) {
+    // CHECK: tt.load {{.*}} {loop.cluster = 1 : i32, loop.stage = 1 : i32}
+    %a = tt.load %a_ptr {tt.latency = 1 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    // CHECK: tt.load {{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32}
+    %b = tt.load %a_ptr {tt.latency = 2 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    // CHECK: arith.addf {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+    %res_a = arith.addf %acc_a, %a : tensor<128x32xf16, #A>
+    // CHECK: arith.addf {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+    %res_b = arith.addf %acc_b, %b : tensor<128x32xf16, #A>
+    // CHECK: tt.addptr {{.*}} {loop.cluster = 2 : i32, loop.stage = 1 : i32}
+    %a_ptr_next = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>, #A>, tensor<128x32xi32, #A>
+    scf.yield %res_a, %res_b, %a_ptr_next : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>, tensor<128x32x!tt.ptr<f16>, #A>
+  }
+  tt.return %loop#0, %loop#1 : tensor<128x32xf16, #A>, tensor<128x32xf16, #A>
+}
+
 // CHECK-LABEL: @prologue_if
 tt.func @prologue_if(%lb : index, %ub : index, %step : index, %cnd : i1,
                  %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {

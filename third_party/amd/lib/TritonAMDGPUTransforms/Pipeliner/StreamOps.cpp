@@ -114,4 +114,9 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
+ttg::LocalLoadOp getChainLocalLoad(const StreamOpVariant &streamOps) {
+  return std::visit([](const auto &ops) { return ops.maybeLocalLoadOp; },
+                    streamOps);
+}
+
 } // namespace mlir

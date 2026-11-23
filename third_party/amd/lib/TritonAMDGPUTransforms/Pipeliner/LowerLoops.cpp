@@ -6,6 +6,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/Pipeliner/PipelineUtility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -40,13 +41,36 @@ void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
                        tt::CoarseSchedule &schedule, int stage,
                        const tt::CoarseSchedule::Cluster &cluster) {
   schedule.insert(localLoadOp, stage, cluster);
-  // If its only user is a ConvertLayout, we place it into the same stage so
-  // it can be folded by a later pass
-  if (localLoadOp->hasOneUse()) {
-    auto cvt = *localLoadOp->getUsers().begin();
-    if (isa<ttg::ConvertLayoutOp>(cvt)) {
-      schedule.insert(cvt, stage, cluster);
-    }
+
+  // Place the ConvertLayout users into the same stage so they can be folded
+  // into the load by a later pass. A load left in a different stage than its
+  // conversion keeps a distributed layout across the stage boundary, and the
+  // conversion then lowers through LDS, which puts a round trip back on the
+  // critical path of the dot the prefetch was meant to feed.
+  SmallVector<ttg::ConvertLayoutOp> cvts;
+  for (Operation *user : localLoadOp->getUsers())
+    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(user))
+      if (cvt->getBlock() == localLoadOp->getBlock())
+        cvts.push_back(cvt);
+
+  // An operand shared by several dots (M/N-sliced GEMMs) carries one identical
+  // conversion per consuming dot. Keep a single conversion per result layout so
+  // folding yields one LDS read rather than one per consumer. The survivor is
+  // moved next to the load so it dominates the uses it takes over.
+  llvm::MapVector<Type, ttg::ConvertLayoutOp> canonical;
+  SmallVector<ttg::ConvertLayoutOp> redundant;
+  for (ttg::ConvertLayoutOp cvt : cvts)
+    if (!canonical.try_emplace(cvt.getType(), cvt).second)
+      redundant.push_back(cvt);
+
+  for (auto &[type, cvt] : canonical) {
+    cvt->moveAfter(localLoadOp);
+    schedule.insert(cvt, stage, cluster);
+  }
+  for (ttg::ConvertLayoutOp cvt : redundant) {
+    cvt.getResult().replaceAllUsesWith(canonical[cvt.getType()].getResult());
+    schedule.erase(cvt);
+    cvt.erase();
   }
 }
 
@@ -146,18 +170,58 @@ ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
   return clusterMap;
 }
 
-// Remap global and compute clusters to the right place
+// Only consider slicing cases without chained dots (where the result of one dot
+// is used as the A or B operand of another dot). Chained dots usually come from
+// attention kernels, whose schedule is handled in
+// ChainedDotSchedule::updateSchedule.
+SmallVector<Operation *>
+getInterleavableDots(scf::ForOp forOp, int numLoadChains, bool ldsPrefetch) {
+  if (!ldsPrefetch)
+    return {};
+
+  SmallVector<Operation *> dots;
+  for (Operation &op : forOp.getBody()->without_terminator())
+    if (isa<tt::DotOpInterface>(&op))
+      dots.push_back(&op);
+  if (dots.size() < 2 || dots.size() != static_cast<size_t>(numLoadChains))
+    return {};
+
+  DenseSet<Operation *> dotSet(dots.begin(), dots.end());
+  for (Operation *dot : dots) {
+    auto dotOp = cast<tt::DotOpInterface>(dot);
+    for (Value operand : {dotOp.getA(), dotOp.getB()}) {
+      BackwardSliceOptions options;
+      options.omitBlockArguments = true;
+      SetVector<Operation *> slice;
+      (void)getBackwardSlice(operand, &slice, options);
+      if (llvm::any_of(slice,
+                       [&](Operation *op) { return dotSet.contains(op); }))
+        return {};
+    }
+  }
+  return dots;
+}
+
+// Remap global and compute clusters to the right place. Each dot goes to its
+// own group so the groups interleave; everything else in the compute cluster
+// runs after the dots and therefore belongs to the last group.
 void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
-                   Clusters &clusters) {
+                   ArrayRef<Clusters> groupClusters,
+                   const DenseMap<Operation *, int> &dotToGroup) {
+  int lastGroup = groupClusters.size() - 1;
   for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
     tt::CoarseSchedule::ClusterHash clusterHash =
         tt::CoarseSchedule::hashCluster(stageAndCluster.second);
     int oldClusterId = clusterMap[clusterHash];
     if (oldClusterId == 0) {
-      stageAndCluster.second = clusters[SCHED_GLOBAL_LOAD];
+      // The original loads are replaced by the stream ops, which pick their own
+      // group; the cluster here only has to be a valid one.
+      stageAndCluster.second = groupClusters[0][SCHED_GLOBAL_LOAD];
     } else {
       assert(oldClusterId == 1);
-      stageAndCluster.second = clusters[SCHED_COMPUTE];
+      auto it = dotToGroup.find(op);
+      int group = it != dotToGroup.end() ? it->second : lastGroup;
+      stageAndCluster.second = groupClusters[group][SCHED_COMPUTE];
     }
   }
 }
@@ -168,9 +232,11 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 // scheduling.
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
-LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
-                           bool waitAtTail, Clusters &clusters,
+LogicalResult initSchedule(scf::ForOp forOp, int maxDist, Stages &stages,
+                           int numStages, int &numBuffers, int numLoadChains,
+                           bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail,
+                           SmallVector<Operation *> &dots,
+                           SmallVector<Clusters> &groupClusters,
                            tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
@@ -179,10 +245,18 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   stages[SCHED_LOCAL_LOAD] = lastStage;
   stages[SCHED_COMPUTE] = lastStage;
 
-  // LDS prefetch of dot operands: schedule ttg.local_load one stage before
-  // the tt.dot that consumes it, so the LDS read of the next K-tile overlaps
-  // the current tile's matrix op. for num_stages<3 there is no room to separate
-  // them.
+  // LDS prefetch of dot operands: read a tile out of LDS ahead of the tt.dot
+  // that consumes it, so the read overlaps earlier matrix ops. num_stages must
+  // be at least 3 for there to be room between the two.
+  //
+  // How far ahead is a property of the loop body. Several independent dots
+  // (the M/N/K slicing case) leave room inside one iteration, so only the
+  // leading dot's operands cross the backedge and every other chain is read
+  // one dot ahead of its consumer, where its tile retires a dot later rather
+  // than an iteration later. A single dot is that rule's special case - no
+  // earlier dot to be read after, so all of its operands cross the backedge in
+  // registers.
+  //
   // This applies to tt.dot_scaled as well: its operand local_loads are hoisted
   // the same way, and the scale operands follow whichever stage their own
   // local_load lands in.
@@ -218,6 +292,10 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
 
   // Calculate the number of buffers needed for each load.
   // TODO: Use the precise number of buffers needed by the particular load.
+  // Multi-dot prefetch reads its non-prefetched chains a stage later,
+  // which would normally cost a slot, but it also refills each of those buffers
+  // after the read that frees it (see scheduleStreamOps), so the extra slot is
+  // not needed and the ring stays the same depth as under full prefetch.
   numBuffers =
       std::max(1, stages[SCHED_LOCAL_LOAD] - stages[SCHED_LOCAL_STORE]);
   // If we use AsyncCopy or TDM loads, we need one more buffer since we are not
@@ -268,12 +346,14 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
 
   // ldsPrefetch ordering: lead the loop body with the tt.dot (it consumes
   // operands pre-loaded into registers the previous iteration, so it has no
-  // intra-iteration dependency), then the async_wait, the next-tile TDM copy,
-  // and finally the ttg.local_load that feeds the next iteration.
+  // intra-iteration dependency), then the next-tile TDM copy, the async_wait,
+  // and finally the ttg.local_load that feeds the next iteration. The copy
+  // goes first so that it stays in flight across the wait, which only has to
+  // retire the previous iteration's copy.
   if (ldsPrefetch) {
     computeCluster = 0;
-    asyncWaitCluster = 1;
-    globalLoadCluster = 2;
+    globalLoadCluster = 1;
+    asyncWaitCluster = 2;
     localLoadCluster = 3;
     localStoreCluster = 4;
   }
@@ -297,23 +377,42 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
+  // Repeat the whole cluster sequence once per dot. A group is one such run of
+  // SCHED_SIZE clusters: group g owns clusters [g * SCHED_SIZE, (g+1) *
+  // SCHED_SIZE) and leads with dot g, so an op placed in group g is emitted
+  // between dot g and dot g+1. That is the only thing a group is -- a range of
+  // the cluster order, not anything the schedule records. One dot leaves a
+  // single group, which is the plain one-cluster-per-category schedule.
+  dots = getInterleavableDots(forOp, numLoadChains, ldsPrefetch);
+  int numGroups = std::max<int>(1, dots.size());
+  DenseMap<Operation *, int> dotToGroup;
+  for (auto [i, dot] : llvm::enumerate(dots))
+    dotToGroup[dot] = i;
+
   // Create a hash map to associate cluster hash in old schedule with its
   // clusterID
   ClusterMap clusterMap = createClusterMap(schedule);
 
   // Make assignments
-  Clusters clusterVec;
+  SmallVector<tt::CoarseSchedule::Cluster> clusterVec;
   schedule.clusters.clear();
-  std::ranges::generate(clusterVec,
-                        [&] { return schedule.clusters.newAtBack(); });
+  for (int i = 0; i < SCHED_SIZE * numGroups; ++i)
+    clusterVec.push_back(schedule.clusters.newAtBack());
 
-  clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
-  clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];
-  clusters[SCHED_LOCAL_LOAD] = clusterVec[localLoadCluster];
-  clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
-  clusters[SCHED_ASYNC_WAIT] = clusterVec[asyncWaitCluster];
+  groupClusters.assign(numGroups, Clusters{});
+  for (int group = 0; group < numGroups; ++group) {
+    int base = group * SCHED_SIZE;
+    Clusters &clusters = groupClusters[group];
+    clusters[SCHED_GLOBAL_LOAD] = clusterVec[base + globalLoadCluster];
+    clusters[SCHED_LOCAL_STORE] = clusterVec[base + localStoreCluster];
+    clusters[SCHED_LOCAL_LOAD] = clusterVec[base + localLoadCluster];
+    clusters[SCHED_COMPUTE] = clusterVec[base + computeCluster];
+    clusters[SCHED_ASYNC_WAIT] = clusterVec[base + asyncWaitCluster];
+  }
 
-  remapClusters(schedule, clusterMap, clusters);
+  remapClusters(schedule, clusterMap, groupClusters, dotToGroup);
+
+  LDBG("Interleaving the loop body across " << numGroups << " dot groups");
 
   LDBG("Cluster schedule:" << "  GLOBAL_LOAD cluster = " << globalLoadCluster
                            << ", LOCAL_STORE cluster = " << localStoreCluster
@@ -325,85 +424,217 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   return success();
 }
 
-void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
-                    ttg::LocalLoadOp maybeLocalLoadOp, Operation *origLoadOp,
-                    tt::CoarseSchedule &schedule, const Stages &stages,
-                    const Clusters &clusters) {
-  auto [loadStage, loadCluster] = schedule[origLoadOp];
-  schedule.insert(tdmOp, loadStage, loadCluster);
+//===----------------------------------------------------------------------===//
+// Stream op placement
+//
+// A chain is one load's replacement: the ops that fill an LDS buffer and the
+// local_load that reads the tile back. Each read is placed beside the dot it
+// feeds, and the chain's fill ops are placed to serve that read: they take the
+// stages and clusters of the read's group, except for the copy, which goes to
+// the group that refills the slot.
+//===----------------------------------------------------------------------===//
+
+void scheduleTDMFill(Operation *tdmOp, Operation *waitOp, int copyStage,
+                     tt::CoarseSchedule &schedule, const Stages &stages,
+                     const Clusters &clusters) {
+  schedule.insert(tdmOp, copyStage, clusters[SCHED_GLOBAL_LOAD]);
   // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
   // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
   // to ensure all warps are finished reading the shared buffer we will write
   // into. This is done by scheduling AsyncWait as the first cluster.
   // If AsyncCopy and LocalLoads are in the same stage we do not assign a
   // schedule so they are placed before the LocalLoads
-  if (loadStage != stages[SCHED_LOCAL_LOAD])
+  if (copyStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
-
-  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
-                      clusters[SCHED_LOCAL_LOAD]);
-  }
 }
 
-void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
-                       tt::CoarseSchedule &schedule, const Stages &stages,
-                       const Clusters &clusters) {
+void scheduleAsyncCopyFill(const AsyncCopyChainOps &asyncOps, int copyStage,
+                           tt::CoarseSchedule &schedule, const Stages &stages,
+                           const Clusters &clusters) {
   auto [copyOp, commitOp, waitOp, maybeLocalLoadOp] = asyncOps;
-  auto [loadStage, loadCluster] = schedule[loadOp];
-  schedule.insert(copyOp, loadStage, loadCluster);
+  schedule.insert(copyOp, copyStage, clusters[SCHED_GLOBAL_LOAD]);
   // Place ttg.async_commit_group op following AsyncCopyGlobalToLocal so the
   // later UpdateAsyncWaitCount pass can deduce better waitcnts
-  schedule.insert(commitOp, loadStage, loadCluster);
-  // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
-  // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
-  // to ensure all warps are finished reading the shared buffer we will write
-  // into. This is done by scheduling AsyncWait as the first cluster.
-  // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schedule so they are placed before the LocalLoads
-  if (loadStage != stages[SCHED_LOCAL_LOAD])
+  schedule.insert(commitOp, copyStage, clusters[SCHED_GLOBAL_LOAD]);
+  // See scheduleTDMFill.
+  if (copyStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
-
-  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
-                      clusters[SCHED_LOCAL_LOAD]);
-  }
 }
 
-void scheduleStreamCopy(const StreamCopyChainOps &streamOps,
-                        tt::LoadOp oldLoadOp, tt::CoarseSchedule &schedule,
-                        const Stages &stages, const Clusters &clusters) {
+void scheduleStreamCopyFill(const StreamCopyChainOps &streamOps,
+                            tt::LoadOp oldLoadOp, tt::CoarseSchedule &schedule,
+                            const Stages &stages, const Clusters &clusters) {
   auto [newLoadOp, subviewOp, localStoreOp, maybeLocalLoadOp] = streamOps;
   auto [loadStage, loadCluster] = schedule[oldLoadOp];
-
   schedule.insert(newLoadOp, loadStage, loadCluster);
   schedule.insert(subviewOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
   schedule.insert(localStoreOp, stages[SCHED_LOCAL_STORE],
                   clusters[SCHED_LOCAL_STORE]);
-  if (maybeLocalLoadOp && stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) {
-    scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
-                      clusters[SCHED_LOCAL_LOAD]);
+}
+
+std::optional<int> firstConsumerDot(ttg::LocalLoadOp localLoadOp,
+                                    ArrayRef<Operation *> dots) {
+  SetVector<Operation *> slice;
+  getForwardSlice(localLoadOp.getOperation(), &slice);
+  for (auto [i, dot] : llvm::enumerate(dots))
+    if (slice.contains(dot))
+      return i;
+  return std::nullopt;
+}
+
+// Where a chain's tile is read out of LDS. `prefetched` says the read happens
+// an iteration ahead, so the tile crosses the backedge in registers.
+struct ReadPlacement {
+  int group;
+  bool prefetched;
+};
+
+// Put each read in the group before its first consumer: group g reads
+// `dot g, copy, wait, local_load`, so the tile lands just before dot g+1.
+// With three dots, the chains feeding d0, d1, d2 take groups 2, 0, 1. The d0
+// chain wraps to the tail, i.e. the previous iteration, and that wrap is the
+// prefetch across the backedge. Collisions take the nearest free group below;
+// a chain in the last group has no later group to be read in and is
+// prefetched as well. Any other group from the consumer on would read the tile
+// after the dot that needs it, so when none of the allowed groups is free the
+// read shares the group before its consumer.
+SmallVector<ReadPlacement>
+assignReadPlacements(const LoadToStreamOpMap &loadToStreamOp,
+                     ArrayRef<Operation *> dots, int numGroups) {
+  SmallVector<ReadPlacement> reads;
+  SmallVector<bool> taken(numGroups, false);
+  for (auto &[l, streamOps] : loadToStreamOp) {
+    // A chain no dot consumes has no preference; treat it like the leading
+    // dot's, which keeps it prefetched and out of the way.
+    std::optional<int> consumer;
+    if (ttg::LocalLoadOp localLoad = getChainLocalLoad(streamOps))
+      consumer = firstConsumerDot(localLoad, dots);
+
+    // Probing down from the preferred group visits the groups below the
+    // consumer and then wraps to the last group. The leading dot's chains are
+    // prefetched wherever they land, so they may take any group.
+    int first = consumer.value_or(0);
+    int preferred = (first - 1 + numGroups) % numGroups;
+    int numAllowed = first == 0 ? numGroups : first + 1;
+    int group = preferred;
+    for (int tries = 1; tries < numAllowed && taken[group]; ++tries)
+      group = (group - 1 + numGroups) % numGroups;
+    if (taken[group])
+      group = preferred;
+    taken[group] = true;
+
+    bool prefetched = first == 0 || group + 1 == numGroups;
+    assert((prefetched || group < first) &&
+           "a read must precede the dot that consumes it");
+    reads.push_back({group, prefetched});
   }
+  return reads;
+}
+
+// The group whose copy refills the slot `read` frees. The copy goes half the
+// groups further on, so the ring keeps its depth. A read that does not cross
+// the backedge shares that slot with its own refill, so the refill clamps
+// instead of wrapping and the read stays first.
+//
+// Advancing exactly half of the groups is a heuristic based on measurements on
+// an fp16 GEMM kernel and is not necessary for correctness. read.group + 1
+// would be enough to guarantee correctness, but in practice it gives worse
+// results.
+int getRefillGroup(ReadPlacement read, int numGroups) {
+  int group = read.group + numGroups / 2;
+  group = read.prefetched ? group % numGroups : std::min(group, numGroups - 1);
+  assert((read.prefetched || group > read.group) &&
+         "the copy must follow the read whose buffer it refills");
+  return group;
+}
+
+// The stages a read of `read` runs in. The leading dot's chains are read a
+// stage early, so their tiles live in registers from the previous iteration
+// until the dot consumes them. Every other chain is read at the compute stage
+// instead: with dots d0 and d1, the d1 tile is loaded right after d0 and dies
+// at d1 rather than crossing the backedge. Two dots then hold one live tile
+// instead of two.
+Stages getReadStages(ReadPlacement read, const Stages &stages) {
+  Stages readStages = stages;
+  if (!read.prefetched) {
+    readStages[SCHED_LOCAL_LOAD] = stages[SCHED_COMPUTE];
+    readStages[SCHED_ASYNC_WAIT] = stages[SCHED_COMPUTE];
+  }
+  return readStages;
+}
+
+void scheduleRead(ttg::LocalLoadOp localLoad, ReadPlacement read,
+                  tt::CoarseSchedule &schedule, const Stages &stages,
+                  ArrayRef<Clusters> groupClusters) {
+  // Without LDS prefetch the read shares the compute stage and is left to be
+  // placed with its consumer.
+  if (!localLoad ||
+      (read.prefetched && stages[SCHED_LOCAL_LOAD] == stages[SCHED_COMPUTE]))
+    return;
+  scheduleLocalLoad(localLoad, schedule,
+                    getReadStages(read, stages)[SCHED_LOCAL_LOAD],
+                    groupClusters[read.group][SCHED_LOCAL_LOAD]);
+}
+
+// Coarse-schedule slot for one chain's fill ops. `stages` and `clusters` are
+// arrays indexed by SchedType (copy, wait, local store, ...), same shape as a
+// single chain's.
+struct FillPlacement {
+  Stages stages;
+  Clusters clusters;
+};
+
+// The wait has to precede the read and the copy has to follow it: the wait
+// runs with the read, and the copy goes to the refill group.
+FillPlacement placeFill(ReadPlacement read, const Stages &stages,
+                        ArrayRef<Clusters> groupClusters) {
+  int refillGroup = getRefillGroup(read, groupClusters.size());
+  FillPlacement fill{getReadStages(read, stages), groupClusters[read.group]};
+  fill.clusters[SCHED_GLOBAL_LOAD] =
+      groupClusters[refillGroup][SCHED_GLOBAL_LOAD];
+  return fill;
 }
 
 void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
                        tt::CoarseSchedule &schedule, const Stages &stages,
-                       const Clusters &clusters) {
-  for (auto [l, streamOps] : loadToStreamOp) {
-    if (auto asyncOps = std::get_if<TDMChainOps>(&streamOps)) {
-      auto [tdmOp, waitOp, localLoad] = *asyncOps;
-      scheduleTDMOps(tdmOp, waitOp, localLoad, l, schedule, stages, clusters);
-    } else if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
-      auto loadOp = cast<tt::LoadOp>(l);
-      scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);
-    } else if (auto sOps = std::get_if<StreamCopyChainOps>(&streamOps)) {
-      auto loadOp = cast<tt::LoadOp>(l);
-      scheduleStreamCopy(*sOps, loadOp, schedule, stages, clusters);
-    }
+                       ArrayRef<Clusters> groupClusters,
+                       ArrayRef<Operation *> dots) {
+  // Interleaving is only set up for loops that LDS prefetch, which always
+  // leaves a stage between the local load and compute for a chain to be
+  // dropped into.
+  bool interleaved = !dots.empty();
+  assert((!interleaved || stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE]) &&
+         "interleaved dots require room below the compute stage");
+
+  // A loop without interleavable dots has a single group; every chain is read
+  // in it and keeps the full prefetch.
+  SmallVector<ReadPlacement> reads =
+      interleaved
+          ? assignReadPlacements(loadToStreamOp, dots, groupClusters.size())
+          : SmallVector<ReadPlacement>(loadToStreamOp.size(),
+                                       ReadPlacement{0, true});
+
+  for (auto [chain, read] : llvm::zip(loadToStreamOp, reads)) {
+    auto &[l, streamOps] = chain;
+    FillPlacement fill = placeFill(read, stages, groupClusters);
+    int copyStage = schedule[l].first;
+    if (auto ops = std::get_if<TDMChainOps>(&streamOps))
+      scheduleTDMFill(ops->tdmOp, ops->waitOp, copyStage, schedule, fill.stages,
+                      fill.clusters);
+    else if (auto ops = std::get_if<AsyncCopyChainOps>(&streamOps))
+      scheduleAsyncCopyFill(*ops, copyStage, schedule, fill.stages,
+                            fill.clusters);
+    else if (auto ops = std::get_if<StreamCopyChainOps>(&streamOps))
+      scheduleStreamCopyFill(*ops, cast<tt::LoadOp>(l), schedule, fill.stages,
+                             fill.clusters);
   }
+
+  for (auto [chain, read] : llvm::zip(loadToStreamOp, reads))
+    scheduleRead(getChainLocalLoad(chain.second), read, schedule, stages,
+                 groupClusters);
 }
 
 void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
@@ -412,7 +643,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                     bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail) {
   LDBG("SingleDotSchedule::updateSchedule");
   Stages stages;
-  Clusters clusters;
+  SmallVector<Clusters> groupClusters;
 
   int maxDist = 0;
   for (auto &[l, info] : loadToInfo) {
@@ -420,8 +651,10 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   int numBuffers = 1;
-  if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, waitAtTail, clusters,
+  SmallVector<Operation *> dots;
+  if (failed(initSchedule(forOp, maxDist, stages, schedule.getNumStages(),
+                          numBuffers, loadToInfo.size(), useAsyncCopy,
+                          hasTDMLoad, waitAtTail, dots, groupClusters,
                           schedule)))
     return;
 
@@ -429,7 +662,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   auto loadToStreamOps = createStreamOps(loadToInfo, forOp, numBuffers,
                                          useAsyncCopy, axisInfoAnalysis);
 
-  scheduleStreamOps(loadToStreamOps, schedule, stages, clusters);
+  scheduleStreamOps(loadToStreamOps, schedule, stages, groupClusters, dots);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule stream ops:");
 
   for (auto [l, _] : loadToInfo) {
@@ -443,7 +676,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dependencies:");
   ttg::scheduleDistanceOneDependencies(forOp, schedule);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule with dist 1:");
-  tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
+  tt::CoarseSchedule::Cluster computeCluster =
+      groupClusters.back()[SCHED_COMPUTE];
   ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Final coarse schedule:");
 }
