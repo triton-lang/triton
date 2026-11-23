@@ -327,90 +327,113 @@ def random_experts(E, N, K):
     return W, W_scale, [w[2] for w in weights]
 
 
+@gluon.aggregate
+class MatmulConfig:
+    # Tensor shapes
+    M: gl.tensor | gl.constexpr
+    N: gl.tensor | gl.constexpr
+    K: gl.constexpr
+    E: gl.constexpr
+    # Operand formats
+    A_FORMAT: gl.constexpr
+    W_FORMAT: gl.constexpr
+    # Tile size
+    BLOCK_M: gl.constexpr
+    BLOCK_N: gl.constexpr
+    BLOCK_K: gl.constexpr
+    # Kernel config
+    NUM_BUFFERS: gl.constexpr
+    GATHER: gl.constexpr
+    SCATTER: gl.constexpr
+
+
 @gluon.jit
-def matmul_ld_gmem(k, pred, off_m, off_n, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
-                   BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr, GATHER: gl.constexpr):
-    i = k % NUM_BUFFERS
-    if GATHER:
-        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, k * BLOCK_K], pred=pred, clamp_bounds=True)
+def matmul_ld_gmem(cfg, k, pred, off_m, off_n, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem):
+    i = k % cfg.NUM_BUFFERS
+    if cfg.GATHER:
+        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, k * cfg.BLOCK_K], pred=pred,
+                                                    clamp_bounds=True)
         cdna5.tdm.async_gather(a_desc, gather_idx, a_smem.index(i))
     else:
-        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred,
+        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * cfg.BLOCK_K], pred=pred,
                                                     clamp_bounds=True)
         cdna5.tdm.async_load(a_desc, dest=a_smem.index(i))
-    w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * BLOCK_K // 2], pred=pred,
+    w_desc = cdna5.tdm.update_tensor_descriptor(w_desc, add_offsets=[off_n, k * cfg.BLOCK_K // 2], pred=pred,
                                                 clamp_bounds=True)
-    ws_desc = cdna5.tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * BLOCK_K // 32 * 128],
+    ws_desc = cdna5.tdm.update_tensor_descriptor(ws_desc, add_offsets=[off_n // 128, k * cfg.BLOCK_K // 32 * 128],
                                                  pred=pred, clamp_bounds=True)
     cdna5.tdm.async_load(w_desc, dest=w_smem.index(i))
     cdna5.tdm.async_load(ws_desc, dest=ws_smem.index(i))
 
 
 @gluon.jit
-def matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts: gl.constexpr, NUM_BUFFERS: gl.constexpr):
-    a = a_smem.index(k % NUM_BUFFERS).load(layouts.a_reg_layout)
-    w = w_smem.index(k % NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
-    w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(k % NUM_BUFFERS)).load(layouts.ws_reg_layout)
+def matmul_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts: gl.constexpr):
+    a = a_smem.index(k % cfg.NUM_BUFFERS).load(layouts.a_reg_layout)
+    w = w_smem.index(k % cfg.NUM_BUFFERS).permute([1, 0]).load(layouts.w_reg_layout)
+    w_scale = t5.unshuffle_scales_cdna5(ws_smem.index(k % cfg.NUM_BUFFERS)).load(layouts.ws_reg_layout)
     return a, w, w_scale
 
 
 @gluon.jit
 def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_ptr,  #
-                  M, NUM_EXPERTS, ROWS_PER_EXPERT: gl.constexpr, N, K: gl.constexpr,  #
-                  stride_am, stride_wn, stride_scale, stride_ym,  #
+                  M, N, K: gl.constexpr, E: gl.constexpr,  #
                   GATHER: gl.constexpr, SCATTER: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
-    BLOCK_M: gl.constexpr = 256
-    BLOCK_N: gl.constexpr = 256
-    BLOCK_K: gl.constexpr = 256
-    gl.static_assert(ROWS_PER_EXPERT % BLOCK_M == 0)
+    cfg = MatmulConfig(M, N, K, E, A_FORMAT="e4m3", W_FORMAT="e2m1",  #
+                       BLOCK_M=256, BLOCK_N=256, BLOCK_K=256,  #
+                       NUM_BUFFERS=NUM_BUFFERS, GATHER=GATHER, SCATTER=SCATTER)
     num_warps: gl.constexpr = gl.num_warps()
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(BLOCK_M, BLOCK_N, BLOCK_K, num_warps)
-    if GATHER:
-        a_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [BLOCK_M, BLOCK_K], [1, 0])
+    layouts: gl.constexpr = t5.get_mx_wmma_layouts(cfg.BLOCK_M, cfg.BLOCK_N, cfg.BLOCK_K, num_warps)
+    if cfg.GATHER:
+        a_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [cfg.BLOCK_M, cfg.BLOCK_K],
+                                                                              [1, 0])
     else:
         a_smem_layout: gl.constexpr = layouts.a_smem_layout
-    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, 1], [BLOCK_M, BLOCK_K], a_smem_layout)
-    w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [NUM_EXPERTS * N, K // 2], [stride_wn, 1], [BLOCK_N, BLOCK_K // 2],
-                                              layouts.w_smem_layout)
-    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [NUM_EXPERTS * N // 128, K // 32 * 128], [stride_scale, 1],
-                                               [BLOCK_N // 128, BLOCK_K // 32 * 128], layouts.ws_smem_layout)
-    a_smem = gl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS, BLOCK_M, BLOCK_K], a_desc.layout)
-    w_smem = gl.allocate_shared_memory(w_desc.dtype, [NUM_BUFFERS, BLOCK_N, BLOCK_K // 2], w_desc.layout)
-    ws_smem = gl.allocate_shared_memory(gl.uint8, [NUM_BUFFERS, BLOCK_N // 128, BLOCK_K // 32 * 128], ws_desc.layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [cfg.M, cfg.K], [cfg.K, 1], [cfg.BLOCK_M, cfg.BLOCK_K],
+                                              a_smem_layout)
+    w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [cfg.E * cfg.N, cfg.K // 2], [cfg.K // 2, 1],
+                                              [cfg.BLOCK_N, cfg.BLOCK_K // 2], layouts.w_smem_layout)
+    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [cfg.E * cfg.N // 128, cfg.K // 32 * 128],
+                                               [cfg.K // 32 * 128, 1], [cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128],
+                                               layouts.ws_smem_layout)
+    a_smem = gl.allocate_shared_memory(a_desc.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], a_desc.layout)
+    w_smem = gl.allocate_shared_memory(w_desc.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K // 2], w_desc.layout)
+    ws_smem = gl.allocate_shared_memory(gl.uint8, [cfg.NUM_BUFFERS, cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128],
+                                        ws_desc.layout)
 
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(N, BLOCK_N)
-    off_m = pid // num_pid_n * BLOCK_M
-    off_n = pid % num_pid_n * BLOCK_N
-    expert = off_m // ROWS_PER_EXPERT
-    off_wn = expert * N + off_n
+    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    off_m = pid // num_pid_n * cfg.BLOCK_M
+    off_n = pid % num_pid_n * cfg.BLOCK_N
+    expert = off_m // (cfg.M // cfg.E)
+    off_wn = expert * cfg.N + off_n
     idx_layout: gl.constexpr = gl.SliceLayout(
-        dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_M // num_warps, 1], threads_per_warp=[1, warp_size],
+        dim=1, parent=gl.BlockedLayout(size_per_thread=[cfg.BLOCK_M // num_warps, 1], threads_per_warp=[1, warp_size],
                                        warps_per_cta=[num_warps, 1], order=[1, 0]))
-    rows = off_m + gl.arange(0, BLOCK_M, idx_layout)
-    if GATHER:
+    rows = off_m + gl.arange(0, cfg.BLOCK_M, idx_layout)
+    if cfg.GATHER:
         gather_idx = gl.load(gather_idx_ptr + rows).to(gl.int16)
     else:
         gather_idx = None
 
-    num_k = gl.cdiv(K, BLOCK_K)
-    for k in gl.static_range(NUM_BUFFERS - 1):
-        matmul_ld_gmem(k, k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem,
-                       BLOCK_K, NUM_BUFFERS, GATHER)
-    acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
+    num_k = gl.cdiv(cfg.K, cfg.BLOCK_K)
+    for k in gl.static_range(cfg.NUM_BUFFERS - 1):
+        matmul_ld_gmem(cfg, k, k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem)
+    acc = gl.zeros([cfg.BLOCK_M, cfg.BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
-        next_k = k + NUM_BUFFERS - 1
-        matmul_ld_gmem(next_k, next_k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem,
-                       ws_smem, BLOCK_K, NUM_BUFFERS, GATHER)
-        cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 3)
-        a, w, w_scale = matmul_ld_smem(k, a_smem, w_smem, ws_smem, layouts, NUM_BUFFERS)
-        acc = cdna5.wmma_scaled(a, None, "e4m3", w, w_scale, "e2m1", acc)
+        next_k = k + cfg.NUM_BUFFERS - 1
+        matmul_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem,
+                       ws_smem)
+        cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 3)
+        a, w, w_scale = matmul_ld_smem(cfg, k, a_smem, w_smem, ws_smem, layouts)
+        acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
-    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[BLOCK_N, 8]], [BLOCK_M, BLOCK_N], [1, 0])
-    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], y_smem_layout)
+    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
+                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
+    y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
-    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, N], [stride_ym, 1], [BLOCK_M, BLOCK_N], y_smem_layout)
-    if SCATTER:
+    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],
+                                              y_smem_layout)
+    if cfg.SCATTER:
         scatter_idx = gl.load(scatter_idx_ptr + rows).to(gl.int16)
         y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[0, off_n], clamp_bounds=True)
         cdna5.tdm.async_scatter(y_desc, scatter_idx, y_smem)
@@ -420,15 +443,14 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
     cdna5.tdm.async_wait(0)
 
 
-def matmul(A, W, W_scale, rows_per_expert, gather_idx=None, scatter_idx=None):
+def matmul(A, W, W_scale, gather_idx=None, scatter_idx=None):
     E, N, K = W.shape[0], W.shape[1], A.shape[1]
-    M = E * rows_per_expert
+    M = A.shape[0] if gather_idx is None else gather_idx.numel()
     Y = torch.empty(M, N, device=A.device, dtype=torch.bfloat16)
     grid = (M // 256 * triton.cdiv(N, 256), )
     matmul_kernel[grid](
         A, W, W_scale, Y, gather_idx, scatter_idx,  #
-        M, E, rows_per_expert, N, K,  #
-        A.stride(0), W.stride(1), W_scale.stride(0), Y.stride(0),  #
+        M, N, K, E,  #
         gather_idx is not None, scatter_idx is not None)
     return Y
 
@@ -440,7 +462,7 @@ def test_matmul_gather(E, R, N, K):
     A = t5.random_fp8(T, K)
     W, W_scale, W_ref = random_experts(E, N, K)
     gather_idx = torch.randint(0, T, (E, R), device="cuda", dtype=torch.int32).sort(dim=1).values.flatten()
-    Y = matmul(A, W, W_scale, R, gather_idx=gather_idx)
+    Y = matmul(A, W, W_scale, gather_idx=gather_idx)
     ref = torch.cat([A[gather_idx[e * R:(e + 1) * R].long()].float() @ W_ref[e].T for e in range(E)])
     torch.testing.assert_close(ref, Y.float(), atol=1e-1, rtol=1e-2)
 
@@ -451,7 +473,7 @@ def test_matmul_scatter(E, R, N, K):
     A = t5.random_fp8(E * R, K)
     W, W_scale, W_ref = random_experts(E, N, K)
     scatter_idx = torch.randperm(E * R, device="cuda", dtype=torch.int32)
-    Y = matmul(A, W, W_scale, R, scatter_idx=scatter_idx)
+    Y = matmul(A, W, W_scale, scatter_idx=scatter_idx)
     ref = torch.empty(E * R, N, device="cuda")
     ref[scatter_idx.long()] = torch.cat([A[e * R:(e + 1) * R].float() @ W_ref[e].T for e in range(E)])
     torch.testing.assert_close(ref, Y.float(), atol=1e-1, rtol=1e-2)
@@ -476,11 +498,11 @@ if __name__ == "__main__":
         else:
             A = t5.random_fp8(M, K)
             kwargs = dict(scatter_idx=torch.randperm(M, device="cuda", dtype=torch.int32))
-        ms = triton.testing.do_bench(lambda: matmul(A, W, W_scale, R, **kwargs), warmup=100, rep=500)
+        ms = triton.testing.do_bench(lambda: matmul(A, W, W_scale, **kwargs), warmup=100, rep=500)
         print(f"{name}: {2 * M * N * K / ms * 1e-9:.0f} TFLOPS")
 
 # %%
 # ```
-# mlp1: 6475 TFLOPS
-# mlp2: 6014 TFLOPS
+# mlp1: 6657 TFLOPS
+# mlp2: 6133 TFLOPS
 # ```

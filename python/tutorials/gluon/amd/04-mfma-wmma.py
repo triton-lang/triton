@@ -569,6 +569,22 @@ if __name__ == "__main__" and is_cdna4():
 
 
 @gluon.aggregate
+class MatmulConfig:
+    # Tensor shapes
+    M: gl.tensor | gl.constexpr
+    N: gl.tensor | gl.constexpr
+    K: gl.tensor | gl.constexpr
+    # Operand dtype
+    dtype: gl.constexpr
+    # Tile size
+    BLOCK_M: gl.constexpr
+    BLOCK_N: gl.constexpr
+    BLOCK_K: gl.constexpr
+    # Kernel config
+    NUM_BUFFERS: gl.constexpr
+
+
+@gluon.aggregate
 class MfmaLayouts:
     # Operand A's global memory, shared memory, and register layouts
     a_gmem_layout: gl.constexpr
@@ -601,67 +617,63 @@ def get_mfma_layouts():
 
 
 @gluon.jit
-def matmul_cdna4_ld_gmem(k, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk,  #
-                         BLOCK_K: gl.constexpr, NUM_BUFFERS: gl.constexpr):
-    cdna4.buffer.load_to_shared(a_smem.index(k % NUM_BUFFERS), a_desc, a_offs, soffset=k * BLOCK_K * stride_ak)
-    cdna4.buffer.load_to_shared(b_smem.index(k % NUM_BUFFERS), b_desc, b_offs, soffset=k * BLOCK_K * stride_bk)
+def matmul_cdna4_ld_gmem(cfg, k, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem):
+    i = k % cfg.NUM_BUFFERS
+    cdna4.buffer.load_to_shared(a_smem.index(i), a_desc, a_offs, soffset=k * cfg.BLOCK_K)
+    cdna4.buffer.load_to_shared(b_smem.index(i), b_desc, b_offs, soffset=k * cfg.BLOCK_K)
     cdna4.async_copy.commit_group()
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.constexpr):
-    a_buf = a_smem.index(k % NUM_BUFFERS)
-    b_buf = b_smem.index(k % NUM_BUFFERS)
+def matmul_cdna4_ld_smem(cfg, k, a_smem, b_smem, layouts):
+    a_buf = a_smem.index(k % cfg.NUM_BUFFERS)
+    b_buf = b_smem.index(k % cfg.NUM_BUFFERS)
     a = a_buf.load(layouts.a_reg_layout)
     b = b_buf.permute([1, 0]).load(layouts.b_reg_layout)
     return a, b
 
 
 @gluon.jit
-def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
-                        stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
-                        NUM_BUFFERS: gl.constexpr = 2):
-    BLOCK_M: gl.constexpr = 256
-    BLOCK_N: gl.constexpr = 256
-    BLOCK_K: gl.constexpr = 64
+def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K, NUM_BUFFERS: gl.constexpr = 2):
+    cfg = MatmulConfig(M, N, K, a_ptr.dtype.element_ty,  #
+                       BLOCK_M=256, BLOCK_N=256, BLOCK_K=64,  #
+                       NUM_BUFFERS=NUM_BUFFERS)
     layouts = get_mfma_layouts()
 
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(N, BLOCK_N)
-    off_m = pid // num_pid_n * BLOCK_M
-    off_n = pid % num_pid_n * BLOCK_N
+    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    off_m = pid // num_pid_n * cfg.BLOCK_M
+    off_n = pid % num_pid_n * cfg.BLOCK_N
 
-    a_desc = t1.make_buffer_descriptor(a_ptr, off_m, M, stride_am, BLOCK_M)
-    b_desc = t1.make_buffer_descriptor(b_ptr, off_n, N, stride_bn, BLOCK_N)
-    a_offs = offs_2d(BLOCK_M, BLOCK_K, stride_am, layouts.a_gmem_layout)
-    b_offs = offs_2d(BLOCK_N, BLOCK_K, stride_bn, layouts.b_gmem_layout)
+    a_desc = t1.make_buffer_descriptor(a_ptr, off_m, cfg.M, cfg.K, cfg.BLOCK_M)
+    b_desc = t1.make_buffer_descriptor(b_ptr, off_n, cfg.N, cfg.K, cfg.BLOCK_N)
+    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, layouts.a_gmem_layout)
+    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, layouts.b_gmem_layout)
 
-    a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K], layouts.b_smem_layout)
+    a_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K], layouts.b_smem_layout)
 
-    num_k = gl.cdiv(K, BLOCK_K)
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        matmul_cdna4_ld_gmem(i, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K,
-                             NUM_BUFFERS)
+    num_k = gl.cdiv(cfg.K, cfg.BLOCK_K)
+    for i in gl.static_range(cfg.NUM_BUFFERS - 1):
+        matmul_cdna4_ld_gmem(cfg, i, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
 
-    acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(num_k - (NUM_BUFFERS - 1)):
-        matmul_cdna4_ld_gmem(k + NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk,
-                             BLOCK_K, NUM_BUFFERS)
-        cdna4.async_copy.wait_group(NUM_BUFFERS - 1)
-        a, b = matmul_cdna4_ld_smem(k, a_smem, b_smem, layouts, NUM_BUFFERS)
+    acc = gl.zeros([cfg.BLOCK_M, cfg.BLOCK_N], gl.float32, layouts.acc_layout)
+    for k in range(num_k - (cfg.NUM_BUFFERS - 1)):
+        matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
+        cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
+        a, b = matmul_cdna4_ld_smem(cfg, k, a_smem, b_smem, layouts)
         acc = cdna4.mfma(a, b, acc)
 
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        cdna4.async_copy.wait_group(NUM_BUFFERS - 2 - i)
-        a, b = matmul_cdna4_ld_smem(num_k - (NUM_BUFFERS - 1) + i, a_smem, b_smem, layouts, NUM_BUFFERS)
+    for i in gl.static_range(cfg.NUM_BUFFERS - 1):
+        cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
+        a, b = matmul_cdna4_ld_smem(cfg, num_k - (cfg.NUM_BUFFERS - 1) + i, a_smem, b_smem, layouts)
         acc = cdna4.mfma(a, b, acc)
 
-    c_desc = t1.make_buffer_descriptor(c_ptr + off_n, off_m, M, stride_cm, BLOCK_M)
-    rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
-    cols = gl.arange(0, BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
-    mask = (off_n + cols < N)[None, :]
-    cdna4.buffer.store(acc.to(c_ptr.dtype.element_ty), c_desc, rows[:, None] * stride_cm + cols[None, :], mask)
+    c_desc = t1.make_buffer_descriptor(c_ptr + off_n, off_m, cfg.M, cfg.N, cfg.BLOCK_M)
+    rows = gl.arange(0, cfg.BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
+    cols = gl.arange(0, cfg.BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
+    mask = (off_n + cols < cfg.N)[None, :]
+    cdna4.buffer.store(acc.to(c_ptr.dtype.element_ty), c_desc, rows[:, None] * cfg.N + cols[None, :], mask)
 
 
 def matmul_cdna4(A, B, kernel):
@@ -669,7 +681,7 @@ def matmul_cdna4(A, B, kernel):
     N = B.shape[0]
     C = torch.empty(M, N, device=A.device, dtype=A.dtype)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
-    compiled = kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1), C.stride(0))
+    compiled = kernel[grid](A, B, C, M, N, K)
     return C, compiled
 
 
@@ -691,10 +703,9 @@ def test_matmul_cdna4(M, N, K):
 
 
 @gluon.jit
-def matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.constexpr, k_start: gl.constexpr,
-                                  k_size: gl.constexpr):
-    a_buf = a_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
-    b_buf = b_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
+def matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, k_start: gl.constexpr, k_size: gl.constexpr):
+    a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
+    b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
     b = b_buf.permute([1, 0]).load(layouts.b_reg_layout)
     return a, b
@@ -702,55 +713,52 @@ def matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.co
 
 @gluon.jit
 def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
-                                 stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
                                  NUM_BUFFERS: gl.constexpr = 2):
-    BLOCK_M: gl.constexpr = 256
-    BLOCK_N: gl.constexpr = 256
-    BLOCK_K: gl.constexpr = 64
+    cfg = MatmulConfig(M, N, K, a_ptr.dtype.element_ty,  #
+                       BLOCK_M=256, BLOCK_N=256, BLOCK_K=64,  #
+                       NUM_BUFFERS=NUM_BUFFERS)
     layouts = get_mfma_layouts()
 
-    SUB_K: gl.constexpr = BLOCK_K // 2
+    SUB_K: gl.constexpr = cfg.BLOCK_K // 2
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(N, BLOCK_N)
-    off_m = pid // num_pid_n * BLOCK_M
-    off_n = pid % num_pid_n * BLOCK_N
+    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    off_m = pid // num_pid_n * cfg.BLOCK_M
+    off_n = pid % num_pid_n * cfg.BLOCK_N
 
-    a_desc = t1.make_buffer_descriptor(a_ptr, off_m, M, stride_am, BLOCK_M)
-    b_desc = t1.make_buffer_descriptor(b_ptr, off_n, N, stride_bn, BLOCK_N)
-    a_offs = offs_2d(BLOCK_M, BLOCK_K, stride_am, layouts.a_gmem_layout)
-    b_offs = offs_2d(BLOCK_N, BLOCK_K, stride_bn, layouts.b_gmem_layout)
+    a_desc = t1.make_buffer_descriptor(a_ptr, off_m, cfg.M, cfg.K, cfg.BLOCK_M)
+    b_desc = t1.make_buffer_descriptor(b_ptr, off_n, cfg.N, cfg.K, cfg.BLOCK_N)
+    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, layouts.a_gmem_layout)
+    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, layouts.b_gmem_layout)
 
-    a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K], layouts.b_smem_layout)
+    a_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K], layouts.b_smem_layout)
 
-    num_k = gl.cdiv(K, BLOCK_K)
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        matmul_cdna4_ld_gmem(i, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk, BLOCK_K,
-                             NUM_BUFFERS)
+    num_k = gl.cdiv(cfg.K, cfg.BLOCK_K)
+    for i in gl.static_range(cfg.NUM_BUFFERS - 1):
+        matmul_cdna4_ld_gmem(cfg, i, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
 
-    acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
-    for k in range(num_k - (NUM_BUFFERS - 1)):
-        matmul_cdna4_ld_gmem(k + NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem, stride_ak, stride_bk,
-                             BLOCK_K, NUM_BUFFERS)
-        cdna4.async_copy.wait_group(NUM_BUFFERS - 1)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
+    acc = gl.zeros([cfg.BLOCK_M, cfg.BLOCK_N], gl.float32, layouts.acc_layout)
+    for k in range(num_k - (cfg.NUM_BUFFERS - 1)):
+        matmul_cdna4_ld_gmem(cfg, k + cfg.NUM_BUFFERS - 1, a_desc, b_desc, a_offs, b_offs, a_smem, b_smem)
+        cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 1)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
-    for i in gl.static_range(NUM_BUFFERS - 1):
-        k = num_k - (NUM_BUFFERS - 1) + i
-        cdna4.async_copy.wait_group(NUM_BUFFERS - 2 - i)
-        a0, b0 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
-        a1, b1 = matmul_cdna4_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
+    for i in gl.static_range(cfg.NUM_BUFFERS - 1):
+        k = num_k - (cfg.NUM_BUFFERS - 1) + i
+        cdna4.async_copy.wait_group(cfg.NUM_BUFFERS - 2 - i)
+        a0, b0 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
+        a1, b1 = matmul_cdna4_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
         acc = cdna4.mfma(a0, b0, acc)
         acc = cdna4.mfma(a1, b1, acc)
 
-    c_desc = t1.make_buffer_descriptor(c_ptr + off_n, off_m, M, stride_cm, BLOCK_M)
-    rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
-    cols = gl.arange(0, BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
-    mask = (off_n + cols < N)[None, :]
-    cdna4.buffer.store(acc.to(c_ptr.dtype.element_ty), c_desc, rows[:, None] * stride_cm + cols[None, :], mask)
+    c_desc = t1.make_buffer_descriptor(c_ptr + off_n, off_m, cfg.M, cfg.N, cfg.BLOCK_M)
+    rows = gl.arange(0, cfg.BLOCK_M, gl.SliceLayout(1, layouts.acc_layout))
+    cols = gl.arange(0, cfg.BLOCK_N, gl.SliceLayout(0, layouts.acc_layout))
+    mask = (off_n + cols < cfg.N)[None, :]
+    cdna4.buffer.store(acc.to(c_ptr.dtype.element_ty), c_desc, rows[:, None] * cfg.N + cols[None, :], mask)
 
 
 @pytest.mark.parametrize("M, N, K", [(256, 256, 128), (500, 300, 256), (1024, 512, 512)])
@@ -778,8 +786,8 @@ if __name__ == "__main__" and is_cdna4():
 
 # %%
 # ```
-# matmul: 1031 TFLOPS
-# matmul_subtile: 1055 TFLOPS
+# matmul: 1039 TFLOPS
+# matmul_subtile: 1075 TFLOPS
 # ```
 
 # %%
@@ -1054,63 +1062,63 @@ def get_wmma_layouts(partitioned):
 
 
 @gluon.jit
-def matmul_cdna5_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS: gl.constexpr, k_start: gl.constexpr,
-                                  k_size: gl.constexpr):
-    a_buf = a_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
-    b_buf = b_smem.index(k % NUM_BUFFERS).slice(k_start, k_size, 1)
+def matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, k_start: gl.constexpr, k_size: gl.constexpr):
+    a_buf = a_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
+    b_buf = b_smem.index(k % cfg.NUM_BUFFERS).slice(k_start, k_size, 1)
     a = a_buf.load(layouts.a_reg_layout)
     b = b_buf.permute([1, 0]).load(layouts.b_reg_layout)
     return a, b
 
 
 @gluon.jit
-def matmul_cdna5_ld_gmem(k, pred, a_desc, b_desc, a_smem, b_smem, off_m, off_n, BLOCK_K: gl.constexpr,
-                         NUM_BUFFERS: gl.constexpr):
-    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[off_n, k * BLOCK_K], pred=pred, clamp_bounds=True)
-    cdna5.tdm.async_load(a_desc, dest=a_smem.index(k % NUM_BUFFERS))
-    cdna5.tdm.async_load(b_desc, dest=b_smem.index(k % NUM_BUFFERS))
+def matmul_cdna5_ld_gmem(cfg, k, pred, off_m, off_n, a_desc, b_desc, a_smem, b_smem):
+    a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[off_m, k * cfg.BLOCK_K], pred=pred,
+                                                clamp_bounds=True)
+    b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[off_n, k * cfg.BLOCK_K], pred=pred,
+                                                clamp_bounds=True)
+    cdna5.tdm.async_load(a_desc, dest=a_smem.index(k % cfg.NUM_BUFFERS))
+    cdna5.tdm.async_load(b_desc, dest=b_smem.index(k % cfg.NUM_BUFFERS))
 
 
 @gluon.jit
 def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
-                        stride_am, stride_ak, stride_bn, stride_bk, stride_cm,  #
                         PARTITIONED: gl.constexpr, NUM_BUFFERS: gl.constexpr = 2):
-    BLOCK_M: gl.constexpr = 256
-    BLOCK_N: gl.constexpr = 256
-    BLOCK_K: gl.constexpr = 64
+    cfg = MatmulConfig(M, N, K, a_ptr.dtype.element_ty,  #
+                       BLOCK_M=256, BLOCK_N=256, BLOCK_K=64,  #
+                       NUM_BUFFERS=NUM_BUFFERS)
     layouts = get_wmma_layouts(PARTITIONED)
 
-    SUB_K: gl.constexpr = BLOCK_K // 2
+    SUB_K: gl.constexpr = cfg.BLOCK_K // 2
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(N, BLOCK_N)
-    off_m = pid // num_pid_n * BLOCK_M
-    off_n = pid % num_pid_n * BLOCK_N
+    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    off_m = pid // num_pid_n * cfg.BLOCK_M
+    off_n = pid % num_pid_n * cfg.BLOCK_N
 
-    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [M, K], [stride_am, stride_ak], [BLOCK_M, BLOCK_K],
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [cfg.M, cfg.K], [cfg.K, 1], [cfg.BLOCK_M, cfg.BLOCK_K],
                                               layouts.a_smem_layout)
-    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [N, K], [stride_bn, stride_bk], [BLOCK_N, BLOCK_K],
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [cfg.N, cfg.K], [cfg.K, 1], [cfg.BLOCK_N, cfg.BLOCK_K],
                                               layouts.b_smem_layout)
-    a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_M, BLOCK_K], layouts.a_smem_layout)
-    b_smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [NUM_BUFFERS, BLOCK_N, BLOCK_K], layouts.b_smem_layout)
+    a_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], layouts.a_smem_layout)
+    b_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K], layouts.b_smem_layout)
 
-    num_k = gl.cdiv(K, BLOCK_K)
-    for k in gl.static_range(NUM_BUFFERS - 1):
-        matmul_cdna5_ld_gmem(k, k < num_k, a_desc, b_desc, a_smem, b_smem, off_m, off_n, BLOCK_K, NUM_BUFFERS)
+    num_k = gl.cdiv(cfg.K, cfg.BLOCK_K)
+    for k in gl.static_range(cfg.NUM_BUFFERS - 1):
+        matmul_cdna5_ld_gmem(cfg, k, k < num_k, off_m, off_n, a_desc, b_desc, a_smem, b_smem)
 
-    acc = gl.zeros([BLOCK_M, BLOCK_N], gl.float32, layouts.acc_layout)
+    acc = gl.zeros([cfg.BLOCK_M, cfg.BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
-        next_k = k + NUM_BUFFERS - 1
-        matmul_cdna5_ld_gmem(next_k, next_k < num_k, a_desc, b_desc, a_smem, b_smem, off_m, off_n, BLOCK_K, NUM_BUFFERS)
-        cdna5.tdm.async_wait((NUM_BUFFERS - 1) * 2)
-        a0, b0 = matmul_cdna5_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, 0, SUB_K)
-        a1, b1 = matmul_cdna5_ld_smem_subtiled(k, a_smem, b_smem, layouts, NUM_BUFFERS, SUB_K, SUB_K)
+        next_k = k + cfg.NUM_BUFFERS - 1
+        matmul_cdna5_ld_gmem(cfg, next_k, next_k < num_k, off_m, off_n, a_desc, b_desc, a_smem, b_smem)
+        cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * 2)
+        a0, b0 = matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, 0, SUB_K)
+        a1, b1 = matmul_cdna5_ld_smem_subtiled(cfg, k, a_smem, b_smem, layouts, SUB_K, SUB_K)
         acc = cdna5.wmma(a0, b0, acc)
         acc = cdna5.wmma(a1, b1, acc)
 
-    c_smem = gl.allocate_shared_memory(c_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], layouts.c_smem_layout)
+    c_smem = gl.allocate_shared_memory(c_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], layouts.c_smem_layout)
     c_smem.store(acc.to(c_ptr.dtype.element_ty))
-    c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [M, N], [stride_cm, 1], [BLOCK_M, BLOCK_N], layouts.c_smem_layout)
+    c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],
+                                              layouts.c_smem_layout)
     c_desc = cdna5.tdm.update_tensor_descriptor(c_desc, add_offsets=[off_m, off_n], clamp_bounds=True)
     cdna5.tdm.async_store(c_desc, src=c_smem)
     cdna5.tdm.async_wait(0)
@@ -1121,8 +1129,7 @@ def matmul_cdna5(A, B, partitioned):
     N = B.shape[0]
     C = torch.empty(M, N, device=A.device, dtype=A.dtype)
     grid = (triton.cdiv(M, 256) * triton.cdiv(N, 256), )
-    compiled = matmul_cdna5_kernel[grid](A, B, C, M, N, K, A.stride(0), A.stride(1), B.stride(0), B.stride(1),
-                                         C.stride(0), partitioned)
+    compiled = matmul_cdna5_kernel[grid](A, B, C, M, N, K, partitioned)
     return C, compiled
 
 
@@ -1149,6 +1156,6 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # ```
-# padded: 2261 TFLOPS
-# partitioned: 2326 TFLOPS
+# padded: 2247 TFLOPS
+# partitioned: 2300 TFLOPS
 # ```
