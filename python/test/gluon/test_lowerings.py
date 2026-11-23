@@ -144,6 +144,25 @@ def _scan_layouts():
         for name, layout in layouts.items()
         if _is_layout_applicable(layout)
     ]
+    if is_hopper_or_newer():
+        # CTA bits can split contiguous warp segments, interleave their elements,
+        # select independent scans, or replicate the same scan.
+        cta_major = linear([[1, 0], [2, 0], [0, 16]], [[4, 0], [8, 0], [0, 1], [0, 2], [0, 4]], [[0, 8], [0, 0]],
+                           [[16, 0]], [32, 32])
+        cta_minor = linear([[8, 0], [0, 4], [0, 8]], [[2, 0], [4, 0], [0, 1], [0, 2], [16, 0]], [[0, 0], [0, 0]],
+                           [[0, 16], [1, 0]], [32, 32])
+        cta_replicated = linear([[0, 1], [0, 8], [16, 0]], [[0, 2], [1, 0], [2, 0], [4, 0], [8, 0]], [[0, 4], [0, 0]],
+                                [[0, 0], [0, 16]], [32, 32])
+        # Every lane owns an independent scan. Four CTAs supply interleaved
+        # totals in an order that differs from their physical CTA ranks.
+        cta_registers = linear([[2, 0], [8, 0], [16, 0], [32, 0]], [[0, 1 << i] for i in range(5)], [[0, 0], [0, 0]],
+                               [[4, 0], [1, 0]], [64, 32])
+        cases += [
+            pytest.param(cta_registers, 64, 32, 0, torch.int32, id="cta_registers"),
+            pytest.param(cta_major, 32, 32, 0, torch.int8, id="cta_major"),
+            pytest.param(cta_minor, 32, 32, 0, torch.int32, id="cta_minor"),
+            pytest.param(cta_replicated, 32, 32, 1, torch.bool, id="cta_replicated"),
+        ]
     cases += [
         pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 4, n, 1, torch.int32,
                      id=f"shuffle_bounds_{n}") for n in (4, THREADS_PER_WARP // 2, THREADS_PER_WARP)
@@ -244,7 +263,9 @@ def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
                               cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
-    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4)
+    num_ctas = 1 << len(getattr(layout, "block_bases", []))
+    skip_if_unsupported_cluster_size(num_ctas)
+    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 

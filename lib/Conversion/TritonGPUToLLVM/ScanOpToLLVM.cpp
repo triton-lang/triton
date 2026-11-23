@@ -28,8 +28,6 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ScanLoweringHelper helper(op);
-    if (!helper.isSupported())
-      return op.emitError("scan axis distributed across CTAs is not supported");
 
     auto loc = op.getLoc();
     ScanValues values;
@@ -47,7 +45,7 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
     Value laneId = b.urem(threadId, b.i32_val(warpSize));
     Value warpId = b.udiv(threadId, b.i32_val(warpSize));
 
-    scanWithinCTA(op, helper, values, laneId, warpId, rewriter);
+    emitScan(op, helper, values, laneId, warpId, rewriter);
 
     SmallVector<Value> results;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -63,9 +61,9 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   }
 
 private:
-  void scanWithinCTA(triton::ScanOp op, const ScanLoweringHelper &helper,
-                     ScanValues &values, Value laneId, Value warpId,
-                     ConversionPatternRewriter &rewriter) const {
+  void emitScan(triton::ScanOp op, const ScanLoweringHelper &helper,
+                ScanValues &values, Value laneId, Value warpId,
+                ConversionPatternRewriter &rewriter) const {
     permuteRegisters(values, helper.getRegisterOrder());
     scanWithinThreads(op, values, helper.getThreadSegmentSize(), rewriter);
     ScanValues intraWarpTotals;
@@ -311,7 +309,7 @@ private:
                       /*forceWarpShuffle=*/false, storePred);
 
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
-    scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
+    emitScan(op, totalsHelper, totals, laneId, warpId, rewriter);
     return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
                              interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
@@ -415,7 +413,7 @@ private:
       auto candidates =
           getScanRegisters(source, inverse, r, op.getAxis(), numTotals,
                            inclusive ? 0 : (reverse ? 1 : -1),
-                           /*excludeBoundary=*/!inclusive);
+                           /*numCTAs=*/1, /*excludeBoundary=*/!inclusive);
       llvm::sort(candidates, [reverse](unsigned a, unsigned b) {
         return reverse ? a > b : a < b;
       });
@@ -554,7 +552,7 @@ private:
   getScanRegisters(const LinearLayout &segmentLayout,
                    const LinearLayout &inverseTotalsLayout, unsigned reg,
                    unsigned axis, unsigned segmentsPerScan, int offset,
-                   bool excludeBoundary = false) {
+                   unsigned numCTAs, bool excludeBoundary = false) {
     auto *ctx = segmentLayout.getInDimNames().begin()->getContext();
     auto kReg = StringAttr::get(ctx, "register");
     auto kLane = StringAttr::get(ctx, "lane");
@@ -562,18 +560,19 @@ private:
     auto kBlock = StringAttr::get(ctx, "block");
     unsigned mask = segmentsPerScan - 1;
     llvm::SmallSetVector<unsigned, 8> candidates;
-    for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp); ++warp)
-      for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
-           ++lane) {
-        auto coords = segmentLayout.apply(
-            {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
-        auto &index = coords[axis].second;
-        if (excludeBoundary &&
-            (index & mask) == (offset > 0 ? segmentsPerScan - 1 : 0))
-          continue;
-        index = (index & ~mask) | ((index + offset) & mask);
-        candidates.insert(inverseTotalsLayout.apply(coords).front().second);
-      }
+    for (unsigned block = 0; block < numCTAs; ++block)
+      for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp); ++warp)
+        for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
+             ++lane) {
+          auto coords = segmentLayout.apply(
+              {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, block}});
+          auto &index = coords[axis].second;
+          if (excludeBoundary &&
+              (index & mask) == (offset > 0 ? segmentsPerScan - 1 : 0))
+            continue;
+          index = (index & ~mask) | ((index + offset) & mask);
+          candidates.insert(inverseTotalsLayout.apply(coords).front().second);
+        }
     return llvm::to_vector(candidates);
   }
 
@@ -624,12 +623,19 @@ private:
     auto shuffleDistance =
         getShuffleDistance(segmentLayout, inverse, op.getAxis(),
                            segmentsPerScan, reverse ? -1 : 1);
+    // Only the CTA bits inside this scan segment affect the carry. Higher
+    // bits identify independent segments in the same source layout.
+    bool crossCTA = getOutputBasisMask(segmentLayout, {kBlock}, axis) &
+                    (segmentsPerScan - 1);
+    unsigned numCTAs = crossCTA ? segmentLayout.getInDimSize(kBlock) : 1;
+    Value blockId =
+        crossCTA ? targetInfo.getClusterCTAId(rewriter, loc) : b.i32_val(0);
     for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, segmentLayout,
                                       {{kReg, b.i32_val(r)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)}});
+                                       {kBlock, blockId}});
       Value segment = coords[op.getAxis()].second;
       Value segmentInScan = segment;
       if (segmentsPerScan != numSegments)
@@ -643,7 +649,7 @@ private:
       Value srcLane = src[1].second;
       auto candidates =
           getScanRegisters(segmentLayout, inverse, r, op.getAxis(),
-                           segmentsPerScan, reverse ? 1 : -1);
+                           segmentsPerScan, reverse ? 1 : -1, numCTAs);
       auto carry = gatherCarry(loc, totals, candidates, srcReg, srcLane,
                                rewriter, shuffleDistance, laneLocal);
       carries.push_back({std::move(carry), pred});
