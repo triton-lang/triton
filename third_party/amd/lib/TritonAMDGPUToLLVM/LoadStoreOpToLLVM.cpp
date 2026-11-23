@@ -1645,11 +1645,12 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
       padAmount = paddedEnc.getPaddings()[0];
     }
 
-    triton::LinearLayout sharedLayout = toLinearLayoutIgnoringPadding(smemTy);
+    triton::LinearLayout sharedLayout =
+        getTDMSharedLayout(smemTy, blockShape.size());
 
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+    auto shapePerCTA = triton::gpu::getShapePerCTA(encoding, blockShape);
 
     // Placeholder: the copy inherits pred from the descriptor.
     Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 32);

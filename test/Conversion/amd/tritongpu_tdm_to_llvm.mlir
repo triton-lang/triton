@@ -549,6 +549,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// A rank-reducing store distributes the 64x64 allocation like the [1, 64, 64]
+// block: each warp stores a 1x16x64 tile (tile_dim0 = 64 in group1[3]<31:16>,
+// tile_dim1 = 16 and tile_dim2 = 1 in group1[4]), and the warps start
+// 16 * 64 = 2^10 elements apart.
+#desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_rank_reducing
+  tt.func public @tdm_store_rank_reducing(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 16384 : i64
+    %c_stride1 = arith.constant 64 : i64
+    %c_stride2 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride0, %c_stride1, %c_stride2] : <bf16>, <1x64x64xbf16, #desc>
+    // CHECK-DAG: %[[TILE_DIM0:.*]] = llvm.mlir.constant(4194304 : i32) : i32
+    // CHECK-DAG: %[[TILE_DIM12:.*]] = llvm.mlir.constant(65552 : i32) : i32
+    // CHECK-DAG: %[[WARP_SHIFT:.*]] = llvm.mlir.constant(10 : i32) : i32
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    // CHECK: llvm.shl %{{.*}}, %[[WARP_SHIFT]] : i32
+    // CHECK: llvm.or %{{.*}}, %[[TILE_DIM0]] : i32
+    // CHECK: %[[GROUP1:.*]] = llvm.insertelement %[[TILE_DIM12]], %{{.*}}[%{{.*}} : i32] : vector<8xi32>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %[[GROUP1]], {{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> !tt.tensordesc<1x64x64xbf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
 // Multi-chunk gather: 16 row indices lower to two TDM instructions.  Chunk 1's
 // LDS address is chunk 0 + a compile-time-constant byte delta (8 rows * 64 cols
 // * 2 bytes = 1024), and chunk 1 updates the group0 descriptor produced for
@@ -976,6 +1006,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.ptrtoint %[[STORE_WARP]] : !llvm.ptr<3> to i32
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"
     %4 = amdg.async_tdm_copy_local_to_global %0 from %2 : !ttg.memdesc<128x64xf16, #padded_alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #padded_desc>
+    tt.return
+  }
+}
+
+// -----
+
+// A rank-reducing store from a row subview of a padded allocation drops the
+// descriptor's leading unit dimension and pads the subview offset like a
+// same-rank row subview store.
+#padded_desc = #ttg.padded_shared<[64:+4] {order = [2, 1, 0], shape = [1, 64, 64]}>
+#padded_alloc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [128, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_padded_rank_reducing_row_subview
+  tt.func public @tdm_store_padded_rank_reducing_row_subview(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 4096 : i64
+    %c_stride1 = arith.constant 64 : i64
+    %c_stride2 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride0, %c_stride1, %c_stride2] : <bf16>, <1x64x64xbf16, #padded_desc>
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    // CHECK-DAG: %[[INTERVAL:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK-DAG: %[[PADDING:.*]] = llvm.mlir.constant(2 : i32) : i32
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x64xbf16, #padded_alloc, #smem, mutable>
+    %2 = ttg.memdesc_subslice %1[64, 0] : !ttg.memdesc<128x64xbf16, #padded_alloc, #smem, mutable> -> !ttg.memdesc<64x64xbf16, #padded_alloc, #smem, mutable, 128x64>
+    // CHECK: %[[CHUNKS:.*]] = llvm.lshr %[[OFFSET:.*]], %[[INTERVAL]] : i32
+    // CHECK: %[[PAD:.*]] = llvm.shl %[[CHUNKS]], %[[PADDING]] : i32
+    // CHECK: %[[PADS:.*]] = llvm.add %[[PAD]], %{{.*}} : i32
+    // CHECK: %[[PADDED:.*]] = llvm.add %[[OFFSET]], %[[PADS]] : i32
+    // CHECK: %[[BASE:.*]] = llvm.getelementptr %[[SMEM]][%[[PADDED]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_copy_local_to_global %0 from %2 : !ttg.memdesc<64x64xbf16, #padded_alloc, #smem, mutable, 128x64> -> !tt.tensordesc<1x64x64xbf16, #padded_desc>
     tt.return
   }
 }
