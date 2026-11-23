@@ -67,9 +67,6 @@ These tutorials can be found in ``python/tutorials/gluon``.
 They can be found in ``python/tutorials/gluon/amd``.
 """,
         "ignore": {"__init__.py", "conftest.py"},
-        # Page names and reference targets drop the number prefix of the file
-        # name. The prefix keeps them distinct from the NVIDIA tutorials, e.g.
-        # "02-async-copy.py" becomes "amd-async-copy".
         "name_prefix": "amd-",
     },
     {
