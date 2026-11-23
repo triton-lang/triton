@@ -1,4 +1,6 @@
 #include "triton/Analysis/Membar/Pass.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Membar/AsyncFenceModel.h"
 #include "triton/Analysis/Membar/CFGBuilder.h"
@@ -18,14 +20,38 @@
 namespace mlir::triton::membar {
 namespace {
 
-using Releases = SmallVector<nvidia_gpu::ArriveBarrierOp, 2>;
+struct Worker {
+  SmallVector<nvidia_gpu::ArriveBarrierOp, 2> releases;
+  // Reducing reads leave a full tile and its reduction live at the release.
+  DenseSet<Operation *> reducing;
+  // A conditional payload can compete with the issuer predicate for
+  // registers. A blocking acquire limits how early it can be published.
+  bool conditionalStore = false;
+  bool mayBlock = false;
+};
+
+// Look through branches to the next effect on each path. The graph omits
+// pure computations, including layout conversions that need no scratch.
+static SmallVector<const Node<OpModel> *, 2>
+nextEffects(const MembarCFG<OpModel> &cfg, const Node<OpModel> &from) {
+  SmallVector<const Node<OpModel> *, 2> effects;
+  walkEdges(cfg, from, 0u,
+            [&](unsigned i, unsigned, bool) -> std::optional<unsigned> {
+              const auto &next = cfg.nodes[i];
+              if (isa<BranchOpInterface>(next.op) && next.effects == OpModel{})
+                return 0;
+              effects.push_back(&next);
+              return std::nullopt;
+            });
+  return effects;
+}
 
 // A per-warp release only needs each warp's TMEM wait. When shared
 // storage independently needs a region barrier at the same gap, the
 // warps can reach that barrier while their loads are still outstanding.
-static Releases getIndependentReleases(const MembarCFG<OpModel> &cfg,
-                                       ArrayRef<Demand> required,
-                                       const llvm::BitVector &sites) {
+static Worker getIndependentReleases(const MembarCFG<OpModel> &cfg,
+                                     ArrayRef<Demand> required,
+                                     const llvm::BitVector &sites) {
   // A mandatory cross-warp handoff anywhere on the path can rely on
   // the original wait-before-barrier order.
   if (llvm::any_of(required, [](const Demand &d) {
@@ -33,7 +59,7 @@ static Releases getIndependentReleases(const MembarCFG<OpModel> &cfg,
       }))
     return {};
 
-  Releases releases;
+  Worker worker;
   for (const auto &node : cfg.nodes) {
     if (node.effects.arrivalMode != ArrivalMode::Either) {
       // Promotion adds the other warp leaders as issuers. Reject a fixed
@@ -44,7 +70,8 @@ static Releases getIndependentReleases(const MembarCFG<OpModel> &cfg,
         return {};
       continue;
     }
-    // Every optional handoff must publish per warp after rescheduling.
+    // Each scalar handoff we keep must still collect all the warps at
+    // its own gap, including any newly participating issuers.
     if (cast<gpu::MBarrierOpInterface>(node.op).isPerWarp())
       continue;
     auto arrive = dyn_cast<nvidia_gpu::ArriveBarrierOp>(node.op);
@@ -56,26 +83,73 @@ static Releases getIndependentReleases(const MembarCFG<OpModel> &cfg,
         actions |= bit(action);
     if (actions != (bit(SyncKind::WaitLoad) | bit(SyncKind::RegionBarrier)))
       return {};
-    releases.push_back(arrive);
+    worker.releases.push_back(arrive);
   }
-  return releases;
+  if (worker.releases.empty())
+    return {};
+
+  // These are scheduling hints only. The checks above make either order
+  // legal as long as an overlapped release is per-warp.
+  for (const auto &node : cfg.nodes) {
+    auto load = dyn_cast<nvidia_gpu::TMEMLoadOp>(node.op);
+    if (!load || !load.getRedOp())
+      continue;
+    for (const auto *release : nextEffects(cfg, node)) {
+      if (!llvm::is_contained(worker.releases, release->op))
+        continue;
+      worker.reducing.insert(release->op);
+      for (const auto *next : nextEffects(cfg, *release)) {
+        auto store = dyn_cast<gpu::LocalStoreOp>(next->op);
+        if (!store) {
+          worker.mayBlock = true;
+          continue;
+        }
+        Value value = store.getSrc();
+        while (auto reshape = value.getDefiningOp<ReshapeOp>())
+          value = reshape.getSrc();
+        worker.conditionalStore |=
+            store->getBlock() != release->op->getBlock() ||
+            value.getDefiningOp<arith::SelectOp>();
+      }
+    }
+  }
+  return worker;
 }
 
-static void schedulePairedReleases(ArrayRef<Releases> workers, bool twoCTAs) {
-  if (workers.size() != 2 || workers[0].size() != workers[1].size())
+static void schedulePairedReleases(ArrayRef<Worker> workers, bool twoCTAs) {
+  if (workers.size() != 2 ||
+      workers[0].releases.size() != workers[1].releases.size())
     return;
-  // Stagger paired two-CTA consumers by partition order. The first waits
-  // before the rendezvous, the second overlaps the two. Within one CTA
-  // let both workers overlap their load completion.
-  for (auto [i, releases] : llvm::enumerate(workers))
-    for (auto arrive : releases) {
+  bool conditional = workers[0].conditionalStore && workers[1].conditionalStore;
+  bool overlap =
+      !twoCTAs || (conditional && !workers[0].mayBlock && !workers[1].mayBlock);
+  // Stagger the paired consumers. In a cluster, overlap the second
+  // consumer only when it can prepare a conditional payload immediately.
+  // Otherwise keep both waits first and distribute only the second release.
+  for (auto [i, worker] : llvm::enumerate(workers)) {
+    for (auto arrive : worker.releases) {
+      if (!overlap && i == 0)
+        continue;
+      // Within a CTA, stagger reducing reads by keeping a single publisher
+      // in the second worker. Both workers can overlap ordinary reads.
+      if (!twoCTAs && i == 1 && worker.reducing.contains(arrive))
+        continue;
       arrive.setPerWarp(true);
-      if (twoCTAs && i == 0)
+      if (!overlap || (twoCTAs && i == 0))
         continue;
       auto barrier = cast<gpu::BarrierOp>(arrive->getPrevNode());
       auto wait = cast<nvidia_gpu::TMEMWaitOp>(barrier->getPrevNode());
       barrier->moveBefore(wait);
     }
+    // Shorten the lifetime of the issuer predicate in register-heavy workers.
+    if ((!twoCTAs || conditional) && !worker.reducing.empty()) {
+      Region *body = worker.releases.front()->getParentRegion();
+      for (auto arrive : body->getOps<nvidia_gpu::ArriveBarrierOp>())
+        if (arrive.getPerWarp() && !arrive.getFromCTA())
+          arrive->setAttr(nvidia_gpu::AttrRematerializeLaneIdName,
+                          UnitAttr::get(arrive.getContext()));
+    }
+  }
 }
 
 template <typename Facts>
@@ -210,7 +284,7 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
       bodies.push_back(&ws.getDefaultRegion());
       llvm::append_range(bodies, ws.getPartitionRegions());
     });
-    DenseMap<Operation *, SmallVector<Releases, 2>> pairedReleases;
+    DenseMap<Operation *, SmallVector<Worker, 2>> pairedReleases;
     for (Region *body : bodies) {
       auto cfg = builder.build(*body, /*expandWarpRoles=*/false);
       // A specialized role may inherit transfers from outside its graph.
@@ -234,9 +308,9 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
           cast<nvidia_gpu::BarrierExpectOp>(op).setPerWarp(true);
       }
       if (tmem && isa<gpu::WarpSpecializePartitionsOp>(body->getParentOp())) {
-        auto releases = getIndependentReleases(cfg, required, *sites);
-        if (!releases.empty())
-          pairedReleases[body->getParentOp()].push_back(std::move(releases));
+        auto worker = getIndependentReleases(cfg, required, *sites);
+        if (!worker.releases.empty())
+          pairedReleases[body->getParentOp()].push_back(std::move(worker));
       }
     }
     for (auto &entry : pairedReleases)

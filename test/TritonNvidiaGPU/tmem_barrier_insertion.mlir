@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' | FileCheck %s --check-prefixes=CHECK,WAIT,TMEM
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefixes=TMEM,SCALAR
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tmem-load-reduce --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=103 ptx-version=90' | FileCheck %s --check-prefix=FUSED
 // RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' | FileCheck %s --check-prefix=GUARD
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -25,8 +26,11 @@
 !publish_smem = !ttg.memdesc<128x8xi32, #publish_shared, #ttg.shared_memory, mutable>
 !publish_tmem = !ttg.memdesc<128x8xi32, #tmem8, #ttng.tensor_memory, mutable>
 !publish_bar = !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+!pair_data = tensor<128x8xf32, #blocked>
+!pair_row = tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+!pair_tmem = !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103"} {
   // CHECK-LABEL: @alloc_then_alloc
   // CHECK: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
@@ -1317,39 +1321,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // SCALAR: ttng.tmem_wait load
   // SCALAR-NEXT: ttg.barrier local
   // SCALAR-NEXT: ttng.arrive_barrier {{.*}}, 1 :
-  tt.func @paired_tmem_releases(%initial: !publish_data) {
+  // With reducing reads only the first worker overlaps the rendezvous.
+  // FUSED-LABEL: @paired_tmem_releases
+  // FUSED: ttng.init_barrier {{.*}}, 8 :
+  // FUSED: partition0
+  // FUSED: ttng.tmem_load {{.*}}redOp
+  // FUSED-NEXT: ttg.barrier local
+  // FUSED-NEXT: ttng.tmem_wait load
+  // FUSED-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp, ttng.rematerialize_lane_id}
+  // FUSED: partition1
+  // FUSED: ttng.tmem_load {{.*}}redOp
+  // FUSED-NEXT: ttng.tmem_wait load
+  // FUSED-NEXT: ttg.barrier local
+  // FUSED-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  tt.func @paired_tmem_releases(%initial: !publish_data, %values: !pair_data) {
     %phase = arith.constant 0 : i32
     %true = arith.constant true
-    %mem = ttng.tmem_alloc %initial {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (!publish_data) -> !publish_tmem
+    %mem = ttng.tmem_alloc %values {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (!pair_data) -> !pair_tmem
     %input = ttg.local_alloc %initial : (!publish_data) -> !publish_smem
     %empty = ttg.local_alloc : () -> !publish_bar
     ttng.init_barrier %empty, 2 : !publish_bar
     ttg.warp_specialize(%mem, %empty, %input)
     default {
       ttng.wait_barrier %empty, %phase : !publish_bar
-      ttng.tmem_store %initial, %mem, %true : !publish_data -> !publish_tmem
+      ttng.tmem_store %values, %mem, %true : !pair_data -> !pair_tmem
       ttg.warp_yield
     }
-    partition0(%tile: !publish_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
+    partition0(%tile: !pair_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
       %x = ttg.local_load %src : !publish_smem -> tensor<128x8xi32, #blocked_scales>
       %buf = ttg.local_alloc %x : (tensor<128x8xi32, #blocked_scales>) -> !publish_smem
-      %v = ttng.tmem_load %tile : !publish_tmem -> !publish_data
+      %v = ttng.tmem_load %tile : !pair_tmem -> !pair_data
       ttng.arrive_barrier %done, 1 : !publish_bar
       %y = ttg.local_load %buf : !publish_smem -> !publish_data
-      %sum = arith.addi %v, %y : !publish_data
-      tt.print "sum" {hex = false, isSigned = array<i32: 1>} : %sum : !publish_data
+      %max = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %m = arith.maxnumf %l, %r : f32
+        tt.reduce.return %m : f32
+      }) : (!pair_data) -> !pair_row
+      tt.print "payload" {hex = false, isSigned = array<i32: 1, 1, 1>} : %v, %max, %y : !pair_data, !pair_row, !publish_data
       ttg.warp_return
     }
-    partition1(%tile: !publish_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
+    partition1(%tile: !pair_tmem, %done: !publish_bar, %src: !publish_smem) num_warps(4) {
       %x = ttg.local_load %src : !publish_smem -> tensor<128x8xi32, #blocked_scales>
       %buf = ttg.local_alloc %x : (tensor<128x8xi32, #blocked_scales>) -> !publish_smem
-      %v = ttng.tmem_load %tile : !publish_tmem -> !publish_data
+      %v = ttng.tmem_load %tile : !pair_tmem -> !pair_data
       ttng.arrive_barrier %done, 1 : !publish_bar
       %y = ttg.local_load %buf : !publish_smem -> !publish_data
-      %diff = arith.subi %v, %y : !publish_data
-      tt.print "diff" {hex = false, isSigned = array<i32: 1>} : %diff : !publish_data
+      %max = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %m = arith.maxnumf %l, %r : f32
+        tt.reduce.return %m : f32
+      }) : (!pair_data) -> !pair_row
+      tt.print "payload" {hex = false, isSigned = array<i32: 1, 1, 1>} : %v, %max, %y : !pair_data, !pair_row, !publish_data
       ttg.warp_return
-    } : (!publish_tmem, !publish_bar, !publish_smem) -> ()
+    } : (!pair_tmem, !publish_bar, !publish_smem) -> ()
     tt.return
   }
 
@@ -1700,5 +1725,97 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.print "tiles" {hex = false, isSigned = array<i32: 1>} : %sum : !data
     ttng.wait_barrier %bar, %phase : !bar
     tt.return
+  }
+}
+
+// -----
+
+#rows = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#swapped = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = [[128]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 8, colStride = 1, CGALayout = [[1, 0]]>
+!tile = !ttg.memdesc<256x8xf32, #tmem, #ttng.tensor_memory, mutable>
+!data = tensor<256x8xf32, #rows>
+!row = tensor<256xf32, #ttg.slice<{dim = 1, parent = #rows}>>
+!other = tensor<256xf32, #swapped>
+!buffer = !ttg.memdesc<256xf32, #shared, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<2xi64, #shared, #ttg.shared_memory, mutable>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:103"} {
+  // The shared load and store assign rows to different warps.
+  // With ordinary loads, both workers wait first. Only the second
+  // distributes the release.
+  // CHECK-LABEL: @paired_cluster_releases
+  // CHECK: ttng.init_barrier {{.*}}, 8 :
+  // CHECK: partition0
+  // CHECK: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // CHECK: partition1
+  // CHECK: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // The next shared store selects a row maximum. Fusing the reduction
+  // distributes both releases and lets the second worker overlap its wait.
+  // FUSED-LABEL: @paired_cluster_releases
+  // FUSED: ttng.init_barrier {{.*}}, 8 :
+  // FUSED: partition0
+  // FUSED: ttng.tmem_load {{.*}}redOp
+  // FUSED-NEXT: ttng.tmem_wait load
+  // FUSED-NEXT: ttg.barrier local
+  // FUSED-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp, ttng.rematerialize_lane_id}
+  // FUSED: partition1
+  // FUSED: ttng.tmem_load {{.*}}redOp
+  // FUSED-NEXT: ttg.barrier local
+  // FUSED-NEXT: ttng.tmem_wait load
+  // FUSED-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp, ttng.rematerialize_lane_id}
+  tt.func @paired_cluster_releases(%initial: !data, %seed: !row, %enabled: i1) -> !row {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %mem = ttng.tmem_alloc %initial {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (!data) -> !tile
+    %left = ttg.local_alloc %seed : (!row) -> !buffer
+    %right = ttg.local_alloc %seed : (!row) -> !buffer
+    %empty = ttg.local_alloc : () -> !bar
+    ttng.init_barrier %empty, 2 : !bar
+    ttg.warp_specialize(%mem, %empty, %left, %right, %enabled)
+    default {
+      ttng.wait_barrier %empty, %phase : !bar
+      ttng.tmem_store %initial, %mem, %true : !data -> !tile
+      ttg.warp_yield
+    }
+    partition0(%src: !tile, %done: !bar, %a: !buffer, %b: !buffer, %use: i1) num_warps(4) {
+      %old = ttg.local_load %a : !buffer -> !other
+      %x = ttng.tmem_load %src : !tile -> !data
+      ttng.arrive_barrier %done, 1 : !bar
+      %max = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %v = arith.maxnumf %l, %r : f32
+        tt.reduce.return %v : f32
+      }) : (!data) -> !row
+      %zero = arith.constant dense<0.0> : !row
+      %value = arith.select %use, %max, %zero : !row
+      ttg.local_store %value, %a : !row -> !buffer
+      tt.print "payload" {hex = false, isSigned = array<i32: 1, 1>} : %x, %old : !data, !other
+      ttg.warp_return
+    }
+    partition1(%src: !tile, %done: !bar, %a: !buffer, %b: !buffer, %use: i1) num_warps(4) {
+      %old = ttg.local_load %b : !buffer -> !other
+      %x = ttng.tmem_load %src : !tile -> !data
+      ttng.arrive_barrier %done, 1 : !bar
+      %max = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %v = arith.maxnumf %l, %r : f32
+        tt.reduce.return %v : f32
+      }) : (!data) -> !row
+      %zero = arith.constant dense<0.0> : !row
+      %value = arith.select %use, %max, %zero : !row
+      ttg.local_store %value, %b : !row -> !buffer
+      tt.print "payload" {hex = false, isSigned = array<i32: 1, 1>} : %x, %old : !data, !other
+      ttg.warp_return
+    } : (!tile, !bar, !buffer, !buffer, i1) -> ()
+    %a = ttg.local_load %left : !buffer -> !row
+    %b = ttg.local_load %right : !buffer -> !row
+    %sum = arith.addf %a, %b : !row
+    tt.return %sum : !row
   }
 }
