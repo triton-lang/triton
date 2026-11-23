@@ -282,6 +282,24 @@ On a barrier wait, ConSan:
    the current base thread.
 9. Clears the current base thread's waiting bits.
 
+A nonblocking mbarrier query verifies initialization when its predicate is
+true, but never marks the caller as waiting or checks for deadlock. It transfers
+visibility and the proxy frontier only when the query reports completion.
+Incomplete and predicated-off queries do not acquire any publications.
+
+When validity-reporting TMA loads are consumed by conditional waits, ConSan
+keeps separate primary and conditional barrier columns, each with its own
+parity and publication slots. Contributions update both columns. Completing an
+invalid attempt advances only primary parity; a successful retry also advances
+conditional parity. Thus conditional parity 0 can acquire a successful retry
+from primary parity 1. This model currently requires one CTA.
+
+ConSan issues the real contribution before resolving its hardware report. In
+warp-specialized code it reserves the affected columns and releases the lock
+while resolving completion, so other partitions can progress. Operations on
+those columns wait for publication before reading or updating their shadow
+state; independent columns remain available.
+
 Write transfers also consult the recorded effect-recipient CTA rows, which lets
 TMA-style and CLC cross-CTA writes become visible in the CTA rows reached by the
 memory effect. Read transfers update the current CTA row.

@@ -392,6 +392,26 @@ Value createDimIndices(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
   return convertAndBroadcast(b, range, {dim}, fullIndexType);
 }
 
+Value primarySlots(ImplicitLocOpBuilder &b, RankedTensorType ty) {
+  Value indices = createDimIndices(b, ty, ty.getRank() - 1);
+  Value half = arith::ConstantIntOp::create(b, ty.getShape().back() / 2, 32);
+  return createCmpIntTensorScalar(b, indices, half, arith::CmpIPredicate::ult);
+}
+
+ValueType waitBarriers(ImplicitLocOpBuilder &b, AuxDataMap &aux,
+                       Operation *op) {
+  auto bars = aux.barriers.at(op);
+  if (!aux.conditionalWaits.empty()) {
+    auto ty = cast<RankedTensorType>(bars.type);
+    Value other = tti::createConstIntTensor(b, b.getLoc(), 0, ty);
+    if (aux.conditionalWaits.contains(op))
+      std::swap(bars.value, other);
+    bars.value =
+        arith::SelectOp::create(b, primarySlots(b, ty), bars.value, other);
+  }
+  return bars;
+}
+
 Value createLoadTrackingPhase(ImplicitLocOpBuilder &b, Value trackingPtr,
                               RankedTensorType trackingType, Value phase,
                               Value barrierIndex = {}) {
@@ -713,7 +733,7 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  Value barriersVal = auxData.barriers.at(insertPoint).value;
+  Value barriersVal = waitBarriers(b, auxData, insertPoint).value;
   auto barriersType =
       cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
@@ -816,7 +836,7 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
   }
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
 
-  Value barriersVal = auxData.barriers.at(insertPoint).value;
+  Value barriersVal = waitBarriers(b, auxData, insertPoint).value;
   auto barriersType =
       cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
@@ -1463,9 +1483,52 @@ void FunctionBuilder::createInvalidateBarrierStateCallImpl(
                                         insertPoint);
 }
 
+Value FunctionBuilder::awaitReports(ImplicitLocOpBuilder &b, Operation *op,
+                                    Value pred) {
+  auto barrier = dyn_cast<ttg::MBarrierOpInterface>(op);
+  if (auxData.conditionalWaits.empty() || !barrier ||
+      !op->getParentOfType<ttg::WarpSpecializeOp>() ||
+      auxData.threadLayout.numBaseThreads == 1)
+    return {};
+
+  Value slots;
+  for (Value bar : barrier.getBarriers()) {
+    Value desc = createBufferDescriptor(
+        b, tti::ExperimentalMemDescToI32Op::create(b, bar),
+        arith::ConstantIntOp::create(b, getMemDescLength(bar), 32));
+    Value match =
+        createCmpIntTensorScalar(b, auxData.barriers.at(op).value, desc);
+    slots = slots ? arith::OrIOp::create(b, slots, match).getResult() : match;
+  }
+  if (!slots)
+    return {};
+  auto states = auxData.barrierStates.at(op);
+  auto ty = cast<RankedTensorType>(states.type);
+  slots = convertAndBroadcast(b, slots, {1}, ty);
+
+  if (!pred)
+    pred = arith::ConstantIntOp::create(b, 1, 1);
+  auto [start, check, exit] = createIfBlock(b, pred);
+  b.setInsertionPointToStart(check);
+  Value data = tti::createLoadScratchMemory(b, b.getLoc(), states.value, ty);
+  Value pending =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::slt, data,
+                            tti::createConstIntTensor(b, b.getLoc(), 0, ty));
+  Value busy =
+      reduceAll<arith::OrIOp>(b, arith::AndIOp::create(b, pending, slots));
+  auto [head, retry, next] = createIfBlock(b, busy);
+  b.setInsertionPointToStart(retry);
+  Value lock = auxData.lock.at(op).value;
+  tti::ExperimentalLockReleaseOp::create(b, lock, Value{});
+  tti::ExperimentalLockAcquireOp::create(b, lock, Value{});
+  retry->getTerminator()->setSuccessor(check, 0);
+  b.setInsertionPointToStart(exit);
+  return slots;
+}
+
 void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
     ImplicitLocOpBuilder &b, Value mbar, int count, Value pred,
-    Operation *insertPoint, Value recipientCTAs, int txCount) {
+    Operation *insertPoint, Value recipientCTAs, int txCount, Value slots) {
   assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
          "barrier arrive count exceeds barrier state capacity");
   assert(txCount >= BarrierBits::txCountMin &&
@@ -1509,12 +1572,19 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
   }
   appendTracking(auxData.proxyAccessTracking);
 
+  bool paired = !auxData.conditionalWaits.empty();
+  specializationArgs.append(static_cast<uint64_t>(paired));
+  specializationArgs.append(static_cast<uint64_t>(bool(slots)));
+  if (slots)
+    args.append({slots, auxData.lock.at(insertPoint).value});
+  if (paired)
+    args.push_back(mbar);
   AssertInfo statusInfo{"", b.getI32Type()};
   Value status = createCallToCachedFunction(
       b, "verify_and_update_barrier_state", args, statusInfo,
       specializationArgs,
-      [barrierStatesType, trackingTypes](ImplicitLocOpBuilder &fb,
-                                         Block *entryBlock) {
+      [barrierStatesType, trackingTypes, paired,
+       split = bool(slots)](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value count = entryBlock->getArgument(2);
@@ -1641,13 +1711,57 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
             arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, updatedTxCount,
                                   zero32));
         zeroCond = arith::AndIOp::create(fb, zeroCond, mask);
-        Value zeroCondI32 =
-            arith::ExtUIOp::create(fb, barrierStatesType, zeroCond);
-        Value newPhase = arith::XOrIOp::create(fb, phase, zeroCondI32);
         Value newCurrentValue =
             arith::SelectOp::create(fb, zeroCond, initCount, updatedCurrent);
         Value newTxCountValue =
             arith::SelectOp::create(fb, zeroCond, zero32, updatedTxCount);
+
+        // Both counters reset after an attempt, but an invalid payload advances
+        // only primary parity. Keep conditional tracking on the same phase so
+        // its consumer acquires the successful retry, even at opposite parity.
+        Value reserved;
+        if (paired) {
+          Value primary = arith::AndIOp::create(
+              fb, zeroCond, primarySlots(fb, barrierStatesType));
+          // Ordinary barriers in the same kernel may still use the v0 layout
+          // when their arrival count does not fit in v1's nine bits.
+          Value v1Count = tti::createConstIntTensor(fb, fb.getLoc(), 511,
+                                                    barrierStatesType);
+          Value reportable = arith::CmpIOp::create(
+              fb, arith::CmpIPredicate::ule, initCount, v1Count);
+          Value ready = reduceAll<arith::OrIOp>(
+              fb, arith::AndIOp::create(fb, primary, reportable));
+          Value old = arith::SelectOp::create(fb, primary, phase, zero32);
+          Value parity = arith::TruncIOp::create(
+              fb, fb.getI32Type(), reduceAll<arith::OrIOp>(fb, old));
+          Value bar = entryBlock->getArguments().back();
+          Value lock;
+          if (split) {
+            auto tail = entryBlock->getArguments().take_back(3);
+            reserved = tail[0];
+            lock = tail[1];
+            // Reserve every destination of the real op until publication.
+            Value bit = tti::createConstIntTensor(fb, fb.getLoc(), INT64_MIN,
+                                                  barrierStatesType);
+            Value busy = arith::OrIOp::create(fb, states, bit);
+            tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, busy,
+                                          barrierStatesType, false, reserved);
+            tti::ExperimentalLockReleaseOp::create(fb, lock, ready)
+                .setCtaLocal(true);
+          }
+          ttng::WaitBarrierOp::create(fb, bar, parity, ready);
+          auto poll =
+              ttng::BarrierTestWaitReportOp::create(fb, bar, parity, ready);
+          if (split)
+            tti::ExperimentalLockAcquireOp::create(fb, lock, ready)
+                .setCtaLocal(true);
+          Value failed =
+              triton::SplatOp::create(fb, condType, poll.getReportPredicate());
+          zeroCond = arith::SelectOp::create(fb, failed, primary, zeroCond);
+        }
+        Value zeroCondI32 =
+            arith::ExtUIOp::create(fb, barrierStatesType, zeroCond);
+        Value newPhase = arith::XOrIOp::create(fb, phase, zeroCondI32);
 
         Value initField = arith::ShLIOp::create(fb, initCount, shiftInitTensor);
         Value currentField =
@@ -1662,8 +1776,13 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
         newState = arith::OrIOp::create(fb, newState, txCountField);
 
         Value updated = arith::SelectOp::create(fb, mask, newState, states);
-        createCTAScopedStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
-                                          barrierStatesType, recipientCTAs);
+        // Unreserved slots may have changed while the lock was released.
+        if (split)
+          tti::createStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
+                                        barrierStatesType, false, reserved);
+        else
+          createCTAScopedStoreScratchMemory(fb, fb.getLoc(), statesPtr, updated,
+                                            barrierStatesType, recipientCTAs);
 
         if (!trackingTypes.empty()) {
           Value recipientMask =
@@ -2617,7 +2736,7 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
-  ValueType barriers = auxData.barriers.at(insertPoint);
+  ValueType barriers = waitBarriers(b, auxData, insertPoint);
   auto barriersType = cast<RankedTensorType>(barriers.type);
   uint32_t mbarLength = getMemDescLength(mbar);
   SmallVector<Value> args = {
@@ -3765,7 +3884,7 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
   const bool clearWaiting = !auxData.waiting.empty();
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
-  ValueType barriers = auxData.barriers.at(insertPoint);
+  ValueType barriers = waitBarriers(b, auxData, insertPoint);
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   ValueType tracking = auxData.proxyAccessTracking.at(insertPoint);
   auto barriersType = cast<RankedTensorType>(barriers.type);

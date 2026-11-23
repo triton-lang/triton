@@ -14,7 +14,8 @@ using FenceCFG = MembarCFG<AsyncFenceFacts>;
 
 bool mayObserveBarrier(const Node<AsyncFenceFacts> &node,
                        ArrayRef<const BufferRegionFootprint *> barriers) {
-  return isa<nvidia_gpu::WaitBarrierOp>(node.op) &&
+  return isa<nvidia_gpu::WaitBarrierOp, nvidia_gpu::BarrierTestWaitReportOp>(
+             node.op) &&
          llvm::any_of(barriers, [&](const auto *barrier) {
            return mayOverlap(barrier, node.effects.completionBarrier);
          });
@@ -62,7 +63,7 @@ AsyncFenceModel::describe(Operation *op, FixedSync &fixed, Block *active) {
   }
   bool usesCompletionBarrier =
       isa<nvidia_gpu::AsyncSharedStoreOp, nvidia_gpu::AsyncCopyMbarrierArriveOp,
-          nvidia_gpu::WaitBarrierOp>(op);
+          nvidia_gpu::WaitBarrierOp, nvidia_gpu::BarrierTestWaitReportOp>(op);
   if (usesCompletionBarrier) {
     Value barrier = cast<gpu::MBarrierOpInterface>(op).getBarrier();
     facts.completionBarrier = getFootprint(barrier);

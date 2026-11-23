@@ -66,6 +66,9 @@ public:
 
   std::optional<BarrierWaitInfo>
   getBarrierWaitInfo(Operation *op) const override {
+    if (auto poll = dyn_cast<ttng::BarrierTestWaitReportOp>(op))
+      return BarrierWaitInfo{poll.getBarrier(), poll.getPhase(), poll.getPred(),
+                             poll.getWaitComplete()};
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       return BarrierWaitInfo{waitOp.getBarrier(), waitOp.getPhase(),
                              waitOp.getPred()};
@@ -112,6 +115,8 @@ public:
       mask = getBlockBroadcastMask(initOp.getAlloc().getType());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       mask = getBlockBroadcastMask(waitOp.getAlloc().getType());
+    if (auto poll = dyn_cast<ttng::BarrierTestWaitReportOp>(op))
+      mask = getBlockBroadcastMask(poll.getAlloc().getType());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
       mask = getBlockBroadcastMask(invalOp.getAlloc().getType());
     if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {

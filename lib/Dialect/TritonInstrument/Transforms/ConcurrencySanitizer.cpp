@@ -1049,7 +1049,11 @@ private:
   LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
     SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
-    WalkResult walkResult = entryPoint.walk([&](Operation *op) -> WalkResult {
+    // Resolving reports can split blocks and add retry edges. Keep the source
+    // operations stable while instrumentation changes their control flow.
+    SmallVector<Operation *> operations;
+    entryPoint.walk([&](Operation *op) { operations.push_back(op); });
+    for (Operation *op : operations) {
       CriticalSectionListener listener;
       b.setListener(&listener);
 
@@ -1070,14 +1074,13 @@ private:
         // manually inside instrumentBarrierWait (disable the critical section
         // listener and return early)
         b.setListener(nullptr);
-        instrumentBarrierWait(op, info->alloc, info->phase, info->pred, thread,
-                              baseThread, funcBuilder);
-        return WalkResult::advance();
+        instrumentBarrierWait(op, *info, thread, baseThread, funcBuilder);
+        continue;
       }
 
       if (failed(instrumentMemEffects(b, op, thread, funcBuilder))) {
         b.setListener(nullptr);
-        return WalkResult::interrupt();
+        return failure();
       }
       b.setLoc(op->getLoc());
       if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
@@ -1222,10 +1225,7 @@ private:
       b.setListener(nullptr);
       if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
         instrumentLocalScatter(b, scatter, funcBuilder);
-      return WalkResult::advance();
-    });
-    if (walkResult.wasInterrupted())
-      return failure();
+    }
 
     // Cluster rendezvous polling introduces control-flow blocks, so add it
     // after the operation walk rather than invalidating the walk iterators.
@@ -1268,9 +1268,10 @@ private:
       synchronize();
   }
 
-  void instrumentBarrierWait(Operation *op, Value alloc, Value phase,
-                             Value pred, int thread, int baseThread,
+  void instrumentBarrierWait(Operation *op, const tti::BarrierWaitInfo &info,
+                             int thread, int baseThread,
                              tti::FunctionBuilder &funcBuilder) {
+    auto [alloc, phase, pred, done] = info;
     ImplicitLocOpBuilder wb(op->getLoc(), op);
     pred = tti::maybeAnd(wb, pred, hooks.getIssuerCTAPred(wb, op));
     Value lock = auxData.lock.at(op).value;
@@ -1278,17 +1279,24 @@ private:
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     funcBuilder.createVerifyBarrierInitializedCall(wb, alloc, pred, op,
                                                    currentCTAMask(wb));
-    funcBuilder.createSetWaitingCall(wb, alloc, baseThread, phase, pred, op);
-    Value ok = funcBuilder.createCheckAllActiveWaitingCall(wb, pred, op);
+    Value ok;
+    if (!done) {
+      funcBuilder.createSetWaitingCall(wb, alloc, baseThread, phase, pred, op);
+      ok = funcBuilder.createCheckAllActiveWaitingCall(wb, pred, op);
+    }
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
-    tti::createAssertInThread(wb, ok,
-                              "Deadlock detected while waiting on an mbarrier");
+    if (ok)
+      tti::createAssertInThread(
+          wb, ok, "Deadlock detected while waiting on an mbarrier");
     // Post-wait: transfer the waited phase's visible writes and reads to all
     // peer threads, and clear waiting for this barrier.
     assert(!auxData.barriers.empty() &&
            "barrier descriptors must exist when instrumenting wait");
     wb.setInsertionPointAfter(op);
+    if (done)
+      pred = tti::maybeAnd(wb, pred, done);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
+    funcBuilder.awaitReports(wb, op, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleAccessesCall(
           wb, alloc, phase, getThreadPeersMask(thread, auxData.threadLayout),
@@ -1322,6 +1330,7 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
+    Value slots = funcBuilder.awaitReports(b, op, pred);
     Value defaultEffectCTAs;
     struct MaterializedEffect {
       Value bufferMask;
@@ -1693,9 +1702,13 @@ private:
             recipientCTAs, completionBufferMask);
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
+        // Issue the real contribution before resolving its report.
+        if (!auxData.conditionalWaits.empty() &&
+            b.getInsertionPoint() == op->getIterator())
+          b.setInsertionPointAfter(op);
         funcBuilder.createVerifyAndUpdateBarrierStateCall(
             b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
-            barrierInfo.txCount);
+            barrierInfo.txCount, slots);
       }
     }
     if (opInfo->implicitCommit) {
