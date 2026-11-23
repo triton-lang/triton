@@ -1647,7 +1647,8 @@ def _run_gsan_tma_launch_case(dependency):
 def _check_gsan_tma_case(*args, error=None, runner=_run_gsan_tma_case, **kwargs):
     if is_compile_warmup():
         pytest.skip("GSan assertion tests require isolated GPU processes")
-    result = run_in_process(runner, args, kwargs)
+    # These tests check source locations even when CI disables line information.
+    result = run_in_process(runner, args, kwargs, env={"TRITON_DISABLE_LINE_INFO": "0"})
     if error is None:
         assert result.exc is None, (result.exc, result.driver_stderr_output)
         assert "race detected" not in result.driver_stderr_output
