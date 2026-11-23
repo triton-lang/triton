@@ -51,8 +51,9 @@ struct TestMembarPass
     if (computeCapability >= 90 &&
         failed(triton::membar::placeClusterBarriers(allocation, *regions)))
       return signalPassFailure();
+    triton::NVIDIA::SMemOrdering ordering(allocation);
     if (failed(triton::membar::placeBarriers(
-            allocation, *regions, triton::NVIDIA::canSkipBarSync,
+            allocation, *regions, &ordering,
             triton::membar::PlacementMode::Shared)))
       signalPassFailure();
   }

@@ -5,29 +5,18 @@
 #include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <optional>
 
 namespace mlir {
 
-namespace triton::membar {
-struct SMemAccess;
-}
-
-/// Exempt a pair the backend orders or allows to commute, even across
-/// iterations. Relative address proofs belong to AllocationSlice.
-using MembarFilterFn =
-    std::function<bool(const triton::membar::SMemAccess &,
-                       const triton::membar::SMemAccess &, Allocation &)>;
-
 /// Physical storage and the relative coordinates valid in one SSA binding.
 struct AllocationSlice {
-  // Use BufferIndexAnalysis::makeSlice to attach a relative slot expression.
-  AllocationSlice(Value value, Interval<size_t> interval,
-                  Allocation::BufferId bufferId);
-  explicit AllocationSlice(Interval<size_t> interval)
-      : allocationInterval(interval) {}
+  explicit AllocationSlice(
+      Interval<size_t> interval,
+      Allocation::BufferId id = Allocation::InvalidBufferId,
+      const triton::membar::Subslice *view = nullptr)
+      : allocationInterval(interval), bufferId(id), subslice(view) {}
 
   bool operator<(const AllocationSlice &other) const;
   bool operator==(const AllocationSlice &) const = default;
@@ -59,7 +48,7 @@ private:
   // Identifies a local buffer for slot comparisons and backend alias checks.
   Allocation::BufferId bufferId = Allocation::InvalidBufferId;
   // A direct subslice gives its source, offsets and shape for relative proofs.
-  Operation *subslice = nullptr;
+  const triton::membar::Subslice *subslice;
 };
 
 namespace triton::membar {
@@ -106,19 +95,53 @@ struct FixedSync;
 
 enum class Conflict { None, AfterRebind, Always };
 
+// A backend may order a specific effect even when its storage overlaps.
+enum class OrderingRule : uint8_t {
+  Ordinary,
+  // NVIDIA transaction completion, mbarrier protocol and atomic updates.
+  AsyncPayload,
+  Counter,
+  CounterInit,
+  CounterWait,
+  CounterSignal,
+  CommutativeAtomic,
+  // AMD async tokens and mbarriers. An ordered copy uses both protocols.
+  AsyncCopy,
+  OrderedCopy,
+  OrderedLoad,
+  OrderedBarrier
+};
+
+struct SMemAccess;
+
+/// Classify effects before merging guarded operations or call summaries.
+/// Keys belong to this ordering instance and outlive all its access records.
+class SMemOrdering {
+public:
+  virtual ~SMemOrdering() = default;
+  // Only descriptor effects have backend-specific ordering. Scratch is
+  // ordinary.
+  virtual void classify(SMemAccess &access, Operation *op,
+                        const MemoryAccess &effect, ThreadEffects threads,
+                        Allocation &allocation) = 0;
+  // Exempt overlapping accesses only if the ordering survives rebinding.
+  virtual bool canSkip(const SMemAccess &source, const SMemAccess &sink,
+                       Allocation &allocation) const = 0;
+};
+
 struct SMemAccess {
   // A write subsumes a read of the same bytes for hazard detection.
   enum Kind : uint8_t { None, Read, Write };
-  // A guarded block or function summary can represent several issuing ops.
-  Operation *op;
   AllocationSlice slice;
   // Exposed to predecessors and successors respectively. An internal
   // rendezvous separates the first scratch write from the final read.
   Kind entry, exit;
-  // A single operation can signal a counter and also access its payload.
-  bool isBarrier = false;
+  // A single operation can have different ordering rules for its payload
+  // and counter. The key identifies extra comparison facts, or zero if unused.
+  OrderingRule rule = OrderingRule::Ordinary;
+  uint32_t key = 0;
 
-  Conflict conflict(const SMemAccess &sink, const MembarFilterFn &filter,
+  Conflict conflict(const SMemAccess &sink, const SMemOrdering *ordering,
                     Allocation &allocation) const;
   bool operator==(const SMemAccess &) const = default;
 };
@@ -131,7 +154,7 @@ struct SMemData {
   ThreadEffects threads;
 
   void merge(const SMemData &other);
-  Conflict conflict(const SMemData &sink, const MembarFilterFn &filter,
+  Conflict conflict(const SMemData &sink, const SMemOrdering *ordering,
                     Allocation &allocation) const;
   bool operator==(const SMemData &) const = default;
 };
@@ -172,13 +195,14 @@ public:
   /// TODO: When it retires, remove the flag, follow descriptor uses through
   /// calls unconditionally, and keep callee footprints in kernel coordinates.
   SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
+            SMemOrdering *ordering,
             AccessMode accessMode = AccessMode::AllSharedAccesses,
             CompletionScopeFn completionScope = nullptr,
             bool followCalls = false)
-      : allocation(allocation), regions(regions), accessMode(accessMode),
-        completionScope(completionScope), followCalls(followCalls),
-        bufferIndexAnalysis(
-            cast<FunctionOpInterface>(allocation.getOperation())) {}
+      : allocation(allocation), regions(regions), ordering(ordering),
+        accessMode(accessMode), completionScope(completionScope),
+        followCalls(followCalls), bufferIndexAnalysis(cast<FunctionOpInterface>(
+                                      allocation.getOperation())) {}
 
   /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
   SMemData describe(Operation *op, FixedSync &fixed,
@@ -196,6 +220,8 @@ private:
 
   Allocation &allocation;
   BufferRegionAnalysis &regions;
+  // Backend classification and key tables shared across this module's calls.
+  SMemOrdering *ordering;
   AccessMode accessMode;
   CompletionScopeFn completionScope;
   bool followCalls;

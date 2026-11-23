@@ -52,7 +52,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
         op->getOperand(0).getDefiningOp<triton::gpu::ThreadPredicateOp>())
       joins |= ThreadEffects::Completions | ThreadEffects::PeerWait;
     if ((pending.threads.pending & joins) ||
-        pending.isIntersected(effects, filter, allocation))
+        pending.isIntersected(effects, ordering, allocation))
       insertBarrier(op, *builder, *membarInfo);
   };
   // Finish completions that block every memory demand once before a loop.

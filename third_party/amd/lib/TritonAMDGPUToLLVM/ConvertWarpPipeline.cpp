@@ -84,45 +84,51 @@ static triton::gpu::MemDescIndexOp resolveMemDescIndex(Value value) {
   return {};
 }
 
-// Construct a virtual block describing a pipeline cluster's buffer R/W set.
-// Walks recursively so that LDS effects inside nested non-loop regions
-// (scf.if / tt.reduce / tt.scan / etc.) are accounted for.  Loops (scf.for /
-// scf.while) cannot legally appear inside a cluster, so this walk never has
-// to reason about iteration-multiplied effects.
-static BlockInfo
-buildBlockInfoFromBlock(Block *block, Allocation *allocation,
-                        BufferIndexAnalysis *bufferIndex = nullptr) {
-  BlockInfo info;
-  block->walk([&](MemoryEffectOpInterface mei) {
-    Operation *op = mei.getOperation();
-    SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
-    mei.getEffects(effs);
-    for (auto &eff : effs) {
-      Value v = eff.getValue();
-      if (!v ||
-          !isa<MemoryEffects::Read, MemoryEffects::Write>(eff.getEffect()))
+// Stages in one comparison share descriptor facts and async-copy keys.
+class PipelineAccesses {
+public:
+  explicit PipelineAccesses(Allocation &allocation)
+      : allocation(allocation),
+        indices(cast<FunctionOpInterface>(allocation.getOperation())) {}
+
+  BlockInfo collect(Block *block, bool useIndex = true);
+  bool hasConflict(const BlockInfo &before, const BlockInfo &after) const {
+    return before.isIntersected(after, &ordering, allocation);
+  }
+
+private:
+  Allocation &allocation;
+  BufferIndexAnalysis indices;
+  triton::AMD::SMemOrdering ordering;
+};
+
+BlockInfo PipelineAccesses::collect(Block *block, bool useIndex) {
+  using triton::membar::SMemAccess;
+  BlockInfo stage;
+  // Include nested regions. Pipeline stages cannot contain loops.
+  block->walk([&](Operation *op) {
+    for (const auto &effect : triton::getMemoryAccesses(op)) {
+      if (!effect.isShared())
         continue;
-      using triton::membar::SMemAccess;
-      auto kind = isa<MemoryEffects::Write>(eff.getEffect()) ? SMemAccess::Write
-                                                             : SMemAccess::Read;
-      for (auto bufId : allocation->getAllBufferIdsWithAliases(v)) {
-        if (bufId == Allocation::InvalidBufferId)
+      auto kind = effect.isWrite ? SMemAccess::Write : SMemAccess::Read;
+      for (auto id : allocation.getAllBufferIdsWithAliases(effect.value)) {
+        if (id == Allocation::InvalidBufferId)
           continue;
-        auto interval = allocation->getAllocatedInterval(bufId);
-        auto slice = AllocationSlice(v, interval, bufId);
-        // Retain the access's physical footprint and subview restrictions;
-        // recover only its slot expression through descriptor and stage views.
-        if (bufferIndex) {
-          if (auto indexed = resolveMemDescIndex(v))
+        auto interval = allocation.getAllocatedInterval(id);
+        AllocationSlice slice(interval, id, indices.getSubslice(effect.value));
+        // A stage yield can forward an indexed slot of the original view.
+        if (useIndex)
+          if (auto indexed = resolveMemDescIndex(effect.value))
             slice.bufferIndexExpr =
-                bufferIndex->makeSlice(indexed.getResult(), interval, bufId)
+                indices.makeSlice(indexed.getResult(), interval, id)
                     .bufferIndexExpr;
-        }
-        info.accesses.insert({op, slice, kind, kind});
+        SMemAccess access{slice, kind, kind};
+        ordering.classify(access, op, effect, {}, allocation);
+        stage.accesses.insert(access);
       }
     }
   });
-  return info;
+  return stage;
 }
 
 // Pre-existing barrier/wait ops that may legally appear at cluster
@@ -249,7 +255,8 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
 //   skipping many redundant placements.
 static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
                                         SmallVectorImpl<bool> &bars,
-                                        Allocation *allocation, bool circular) {
+                                        const PipelineAccesses &pipeline,
+                                        bool circular) {
   const int N = clusterInfo.size();
   const int maxDist = circular ? N : N - 1;
 
@@ -290,8 +297,7 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
         continue;
       const BlockInfo &sourceInfo =
           src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
-      if (!sourceInfo.isIntersected(
-              clusterInfo[dst], mlir::triton::AMD::membarFilter, *allocation))
+      if (!pipeline.hasConflict(sourceInfo, clusterInfo[dst]))
         continue;
       bars[barrierLoc] = true;
       LDBG("cluster " << src << " need fence to " << dst
@@ -470,11 +476,10 @@ private:
       }
     }
 
-    BufferIndexAnalysis bufferIndex(forOp->getParentOfType<triton::FuncOp>());
+    PipelineAccesses pipeline(*allocation);
     SmallVector<BlockInfo> clusterInfo;
     for (auto cb : clusterBlocks)
-      clusterInfo.push_back(
-          buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+      clusterInfo.push_back(pipeline.collect(cb));
     int numClusters = clusterInfo.size();
 
     // Check if any cluster has explicit priority.
@@ -498,7 +503,7 @@ private:
     }
 
     // 3. Circular dependency analysis (wrap-around for loop pipelines).
-    analyzePipelineDependencies(clusterInfo, bars, allocation,
+    analyzePipelineDependencies(clusterInfo, bars, pipeline,
                                 /*circular=*/true);
     if (shouldPlaceBackedgeBarrierAtHead(isaFamily, clusterOps, clusterBlocks,
                                          bars, hasTopBarrier, hasBottomBarrier))
@@ -652,19 +657,17 @@ static void emitPipelinedFlat(SmallVector<scf::ExecuteRegionOp> &clusterOps,
     clusterBlocks.push_back(&exec->getRegion(0).front());
   }
 
-  BufferIndexAnalysis bufferIndex(
-      clusterOps.front()->getParentOfType<triton::FuncOp>());
+  PipelineAccesses pipeline(*allocation);
   SmallVector<BlockInfo> clusterInfo;
   for (auto *cb : clusterBlocks)
-    clusterInfo.push_back(
-        buildBlockInfoFromBlock(cb, allocation, &bufferIndex));
+    clusterInfo.push_back(pipeline.collect(cb));
 
   bool anyHasPriority = llvm::any_of(clusterOps, [](scf::ExecuteRegionOp op) {
     return op->hasAttr("triton.warp_pipeline.priority");
   });
 
   // 3. Linear dependency analysis (no wrap-around for flat pipelines).
-  analyzePipelineDependencies(clusterInfo, bars, allocation,
+  analyzePipelineDependencies(clusterInfo, bars, pipeline,
                               /*circular=*/false);
 
   // 4. Materialize cluster barriers.
@@ -903,11 +906,12 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
   assert(!loopBars.empty() &&
          "expected at least one cluster in the prior loop");
 
+  PipelineAccesses pipeline(*allocation);
   SmallVector<BlockInfo> mergedInfo;
   for (auto *b : loopBlocks)
-    mergedInfo.push_back(buildBlockInfoFromBlock(b, allocation));
+    mergedInfo.push_back(pipeline.collect(b, /*useIndex=*/false));
   for (auto *b : nextBlocks)
-    mergedInfo.push_back(buildBlockInfoFromBlock(b, allocation));
+    mergedInfo.push_back(pipeline.collect(b, /*useIndex=*/false));
 
   SmallVector<bool> mergedBars;
   mergedBars.reserve(K + M);
@@ -934,8 +938,7 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
       int barrierLoc = (dist == 1) ? dst : dst - 1;
       if (isCovered(src, barrierLoc))
         continue;
-      if (!mergedInfo[src].isIntersected(
-              mergedInfo[dst], mlir::triton::AMD::membarFilter, *allocation))
+      if (!pipeline.hasConflict(mergedInfo[src], mergedInfo[dst]))
         continue;
       LDBG("cross-pipeline LDS dep (a_"
            << i << ", b_" << j << ") uncovered at slot " << barrierLoc);

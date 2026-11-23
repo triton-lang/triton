@@ -55,8 +55,7 @@ std::optional<Path> tmemNeed(const Node<OpModel> &producer,
 
 MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
                               Allocation &allocation,
-                              const MembarFilterFn &sharedFilter,
-                              TMemModel *tmem) {
+                              const SMemOrdering *ordering, TMemModel *tmem) {
   // Skip thread-only producers when no operation can observe them.
   unsigned allJoins = 0;
   for (const auto &node : cfg.nodes)
@@ -80,7 +79,7 @@ MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
             auto conflict =
                 join && in.arrivalMode == ArrivalMode::Scalar
                     ? Conflict::Always
-                    : shared.conflict(in.shared, sharedFilter, allocation);
+                    : shared.conflict(in.shared, ordering, allocation);
             if (conflict == Conflict::Always) {
               demands.required.push_back(
                   {source, sink, SyncKind::RegionBarrier});

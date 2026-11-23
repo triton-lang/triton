@@ -69,11 +69,6 @@ SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
 
 } // namespace triton::membar
 
-AllocationSlice::AllocationSlice(Value value, Interval<size_t> interval,
-                                 Allocation::BufferId bufferId)
-    : allocationInterval(interval), bufferId(bufferId),
-      subslice(value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {}
-
 bool AllocationSlice::operator<(const AllocationSlice &other) const {
   auto key = [](const AllocationSlice &slice) {
     return std::tie(slice.allocationInterval, slice.bufferId, slice.subslice,
@@ -92,19 +87,7 @@ bool AllocationSlice::disjointWithinBinding(
   if (bufferId == other.bufferId &&
       areBufferIndicesProvablyDifferent(*this, other))
     return true;
-  if (!subslice || !other.subslice)
-    return false;
-  auto a = cast<triton::gpu::MemDescSubsliceOp>(subslice);
-  auto b = cast<triton::gpu::MemDescSubsliceOp>(other.subslice);
-  // Logical coordinates are comparable only relative to the same descriptor.
-  if (a.getSrc() != b.getSrc())
-    return false;
-  for (auto [startA, sizeA, startB, sizeB] :
-       llvm::zip_equal(a.getOffsets(), a.getType().getShape(), b.getOffsets(),
-                       b.getType().getShape()))
-    if (startA + sizeA <= startB || startB + sizeB <= startA)
-      return true;
-  return false;
+  return triton::membar::disjointSubslices(subslice, other.subslice);
 }
 
 AllocationSlice AllocationSlice::translateToCallsite(
@@ -131,12 +114,12 @@ void SMemData::merge(const SMemData &other) {
   threads.merge(other.threads, !accesses.empty());
 }
 
-Conflict SMemData::conflict(const SMemData &sink, const MembarFilterFn &filter,
+Conflict SMemData::conflict(const SMemData &sink, const SMemOrdering *ordering,
                             Allocation &allocation) const {
   auto result = Conflict::None;
   for (const SMemAccess &before : accesses)
     for (const SMemAccess &after : sink.accesses) {
-      auto pair = before.conflict(after, filter, allocation);
+      auto pair = before.conflict(after, ordering, allocation);
       if (pair == Conflict::Always)
         return pair;
       if (pair == Conflict::AfterRebind)
@@ -155,13 +138,13 @@ void ThreadEffects::merge(ThreadEffects other, bool usesShared) {
 }
 
 Conflict SMemAccess::conflict(const SMemAccess &sink,
-                              const MembarFilterFn &filter,
+                              const SMemOrdering *ordering,
                               Allocation &allocation) const {
   if (exit == None || sink.entry == None ||
       (exit == Read && sink.entry == Read))
     return Conflict::None;
   if (!slice.mayOverlapPhysically(sink.slice) ||
-      (filter && filter(*this, sink, allocation)))
+      (ordering && ordering->canSkip(*this, sink, allocation)))
     return Conflict::None;
   // Only relative disjointness can expire on a backedge or call entry.
   return slice.disjointWithinBinding(sink.slice) ? Conflict::AfterRebind
@@ -521,10 +504,13 @@ SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
       continue;
     auto kind = access.isWrite ? SMemAccess::Write : SMemAccess::Read;
     // An internal rendezvous completes explicit accesses before exit.
-    for (const auto &slice : getAllocationSlices(access.value))
-      data.accesses.push_back({op, slice, kind,
-                               fixed.inside ? SMemAccess::None : kind,
-                               access.isShared(gpu::SharedKind::Barrier)});
+    for (const auto &slice : getAllocationSlices(access.value)) {
+      data.accesses.push_back(
+          {slice, kind, fixed.inside ? SMemAccess::None : kind});
+      if (ordering)
+        ordering->classify(data.accesses.back(), op, access, data.threads,
+                           allocation);
+    }
   }
 
   if (!hasScratch)
@@ -542,7 +528,7 @@ SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
   // Scratch starts with a write and ends with a read. An internal
   // rendezvous leaves only the final read exposed to subsequent operations.
   data.accesses.push_back(
-      {op, scratch, SMemAccess::Write,
+      {scratch, SMemAccess::Write,
        fixed.inside ? SMemAccess::Read : SMemAccess::Write});
   return data;
 }

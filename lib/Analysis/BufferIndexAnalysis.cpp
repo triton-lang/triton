@@ -7,6 +7,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/CFG.h"
 #include <optional>
 
@@ -264,6 +265,29 @@ BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
 
+const triton::membar::Subslice *BufferIndexAnalysis::getSubslice(Value value) {
+  using triton::membar::Subslice;
+  auto view = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>();
+  if (!view)
+    return nullptr;
+  auto &coords = subslices[value];
+  if (!coords)
+    coords = std::make_unique<Subslice>(
+        Subslice{view.getSrc().getAsOpaquePointer(), view.getOffsets(),
+                 view.getType().getShape()});
+  return coords.get();
+}
+
+bool triton::membar::disjointSubslices(const Subslice *a, const Subslice *b) {
+  if (!a || !b || a->source != b->source)
+    return false;
+  for (auto [startA, sizeA, startB, sizeB] :
+       llvm::zip_equal(a->offsets, a->shape, b->offsets, b->shape))
+    if (startA + sizeA <= startB || startB + sizeB <= startA)
+      return true;
+  return false;
+}
+
 const CFGLoopInfo *BufferIndexAnalysis::getLoopInfo(Region *region) const {
   if (region->hasOneBlock())
     return nullptr;
@@ -304,7 +328,7 @@ const BufferIndexExpr *BufferIndexAnalysis::intern(BufferIndexExpr expr) {
 AllocationSlice
 BufferIndexAnalysis::makeSlice(Value value, Interval<size_t> allocationInterval,
                                Allocation::BufferId bufferId) {
-  AllocationSlice slice(value, allocationInterval, bufferId);
+  AllocationSlice slice(allocationInterval, bufferId, getSubslice(value));
   attachBufferIndex(slice, value);
   return slice;
 }

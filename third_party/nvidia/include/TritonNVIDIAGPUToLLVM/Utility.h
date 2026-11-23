@@ -1,22 +1,33 @@
 #ifndef TRITONGPU_CONVERSION_TRITONNVIDIAGPUTOLLVM_UTILITY_H
 #define TRITONGPU_CONVERSION_TRITONNVIDIAGPUTOLLVM_UTILITY_H
 
-#include "mlir/IR/Operation.h"
-#include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Membar/SmemModel.h"
 
-namespace mlir {
-namespace triton {
-namespace membar {
-struct SMemAccess;
-}
-namespace NVIDIA {
+namespace mlir::triton::NVIDIA {
 
-/// Return true if we can skip a barrier synchronization between two operations
-/// even if they access the same shared memory.
-bool canSkipBarSync(const membar::SMemAccess &source,
-                    const membar::SMemAccess &sink, Allocation &allocation);
-} // namespace NVIDIA
-} // namespace triton
-} // namespace mlir
+class SMemOrdering final : public membar::SMemOrdering {
+public:
+  explicit SMemOrdering(ModuleAllocation &module);
+
+  void classify(membar::SMemAccess &access, Operation *op,
+                const MemoryAccess &effect, membar::ThreadEffects threads,
+                Allocation &allocation) override;
+  bool canSkip(const membar::SMemAccess &source, const membar::SMemAccess &sink,
+               Allocation &allocation) const override;
+
+private:
+  bool hasOnlySourceAliases(const membar::SMemAccess &source,
+                            const membar::SMemAccess &sink,
+                            Allocation &allocation) const;
+
+  // Only entry allocations have one lifetime across different calls.
+  DenseMap<Operation *, Operation *> entryKernels;
+  // Zero excludes counters that lack a participating issuer in each CTA.
+  DenseMap<Value, uint32_t> counterKeys;
+  // Commutativity requires both the same operation and the same element type.
+  DenseMap<std::pair<unsigned, Type>, uint32_t> atomicKeys;
+};
+
+} // namespace mlir::triton::NVIDIA
 
 #endif // TRITONGPU_CONVERSION_TRITONNVIDIAGPUTOLLVM_UTILITY_H

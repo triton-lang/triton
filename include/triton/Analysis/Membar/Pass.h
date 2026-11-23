@@ -35,7 +35,7 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
 /// Emit actions before their operations, waits first.
 LogicalResult placeBarriers(ModuleAllocation &allocation,
                             BufferRegionAnalysis &regions,
-                            MembarFilterFn sharedFilter, PlacementMode mode,
+                            SMemOrdering *ordering, PlacementMode mode,
                             CompletionScopeFn completionScope = nullptr,
                             DenseSet<Operation *> distributable = {});
 

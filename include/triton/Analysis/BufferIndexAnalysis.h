@@ -6,7 +6,9 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -17,6 +19,21 @@ class CFGLoopInfo;
 class Operation;
 struct AllocationSlice;
 struct BufferIndexExpr;
+
+namespace triton::membar {
+
+struct Subslice {
+  // SSA identity of the descriptor defining the coordinate system.
+  const void *source;
+  // Bounds borrowed from the immutable offset attribute and result type.
+  ArrayRef<int32_t> offsets;
+  ArrayRef<int64_t> shape;
+};
+
+/// Compare two known subviews within one binding of their common source.
+bool disjointSubslices(const Subslice *a, const Subslice *b);
+
+} // namespace triton::membar
 
 /// Extends membar's slice disjointness check for multi-buffered shared-memory
 /// allocations selected by `ttg.memdesc_index`.
@@ -62,6 +79,9 @@ public:
   explicit BufferIndexAnalysis(FunctionOpInterface funcOp);
   ~BufferIndexAnalysis();
 
+  /// Return the direct subslice coordinates, if any, owned by this analysis.
+  const triton::membar::Subslice *getSubslice(Value value);
+
   /// Builds an `AllocationSlice` for `value` and attaches a buffer-index
   /// expression to it. Callers in membar should use this rather than the raw
   /// `AllocationSlice` constructor so index expressions are attached
@@ -91,6 +111,7 @@ private:
   mutable DenseMap<Region *, std::unique_ptr<CFGLoopInfo>> loops;
   bool hasReducibleCFG;
   std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
+  DenseMap<Value, std::unique_ptr<triton::membar::Subslice>> subslices;
 };
 
 /// Returns true only if the buffer-index expressions attached to `a` and `b`

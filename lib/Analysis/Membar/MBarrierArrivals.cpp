@@ -163,7 +163,7 @@ static void finalizeGroup(const BarrierUses &uses) {
 
 LogicalResult placeBarriersAndArrivals(ModuleAllocation &allocation,
                                        BufferRegionAnalysis &regions,
-                                       MembarFilterFn filter,
+                                       SMemOrdering *ordering,
                                        int computeCapability) {
   ModuleOp mod = allocation.getModuleOp();
   auto groups = collectGroups(allocation, regions, computeCapability);
@@ -177,7 +177,7 @@ LogicalResult placeBarriersAndArrivals(ModuleAllocation &allocation,
   }
   auto mode = usesTensorMemory(mod) ? PlacementMode::SharedAndTensorMemory
                                     : PlacementMode::Shared;
-  if (failed(placeBarriers(allocation, regions, std::move(filter), mode,
+  if (failed(placeBarriers(allocation, regions, ordering, mode,
                            /*completionScope=*/nullptr,
                            std::move(distributable))))
     return failure();

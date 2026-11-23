@@ -25,8 +25,8 @@ struct TestAMDGPUMembarPass
     triton::AMD::annotateLocalLoadsSyncedViaAsyncWait(moduleOp);
     // Print all ops after membar pass
     ModuleAllocation allocation(moduleOp);
-    triton::AMD::ModuleMembarAnalysis membarPass(allocation,
-                                                 triton::AMD::membarFilter);
+    triton::AMD::SMemOrdering ordering;
+    triton::AMD::ModuleMembarAnalysis membarPass(allocation, &ordering);
     membarPass.run();
   }
 };

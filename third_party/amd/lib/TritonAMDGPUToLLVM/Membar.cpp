@@ -22,10 +22,9 @@ namespace {
 
 class AMDMembarAnalysis : public AMD::MembarAnalysis {
 public:
-  AMDMembarAnalysis(Allocation &allocation, MembarFilterFn filter,
+  AMDMembarAnalysis(Allocation &allocation, membar::SMemOrdering *ordering,
                     BufferRegionAnalysis &regions)
-      : MembarAnalysis(allocation, std::move(filter), regions,
-                       getCompletionSync) {}
+      : MembarAnalysis(allocation, ordering, regions, getCompletionSync) {}
 
   // Consume the earlier wait-count pass's scope proof before merging state.
   static CompletionSync getCompletionSync(Operation *op,
@@ -71,13 +70,14 @@ struct TritonAMDGPUMembar
     if (failed(solver->initializeAndRun(mod)))
       llvm::report_fatal_error("failed to analyze allocated buffer regions");
 
+    AMD::SMemOrdering ordering;
     // Phase-shifted waves rendezvous at different static pipeline stages.
     if (mod.walk([](amdgpu::CondBarrierOp) { return WalkResult::interrupt(); })
             .wasInterrupted()) {
-      AMD::ModuleMembarAnalysis(allocation, AMD::membarFilter)
+      AMD::ModuleMembarAnalysis(allocation, &ordering)
           .runAnalysis<AMDMembarAnalysis>(*regions);
     } else if (failed(membar::placeBarriers(
-                   allocation, *regions, AMD::membarFilter,
+                   allocation, *regions, &ordering,
                    membar::PlacementMode::Shared,
                    AMDMembarAnalysis::getCompletionSync))) {
       return signalPassFailure();

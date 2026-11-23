@@ -8,7 +8,7 @@ namespace mlir::triton::membar {
 /// Choose notification modes while placing barriers, then scale each counter.
 LogicalResult placeBarriersAndArrivals(ModuleAllocation &allocation,
                                        BufferRegionAnalysis &regions,
-                                       MembarFilterFn filter,
+                                       SMemOrdering *ordering,
                                        int computeCapability);
 
 } // namespace mlir::triton::membar

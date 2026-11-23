@@ -69,17 +69,21 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
   });
 }
 
-bool isSyncedViaAsyncWait(Operation *op) {
-  assert(op);
+BoolAttr getAsyncWaitAnnotation(Operation *op) {
+  return op->getAttrOfType<BoolAttr>(syncedViaAsyncWaitAttrName);
+}
 
-  auto attr = op->getAttr(syncedViaAsyncWaitAttrName);
-  if (!attr) {
-    op->emitRemark("has no async sync information attached to it which "
-                   "might negatively affect performance. Run "
-                   "annotateLocalLoadSyncedViaAsyncWait first");
-    return false;
-  }
-  return cast<BoolAttr>(attr).getValue();
+void reportMissingAsyncWaitAnnotation(Operation *op) {
+  op->emitRemark("has no async sync information attached to it which "
+                 "might negatively affect performance. Run "
+                 "annotateLocalLoadSyncedViaAsyncWait first");
+}
+
+bool isSyncedViaAsyncWait(Operation *op) {
+  if (auto attr = getAsyncWaitAnnotation(op))
+    return attr.getValue();
+  reportMissingAsyncWaitAnnotation(op);
+  return false;
 }
 
 namespace {

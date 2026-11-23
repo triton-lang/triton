@@ -67,8 +67,7 @@ void coalesceDemands(SmallVectorImpl<Demand> &demands);
 
 MembarDemands discoverDemands(const MembarCFG<OpModel> &cfg,
                               Allocation &allocation,
-                              const MembarFilterFn &sharedFilter,
-                              TMemModel *tmem);
+                              const SMemOrdering *ordering, TMemModel *tmem);
 
 } // namespace mlir::triton::membar
 

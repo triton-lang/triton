@@ -44,7 +44,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
   // Removing this check will create incorrect IR, see
-  // MembarUtility.h:membarFilter
+  // SMemOrdering::canSkip in MembarUtility.cpp
   if (numBuffers <= 1)
     return false;
 

@@ -122,7 +122,7 @@ LogicalResult placeClusterBarriers(ModuleAllocation &allocation,
 
 LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
                             BufferRegionAnalysis &regions,
-                            MembarFilterFn sharedFilter, PlacementMode mode,
+                            SMemOrdering *ordering, PlacementMode mode,
                             CompletionScopeFn completionScope,
                             DenseSet<Operation *> distributable) {
   ModuleOp module = moduleAllocation.getModuleOp();
@@ -139,7 +139,7 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
   std::map<Operation *, SMemModel> models;
   for (auto function : module.getOps<FunctionOpInterface>())
     models.try_emplace(function, *moduleAllocation.getFuncData(function),
-                       regions, sharedMode, completionScope,
+                       regions, ordering, sharedMode, completionScope,
                        /*followCalls=*/true);
 
   MembarModel model(models, tmemModel);
@@ -160,7 +160,7 @@ LogicalResult placeBarriers(ModuleAllocation &moduleAllocation,
         if (distributable.erase(node.op))
           node.effects.arrivalMode = ArrivalMode::Either;
       auto [required, optional] =
-          discoverDemands(cfg, allocation, sharedFilter, tmemModel);
+          discoverDemands(cfg, allocation, ordering, tmemModel);
       auto sites = placeRequired(function, cfg, required, ACTIONS);
       if (failed(sites))
         return failure();

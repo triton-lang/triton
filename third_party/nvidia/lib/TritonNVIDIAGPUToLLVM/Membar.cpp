@@ -43,24 +43,88 @@ struct TritonNvidiaGPUMembar
     // Synchronization insertion and arrival attributes preserve this geometry.
     if (failed(membar::placeClusterBarriers(allocation, *regions)))
       return signalPassFailure();
-    if (failed(membar::placeBarriersAndArrivals(
-            allocation, *regions, NVIDIA::canSkipBarSync, computeCapability)))
+    NVIDIA::SMemOrdering ordering(allocation);
+    if (failed(membar::placeBarriersAndArrivals(allocation, *regions, &ordering,
+                                                computeCapability)))
       signalPassFailure();
   }
 };
 
-// Preserve aliases introduced by allocator reuse. Multiple possible origins
-// are safe when every physical overlap has the same allocation origin.
-bool hasOnlySourceAliases(const AllocationSlice &lhs,
-                          const AllocationSlice &rhs, Allocation &allocation) {
-  auto *before = lhs.physicalFootprint;
-  auto *after = rhs.physicalFootprint;
+} // namespace
+
+namespace NVIDIA {
+
+using membar::OrderingRule;
+using membar::SMemAccess;
+using membar::ThreadEffects;
+
+SMemOrdering::SMemOrdering(ModuleAllocation &module) {
+  for (auto kernel : module.getRoots()) {
+    if (kernel.isExternal())
+      continue;
+    Block &entry = kernel.getFunctionBody().front();
+    for (auto alloc : entry.getOps<gpu::LocalAllocOp>())
+      entryKernels[alloc] = kernel;
+  }
+}
+
+void SMemOrdering::classify(SMemAccess &access, Operation *op,
+                            const MemoryAccess &effect, ThreadEffects threads,
+                            Allocation &) {
+  // Init and inval are generic writes by the same elected lane. They
+  // change the counter's lifetime and must also be ordered with waits.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(op)) {
+    access.rule = OrderingRule::CounterInit;
+    return;
+  }
+  bool completesTransactions =
+      isa<ttng::AsyncLoadOpInterface, ttng::CLCTryCancelOp,
+          ttng::AsyncSharedStoreOp>(op);
+  if (effect.isShared(gpu::SharedKind::Barrier)) {
+    bool wait = isa<ttng::WaitBarrierOp>(op);
+    bool release = threads.joins & ThreadEffects::AnyIssuer;
+    auto copy = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op);
+    if (wait)
+      access.rule = OrderingRule::CounterWait;
+    else if (release || completesTransactions ||
+             (copy && copy.getNoIncrement()))
+      access.rule = OrderingRule::CounterSignal;
+    else
+      access.rule = OrderingRule::Counter;
+
+    // A direct arrival or expectation includes a local contribution.
+    // Routed issuers and broadcast waits can omit participating CTAs.
+    bool direct = release && (threads.pending == ThreadEffects::Thread0 ||
+                              threads.pending == ThreadEffects::WarpLeaders);
+    if ((wait || direct) &&
+        !ttng::hasCGABroadcast(cast<gpu::MemDescType>(effect.value.getType())))
+      access.key = counterKeys.try_emplace(effect.value, counterKeys.size() + 1)
+                       .first->second;
+    return;
+  }
+
+  if (completesTransactions)
+    access.rule = OrderingRule::AsyncPayload;
+  if (auto atomic = dyn_cast<gpu::LocalAtomicScatterRMWOp>(op);
+      atomic && atomic.isCommutative()) {
+    access.rule = OrderingRule::CommutativeAtomic;
+    auto key = std::make_pair(unsigned(atomic.getAtomicRmwOp()),
+                              atomic.getDst().getType().getElementType());
+    access.key =
+        atomicKeys.try_emplace(key, atomicKeys.size() + 1).first->second;
+  }
+}
+
+// Allocator reuse can give unrelated allocations the same physical address.
+bool SMemOrdering::hasOnlySourceAliases(const SMemAccess &source,
+                                        const SMemAccess &sink,
+                                        Allocation &allocation) const {
+  auto *before = source.slice.physicalFootprint;
+  auto *after = sink.slice.physicalFootprint;
   if (!before || !after)
     return false;
-  // A kernel-entry allocation has one lifetime across all calls.
-  auto kernel = cast<FunctionOpInterface>(allocation.getOperation());
-  bool local = lhs.getBufferId() != Allocation::InvalidBufferId &&
-               rhs.getBufferId() != Allocation::InvalidBufferId;
+  bool local = source.slice.getBufferId() != Allocation::InvalidBufferId &&
+               sink.slice.getBufferId() != Allocation::InvalidBufferId;
   bool overlaps = false;
   for (const auto &a : before->regionInfo.views) {
     for (const auto &b : after->regionInfo.views) {
@@ -68,9 +132,10 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
         return false;
       if (!a.region.intersects(b.region))
         continue;
-      if (!a.allocation || a.allocation != b.allocation ||
-          (!local &&
-           a.allocation->getBlock() != &kernel.getFunctionBody().front()))
+      if (!a.allocation || a.allocation != b.allocation)
+        return false;
+      if (!local &&
+          entryKernels.lookup(a.allocation) != allocation.getOperation())
         return false;
       overlaps = true;
     }
@@ -78,70 +143,32 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
   return overlaps;
 }
 
-} // namespace
-
-bool NVIDIA::canSkipBarSync(const membar::SMemAccess &source,
-                            const membar::SMemAccess &sink,
-                            Allocation &allocation) {
-  Operation *before = source.op;
-  Operation *after = sink.op;
-  // Init and inval execute synchronously on the same lane within a region.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(after))
-    return true;
-
-  auto completesTransactions = [](Operation *op) {
-    return isa<ttng::AsyncLoadOpInterface, ttng::CLCTryCancelOp,
-               ttng::AsyncSharedStoreOp>(op);
-  };
-  // Accessing these live destinations requires completion, which makes their
-  // writes visible to the generic proxy.
-  if (completesTransactions(before) && !source.isBarrier &&
-      hasOnlySourceAliases(source.slice, sink.slice, allocation))
-    return true;
-
-  if (source.isBarrier && sink.isBarrier) {
-    auto signalsCompletion = [&](Operation *op) {
-      if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
-        return arrive.getNoIncrement();
-      return completesTransactions(op) ||
-             isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp,
-                 ttng::TCGen5CommitOp, ttng::MMAv5OpInterface>(op);
-    };
-    // Signaling completion via incrementing or decrementing
-    // expect / arrive counters commutes with each other
-    // Note that this is just for mbarriers
-    // Data accessed by these ops may still add barriers
-    if (signalsCompletion(before) && signalsCompletion(after))
+bool SMemOrdering::canSkip(const SMemAccess &source, const SMemAccess &sink,
+                           Allocation &allocation) const {
+  switch (source.rule) {
+  case OrderingRule::AsyncPayload:
+    // Consumers of live destinations must await transaction completion.
+    return hasOnlySourceAliases(source, sink, allocation);
+  case OrderingRule::CommutativeAtomic:
+    return sink.rule == source.rule && sink.key == source.key;
+  case OrderingRule::CounterInit:
+    return sink.rule == source.rule;
+  case OrderingRule::CounterSignal:
+    // Contributions to a live counter commute with one another.
+    return sink.rule == source.rule || sink.rule == OrderingRule::CounterWait;
+  case OrderingRule::Counter:
+    return sink.rule == OrderingRule::CounterWait;
+  case OrderingRule::CounterWait:
+    if (sink.rule == OrderingRule::CounterWait)
       return true;
-
-    // A wait can observe a live counter concurrently with signals or waits.
-    if (isa<ttng::WaitBarrierOp>(after))
-      return true;
-
-    auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
-    auto contribution = cast<gpu::MBarrierOpInterface>(after);
-    // Thread ordering covers direct contributions to the same counter. A
-    // scalar issuer needs a CTA rendezvous. With per-warp issuers, each warp
-    // finishes its wait before contributing to the next phase. Broadcast
-    // waits and nonidentity fromCTA routing omit participating CTAs.
-    if (wait && wait.getAlloc() == contribution.getBarrier() &&
-        !ttng::hasCGABroadcast(wait.getAlloc().getType())) {
-      auto expect = dyn_cast<ttng::BarrierExpectOp>(after);
-      auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);
-      if ((expect && !expect.getFromCTA()) || (arrive && !arrive.getFromCTA()))
-        return true;
-    }
+    // Publication orders the wait before each issuer's contribution.
+    // With one issuer per warp, the phase needs every warp to arrive.
+    return source.key && sink.rule == OrderingRule::CounterSignal &&
+           source.key == sink.key;
+  default:
+    return false;
   }
-
-  // Identical same-width commutative atomics can be freely reordered.
-  auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
-  auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
-  return beforeAtomic && afterAtomic && beforeAtomic.isCommutative() &&
-         afterAtomic.isCommutative() &&
-         beforeAtomic.getAtomicRmwOp() == afterAtomic.getAtomicRmwOp() &&
-         beforeAtomic.getDst().getType().getElementType() ==
-             afterAtomic.getDst().getType().getElementType();
 }
 
+} // namespace NVIDIA
 } // namespace mlir::triton

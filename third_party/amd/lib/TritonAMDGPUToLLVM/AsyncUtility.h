@@ -7,11 +7,12 @@
 
 namespace mlir::triton::AMD {
 class TargetInfo;
-// Annotates LocalLoadOps with ttg.amdg.syncedByAsyncWait=true if they are
-// synced by an AsyncWait.
+// Mark LocalLoadOps whose token is synchronized by an AsyncWait.
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);
 
-// Getter for the annotation applied by annotateLocalLoadsSyncedViaAsyncWait
+// A missing annotation matters only when a client needs the ordering proof.
+BoolAttr getAsyncWaitAnnotation(Operation *localLoadOp);
+void reportMissingAsyncWaitAnnotation(Operation *localLoadOp);
 bool isSyncedViaAsyncWait(Operation *localLoadOp);
 
 // LLVM is unable to deduce dependencies across warps and loop iterations for

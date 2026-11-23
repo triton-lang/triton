@@ -14,8 +14,8 @@ struct BlockInfo {
   struct AccessLess {
     bool operator()(const membar::SMemAccess &a,
                     const membar::SMemAccess &b) const {
-      return std::tie(a.slice, a.op, a.entry, a.exit, a.isBarrier) <
-             std::tie(b.slice, b.op, b.entry, b.exit, b.isBarrier);
+      return std::tie(a.slice, a.entry, a.exit, a.rule, a.key) <
+             std::tie(b.slice, b.entry, b.exit, b.rule, b.key);
     }
   };
   // A set makes joins idempotent across backedges and repeated calls.
@@ -38,12 +38,12 @@ struct BlockInfo {
 
   void invalidateIterationInfo();
   template <typename Effects>
-  bool isIntersected(const Effects &other, const MembarFilterFn &filter,
+  bool isIntersected(const Effects &other, const membar::SMemOrdering *ordering,
                      Allocation &allocation) const {
     // Both AMD clients invalidate iteration facts on backedges.
     for (const auto &a : accesses)
       for (const auto &b : other.accesses)
-        if (a.conflict(b, filter, allocation) == membar::Conflict::Always)
+        if (a.conflict(b, ordering, allocation) == membar::Conflict::Always)
           return true;
     return false;
   }
@@ -112,11 +112,11 @@ public:
   /// RAR needs no barrier because no write is performed.
   /// Temporary storage of operations such as Reduce contributes an incoming
   /// scratch write and an outgoing scratch read.
-  MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
+  MembarAnalysis(Allocation &allocation, membar::SMemOrdering *ordering,
                  triton::BufferRegionAnalysis &regions,
                  CompletionScopeFn completionScope = nullptr)
-      : allocation(allocation), regions(regions), filter(std::move(filter)),
-        shared(allocation, regions,
+      : allocation(allocation), regions(regions), ordering(ordering),
+        shared(allocation, regions, ordering,
                triton::membar::SMemModel::AccessMode::AllSharedAccesses,
                completionScope) {}
 
@@ -131,7 +131,7 @@ private:
 
   Allocation &allocation;
   BufferRegionAnalysis &regions;
-  MembarFilterFn filter;
+  membar::SMemOrdering *ordering;
   triton::membar::SMemModel shared;
 };
 
@@ -142,8 +142,8 @@ private:
 class ModuleMembarAnalysis {
 public:
   ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
-                       MembarFilterFn filter = nullptr)
-      : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
+                       membar::SMemOrdering *ordering = nullptr)
+      : moduleAllocation(moduleAllocation), ordering(ordering) {}
 
   void run() {
     // Geometry and interval slices use the same completed allocation, including
@@ -161,13 +161,13 @@ public:
     AnalysisT::runModule(
         moduleAllocation.getModuleOp(), [&](FunctionOpInterface function) {
           auto &allocation = *moduleAllocation.getFuncData(function);
-          return AnalysisT(allocation, filter, regions);
+          return AnalysisT(allocation, ordering, regions);
         });
   }
 
 private:
   ModuleAllocation &moduleAllocation;
-  MembarFilterFn filter;
+  membar::SMemOrdering *ordering;
 };
 
 } // namespace mlir::triton::AMD
