@@ -1511,6 +1511,10 @@ Value FunctionBuilder::awaitReports(ImplicitLocOpBuilder &b, Operation *op,
   auto [start, check, exit] = createIfBlock(b, pred);
   b.setInsertionPointToStart(check);
   Value data = tti::createLoadScratchMemory(b, b.getLoc(), states.value, ty);
+  // Compare each entire packed i64 shadow-state word with signed zero to test
+  // reservation bit 63. Phase and count fields occupy bits 0..61, so the whole
+  // word is negative exactly while a report update is pending. This does not
+  // compare the signed tx-count field stored within that word.
   Value pending =
       arith::CmpIOp::create(b, arith::CmpIPredicate::slt, data,
                             tti::createConstIntTensor(b, b.getLoc(), 0, ty));
@@ -1519,8 +1523,11 @@ Value FunctionBuilder::awaitReports(ImplicitLocOpBuilder &b, Operation *op,
   auto [head, retry, next] = createIfBlock(b, busy);
   b.setInsertionPointToStart(retry);
   Value lock = auxData.lock.at(op).value;
+  // The caller holds the lock. Release it so another partition can publish
+  // its report update, then reacquire it to protect the next state inspection.
   tti::ExperimentalLockReleaseOp::create(b, lock, Value{});
   tti::ExperimentalLockAcquireOp::create(b, lock, Value{});
+  // Loop back to check, reloading the shadow state with the lock held.
   retry->getTerminator()->setSuccessor(check, 0);
   b.setInsertionPointToStart(exit);
   return slots;
@@ -1741,6 +1748,8 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
             reserved = tail[0];
             lock = tail[1];
             // Reserve every destination of the real op until publication.
+            // INT64_MIN sets only bit 63 of each packed shadow-state word;
+            // awaitReports detects this flag with its signed word < 0 test.
             Value bit = tti::createConstIntTensor(fb, fb.getLoc(), INT64_MIN,
                                                   barrierStatesType);
             Value busy = arith::OrIOp::create(fb, states, bit);

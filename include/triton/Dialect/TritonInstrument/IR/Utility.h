@@ -233,7 +233,9 @@ struct AuxDataMap {
   // Packed barrier lifecycle state. Zero means invalid/uninitialized. Bit 0 is
   // phase, bits [1..20] are the initial arrival count, bits [21..40] are the
   // current arrival count, and bits [41..61] hold a signed tx-count.
-  // Bit 63 reserves slots while hardware reports are resolved.
+  // Bit 63 reserves slots while hardware reports are resolved. awaitReports
+  // tests this flag by comparing the entire packed i64 word with signed zero;
+  // a negative tx-count in bits [41..61] alone does not make the word negative.
   RegionToValueMap barrierStates;
 
   // scratch, <Cbuf x B x Cmask x iV>
