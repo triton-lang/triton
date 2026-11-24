@@ -18,7 +18,7 @@ TMemModel::TMemModel(ModuleOp module, BufferRegionAnalysis &regions)
     Value root = alloc.getResult();
     // A noinline function can execute in more than one warp role.
     Region *owner = isKernel(alloc->getParentOfType<FunctionOpInterface>()) &&
-                            hasRegionLocalUses(root, /*followCalls=*/true)
+                            hasRegionLocalUses(root)
                         ? alloc->getParentRegion()
                         : nullptr;
     allocations.emplace_back(regions.getFootprint(root), owner);

@@ -17,14 +17,14 @@ namespace triton::membar {
 // Summaries union the effects on each side of an operation.
 struct ThreadEffects {
   enum : uint8_t {
-    // A release with a known issuer observes that issuer in program order.
+    // Each participant in a release publishes its own earlier work.
     // Thread and warp numbers are relative to the executing partition.
     // The elected lane of warp zero can differ from thread zero.
     Thread0 = 1 << 0,
-    WarpLeaders = 1 << 1, // Lane zero of every warp.
-    Warp0Leader = 1 << 2, // Elected lane of the first warp.
+    WarpLeaders = Thread0 | (1 << 1), // Lane zero of every warp.
+    Warp0Leader = 1 << 2,             // Elected lane of the first warp.
     // Use all issuer bits when the issuing lanes are unknown.
-    AnyIssuer = Thread0 | WarpLeaders | Warp0Leader,
+    AnyIssuer = WarpLeaders | Warp0Leader,
     SharedCompletion = 1 << 3, // May overlap independent global reads.
     FullCompletion = 1 << 4,   // Must also finish before reads and kernel exit.
     Completions = SharedCompletion | FullCompletion,
@@ -38,7 +38,10 @@ struct ThreadEffects {
   // FixedSync records the barriers the operation itself provides.
   uint8_t joins = 0;
 
-  void merge(ThreadEffects other, bool usesShared);
+  void merge(ThreadEffects other) {
+    pending |= other.pending;
+    joins |= other.joins;
+  }
   bool operator==(const ThreadEffects &) const = default;
 };
 
@@ -135,7 +138,7 @@ private:
   std::map<Operation *, BufferIndexAnalysis> indices;
 };
 
-bool hasRegionLocalUses(Value root, bool followCalls);
+bool hasRegionLocalUses(Value root);
 
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {

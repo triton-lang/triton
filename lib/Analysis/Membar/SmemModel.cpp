@@ -62,7 +62,7 @@ SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
 
 void SMemData::merge(const SMemData &other) {
   llvm::append_range(accesses, other.accesses);
-  threads.merge(other.threads, !accesses.empty());
+  threads.merge(other.threads);
 }
 
 Conflict SMemData::conflict(const SMemData &sink, const MembarFilterFn &filter,
@@ -77,15 +77,6 @@ Conflict SMemData::conflict(const SMemData &sink, const MembarFilterFn &filter,
         result = pair;
     }
   return result;
-}
-
-void ThreadEffects::merge(ThreadEffects other, bool usesShared) {
-  pending |= other.pending;
-  joins |= other.joins;
-  // In a guard or call summary, a global read combined with shared storage
-  // also consumes pending shared completions.
-  if (usesShared && (joins & FullCompletion))
-    joins |= SharedCompletion;
 }
 
 SMemAccess SMemAccess::fromDescriptor(Operation *op, const MemoryAccess &effect,
@@ -152,7 +143,17 @@ std::optional<CompletionSync> getCompletion(Operation *op) {
   return std::nullopt;
 }
 
-// A publication orders earlier effects of its own known issuer.
+uint8_t payloadIssuer(Operation *op) {
+  // Each issuing CTA elects a lane in its partition's warp zero.
+  // Init and inval use thread zero before SM90.
+  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
+          ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp,
+          ttng::MMAv5OpInterface>(op))
+    return ThreadEffects::Warp0Leader;
+  return ThreadEffects::AnyIssuer;
+}
+
+// A direct notification orders the work of every contributing thread.
 uint8_t publicationIssuer(Operation *op) {
   if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
     return getNotificationIssuer(arrive);
@@ -169,11 +170,9 @@ uint8_t publicationIssuer(Operation *op) {
 
 // Follow views and selects within this region. For calls, record which results
 // carry each descriptor argument back to the caller.
-// Only the legacy flow passes a null cache.
-// TODO: Make it a reference when followCalls is removed.
 static bool
 usesStayLocal(Value root,
-              DenseMap<Value, SmallVector<unsigned>> *calleeReturns) {
+              DenseMap<Value, SmallVector<unsigned>> &calleeReturns) {
   SmallVector<Value> worklist{root};
   llvm::SmallPtrSet<Value, 8> seen;
   while (!worklist.empty()) {
@@ -189,19 +188,18 @@ usesStayLocal(Value root,
       }
       if (user->getParentRegion() != root.getParentRegion())
         return false;
-      if (auto call = dyn_cast<triton::CallOp>(user); calleeReturns && call) {
+      if (auto call = dyn_cast<triton::CallOp>(user)) {
         auto callee = cast<triton::FuncOp>(call.resolveCallable());
         BlockArgument arg = callee.getArgument(use.getOperandNumber());
-        if (calleeReturns->try_emplace(arg).second &&
+        if (calleeReturns.try_emplace(arg).second &&
             !usesStayLocal(arg, calleeReturns))
           return false;
-        for (unsigned index : calleeReturns->at(arg))
+        for (unsigned index : calleeReturns.at(arg))
           worklist.push_back(call.getResult(index));
         continue;
       }
-      if (calleeReturns && isa<BlockArgument>(root) &&
-          isa<triton::ReturnOp>(user)) {
-        calleeReturns->at(root).push_back(use.getOperandNumber());
+      if (isa<BlockArgument>(root) && isa<triton::ReturnOp>(user)) {
+        calleeReturns.at(root).push_back(use.getOperandNumber());
         continue;
       }
       // TMEM loads and stores only access the issuing CTA's tensor memory.
@@ -234,11 +232,11 @@ usesStayLocal(Value root,
   return true;
 }
 
-bool hasRegionLocalUses(Value root, bool followCalls) {
+bool hasRegionLocalUses(Value root) {
   if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
     return false;
   DenseMap<Value, SmallVector<unsigned>> calleeReturns;
-  return usesStayLocal(root, followCalls ? &calleeReturns : nullptr);
+  return usesStayLocal(root, calleeReturns);
 }
 
 bool SMemModel::isRegionLocal(Value value) {
@@ -249,7 +247,7 @@ bool SMemModel::isRegionLocal(Value value) {
            auto [it, inserted] =
                regionLocalAllocations.try_emplace(root, false);
            if (inserted)
-             it->second = hasRegionLocalUses(root, mode == Mode::Role);
+             it->second = hasRegionLocalUses(root);
            return it->second;
          });
 }
@@ -395,26 +393,19 @@ ThreadEffects SMemModel::getThreadEffects(Operation *op, bool hasScratch,
 
   if (auto issuer = publicationIssuer(op)) {
     threads.pending = issuer;
-    unsigned ordered = issuer == ThreadEffects::AnyIssuer ? 0 : issuer;
-    threads.joins =
-        ThreadEffects::Completions | (ThreadEffects::AnyIssuer & ~ordered);
-  } else {
-    threads.joins =
-        hasScratch ? ThreadEffects::Completions : joinedCompletions(op);
-    if (!threads.joins)
-      return {};
-    // Diagnostics consume completions without leaving payload to publish.
-    if (isa<triton::PrintOp, triton::AssertOp>(op))
-      return threads;
-    // Each issuing CTA uses a fixed lane of the partition's first warp.
-    // Init and inval use thread zero before SM90.
-    threads.pending =
-        isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::TMEMCopyOp,
-            ttng::CLCTryCancelOp, ttng::FenceMBarrierInitReleaseClusterOp,
-            ttng::MMAv5OpInterface>(op)
-            ? ThreadEffects::Warp0Leader
-            : ThreadEffects::AnyIssuer;
+    // Routed signals have no guaranteed participant. Direct signals join
+    // only work that may have been issued outside their participating lanes.
+    unsigned participants = issuer == ThreadEffects::AnyIssuer ? 0 : issuer;
+    threads.joins = ThreadEffects::AnyIssuer & ~participants;
+    return threads;
   }
+
+  threads.joins =
+      hasScratch ? ThreadEffects::Completions : joinedCompletions(op);
+  // Diagnostics consume completions without leaving payload to publish.
+  if (!threads.joins || isa<triton::PrintOp, triton::AssertOp>(op))
+    return threads;
+  threads.pending = payloadIssuer(op);
   if (mayNotifyPeer(op, accesses))
     threads.joins |= ThreadEffects::PeerWait;
   return threads;

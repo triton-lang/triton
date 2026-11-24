@@ -16,7 +16,7 @@ struct BlockInfo {
 
   void join(const BlockInfo &other) {
     accesses.insert(other.accesses.begin(), other.accesses.end());
-    threads.merge(other.threads, !accesses.empty());
+    threads.merge(other.threads);
   }
 
   template <typename Effects>

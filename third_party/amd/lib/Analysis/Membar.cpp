@@ -101,8 +101,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   if (!membarInfo->allPathsFromEntrySynced) {
     auto &prefix = membarInfo->entryBlockInfo;
     prefix.accesses.insert(data.accesses.begin(), data.accesses.end());
-    prefix.threads.merge({.joins = data.threads.joins},
-                         !prefix.accesses.empty());
+    prefix.threads.joins |= data.threads.joins;
   }
   if (fixed.inside == mb::fullBarrier)
     membarInfo->sync();
