@@ -197,6 +197,9 @@ class Libdevice(ExternLibrary):
             ret_type = to_unsigned(ret_type)
             for i, arg_type in enumerate(arg_types):
                 arg_types[i] = to_unsigned(arg_type)
+        elif "2uint" in op_name or "2ull" in op_name or "as_uint" in op_name:
+            # Conversions to unsigned, e.g. float2uint_rn, double2ull_rz and float_as_uint
+            ret_type = to_unsigned(ret_type)
         return Symbol(func_name, op_name, ret_type, arg_names, arg_types)
 
     def _group_symbols(self) -> None:
