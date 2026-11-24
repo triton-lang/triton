@@ -580,7 +580,33 @@ def test_scaled_wmma(M, N, K, a_kind, b_kind, warp_bases):
 
 
 # %%
-# The idea of scale preshuffle also applies to WMMA.
+# CDNA5's scale layout is different from CDNA4:
+
+if __name__ == "__main__" and is_cdna5():
+    wmma_layout = gl.amd.AMDWMMALayout(  #
+        version=3, transposed=True, warp_bases=[], reg_bases=[], instr_shape=[16, 16, 128])
+    b_layout = gl.DotOperandLayout(operand_index=1, parent=wmma_layout, k_width=16)
+    print(cdna5.get_wmma_scale_layout(b_layout, [32, 8]).format_tensor_view([32, 8]))
+
+# %%
+# ```
+# [[ T0:0,  T0:1,  T0:2,  T0:3,  T0:4,  T0:5,  T0:6,  T0:7]
+# [  T1:0,  T1:1,  T1:2,  T1:3,  T1:4,  T1:5,  T1:6,  T1:7]
+# ...
+# [ T15:0, T15:1, T15:2, T15:3, T15:4, T15:5, T15:6, T15:7]
+# [ T16:0, T16:1, T16:2, T16:3, T16:4, T16:5, T16:6, T16:7]
+# ...
+# [ T31:0, T31:1, T31:2, T31:3, T31:4, T31:5, T31:6, T31:7]]
+# ```
+#
+# On CDNA4, the 4 scales of a row in one MFMA are spread over 4 lanes. On CDNA5,
+# each lane holds all the scales of one row. So the 4 scales of one WMMA already
+# fill a 32-bit register, and they are next to each other in memory.
+#
+# Though, we can still do scale preshuffle on CDNA5, but for a different reason.
+# We can see the scale has shape `[N, K // 32]` for operand B, but each row for
+# the scale tile `[BLOCK_N, BLOCK_K // 32]` is not contiguous in memory. So the
+# motivation for preshuffle here is to make them contiguous.
 
 
 def preshuffle_scales_cdna5(scales):
