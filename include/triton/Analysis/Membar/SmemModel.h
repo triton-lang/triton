@@ -1,6 +1,41 @@
 #ifndef TRITON_ANALYSIS_MEMBAR_SMEMMODEL_H
 #define TRITON_ANALYSIS_MEMBAR_SMEMMODEL_H
 
+// Shared-memory fields of OpModel (see Node in CFGBuilder.h).
+// Compare the earlier access's exit with the later access's entry for storage
+// hazards. For thread ordering, intersect the earlier pending mask with
+// the later joins mask.
+//
+// cfg.nodes[i].effects               OpModel
+// ├── arrivalMode                    ArrivalMode   Scalar | PerWarp | Either
+// │                                                Either lets placement choose
+// └── shared                         SMemData
+//     ├── accesses                   SmallVector<SMemAccess, 0>
+//     │   └── [j]                    SMemAccess
+//     │       ├── entry              Kind          Exposed to earlier ops
+//     │       │                                    Read | Write
+//     │       ├── exit               Kind          Exposed to later ops
+//     │       │                                    None | Read | Write
+//     │       ├── isMBarrier         bool          Mbarrier protocol access
+//     │       ├── issuer             Operation*    Op that issued this access
+//     │       ├── footprint          const BufferRegionFootprint*
+//     │       │                      Possible bytes and CTAs, including padding
+//     │       └── relative           RelativeAddress
+//     │           ├── index          const BufferIndexExpr*
+//     │           │                  Slot, e.g. (p + 1) % 3
+//     │           └── subslice       const Subslice*
+//     │               ├── source     mlir::Value        Descriptor being sliced
+//     │               ├── offsets    ArrayRef<int32_t>  First element per axis
+//     │               └── shape      ArrayRef<int64_t>  Element count per axis
+//     └── threads                    ThreadEffects
+//         ├── pending                uint8_t       Effects left pending at exit
+//         └── joins                  uint8_t       Earlier effects to order
+//
+// Relative coordinates can prove disjointness within one SSA binding.
+// A null index or subslice disables only that proof.
+// ThreadEffects combines issuer masks (Thread0, WarpLeaders, Warp0Leader)
+// with SharedCompletion, FullCompletion and PeerWait.
+
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
