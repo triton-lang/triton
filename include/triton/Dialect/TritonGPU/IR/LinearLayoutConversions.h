@@ -175,13 +175,15 @@ LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
                                            ArrayRef<int64_t> shape,
                                            CGAEncodingAttr cgaLayout);
 
-// Create a TDM (Tensor DMA) LinearLayout: (message, warp, block) ->
+// Create a TDM (Tensor DMA) LinearLayout: (message, warp, instr, block) ->
 // (dim0, dim1, ...).  TDM is warp-granular.  The "warp" sublayout is an
 // identity over `warpsPerCTA`, zero-padded up to log2(numWarps) so the
 // full module warpId is covered; padded rows expose the redundant bits
 // as free variables (via getFreeVariableMasks("warp")) so partial copies
 // (K < numWarps) can pred-off inactive warps.  "message" covers the
-// per-warp tile (surjectivity); "block" comes from `cgaLayout`.
+// per-warp tile (surjectivity).  `blockShape` is the block one instruction
+// copies; "instr" tiles it `instrsPerCTA` times to cover the CTA tile, below
+// the "block" bases from `cgaLayout`.
 //
 // `warpUsedHint`: power-of-two-popcount bitmask whose K = popcount(hint)
 // set bits select active warps.  The varying warpId bit positions in the
@@ -190,6 +192,7 @@ LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
 // Empty = no-hint default (lowest log2(K) bits, K = prod(warpsPerCTA)).
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
+                                ArrayRef<unsigned> instrsPerCTA,
                                 const LinearLayout &cgaLayout, int totalWarps,
                                 std::optional<uint32_t> warpUsedHint = {});
 

@@ -75,6 +75,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `sharedLayout`: layout of the whole allocation, with one dimension per
 // descriptor dimension. Each warp starts at its tile origin in it; the
 // verifiers require each transfer region to be contiguous before padding.
+// `blockShape`: block copied by one instruction. `instrsPerCTA`: how many
+// instructions tile the CTA block along each dimension. `instrIdx`: index of
+// the instruction being filled.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
@@ -84,6 +87,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
+                       ArrayRef<unsigned> instrsPerCTA, unsigned instrIdx,
                        std::optional<uint32_t> warpUsedHint = std::nullopt,
                        bool isPureForm = false);
 
