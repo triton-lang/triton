@@ -1655,3 +1655,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A subslice of a partitioned buffer that is not exactly one piece is still verified as partitioned.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_partial_piece_of_partitioned(%desc: !tt.tensordesc<1x64x256xui8, #shared>) {
+    %lds = ttg.local_alloc : () -> !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable>
+    %part = ttg.memdesc_subslice %lds[1, 0, 0] : !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    // expected-error @+1 {{partitioned TDM shape per CTA must be divisible by numLogicalPieces along partitionDim}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %part : !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    tt.return
+  }
+}
+
+// -----
+
+// partitionDim split across CTAs: a view sized like one piece of the whole allocation is not one piece of a CTA, so
+// it is still verified as partitioned.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], CGALayout = [[1, 0, 0]]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_piece_of_cta_split_partitioned(%desc: !tt.tensordesc<2x64x256xui8, #shared>) {
+    %lds = ttg.local_alloc : () -> !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable>
+    %part = ttg.memdesc_subslice %lds[2, 0, 0] : !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    // expected-error @+1 {{partitioned TDM shape per CTA must be divisible by numLogicalPieces along partitionDim}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %part : !tt.tensordesc<2x64x256xui8, #shared> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    tt.return
+  }
+}

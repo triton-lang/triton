@@ -422,12 +422,49 @@ LogicalResult verifyTDMBlockFitsSharedMemory(Operation *op,
       gpu::dropPipeliningDim(smemTy.getAllocShape(), enc));
 }
 
+// A subview that is exactly one logical piece of a partitioned buffer
+// (numGroups 1; one piece along partitionDim, full extent elsewhere) behaves as
+// a single-base buffer: the subview lowering rotates the bases so bases[0] is
+// the selected piece, and the TDM load lowering maps the piece's coordinates to
+// partition 0, i.e. bases[0]. Return the view's type with the inner partition
+// layout so it is verified like a plain buffer; return a null type otherwise.
+static gpu::MemDescType getSinglePieceView(gpu::MemDescType smemTy) {
+  auto part =
+      dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding());
+  if (!part || part.getNumGroups() != 1)
+    return {};
+  auto shape = smemTy.getShape();
+  auto alloc = smemTy.getAllocShape();
+  if (shape.size() != alloc.size()) // leading pipelining dim: not handled
+    return {};
+  unsigned dim = part.getPartitionDim();
+  // Pieces repeat within each CTA (the subview lowering selects them from the
+  // per-CTA shape). With partitionDim split across CTAs, a view sized like one
+  // piece of the whole allocation is not one piece of any CTA: not handled.
+  if (gpu::getShapePerCTA(part, alloc)[dim] != alloc[dim])
+    return {};
+  for (unsigned i = 0; i < shape.size(); ++i) {
+    int64_t want =
+        i == dim ? alloc[i] / (int64_t)part.getNumLogicalPieces() : alloc[i];
+    if (shape[i] != want)
+      return {};
+  }
+  return gpu::MemDescType::get(
+      shape, smemTy.getElementType(), part.getPartitionLayout(),
+      smemTy.getMemorySpace(), smemTy.getMutableMemory());
+}
+
 // Verify the TDM layout constraints common to all TDM ops
 LogicalResult verifyTDMCommonLayout(Operation *op,
                                     triton::TensorDescType descTy,
-                                    gpu::MemDescType smemTy) {
+                                    gpu::MemDescType smemTy,
+                                    bool allowSinglePiece = false) {
   if (failed(verifyTDMDescriptor(op, descTy)))
     return failure();
+
+  if (allowSinglePiece)
+    if (auto single = getSinglePieceView(smemTy))
+      smemTy = single;
 
   if (auto partitioned =
           dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding())) {
@@ -1809,6 +1846,10 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
 LogicalResult verifyPartitionedHintFitsSingleInstruction(
     Operation *op, gpu::MemDescType smemTy, uint32_t hint,
     std::optional<size_t> memberIdx = std::nullopt) {
+  // One piece of a partitioned buffer is copied with the plain inner layout
+  // (see getSinglePieceView), so any hint fits one instruction.
+  if (getSinglePieceView(smemTy))
+    return success();
   auto partitionedEnc =
       llvm::dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding());
   if (!partitionedEnc)
@@ -1844,7 +1885,10 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   if (failed(verifyTDMBuffer(getOperation(), tensorDescTy, smemTy)))
     return failure();
 
-  if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
+  // The load lowerings also handle one piece of a partitioned buffer (see
+  // getSinglePieceView).
+  if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy,
+                                   /*allowSinglePiece=*/true)))
     return failure();
 
   if (failed(
@@ -1914,7 +1958,8 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
       return emitOpError("Cannot store into immutable memory");
     if (failed(verifyTDMBuffer(getOperation(), tensorDescTy, smemTy)))
       return failure();
-    if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
+    if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy,
+                                     /*allowSinglePiece=*/true)))
       return failure();
     if (failed(verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy,
                                               smemTy)))

@@ -1041,3 +1041,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// TDM loads into one piece of a partitioned buffer (a subslice along partitionDim) are verified against the inner
+// layout and lowered as single-base copies: one instruction each, with or without warp_used_hint, fused or not.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_one_piece_of_partitioned
+  tt.func public @tdm_load_one_piece_of_partitioned(%desc: !tt.tensordesc<1x64x256xui8, #shared>) {
+    %lds = ttg.local_alloc : () -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable>
+    %p0 = ttg.memdesc_subslice %lds[0, 0, 0] : !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %p1 = ttg.memdesc_subslice %lds[1, 0, 0] : !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    // CHECK-COUNT-3: llvm.amdgcn.tensor.load.to.lds
+    // CHECK-NOT: llvm.amdgcn.tensor.load.to.lds
+    // CHECK: llvm.return
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %p1 : !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %1 = amdg.async_tdm_copy_global_to_local %desc into %p0 {warp_used_hint = 1 : i32} : !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %2 = amdg.async_tdm_fused_copy_global_to_local %desc, %desc into %p0, %p1 {warp_used_hints = array<i32: 1, 2>} : !tt.tensordesc<1x64x256xui8, #shared>, !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>, !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    tt.return
+  }
+}
