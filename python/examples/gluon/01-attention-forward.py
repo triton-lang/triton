@@ -945,6 +945,12 @@ def attention_kernel(  #
     c0_chnl.prime()
     c1_chnl.prime()
     exp_turnstile.prime()
+    if gl.num_ctas() > 1:
+        # With 4 CTAs, the q/kv empty barriers also receive the other CTA pair's
+        # multicast tcgen05 commits. Wait until every CTA has primed, or a fast
+        # pair's commit can land before a slow CTA's prime and underflow the
+        # barrier's pending count.
+        bw.cluster.barrier()
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
@@ -1284,7 +1290,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
 @pytest.mark.enable_warmup(min_capability=10, priority=3)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
-@pytest.mark.parametrize("cga_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op_consan(dtype, cga_layout):
     p = KernelConfig(NUM_KV_BUFFERS=4) if dtype == torch.float16 and cga_layout and not is_blackwell_ultra() else None
