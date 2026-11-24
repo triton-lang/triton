@@ -802,8 +802,8 @@ def matmul_cdna5_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, M, N, K: gl.constexpr,
         a, w, w_scale = matmul_cdna5_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
-    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
-                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
+    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for(  #
+        [[cfg.BLOCK_N, 8]], [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
     y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],

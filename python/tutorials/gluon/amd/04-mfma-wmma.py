@@ -1101,8 +1101,8 @@ def matmul_cdna5_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
         acc = cdna5.wmma(a0, b0, acc)
         acc = cdna5.wmma(a1, b1, acc)
 
-    c_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
-                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
+    c_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for(  #
+        [[cfg.BLOCK_N, 8]], [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
     c_smem = gl.allocate_shared_memory(c_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], c_smem_layout)
     c_smem.store(acc.to(c_ptr.dtype.element_ty))
     c_desc = cdna5.tdm.make_tensor_descriptor(c_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],

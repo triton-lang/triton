@@ -418,6 +418,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
     num_k = gl.cdiv(cfg.K, cfg.BLOCK_K)
     for k in gl.static_range(cfg.NUM_BUFFERS - 1):
         matmul_ld_gmem(cfg, k, k < num_k, off_m, off_wn, gather_idx, a_desc, w_desc, ws_desc, a_smem, w_smem, ws_smem)
+
     acc = gl.zeros([cfg.BLOCK_M, cfg.BLOCK_N], gl.float32, layouts.acc_layout)
     for k in range(num_k):
         next_k = k + cfg.NUM_BUFFERS - 1
@@ -427,8 +428,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
         a, w, w_scale = matmul_ld_smem(cfg, layouts, k, a_smem, w_smem, ws_smem)
         acc = cdna5.wmma_scaled(a, None, cfg.A_FORMAT, w, w_scale, cfg.W_FORMAT, acc)
 
-    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[cfg.BLOCK_N, 8]],
-                                                                          [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
+    y_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for(  #
+        [[cfg.BLOCK_N, 8]], [cfg.BLOCK_M, cfg.BLOCK_N], [1, 0])
     y_smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [cfg.BLOCK_M, cfg.BLOCK_N], y_smem_layout)
     y_smem.store(acc.to(y_ptr.dtype.element_ty))
     y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [cfg.M, cfg.N], [cfg.N, 1], [cfg.BLOCK_M, cfg.BLOCK_N],
